@@ -84,6 +84,10 @@ pub struct PhotosJxlAuditSummary {
 pub struct PhotosJxlRecoveryRecord {
     pub uuid: String,
     pub original_filename: String,
+    /// Canonical live JXL path re-read during recovery collection. Keeping the
+    /// path with the audited record prevents a later collector from pairing a
+    /// backup JPEG using metadata alone.
+    pub source_path: PathBuf,
     pub source_blake3: String,
     pub album_paths: Vec<Vec<String>>,
 }
@@ -871,10 +875,27 @@ pub fn list_photos_jxl_recovery_records(library: &Path) -> Result<Vec<PhotosJxlR
         let source_blake3 = classified
             .source_blake3
             .context("live Photos recovery candidate has no source hash")?;
+        let source_path = classified
+            .record
+            .path
+            .clone()
+            .context("live Photos recovery candidate has no original path")?;
+        let source_path = fs::canonicalize(&source_path).with_context(|| {
+            format!(
+                "live Photos recovery candidate path is not readable: {}",
+                source_path.display()
+            )
+        })?;
+        anyhow::ensure!(
+            source_path.starts_with(&scope.library),
+            "live Photos recovery candidate escaped the selected library: {}",
+            source_path.display()
+        );
         let original_filename = safe_original_filename(&classified.record)?;
         recovery.push(PhotosJxlRecoveryRecord {
             uuid: classified.record.uuid,
             original_filename,
+            source_path,
             source_blake3,
             album_paths,
         });
@@ -955,7 +976,10 @@ fn folded_filename_stem(name: &str) -> Result<String> {
         .file_stem()
         .and_then(|value| value.to_str())
         .context("Photos original filename has no UTF-8 stem")?;
-    anyhow::ensure!(!stem.is_empty(), "Photos original filename has an empty stem");
+    anyhow::ensure!(
+        !stem.is_empty(),
+        "Photos original filename has an empty stem"
+    );
     Ok(stem.to_lowercase())
 }
 

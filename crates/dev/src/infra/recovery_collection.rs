@@ -7,13 +7,13 @@
 //! guesses from capture time when identity is ambiguous.
 
 use anyhow::{Context, Result};
+use foundation::ToolBuilder;
 use foundation::image::format_detect::{FormatKind, detect_true_format};
 use foundation::image::jxl_utils::JpegReconstructionEligibility;
 use foundation::image::photos_jxl_audit::{
     PhotosBackupOriginalRecord, PhotosJxlRecoveryRecord, list_photos_jxl_recovery_records,
     photos_backup_original_candidates,
 };
-use foundation::ToolBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -149,6 +149,7 @@ struct PhotosExportReportRow {
 struct PhotosRecoveryMatch {
     source: PhotosJxlRecoveryRecord,
     backup: PhotosBackupOriginalRecord,
+    backup_blake3: String,
 }
 
 fn is_photos_library(path: &Path) -> bool {
@@ -292,6 +293,64 @@ fn file_hash(path: &Path) -> Result<String> {
         .with_context(|| format!("hash recovery file {}", path.display()))
 }
 
+/// Prove that a candidate backup JPEG carries the same decoded pixels as the
+/// live audited JXL before any recovery copy or Photos export is attempted.
+/// Filename, UUID, and album identity narrow the search; they are not payload
+/// proof and must never authorize recovery on their own.
+fn verify_backup_original_matches_jxl(
+    source_jxl: &Path,
+    backup_jpeg: &Path,
+) -> Result<(String, String)> {
+    anyhow::ensure!(
+        detect_true_format(source_jxl)? == FormatKind::Jxl,
+        "audited recovery source is not a true JXL: {}",
+        source_jxl.display()
+    );
+    anyhow::ensure!(
+        is_jpeg_original(detect_true_format(backup_jpeg)?),
+        "backup recovery candidate is not a true JPEG: {}",
+        backup_jpeg.display()
+    );
+    let source_before = file_hash(source_jxl)?;
+    let backup_before = file_hash(backup_jpeg)?;
+    let integrity = foundation::image::fast_img::verify_pixel_equivalence_integrity(
+        backup_jpeg,
+        source_jxl,
+        FormatKind::Jxl,
+    )
+    .with_context(|| {
+        format!(
+            "pixel proof failed for audited JXL {} and backup JPEG {}",
+            source_jxl.display(),
+            backup_jpeg.display()
+        )
+    })?;
+    let (verified_backup, verified_jxl) = match integrity {
+        foundation::image::fast_img::IntegrityResult::JxlPixelEquivalent {
+            source_hash,
+            output_hash,
+        } => (source_hash, output_hash),
+        _ => anyhow::bail!(
+            "recovery candidate proof did not produce the required JXL pixel-equivalence result"
+        ),
+    };
+    anyhow::ensure!(
+        verified_backup == backup_before && verified_jxl == source_before,
+        "recovery input changed while pixel proof was running: JXL={} backup={}",
+        source_jxl.display(),
+        backup_jpeg.display()
+    );
+    let source_after = file_hash(source_jxl)?;
+    let backup_after = file_hash(backup_jpeg)?;
+    anyhow::ensure!(
+        source_after == source_before && backup_after == backup_before,
+        "recovery input changed after pixel proof: JXL={} backup={}",
+        source_jxl.display(),
+        backup_jpeg.display()
+    );
+    Ok((source_before, backup_before))
+}
+
 fn ensure_safe_output_parent(root: &Path, destination: &Path) -> Result<()> {
     let parent = destination
         .parent()
@@ -414,6 +473,9 @@ fn xmp_sidecars(media: &Path) -> Result<Vec<PathBuf>> {
                 "XMP sidecar is not a regular file: {}",
                 entry.path().display()
             );
+            foundation::metadata::validate_xmp_sidecar(&entry.path()).with_context(|| {
+                format!("validate recovery XMP sidecar {}", entry.path().display())
+            })?;
             sidecars.push(entry.path());
         }
     }
@@ -597,7 +659,6 @@ fn collect_folder_recovery(
     }
     for source_jxl in selected {
         let relative = source_jxl.strip_prefix(source_root)?;
-        let source_hash = file_hash(&source_jxl)?;
         let original = match find_folder_backup_original(backup, relative) {
             Ok(path) => path,
             Err(error) => {
@@ -605,6 +666,14 @@ fn collect_folder_recovery(
                 continue;
             }
         };
+        let (source_hash, backup_hash) =
+            match verify_backup_original_matches_jxl(&source_jxl, &original) {
+                Ok(hashes) => hashes,
+                Err(error) => {
+                    summary.failed.push(error.to_string());
+                    continue;
+                }
+            };
         let output = destination
             .join(relative.parent().unwrap_or_else(|| Path::new("")))
             .join(
@@ -614,17 +683,25 @@ fn collect_folder_recovery(
             );
         if dry_run {
             println!(
-                "[DRY-RUN] recover {} <- {}",
+                "[DRY-RUN] recover {} <- {} (pixel proof ✅)",
                 relative.display(),
                 original.display()
             );
             continue;
         }
+        let mut candidate_records = Vec::new();
         match copy_exact(destination, &original, &output) {
             Ok((hash, copied)) => {
+                if hash != backup_hash {
+                    summary.failed.push(format!(
+                        "backup JPEG changed after pixel proof: {}",
+                        original.display()
+                    ));
+                    continue;
+                }
                 summary.copied += usize::from(copied);
                 summary.skipped += usize::from(!copied);
-                records.push(RecoveryManifestRecord {
+                candidate_records.push(RecoveryManifestRecord {
                     identity: relative_string(&source_jxl, source_root)?,
                     source_jxl_blake3: source_hash.clone(),
                     output_relative_path: relative_string(&output, destination)?,
@@ -637,7 +714,14 @@ fn collect_folder_recovery(
                 continue;
             }
         }
-        for sidecar in xmp_sidecars(&original)? {
+        let sidecars = match xmp_sidecars(&original) {
+            Ok(sidecars) => sidecars,
+            Err(error) => {
+                summary.failed.push(error.to_string());
+                Vec::new()
+            }
+        };
+        for sidecar in sidecars {
             let sidecar_output = output
                 .parent()
                 .context("recovery output has no parent")?
@@ -646,7 +730,7 @@ fn collect_folder_recovery(
                 Ok((hash, copied)) => {
                     summary.copied += usize::from(copied);
                     summary.skipped += usize::from(!copied);
-                    records.push(RecoveryManifestRecord {
+                    candidate_records.push(RecoveryManifestRecord {
                         identity: relative_string(&source_jxl, source_root)?,
                         source_jxl_blake3: source_hash.clone(),
                         output_relative_path: relative_string(&sidecar_output, destination)?,
@@ -657,6 +741,14 @@ fn collect_folder_recovery(
                 Err(error) => summary.failed.push(error.to_string()),
             }
         }
+        if file_hash(&source_jxl)? != source_hash {
+            summary.failed.push(format!(
+                "audited JXL changed during recovery collection: {}",
+                source_jxl.display()
+            ));
+            continue;
+        }
+        records.extend(candidate_records);
     }
     if !dry_run {
         summary.manifest = Some(write_manifest(
@@ -686,10 +778,7 @@ fn folded_filename_stem(name: &str) -> Result<String> {
     Ok(stem.to_lowercase())
 }
 
-fn photos_album_paths_overlap(
-    left: &[Vec<String>],
-    right: &[Vec<String>],
-) -> bool {
+fn photos_album_paths_overlap(left: &[Vec<String>], right: &[Vec<String>]) -> bool {
     left.iter().any(|path| right.contains(path))
 }
 
@@ -701,8 +790,7 @@ fn select_photos_backup_match<'a>(
     let same_stem = candidates
         .iter()
         .filter(|candidate| {
-            folded_filename_stem(&candidate.original_filename)
-                .is_ok_and(|stem| stem == source_stem)
+            folded_filename_stem(&candidate.original_filename).is_ok_and(|stem| stem == source_stem)
         })
         .collect::<Vec<_>>();
     let same_uuid = same_stem
@@ -713,9 +801,7 @@ fn select_photos_backup_match<'a>(
     let album_matches = same_stem
         .iter()
         .copied()
-        .filter(|candidate| {
-            photos_album_paths_overlap(&source.album_paths, &candidate.album_paths)
-        })
+        .filter(|candidate| photos_album_paths_overlap(&source.album_paths, &candidate.album_paths))
         .collect::<Vec<_>>();
     if same_uuid.len() == 1 {
         return Ok(same_uuid[0]);
@@ -761,6 +847,13 @@ fn resolve_photos_recovery_matches(
 
     for source in recovery {
         let selected = select_photos_backup_match(source, &candidates)?;
+        let (source_hash, backup_blake3) =
+            verify_backup_original_matches_jxl(&source.source_path, &selected.original_path)?;
+        anyhow::ensure!(
+            source_hash == source.source_blake3,
+            "live Photos JXL {} changed since the audit; rerun the audit before backup recovery",
+            source.uuid
+        );
         anyhow::ensure!(
             used_backup_uuids.insert(selected.uuid.clone()),
             "backup Photos UUID {} matched more than one audited JXL",
@@ -769,6 +862,7 @@ fn resolve_photos_recovery_matches(
         matches.push(PhotosRecoveryMatch {
             source: source.clone(),
             backup: selected.clone(),
+            backup_blake3,
         });
     }
     Ok(matches)
@@ -801,6 +895,18 @@ fn export_photos_originals(
         .map(|record| record.backup.clone())
         .collect::<Vec<_>>();
     validate_photos_originals(&originals)?;
+    for matched in matches {
+        anyhow::ensure!(
+            file_hash(&matched.source.source_path)? == matched.source.source_blake3,
+            "live Photos JXL {} changed after backup matching; recovery export was not started",
+            matched.source.uuid
+        );
+        anyhow::ensure!(
+            file_hash(&matched.backup.original_path)? == matched.backup_blake3,
+            "backup Photos original {} changed after matching; recovery export was not started",
+            matched.backup.uuid
+        );
+    }
     fs::create_dir_all(destination)?;
     let scratch = foundation::process_lock::get_mfb_tmp_dir()?;
     let mut uuid_file = tempfile::NamedTempFile::new_in(scratch)?;
@@ -900,7 +1006,13 @@ fn export_photos_originals(
                 "osxphotos marked a non-XMP file as sidecar for UUID {}",
                 row.uuid
             );
-            xmp_seen.insert(row.uuid.clone());
+            foundation::metadata::validate_xmp_sidecar(&path)
+                .with_context(|| format!("validate exported recovery XMP for UUID {}", row.uuid))?;
+            anyhow::ensure!(
+                xmp_seen.insert(row.uuid.clone()),
+                "osxphotos recovery report contains duplicate XMP output for UUID {}",
+                row.uuid
+            );
             records.push(RecoveryManifestRecord {
                 identity: matched.source.uuid.clone(),
                 source_jxl_blake3: matched.source.source_blake3.clone(),
@@ -912,15 +1024,29 @@ fn export_photos_originals(
         }
         let format = detect_true_format(&path)?;
         if !is_jpeg_original(format) {
-            continue;
+            anyhow::bail!(
+                "osxphotos recovery report returned non-JPEG media for UUID {}: {}",
+                row.uuid,
+                path.display()
+            );
         }
         let original = original_by_uuid[&row.uuid.as_str()];
+        let expected_backup_hash = recovery_by_uuid[&row.uuid.as_str()].backup_blake3.as_str();
         anyhow::ensure!(
-            file_hash(&path)? == file_hash(&original.original_path)?,
+            file_hash(&path)? == expected_backup_hash,
             "exported Photos original differs from backup bytes for UUID {}",
             row.uuid
         );
-        media_seen.insert(row.uuid.clone());
+        anyhow::ensure!(
+            file_hash(&original.original_path)? == expected_backup_hash,
+            "backup Photos original changed during export for UUID {}",
+            row.uuid
+        );
+        anyhow::ensure!(
+            media_seen.insert(row.uuid.clone()),
+            "osxphotos recovery report contains duplicate media output for UUID {}",
+            row.uuid
+        );
         records.push(RecoveryManifestRecord {
             identity: matched.source.uuid.clone(),
             source_jxl_blake3: matched.source.source_blake3.clone(),
@@ -945,6 +1071,18 @@ fn export_photos_originals(
         xmp_seen.len(),
         expected.len()
     );
+    for matched in matches {
+        anyhow::ensure!(
+            file_hash(&matched.source.source_path)? == matched.source.source_blake3,
+            "live Photos JXL {} changed during recovery export; rerun audit before consuming the manifest",
+            matched.source.uuid
+        );
+        anyhow::ensure!(
+            file_hash(&matched.backup.original_path)? == matched.backup_blake3,
+            "backup Photos original {} changed during recovery export",
+            matched.backup.uuid
+        );
+    }
     Ok(records)
 }
 
@@ -1002,11 +1140,7 @@ fn collect_photos_recovery(
     })
 }
 
-fn comparison_destination(
-    destination: &Path,
-    source: &Path,
-    backup: &Path,
-) -> Result<PathBuf> {
+fn comparison_destination(destination: &Path, source: &Path, backup: &Path) -> Result<PathBuf> {
     let resolved = if destination.exists() {
         checked_real_directory(destination, "comparison destination")?
     } else {
@@ -1080,12 +1214,13 @@ fn comparison_inventory(input: &Path) -> Result<(Vec<ComparisonItem>, Vec<String
         paths.push(input.to_path_buf());
     } else {
         for entry in walkdir::WalkDir::new(input).follow_links(false) {
-            let entry = entry.with_context(|| format!("scan comparison input {}", input.display()))?;
+            let entry =
+                entry.with_context(|| format!("scan comparison input {}", input.display()))?;
             if entry.path_is_symlink() {
-                let relative = entry
-                    .path()
-                    .strip_prefix(root)
-                    .map_or_else(|_| "<outside-root>".into(), |path| path.display().to_string());
+                let relative = entry.path().strip_prefix(root).map_or_else(
+                    |_| "<outside-root>".into(),
+                    |path| path.display().to_string(),
+                );
                 needs_review.push(format!("comparison refused symlink: {relative}"));
                 continue;
             }
@@ -1268,12 +1403,16 @@ fn compare_folders(
         .cloned()
         .collect::<BTreeSet<_>>();
     let source_root = if source.is_file() {
-        source.parent().context("comparison source file has no parent")?
+        source
+            .parent()
+            .context("comparison source file has no parent")?
     } else {
         source
     };
     let backup_root = if backup.is_file() {
-        backup.parent().context("comparison backup file has no parent")?
+        backup
+            .parent()
+            .context("comparison backup file has no parent")?
     } else {
         backup
     };
@@ -1285,12 +1424,7 @@ fn compare_folders(
         let backup_set = backup_by_key.remove(&key).unwrap_or_default();
         match (source_set.as_slice(), backup_set.as_slice()) {
             ([source_item], [backup_item]) => {
-                match folder_pair_relationship(
-                    source_root,
-                    backup_root,
-                    source_item,
-                    backup_item,
-                ) {
+                match folder_pair_relationship(source_root, backup_root, source_item, backup_item) {
                     Ok(relationship) => matched.push(ComparisonPair {
                         logical_key: key,
                         relationship,
@@ -1511,10 +1645,7 @@ mod tests {
         assert!(find_folder_backup_original(backup.path(), Path::new("album/photo.jxl")).is_err());
 
         let png_backup = tempfile::tempdir()?;
-        fs::write(
-            png_backup.path().join("photo.png"),
-            b"\x89PNG\r\n\x1a\n",
-        )?;
+        fs::write(png_backup.path().join("photo.png"), b"\x89PNG\r\n\x1a\n")?;
         assert!(
             find_folder_backup_original(png_backup.path(), Path::new("photo.jxl")).is_err(),
             "recovery collection must never substitute a non-JPEG static original"
@@ -1527,19 +1658,14 @@ mod tests {
         let source = PhotosJxlRecoveryRecord {
             uuid: "source-uuid".to_string(),
             original_filename: "IMG_0001.JXL".to_string(),
+            source_path: PathBuf::from("fixture/IMG_0001.JXL"),
             source_blake3: "source-hash".to_string(),
             album_paths: vec![vec!["Family".to_string(), "2025".to_string()]],
         };
-        let exact_uuid = photos_backup_candidate(
-            "source-uuid",
-            "IMG_0001.JPG",
-            &["Different", "Album"],
-        );
-        let same_album = photos_backup_candidate(
-            "backup-uuid",
-            "IMG_0001.jpeg",
-            &["Family", "2025"],
-        );
+        let exact_uuid =
+            photos_backup_candidate("source-uuid", "IMG_0001.JPG", &["Different", "Album"]);
+        let same_album =
+            photos_backup_candidate("backup-uuid", "IMG_0001.jpeg", &["Family", "2025"]);
         assert_eq!(
             select_photos_backup_match(&source, &[exact_uuid.clone(), same_album.clone()])?.uuid,
             exact_uuid.uuid
@@ -1558,17 +1684,10 @@ mod tests {
             same_album.uuid
         );
 
-        let ambiguous = photos_backup_candidate(
-            "another-backup-uuid",
-            "IMG_0001.jpg",
-            &["Family", "2025"],
-        );
+        let ambiguous =
+            photos_backup_candidate("another-backup-uuid", "IMG_0001.jpg", &["Family", "2025"]);
         assert!(
-            select_photos_backup_match(
-                &source_with_new_uuid,
-                &[same_album, ambiguous],
-            )
-            .is_err(),
+            select_photos_backup_match(&source_with_new_uuid, &[same_album, ambiguous],).is_err(),
             "duplicate filename and album identity must remain explicit instead of choosing the earliest date"
         );
         Ok(())

@@ -704,9 +704,11 @@ working copy. State handling is explicit:
   basename. Photos backups require an exact filename plus one unambiguous UUID
   or album-hierarchy identity; capture date is evidence only and is never used
   to guess. It copies/exports only affected originals plus XMP, never writes the
-  backup or a Photos database, rejects ambiguous/missing matches, verifies byte
-  hashes, and leaves `.mfb_recovery_collection.json` as the resumable BLAKE3
-  proof. The native GUI exposes the same flow as **Collect recovery originals**.
+  backup or a Photos database, rejects ambiguous/missing matches, and proves
+  each selected backup JPEG against the live JXL pixels before copying/exporting.
+  BLAKE3 is checked around the proof and delivery; the atomic
+  `.mfb_recovery_collection.json` records the resumable result. The native GUI
+  exposes the same flow as **Collect recovery originals**.
   Add `--dry-run` to emit the exact folder/Photos recovery match list without
   copying media; the list can be redirected for a custom export script.
 - `collect_optimized CURRENT REPORT --backup BACKUP --compare` is read-only.

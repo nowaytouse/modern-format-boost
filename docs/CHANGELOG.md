@@ -57,6 +57,12 @@ All notable changes to this project will be documented in this file.
   changes, or absent XMP proof fail closed. Every delivered file receives a
   BLAKE3 record in the atomic `.mfb_recovery_collection.json`, and the AppKit
   GUI exposes the same workflow as “Collect recovery originals”.
+- **Backup payload proof**: Folder and Photos recovery now prove the selected
+  backup JPEG against the current audited JXL with the shared pixel-equivalence
+  check before copying or exporting it. BLAKE3 is rechecked before and after
+  proof, copy, and export; invalid XMP sidecars, duplicate report rows, and
+  concurrent source/backup changes fail closed instead of producing an
+  apparently complete recovery manifest.
 
 - **Clear recovery naming and libjxl compatibility**: The native operation is
   again named “Restore Original JPEG” instead of exposing its internal audit
