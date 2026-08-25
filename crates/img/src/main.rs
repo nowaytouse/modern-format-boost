@@ -320,6 +320,7 @@ fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn canonicalize_img_run_roots(
     input: PathBuf,
     base_dir: Option<PathBuf>,
@@ -2485,6 +2486,7 @@ fn fast_img_container_is_static(path: &Path, format: FormatKind) -> anyhow::Resu
         })
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn validate_fast_img_options(options: &FastImgRunOptions<'_>) -> anyhow::Result<()> {
     if options.extreme_precision {
         println!(
@@ -2513,6 +2515,7 @@ struct FastImgSourceInventory {
     source_files: Vec<PathBuf>,
     scan_failures: BTreeMap<String, String>,
     modern_lossy_candidates: Vec<ModernLossyStaticCandidate>,
+    modern_probe_failure_count: usize,
     source_hashes: BTreeMap<String, String>,
     planned_encode_count: usize,
 }
@@ -2555,6 +2558,7 @@ fn scan_fast_img_sources(
     } else {
         foundation::ModernLossyStaticScan::default()
     };
+    let modern_probe_failure_count = modern_lossy_scan.probe_failures.len();
     for (path, reason) in &modern_lossy_scan.probe_failures {
         println!(
             "[RETAIN  ] modern source could not be classified safely and will remain: {} ({reason})",
@@ -2625,6 +2629,7 @@ fn scan_fast_img_sources(
         source_files,
         scan_failures,
         modern_lossy_candidates: modern_lossy_scan.candidates,
+        modern_probe_failure_count,
         source_hashes,
         planned_encode_count,
     })
@@ -3028,6 +3033,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     })?;
     let working_copy =
         fast_img_resolve_requested_working_copy(&src_dir, output_dir, dry_run, fresh)?;
+    let working_copy_existed = working_copy.exists();
     let _working_copy_lock = if dry_run.0 {
         None
     } else {
@@ -3052,6 +3058,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         source_files: source_jpegs,
         scan_failures,
         modern_lossy_candidates,
+        modern_probe_failure_count,
         source_hashes: current_source_hashes,
         planned_encode_count,
     } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
@@ -3084,6 +3091,29 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         dry_run,
         retry_requested,
     )? {
+        return Ok(());
+    }
+
+    if existing_marker.is_none()
+        && source_jpegs.is_empty()
+        && modern_lossy_candidates.is_empty()
+    {
+        if !working_copy_existed && working_copy.is_dir() {
+            std::fs::remove_dir(&working_copy).with_context(|| {
+                format!(
+                    "remove unused empty fast-img output directory {}",
+                    working_copy.display()
+                )
+            })?;
+        }
+        if modern_probe_failure_count > 0 {
+            anyhow::bail!(
+                "fast-img retained all sources because {modern_probe_failure_count} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted"
+            );
+        }
+        println!(
+            "[DONE    ] no eligible {output_format_name} input media found; no files, Photos assets, or directories were changed"
+        );
         return Ok(());
     }
 
@@ -6009,6 +6039,7 @@ struct RestoreJpegCommitProof {
     reconstruction_hash: String,
     output_hash: String,
     xmp_sidecar: Option<RestoreJpegSidecarProof>,
+    source_retention_reason: Option<String>,
     verified_unix_seconds: u64,
     djxl_version: String,
 }
@@ -6017,6 +6048,12 @@ struct RestoreJpegCommitProof {
 struct RestoreJpegSidecarProof {
     path: PathBuf,
     hash: String,
+}
+
+#[derive(Debug, Default)]
+struct RestoreJpegXmpCommit {
+    sidecar: Option<RestoreJpegSidecarProof>,
+    source_retention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -6097,6 +6134,7 @@ struct RestoreJpegParallelOutcome {
     restored: usize,
     skipped: usize,
     records: Vec<RestoreJpegManifestRecord>,
+    metadata_reviews: Vec<RestoreJpegFailure>,
     failures: Vec<RestoreJpegFailure>,
 }
 
@@ -6253,6 +6291,13 @@ fn write_restore_jpeg_manifest(
         } else {
             "false\n"
         });
+        if let Some(reason) = &record.proof.source_retention_reason {
+            content.push_str("# MFB_RESTORE_JPEG_ATTENTION\t");
+            content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
+            content.push('\t');
+            content.push_str(&restore_jpeg_hex_encode(reason));
+            content.push('\n');
+        }
     }
     write_restore_jpeg_durable_text(&manifest, "mfb-restore-manifest-", &content)
 }
@@ -6272,6 +6317,9 @@ fn record_and_delete_restored_jpeg_source(
             proof.source.display()
         )
     })?;
+    if proof.source_retention_reason.is_some() {
+        return Ok(false);
+    }
     let deleted = restore_jpeg_delete_verified_source(proof)?;
     if deleted {
         let record = restore_records
@@ -6403,17 +6451,46 @@ fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Re
     Ok(true)
 }
 
+fn restore_jpeg_stage_adjacent_xmp(
+    adjacent: &Path,
+    temp_xmp: &Path,
+) -> anyhow::Result<String> {
+    let source_hash = calculate_blake3_hash(adjacent)?;
+    std::fs::copy(adjacent, temp_xmp).with_context(|| {
+        format!(
+            "restore-jpeg failed to stage source XMP sidecar {}",
+            adjacent.display()
+        )
+    })?;
+    foundation::metadata::validate_xmp_sidecar(temp_xmp).with_context(|| {
+        format!(
+            "restore-jpeg staged invalid source XMP sidecar {}",
+            adjacent.display()
+        )
+    })?;
+    let staged_hash = calculate_blake3_hash(temp_xmp)?;
+    let source_after_hash = calculate_blake3_hash(adjacent)?;
+    anyhow::ensure!(
+        source_hash == staged_hash && source_hash == source_after_hash,
+        "restore-jpeg source XMP changed while staging: {}",
+        adjacent.display()
+    );
+    Ok(source_hash)
+}
+
 fn restore_jpeg_commit_xmp_sidecar(
     input: &Path,
     output: &Path,
     force: bool,
-) -> anyhow::Result<Option<RestoreJpegSidecarProof>> {
+) -> anyhow::Result<RestoreJpegXmpCommit> {
     let sidecar_output = restore_jpeg_output_xmp_path(output);
     let temp_xmp = foundation::path_safety::isolated_temp_path_for_search(&sidecar_output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg XMP temp path failed: {err}"))?;
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
     let extracted = restore_jpeg_extract_xmp_to_temp(input, &temp_xmp)?;
     let adjacent = foundation::metadata::find_xmp_sidecar(input);
+    let mut source_retention_reason = None;
+    let expected_hash;
 
     if let Some(adjacent) = adjacent.as_deref() {
         foundation::metadata::validate_xmp_sidecar(adjacent).with_context(|| {
@@ -6425,32 +6502,41 @@ fn restore_jpeg_commit_xmp_sidecar(
         if extracted {
             let extracted_hash = calculate_blake3_hash(&temp_xmp)?;
             let adjacent_hash = calculate_blake3_hash(adjacent)?;
-            anyhow::ensure!(
-                extracted_hash == adjacent_hash,
-                "restore-jpeg found conflicting container and adjacent XMP for {}",
-                input.display()
-            );
-        } else {
-            std::fs::copy(adjacent, &temp_xmp).with_context(|| {
-                format!(
-                    "restore-jpeg failed to stage source XMP sidecar {}",
+            if extracted_hash == adjacent_hash {
+                expected_hash = extracted_hash;
+            } else {
+                let staged_hash = restore_jpeg_stage_adjacent_xmp(adjacent, &temp_xmp)?;
+                anyhow::ensure!(
+                    staged_hash == adjacent_hash,
+                    "restore-jpeg adjacent XMP changed before staging: {}",
                     adjacent.display()
-                )
-            })?;
+                );
+                source_retention_reason = Some(format!(
+                    "exact JPEG reconstruction succeeded, but the JXL container XMP ({}) differs from the adjacent XMP ({}); the adjacent XMP was delivered and the source JXL was retained so both metadata layers remain available for review",
+                    extracted_hash, adjacent_hash
+                ));
+                expected_hash = staged_hash;
+            }
+        } else {
+            expected_hash = restore_jpeg_stage_adjacent_xmp(adjacent, &temp_xmp)?;
         }
     } else if !extracted {
-        return Ok(None);
+        return Ok(RestoreJpegXmpCommit::default());
+    } else {
+        expected_hash = calculate_blake3_hash(&temp_xmp)?;
     }
 
-    let expected_hash = calculate_blake3_hash(&temp_xmp)?;
     if sidecar_output.exists() {
         let current_hash = calculate_blake3_hash(&sidecar_output)?;
         if current_hash == expected_hash {
             restore_jpeg_remove_temp(&temp_xmp, "matching existing XMP sidecar")?;
-            return Ok(Some(RestoreJpegSidecarProof {
-                path: sidecar_output,
-                hash: current_hash,
-            }));
+            return Ok(RestoreJpegXmpCommit {
+                sidecar: Some(RestoreJpegSidecarProof {
+                    path: sidecar_output,
+                    hash: current_hash,
+                }),
+                source_retention_reason,
+            });
         }
         anyhow::ensure!(
             force,
@@ -6480,10 +6566,13 @@ fn restore_jpeg_commit_xmp_sidecar(
             sidecar_output.display()
         );
     }
-    Ok(Some(RestoreJpegSidecarProof {
-        path: sidecar_output,
-        hash: current_hash,
-    }))
+    Ok(RestoreJpegXmpCommit {
+        sidecar: Some(RestoreJpegSidecarProof {
+            path: sidecar_output,
+            hash: current_hash,
+        }),
+        source_retention_reason,
+    })
 }
 
 fn restore_jpeg_build_current_proof_with_decoder<F>(
@@ -6607,6 +6696,7 @@ where
             reconstruction_hash: reconstructed_hash,
             output_hash,
             xmp_sidecar: None,
+            source_retention_reason: None,
             verified_unix_seconds: restore_jpeg_verified_unix_seconds()?,
             djxl_version: restore_jpeg_djxl_version()?.to_string(),
         })
@@ -6628,7 +6718,7 @@ fn restore_jpeg_build_current_proof(
     output: &Path,
     output_root: &Path,
 ) -> anyhow::Result<RestoreJpegCommitProof> {
-    let xmp_sidecar = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
+    let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
     let mut proof = restore_jpeg_build_current_proof_with_decoder(
         input,
         input_root,
@@ -6636,7 +6726,8 @@ fn restore_jpeg_build_current_proof(
         output_root,
         restore_jpeg_decode_to_temp,
     )?;
-    proof.xmp_sidecar = xmp_sidecar;
+    proof.xmp_sidecar = xmp_commit.sidecar;
+    proof.source_retention_reason = xmp_commit.source_retention_reason;
     Ok(proof)
 }
 
@@ -6719,8 +6810,8 @@ fn restore_single_jpeg(
             return Err(err);
         }
     };
-    let xmp_sidecar = match restore_jpeg_commit_xmp_sidecar(input, &output, force) {
-        Ok(proof) => proof,
+    let xmp_commit = match restore_jpeg_commit_xmp_sidecar(input, &output, force) {
+        Ok(commit) => commit,
         Err(error) => {
             if committed {
                 foundation::media_conversion_gate::delivery_remove_file_or_audit(
@@ -6780,7 +6871,8 @@ fn restore_single_jpeg(
             )));
         }
     };
-    proof.xmp_sidecar = xmp_sidecar;
+    proof.xmp_sidecar = xmp_commit.sidecar;
+    proof.source_retention_reason = xmp_commit.source_retention_reason;
 
     Ok(RestoreJpegResult { committed, proof })
 }
@@ -6788,6 +6880,11 @@ fn restore_single_jpeg(
 fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow::Result<bool> {
     let input = &proof.source;
     let output = &proof.output;
+    anyhow::ensure!(
+        proof.source_retention_reason.is_none(),
+        "restore-jpeg delete gate refused source cleanup while metadata requires review: {}",
+        proof.source_retention_reason.as_deref().unwrap_or_default()
+    );
     if !input.exists() {
         tracing::info!(
             target: "restore_jpeg_delete",
@@ -7399,10 +7496,19 @@ fn restore_jpeg_keep_source_parallel(
     });
 
     let mut records = Vec::with_capacity(file_count);
+    let mut metadata_reviews = Vec::new();
     let mut failures = Vec::new();
     for (source, result) in pending {
         match result {
-            Ok(result) => record_retained_restored_jpeg_source(&mut records, &result.proof),
+            Ok(result) => {
+                if let Some(reason) = &result.proof.source_retention_reason {
+                    metadata_reviews.push(RestoreJpegFailure {
+                        source: source.clone(),
+                        reason: reason.clone(),
+                    });
+                }
+                record_retained_restored_jpeg_source(&mut records, &result.proof);
+            }
             Err(error) => failures.push(RestoreJpegFailure {
                 source,
                 reason: format!("{error:#}"),
@@ -7413,6 +7519,7 @@ fn restore_jpeg_keep_source_parallel(
         restored: restored.load(Ordering::Relaxed),
         skipped: skipped.load(Ordering::Relaxed),
         records,
+        metadata_reviews,
         failures,
     })
 }
@@ -7597,6 +7704,7 @@ fn run_restore_jpeg(
     let mut deleted_sources = 0usize;
     let mut deleted_source_dirs = Vec::new();
     let mut restore_records = Vec::new();
+    let mut metadata_reviews = Vec::new();
     let mut processing_failures = Vec::new();
 
     if keep_source {
@@ -7604,6 +7712,14 @@ fn run_restore_jpeg(
         restored = outcome.restored;
         skipped = outcome.skipped;
         restore_records = outcome.records;
+        for review in &outcome.metadata_reviews {
+            eprintln!(
+                "[METADATA-REVIEW] {}: {}",
+                review.source.display(),
+                review.reason
+            );
+        }
+        metadata_reviews = outcome.metadata_reviews;
         for failed in &outcome.failures {
             eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
         }
@@ -7623,6 +7739,13 @@ fn run_restore_jpeg(
                         restored += 1;
                     } else {
                         skipped += 1;
+                    }
+                    if let Some(reason) = &result.proof.source_retention_reason {
+                        eprintln!("[METADATA-REVIEW] {}: {reason}", file.display());
+                        metadata_reviews.push(RestoreJpegFailure {
+                            source: file.clone(),
+                            reason: reason.clone(),
+                        });
                     }
                     if record_and_delete_restored_jpeg_source(
                         &output_root,
@@ -7685,6 +7808,7 @@ fn run_restore_jpeg(
     let retained_sources = candidate_count.saturating_sub(deleted_sources);
     let delivered = restored + skipped;
     let processing_failure_count = processing_failures.len();
+    let metadata_review_count = metadata_reviews.len();
     let failure_count = processing_failure_count;
     println!("Succeeded: {delivered}");
     println!("Skipped: {}", ineligible_count + review_count);
@@ -7693,12 +7817,12 @@ fn run_restore_jpeg(
     if failure_count == 0 {
         if ineligible_count == 0 {
             println!(
-                "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+                "[DONE    ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) metadata_review={metadata_review_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
                 output_root.display()
             );
         } else {
             println!(
-                "[DONE    ] restored every exact-reconstruction candidate: {restored} new JPEGs at {} ({skipped} existing outputs reused); {ineligible_count} valid but non-reconstructible JXLs retained; source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+                "[DONE    ] restored every exact-reconstruction candidate: {restored} new JPEGs at {} ({skipped} existing outputs reused); {ineligible_count} valid but non-reconstructible JXLs retained; metadata_review={metadata_review_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
                 output_root.display()
             );
         }
@@ -7712,7 +7836,7 @@ fn run_restore_jpeg(
     }
 
     println!(
-        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} processing_failed={processing_failure_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
+        "[PARTIAL ] restored {restored} JPEGs to {} ({skipped} existing outputs reused) ineligible={ineligible_count} metadata_review={metadata_review_count} processing_failed={processing_failure_count} source JXLs deleted={deleted_sources} retained={retained_sources} empty directories removed={source_dirs_pruned}",
         output_root.display(),
     );
     anyhow::bail!(restore_jpeg_failure_summary(0, processing_failure_count))
@@ -8701,7 +8825,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     Ok((deleted, already_deleted, pruned))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 fn fast_img_run_verification_and_delivery_pipeline(
     marker: &mut WorkingCopyMarker,
     source_jpegs: &[std::path::PathBuf],
@@ -9259,7 +9383,8 @@ mod fast_img_hardening_tests {
         restore_jpeg_candidate_files, restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
         restore_jpeg_delete_verified_source, restore_jpeg_djxl_command, restore_jpeg_hex_encode,
         restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
-        restore_jpeg_validate_disjoint_roots, run_fast_img, validate_cleanup_complete_marker,
+        restore_jpeg_validate_disjoint_roots, restore_single_jpeg,
+        record_and_delete_restored_jpeg_source, run_fast_img, validate_cleanup_complete_marker,
         validate_fast_img_marker_source_state, write_restore_jpeg_manifest,
     };
     use anyhow::Context;
@@ -9506,7 +9631,9 @@ mod fast_img_hardening_tests {
                 Ok(())
             },
         )?;
-        proof.xmp_sidecar = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
+        let xmp_commit = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
+        proof.xmp_sidecar = xmp_commit.sidecar;
+        proof.source_retention_reason = xmp_commit.source_retention_reason;
         Ok(proof)
     }
 
@@ -9615,6 +9742,7 @@ mod fast_img_hardening_tests {
             reconstruction_hash: "jpeg-hash".to_string(),
             output_hash: "jpeg-hash".to_string(),
             xmp_sidecar: None,
+            source_retention_reason: None,
             verified_unix_seconds: 1,
             djxl_version: "djxl test-version".to_string(),
         };
@@ -9771,6 +9899,59 @@ mod fast_img_hardening_tests {
         assert!(restored_without_xmp.committed);
         assert!(output_root.join("plain.jpg").exists());
         assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg")).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_conflicting_xmp_restores_exact_jpeg_and_retains_source() -> anyhow::Result<()> {
+        if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
+        {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let input_root = root.path().join("Album_optimized");
+        let output_root = root.path().join("Album_restored_jpeg");
+        let source = input_root.join("camera.JXL");
+        let source_xmp = input_root.join("camera.xmp");
+        assert!(write_real_reconstructible_jxl(&source)?);
+        write_date_created_xmp(&source_xmp)?;
+        assert!(foundation::metadata::merge_xmp_sidecar_into_dest(
+            &source, &source,
+        )?);
+        let adjacent_xmp = std::fs::read_to_string(&source_xmp)?.replace(
+            "2025-10-24T12:00:24+08:00",
+            "2026-08-25T12:00:24+08:00",
+        );
+        std::fs::write(&source_xmp, adjacent_xmp.as_bytes())?;
+        let expected_jpeg = root.path().join("expected-camera.jpg");
+        restore_jpeg_decode_to_temp(&source, &expected_jpeg)?;
+
+        let restored = restore_single_jpeg(&source, &input_root, &output_root, false)?;
+        let output = output_root.join("camera.jpg");
+
+        assert!(restored.committed);
+        assert_eq!(std::fs::read(&output)?, std::fs::read(&expected_jpeg)?);
+        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
+            .context("restored adjacent XMP sidecar missing")?;
+        assert_eq!(std::fs::read(restored_xmp)?, adjacent_xmp.as_bytes());
+        assert!(restored
+            .proof
+            .source_retention_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("both metadata layers")));
+
+        let mut records = Vec::new();
+        assert!(!record_and_delete_restored_jpeg_source(
+            &output_root,
+            &mut records,
+            &restored.proof,
+        )?);
+        assert!(source.exists());
+        assert!(source_xmp.exists());
+        let manifest = std::fs::read_to_string(output_root.join(RESTORE_JPEG_MANIFEST_NAME))?;
+        assert!(manifest.contains("# MFB_RESTORE_JPEG_ATTENTION\t"));
         Ok(())
     }
 
@@ -10006,8 +10187,8 @@ mod fast_img_hardening_tests {
             &output,
             &output_root,
             |_input, temp_output| {
-                std::fs::copy(&output, temp_output)?;
                 use std::io::Write;
+                std::fs::copy(&output, temp_output)?;
                 std::fs::OpenOptions::new()
                     .append(true)
                     .open(temp_output)?
@@ -10202,6 +10383,41 @@ mod fast_img_hardening_tests {
             extreme_precision: false,
         })?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn empty_fast_img_input_does_not_create_a_false_success_pipeline() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let input = root.path().join("empty");
+        std::fs::create_dir_all(&input)?;
+        let input = input.canonicalize()?;
+        let output = input
+            .parent()
+            .context("empty input parent")?
+            .join("empty_optimized");
+
+        run_fast_img(FastImgRunOptions {
+            input: &input,
+            output_dir: Some(&output),
+            delete_source: DeleteSourceFlag(false),
+            dry_run: DryRunFlag(false),
+            recursive: RecursiveFlag(true),
+            shortest_path: ShortestPathFlag(true),
+            retry: RetryFlag(false),
+            fresh: FreshFlag(false),
+            archive: false,
+            allow_expert_options: false,
+            strategy: "jxl",
+            extreme_precision: false,
+        })?;
+
+        assert!(input.is_dir());
+        assert!(
+            !output.exists(),
+            "zero-work fast-img must not leave an output or enter Photos delivery"
+        );
         Ok(())
     }
 

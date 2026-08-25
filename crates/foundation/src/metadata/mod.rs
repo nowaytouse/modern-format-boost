@@ -1260,6 +1260,8 @@ struct JxlFileIdentity {
 }
 
 fn jxl_file_identity(path: &Path) -> io::Result<JxlFileIdentity> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(io::Error::new(
@@ -1270,8 +1272,6 @@ fn jxl_file_identity(path: &Path) -> io::Result<JxlFileIdentity> {
             ),
         ));
     }
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
     Ok(JxlFileIdentity {
         len: metadata.len(),
         modified: metadata.modified()?,
@@ -1452,16 +1452,14 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
                 .checked_add(1)
                 .ok_or_else(|| io::Error::other("JXL XML box counter overflow"))?;
             last_xml = Some(span);
-        } else if header[4..8] == *b"jbrd" {
-            if jbrd.replace(span).is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "JXL contains multiple top-level jbrd boxes: {}",
-                        path.display()
-                    ),
-                ));
-            }
+        } else if header[4..8] == *b"jbrd" && jbrd.replace(span).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "JXL contains multiple top-level jbrd boxes: {}",
+                    path.display()
+                ),
+            ));
         }
         offset = offset
             .checked_add(box_size)

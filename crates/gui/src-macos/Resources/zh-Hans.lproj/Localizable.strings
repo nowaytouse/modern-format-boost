@@ -30,6 +30,7 @@
 "operation.fast_video" = "快速视频";
 "operation.restore_jpeg" = "恢复原始 JPEG";
 "operation.collect" = "收集恢复原件";
+"operation.compare" = "比对备份";
 "operation.merge_xmp" = "合并 XMP 元数据";
 "operation.icloud_import" = "导入 iCloud 媒体";
 "operation.diagnostic" = "诊断";
@@ -37,7 +38,8 @@
 "operation.database" = "数据库管理";
 "metadata.jxl_overlay" = "JPEG XL 安全策略：冻结重建所依赖的原始 box；外部 XMP 仅作为 overlay 追加，并再次逐字节核验重建结果。";
 "metadata.restore_auto" = "自动恢复 JPEG：选择文件或文件夹时逐字节恢复 JPEG，并按原目录标记不可逆项目；选择照片图库时实时核验资产 UUID，仅把受影响资产引用到 MFB 审计相册，不改写媒体字节。";
-"metadata.recovery_collect" = "收集时会实时复核受影响的 JXL；文件夹备份只接受相同相对目录与文件名的唯一原件，图库备份只接受相同 Photos UUID。不会修改备份，存在歧义就拒绝猜测。";
+"metadata.recovery_collect" = "收集时会实时复核受影响的 JXL，且只接受真实 JPEG 原件；文件夹备份要求相对身份精确匹配，图库备份要求文件名精确并由唯一 UUID 或相册身份确认。不会修改备份，存在歧义就拒绝猜测。";
+"metadata.backup_compare" = "备份比对为只读操作：按相对身份核对真实媒体内容与 XMP，必要时验证 JXL 能否逐字节重建 JPEG，只写报告，不修改任一输入。";
 "option.ultimate" = "最高质量";
 "option.verbose" = "详细日志";
 "option.shortest_path" = "导入到照片";

@@ -2,16 +2,18 @@
 //!
 //! Folder backups are matched by the audited relative directory and basename;
 //! a single audited JXL may use either one exact backup file or a backup folder.
-//! Photos backups are matched by the Photos UUID and exported read-only through
-//! `osxphotos`. Neither path guesses when identity is ambiguous.
+//! Photos backups require an exact original filename plus a unique UUID or
+//! album-hierarchy identity and are exported through `osxphotos`. Neither path
+//! guesses from capture time when identity is ambiguous.
 
 use anyhow::{Context, Result};
 use foundation::image::format_detect::{FormatKind, detect_true_format};
 use foundation::image::jxl_utils::JpegReconstructionEligibility;
 use foundation::image::photos_jxl_audit::{
     PhotosBackupOriginalRecord, PhotosJxlRecoveryRecord, list_photos_jxl_recovery_records,
-    photos_backup_originals_by_uuid,
+    photos_backup_original_candidates,
 };
+use foundation::ToolBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -22,6 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const RECOVERY_MANIFEST: &str = ".mfb_recovery_collection.json";
 const OSXPHOTOS_REPORT: &str = ".mfb_recovery_osxphotos_report.json";
+const COMPARISON_REPORT: &str = "mfb_backup_comparison.json";
 
 #[derive(Debug, Default)]
 pub struct RecoveryCollectionSummary {
@@ -38,6 +41,60 @@ impl RecoveryCollectionSummary {
     pub fn succeeded(&self) -> bool {
         self.failed.is_empty()
     }
+}
+
+#[derive(Debug, Default)]
+pub struct RecoveryComparisonSummary {
+    pub matched: usize,
+    pub source_only: usize,
+    pub backup_only: usize,
+    pub different: usize,
+    pub needs_review: usize,
+    pub report: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ComparisonItem {
+    logical_key: String,
+    relative_path: String,
+    role: &'static str,
+    true_format: String,
+    bytes: u64,
+    blake3: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ComparisonPair {
+    logical_key: String,
+    relationship: &'static str,
+    source: ComparisonItem,
+    backup: ComparisonItem,
+}
+
+#[derive(Debug, Serialize)]
+struct RecoveryComparisonReport {
+    schema: &'static str,
+    complete: bool,
+    source_kind: &'static str,
+    source_identity: String,
+    backup_identity: String,
+    generated_unix_seconds: u64,
+    matched: Vec<ComparisonPair>,
+    source_only: Vec<ComparisonItem>,
+    backup_only: Vec<ComparisonItem>,
+    needs_review: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    photos_report: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct PhotosComparisonReport {
+    library_a: String,
+    library_b: String,
+    in_a_not_b: Vec<serde_json::Value>,
+    in_b_not_a: Vec<serde_json::Value>,
+    in_a_and_b_same: Vec<serde_json::Value>,
+    in_a_and_b_different: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +145,12 @@ struct PhotosExportReportRow {
     sidecar_xmp: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PhotosRecoveryMatch {
+    source: PhotosJxlRecoveryRecord,
+    backup: PhotosBackupOriginalRecord,
+}
+
 fn is_photos_library(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -97,16 +160,8 @@ fn is_photos_library(path: &Path) -> bool {
         })
 }
 
-fn is_static_original(format: FormatKind) -> bool {
-    !matches!(
-        format,
-        FormatKind::Jxl
-            | FormatKind::Mp4
-            | FormatKind::Mov
-            | FormatKind::Mkv
-            | FormatKind::Webm
-            | FormatKind::Unknown
-    )
+const fn is_jpeg_original(format: FormatKind) -> bool {
+    matches!(format, FormatKind::Jpeg)
 }
 
 fn checked_real_directory(path: &Path, label: &str) -> Result<PathBuf> {
@@ -379,8 +434,8 @@ fn find_folder_backup_original(backup: &Path, relative_jxl: &Path) -> Result<Pat
             .context("backup filename is not UTF-8")?;
         anyhow::ensure!(
             backup_stem.eq_ignore_ascii_case(source_stem)
-                && is_static_original(detect_true_format(backup)?),
-            "backup file is not the exact non-JXL static original for {}: {}",
+                && is_jpeg_original(detect_true_format(backup)?),
+            "backup file is not the original JPEG for {}: {}",
             relative_jxl.display(),
             backup.display()
         );
@@ -391,6 +446,7 @@ fn find_folder_backup_original(backup: &Path, relative_jxl: &Path) -> Result<Pat
     let directory = backup.join(relative_parent);
     let mut matches = Vec::new();
     if directory.exists() {
+        let canonical_backup = fs::canonicalize(backup)?;
         let metadata = fs::symlink_metadata(&directory)?;
         anyhow::ensure!(
             metadata.is_dir() && !metadata.file_type().is_symlink(),
@@ -398,7 +454,7 @@ fn find_folder_backup_original(backup: &Path, relative_jxl: &Path) -> Result<Pat
             directory.display()
         );
         anyhow::ensure!(
-            fs::canonicalize(&directory)?.starts_with(backup),
+            fs::canonicalize(&directory)?.starts_with(&canonical_backup),
             "backup relative directory escaped the selected backup: {}",
             directory.display()
         );
@@ -413,7 +469,7 @@ fn find_folder_backup_original(backup: &Path, relative_jxl: &Path) -> Result<Pat
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.eq_ignore_ascii_case(source_stem));
-            if same_stem && is_static_original(detect_true_format(&path)?) {
+            if same_stem && is_jpeg_original(detect_true_format(&path)?) {
                 matches.push(path);
             }
         }
@@ -616,12 +672,114 @@ fn collect_folder_recovery(
     Ok(summary)
 }
 
+fn folded_filename_stem(name: &str) -> Result<String> {
+    let path = Path::new(name);
+    anyhow::ensure!(
+        path.file_name().is_some_and(|component| component == name),
+        "recovery filename is unsafe: {name}"
+    );
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .context("recovery filename has no UTF-8 stem")?;
+    anyhow::ensure!(!stem.is_empty(), "recovery filename has an empty stem");
+    Ok(stem.to_lowercase())
+}
+
+fn photos_album_paths_overlap(
+    left: &[Vec<String>],
+    right: &[Vec<String>],
+) -> bool {
+    left.iter().any(|path| right.contains(path))
+}
+
+fn select_photos_backup_match<'a>(
+    source: &PhotosJxlRecoveryRecord,
+    candidates: &'a [PhotosBackupOriginalRecord],
+) -> Result<&'a PhotosBackupOriginalRecord> {
+    let source_stem = folded_filename_stem(&source.original_filename)?;
+    let same_stem = candidates
+        .iter()
+        .filter(|candidate| {
+            folded_filename_stem(&candidate.original_filename)
+                .is_ok_and(|stem| stem == source_stem)
+        })
+        .collect::<Vec<_>>();
+    let same_uuid = same_stem
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.uuid == source.uuid)
+        .collect::<Vec<_>>();
+    let album_matches = same_stem
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            photos_album_paths_overlap(&source.album_paths, &candidate.album_paths)
+        })
+        .collect::<Vec<_>>();
+    if same_uuid.len() == 1 {
+        return Ok(same_uuid[0]);
+    }
+    if album_matches.len() == 1 {
+        return Ok(album_matches[0]);
+    }
+    if same_stem.len() == 1 {
+        return Ok(same_stem[0]);
+    }
+    let evidence = same_stem
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{}@{}",
+                candidate.uuid,
+                candidate.capture_date.as_deref().unwrap_or("unknown-date")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!(
+        "backup Photos match for source UUID {} ({}) resolved to {} JPEG candidates [{}]; exact filename plus UUID or album identity must select one",
+        source.uuid,
+        source.original_filename,
+        same_stem.len(),
+        evidence
+    )
+}
+
+fn resolve_photos_recovery_matches(
+    backup: &Path,
+    recovery: &[PhotosJxlRecoveryRecord],
+) -> Result<Vec<PhotosRecoveryMatch>> {
+    let requested_names = recovery
+        .iter()
+        .map(|record| record.original_filename.clone())
+        .collect::<Vec<_>>();
+    let candidates = photos_backup_original_candidates(backup, &requested_names)?;
+    validate_photos_originals(&candidates)?;
+    let mut used_backup_uuids = BTreeSet::new();
+    let mut matches = Vec::with_capacity(recovery.len());
+
+    for source in recovery {
+        let selected = select_photos_backup_match(source, &candidates)?;
+        anyhow::ensure!(
+            used_backup_uuids.insert(selected.uuid.clone()),
+            "backup Photos UUID {} matched more than one audited JXL",
+            selected.uuid
+        );
+        matches.push(PhotosRecoveryMatch {
+            source: source.clone(),
+            backup: selected.clone(),
+        });
+    }
+    Ok(matches)
+}
+
 fn validate_photos_originals(originals: &[PhotosBackupOriginalRecord]) -> Result<()> {
     for original in originals {
         let format = detect_true_format(&original.original_path)?;
         anyhow::ensure!(
-            is_static_original(format),
-            "backup Photos UUID {} resolves to {:?}, not an original static image suitable for JXL recovery",
+            is_jpeg_original(format),
+            "backup Photos UUID {} resolves to {:?}, not the original JPEG required for JXL recovery",
             original.uuid,
             format
         );
@@ -632,13 +790,16 @@ fn validate_photos_originals(originals: &[PhotosBackupOriginalRecord]) -> Result
 fn export_photos_originals(
     backup: &Path,
     destination: &Path,
-    recovery: &[PhotosJxlRecoveryRecord],
+    matches: &[PhotosRecoveryMatch],
 ) -> Result<Vec<RecoveryManifestRecord>> {
-    let uuids = recovery
+    let uuids = matches
         .iter()
-        .map(|record| record.uuid.clone())
+        .map(|record| record.backup.uuid.clone())
         .collect::<Vec<_>>();
-    let originals = photos_backup_originals_by_uuid(backup, &uuids)?;
+    let originals = matches
+        .iter()
+        .map(|record| record.backup.clone())
+        .collect::<Vec<_>>();
     validate_photos_originals(&originals)?;
     fs::create_dir_all(destination)?;
     let scratch = foundation::process_lock::get_mfb_tmp_dir()?;
@@ -691,15 +852,19 @@ fn export_photos_originals(
     let rows: Vec<PhotosExportReportRow> =
         serde_json::from_slice(&fs::read(&report_path).context("read osxphotos recovery report")?)
             .context("parse osxphotos recovery report")?;
-    let recovery_by_uuid = recovery
+    let recovery_by_uuid = matches
         .iter()
-        .map(|record| (record.uuid.as_str(), record))
+        .map(|record| (record.backup.uuid.as_str(), record))
         .collect::<BTreeMap<_, _>>();
     let original_by_uuid = originals
         .iter()
         .map(|record| (record.uuid.as_str(), record))
         .collect::<BTreeMap<_, _>>();
     let expected = uuids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        expected.len() == uuids.len(),
+        "resolved Photos backup contains duplicate UUID matches"
+    );
     let mut media_seen = BTreeSet::new();
     let mut xmp_seen = BTreeSet::new();
     let canonical_destination = fs::canonicalize(destination)?;
@@ -725,7 +890,7 @@ fn export_photos_originals(
             "osxphotos recovery report escaped destination: {}",
             path.display()
         );
-        let source = recovery_by_uuid[&row.uuid.as_str()];
+        let matched = recovery_by_uuid[&row.uuid.as_str()];
         let relative = relative_string(&path, &canonical_destination)?;
         if row.sidecar_xmp {
             anyhow::ensure!(
@@ -737,8 +902,8 @@ fn export_photos_originals(
             );
             xmp_seen.insert(row.uuid.clone());
             records.push(RecoveryManifestRecord {
-                identity: row.uuid,
-                source_jxl_blake3: source.source_blake3.clone(),
+                identity: matched.source.uuid.clone(),
+                source_jxl_blake3: matched.source.source_blake3.clone(),
                 output_relative_path: relative,
                 output_blake3: file_hash(&path)?,
                 sidecar: true,
@@ -746,7 +911,7 @@ fn export_photos_originals(
             continue;
         }
         let format = detect_true_format(&path)?;
-        if !is_static_original(format) {
+        if !is_jpeg_original(format) {
             continue;
         }
         let original = original_by_uuid[&row.uuid.as_str()];
@@ -757,8 +922,8 @@ fn export_photos_originals(
         );
         media_seen.insert(row.uuid.clone());
         records.push(RecoveryManifestRecord {
-            identity: row.uuid,
-            source_jxl_blake3: source.source_blake3.clone(),
+            identity: matched.source.uuid.clone(),
+            source_jxl_blake3: matched.source.source_blake3.clone(),
             output_relative_path: relative,
             output_blake3: file_hash(&path)?,
             sidecar: false,
@@ -793,12 +958,17 @@ fn collect_photos_recovery(
     if recovery.is_empty() {
         return Ok(RecoveryCollectionSummary::default());
     }
+    let matches = resolve_photos_recovery_matches(backup, &recovery)?;
     if dry_run {
-        let uuids = recovery
-            .iter()
-            .map(|record| record.uuid.clone())
-            .collect::<Vec<_>>();
-        validate_photos_originals(&photos_backup_originals_by_uuid(backup, &uuids)?)?;
+        for matched in &matches {
+            println!(
+                "[DRY-RUN] recover Photos {} ({}) <- {} ({})",
+                matched.source.uuid,
+                matched.source.original_filename,
+                matched.backup.uuid,
+                matched.backup.original_filename
+            );
+        }
         return Ok(RecoveryCollectionSummary {
             selected: recovery.len(),
             ..RecoveryCollectionSummary::default()
@@ -813,7 +983,7 @@ fn collect_photos_recovery(
         Vec::new(),
         Vec::new(),
     )?;
-    let records = export_photos_originals(backup, destination, &recovery)?;
+    let records = export_photos_originals(backup, destination, &matches)?;
     let copied = records.len();
     let manifest = write_manifest(
         destination,
@@ -832,11 +1002,445 @@ fn collect_photos_recovery(
     })
 }
 
+fn comparison_destination(
+    destination: &Path,
+    source: &Path,
+    backup: &Path,
+) -> Result<PathBuf> {
+    let resolved = if destination.exists() {
+        checked_real_directory(destination, "comparison destination")?
+    } else {
+        let parent = destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let parent = checked_real_directory(parent, "comparison destination parent")?;
+        let name = destination
+            .file_name()
+            .context("comparison destination has no final component")?;
+        anyhow::ensure!(
+            Path::new(name)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
+            "comparison destination has an unsafe final component"
+        );
+        parent.join(name)
+    };
+    anyhow::ensure!(
+        !resolved.starts_with(source) && !resolved.starts_with(backup),
+        "comparison destination must not be inside either compared input"
+    );
+    Ok(resolved)
+}
+
+fn comparison_logical_key(relative: &Path, role: &'static str) -> Result<String> {
+    let filename = relative
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("comparison filename is not UTF-8")?;
+    let filename_path = Path::new(filename);
+    let media_name = if filename_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("xmp"))
+    {
+        filename_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .context("comparison XMP filename has no UTF-8 media name")?
+    } else {
+        filename
+    };
+    let stem = Path::new(media_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .context("comparison filename has no UTF-8 stem")?;
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent = parent.to_str().context("comparison path is not UTF-8")?;
+    let logical = if parent.is_empty() {
+        stem.to_lowercase()
+    } else {
+        format!("{}/{}", parent.to_lowercase(), stem.to_lowercase())
+    };
+    Ok(format!("{logical}:{role}"))
+}
+
+fn comparison_inventory(input: &Path) -> Result<(Vec<ComparisonItem>, Vec<String>)> {
+    let input_is_file = input.is_file();
+    let root = if input_is_file {
+        input
+            .parent()
+            .context("single comparison input has no parent")?
+    } else {
+        input
+    };
+    let mut paths = Vec::new();
+    let mut needs_review = Vec::new();
+    if input_is_file {
+        paths.push(input.to_path_buf());
+    } else {
+        for entry in walkdir::WalkDir::new(input).follow_links(false) {
+            let entry = entry.with_context(|| format!("scan comparison input {}", input.display()))?;
+            if entry.path_is_symlink() {
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map_or_else(|_| "<outside-root>".into(), |path| path.display().to_string());
+                needs_review.push(format!("comparison refused symlink: {relative}"));
+                continue;
+            }
+            if entry.file_type().is_file() {
+                paths.push(entry.into_path());
+            }
+        }
+    }
+    paths.sort();
+    let mut items = Vec::new();
+    for path in paths {
+        let relative = match path.strip_prefix(root) {
+            Ok(relative) => relative,
+            Err(error) => {
+                needs_review.push(format!("comparison path escaped input root: {error}"));
+                continue;
+            }
+        };
+        let Some(name) = relative.file_name().and_then(|value| value.to_str()) else {
+            needs_review.push("comparison path is not UTF-8".to_string());
+            continue;
+        };
+        if name == ".DS_Store"
+            || name.starts_with(".mfb_")
+            || name.contains(".mfb-needs-review")
+            || name.contains(".mfb-recovery-needed")
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            needs_review.push(format!(
+                "comparison refused non-regular file: {}",
+                relative.display()
+            ));
+            continue;
+        }
+        let is_xmp = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("xmp"));
+        let (role, true_format) = if is_xmp {
+            if let Err(error) = foundation::metadata::validate_xmp_sidecar(&path) {
+                needs_review.push(format!("invalid XMP {}: {error}", relative.display()));
+            }
+            ("xmp", "xmp".to_string())
+        } else {
+            match detect_true_format(&path) {
+                Ok(format) => ("media", format!("{format:?}").to_lowercase()),
+                Err(error) => {
+                    needs_review.push(format!(
+                        "media format probe failed for {}: {error}",
+                        relative.display()
+                    ));
+                    ("other", "unknown".to_string())
+                }
+            }
+        };
+        let relative_path = relative_string(&path, root)?;
+        items.push(ComparisonItem {
+            logical_key: comparison_logical_key(relative, role)?,
+            relative_path,
+            role,
+            true_format,
+            bytes: metadata.len(),
+            blake3: file_hash(&path)?,
+        });
+    }
+    items.sort_by(|left, right| {
+        left.logical_key
+            .cmp(&right.logical_key)
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    Ok((items, needs_review))
+}
+
+fn exact_jxl_relationship(jxl: &Path, jpeg_hash: &str) -> Result<&'static str> {
+    match foundation::image::jxl_utils::probe_jpeg_reconstruction_eligibility(jxl) {
+        Ok(JpegReconstructionEligibility::Exact) => {}
+        Ok(
+            JpegReconstructionEligibility::PixelOnly
+            | JpegReconstructionEligibility::AdvertisedButRejected { .. },
+        ) => return Ok("jxl-reconstruction-blocked"),
+        Err(error) => return Err(anyhow::anyhow!(error)),
+    }
+    let reconstructed =
+        foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "backup_comparison_jpeg_reconstruction",
+            None,
+            Some(".jpg"),
+        )?;
+    let mut command = foundation::DjxlBuilder::new()
+        .input(jxl)
+        .output(reconstructed.path())
+        .build();
+    let output = foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        Duration::from_secs(120),
+        foundation::process_runner::image_process_hard_timeout(),
+        "compare JXL with backup JPEG",
+    )?;
+    anyhow::ensure!(
+        foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output),
+        "comparison djxl did not produce an exact JPEG reconstruction"
+    );
+    Ok(if file_hash(reconstructed.path())? == jpeg_hash {
+        "exact-jxl-reconstruction"
+    } else {
+        "different-original-jpeg"
+    })
+}
+
+fn folder_pair_relationship(
+    source_root: &Path,
+    backup_root: &Path,
+    source: &ComparisonItem,
+    backup: &ComparisonItem,
+) -> Result<&'static str> {
+    if source.blake3 == backup.blake3 {
+        return Ok("exact-bytes");
+    }
+    let source_path = source_root.join(&source.relative_path);
+    let backup_path = backup_root.join(&backup.relative_path);
+    if source.true_format == "jxl" && backup.true_format == "jpeg" {
+        return exact_jxl_relationship(&source_path, &backup.blake3);
+    }
+    if source.true_format == "jpeg" && backup.true_format == "jxl" {
+        return exact_jxl_relationship(&backup_path, &source.blake3);
+    }
+    Ok("different-payload")
+}
+
+fn write_comparison_report(
+    destination: &Path,
+    report: &RecoveryComparisonReport,
+) -> Result<PathBuf> {
+    fs::create_dir_all(destination)?;
+    let path = destination.join(COMPARISON_REPORT);
+    let bytes = serde_json::to_vec_pretty(report)?;
+    let mut staged = foundation::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "backup_comparison_report",
+        destination,
+        "mfb-comparison-",
+        ".json",
+    )?;
+    staged.as_file_mut().write_all(&bytes)?;
+    staged.as_file_mut().write_all(b"\n")?;
+    staged.as_file_mut().flush()?;
+    staged.as_file().sync_all()?;
+    staged.persist(&path).map_err(|error| error.error)?;
+    foundation::io_utils::sync_committed_file_and_parent(&path)?;
+    Ok(path)
+}
+
+fn compare_folders(
+    source: &Path,
+    backup: &Path,
+    destination: &Path,
+) -> Result<RecoveryComparisonSummary> {
+    let (source_items, mut needs_review) = comparison_inventory(source)?;
+    let (backup_items, backup_review) = comparison_inventory(backup)?;
+    needs_review.extend(backup_review);
+    let mut source_by_key = BTreeMap::<String, Vec<ComparisonItem>>::new();
+    let mut backup_by_key = BTreeMap::<String, Vec<ComparisonItem>>::new();
+    for item in source_items {
+        source_by_key
+            .entry(item.logical_key.clone())
+            .or_default()
+            .push(item);
+    }
+    for item in backup_items {
+        backup_by_key
+            .entry(item.logical_key.clone())
+            .or_default()
+            .push(item);
+    }
+    let keys = source_by_key
+        .keys()
+        .chain(backup_by_key.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let source_root = if source.is_file() {
+        source.parent().context("comparison source file has no parent")?
+    } else {
+        source
+    };
+    let backup_root = if backup.is_file() {
+        backup.parent().context("comparison backup file has no parent")?
+    } else {
+        backup
+    };
+    let mut matched = Vec::new();
+    let mut source_only = Vec::new();
+    let mut backup_only = Vec::new();
+    for key in keys {
+        let source_set = source_by_key.remove(&key).unwrap_or_default();
+        let backup_set = backup_by_key.remove(&key).unwrap_or_default();
+        match (source_set.as_slice(), backup_set.as_slice()) {
+            ([source_item], [backup_item]) => {
+                match folder_pair_relationship(
+                    source_root,
+                    backup_root,
+                    source_item,
+                    backup_item,
+                ) {
+                    Ok(relationship) => matched.push(ComparisonPair {
+                        logical_key: key,
+                        relationship,
+                        source: source_item.clone(),
+                        backup: backup_item.clone(),
+                    }),
+                    Err(_) => needs_review.push(format!(
+                        "comparison could not prove pair {key}; inspect the source locally"
+                    )),
+                }
+            }
+            ([], backup_set) => backup_only.extend_from_slice(backup_set),
+            (source_set, []) => source_only.extend_from_slice(source_set),
+            (source_set, backup_set) => needs_review.push(format!(
+                "comparison key {key} is ambiguous: source={} backup={}",
+                source_set.len(),
+                backup_set.len()
+            )),
+        }
+    }
+    let different = matched
+        .iter()
+        .filter(|pair| {
+            !matches!(
+                pair.relationship,
+                "exact-bytes" | "exact-jxl-reconstruction"
+            )
+        })
+        .count();
+    let report = RecoveryComparisonReport {
+        schema: "MFB_BACKUP_COMPARISON_V1",
+        complete: needs_review.is_empty(),
+        source_kind: "folder",
+        source_identity: path_identity(source)?,
+        backup_identity: path_identity(backup)?,
+        generated_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock precedes Unix epoch")?
+            .as_secs(),
+        matched,
+        source_only,
+        backup_only,
+        needs_review,
+        photos_report: None,
+    };
+    let summary = RecoveryComparisonSummary {
+        matched: report.matched.len(),
+        source_only: report.source_only.len(),
+        backup_only: report.backup_only.len(),
+        different,
+        needs_review: report.needs_review.len(),
+        report: Some(write_comparison_report(destination, &report)?),
+    };
+    Ok(summary)
+}
+
+fn compare_photos_libraries(
+    source: &Path,
+    backup: &Path,
+    destination: &Path,
+) -> Result<RecoveryComparisonSummary> {
+    let osxphotos = foundation::common_utils::resolve_tool_path("osxphotos")
+        .context("osxphotos is required to compare Photos libraries")?;
+    let mut command = Command::new(osxphotos);
+    command.arg("compare").arg("--json").arg(source).arg(backup);
+    let output = foundation::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        Duration::from_mins(5),
+        Duration::from_hours(12),
+        "compare Photos libraries",
+    )?;
+    anyhow::ensure!(
+        output.status.success(),
+        "osxphotos Photos comparison failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let photos: PhotosComparisonReport = serde_json::from_slice(&output.stdout)
+        .context("parse osxphotos Photos comparison report")?;
+    anyhow::ensure!(
+        fs::canonicalize(&photos.library_a)? == source
+            && fs::canonicalize(&photos.library_b)? == backup,
+        "osxphotos comparison report identifies different libraries than requested"
+    );
+    let summary = RecoveryComparisonSummary {
+        matched: photos.in_a_and_b_same.len(),
+        source_only: photos.in_a_not_b.len(),
+        backup_only: photos.in_b_not_a.len(),
+        different: photos.in_a_and_b_different.len(),
+        needs_review: 0,
+        report: None,
+    };
+    let photos_report = serde_json::json!({
+        "in_source_not_backup": &photos.in_a_not_b,
+        "in_backup_not_source": &photos.in_b_not_a,
+        "same": &photos.in_a_and_b_same,
+        "different": &photos.in_a_and_b_different,
+    });
+    let report = RecoveryComparisonReport {
+        schema: "MFB_BACKUP_COMPARISON_V1",
+        complete: true,
+        source_kind: "photos",
+        source_identity: path_identity(source)?,
+        backup_identity: path_identity(backup)?,
+        generated_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock precedes Unix epoch")?
+            .as_secs(),
+        matched: Vec::new(),
+        source_only: Vec::new(),
+        backup_only: Vec::new(),
+        needs_review: Vec::new(),
+        photos_report: Some(photos_report),
+    };
+    Ok(RecoveryComparisonSummary {
+        report: Some(write_comparison_report(destination, &report)?),
+        ..summary
+    })
+}
+
+/// Compare two folders/files or two Photos libraries without changing either.
+///
+/// # Errors
+/// Rejects mixed input kinds, unsafe destinations, malformed inventory, or an
+/// incomplete upstream Photos comparison.
+pub fn run_recovery_comparison(
+    source: &Path,
+    backup: &Path,
+    destination: &Path,
+) -> Result<RecoveryComparisonSummary> {
+    let source = checked_real_input(source, "comparison source")?;
+    let backup = checked_real_input(backup, "comparison backup")?;
+    let destination = comparison_destination(destination, &source, &backup)?;
+    let source_is_photos = source.is_dir() && is_photos_library(&source);
+    let backup_is_photos = backup.is_dir() && is_photos_library(&backup);
+    anyhow::ensure!(
+        source_is_photos == backup_is_photos,
+        "comparison inputs must both be filesystem items or both be Photos libraries"
+    );
+    if source_is_photos {
+        compare_photos_libraries(&source, &backup, &destination)
+    } else {
+        compare_folders(&source, &backup, &destination)
+    }
+}
+
 /// Collect originals for only the live, non-reconstructible JXL set.
 ///
 /// # Errors
 /// Rejects mixed folder/Photos inputs, unsafe path relationships, ambiguous
-/// backup matches, byte changes, incomplete UUID exports, or missing XMP proof.
+/// backup matches, byte changes, incomplete Photos exports, or missing XMP proof.
 pub fn run_recovery_collection(
     source: &Path,
     backup: &Path,
@@ -854,7 +1458,7 @@ pub fn run_recovery_collection(
         "audited source and backup must both be filesystem items or both be Photos libraries"
     );
     if source_is_photos {
-        println!("[RECOVERY] exact Photos UUID collection");
+        println!("[RECOVERY] exact Photos identity collection");
         collect_photos_recovery(&source, &backup, &destination, dry_run)
     } else {
         anyhow::ensure!(
@@ -869,6 +1473,21 @@ pub fn run_recovery_collection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn photos_backup_candidate(
+        uuid: &str,
+        name: &str,
+        album: &[&str],
+    ) -> PhotosBackupOriginalRecord {
+        PhotosBackupOriginalRecord {
+            uuid: uuid.to_string(),
+            original_filename: name.to_string(),
+            original_path: PathBuf::from("/tmp").join(name),
+            original_uti: "public.jpeg".to_string(),
+            capture_date: None,
+            album_paths: vec![album.iter().map(|value| (*value).to_string()).collect()],
+        }
+    }
 
     #[test]
     fn exact_relative_backup_match_rejects_ambiguity_and_spoofed_extensions() -> Result<()> {
@@ -890,6 +1509,101 @@ mod tests {
             [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9],
         )?;
         assert!(find_folder_backup_original(backup.path(), Path::new("album/photo.jxl")).is_err());
+
+        let png_backup = tempfile::tempdir()?;
+        fs::write(
+            png_backup.path().join("photo.png"),
+            b"\x89PNG\r\n\x1a\n",
+        )?;
+        assert!(
+            find_folder_backup_original(png_backup.path(), Path::new("photo.jxl")).is_err(),
+            "recovery collection must never substitute a non-JPEG static original"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn photos_backup_match_uses_exact_identity_without_date_guessing() -> Result<()> {
+        let source = PhotosJxlRecoveryRecord {
+            uuid: "source-uuid".to_string(),
+            original_filename: "IMG_0001.JXL".to_string(),
+            source_blake3: "source-hash".to_string(),
+            album_paths: vec![vec!["Family".to_string(), "2025".to_string()]],
+        };
+        let exact_uuid = photos_backup_candidate(
+            "source-uuid",
+            "IMG_0001.JPG",
+            &["Different", "Album"],
+        );
+        let same_album = photos_backup_candidate(
+            "backup-uuid",
+            "IMG_0001.jpeg",
+            &["Family", "2025"],
+        );
+        assert_eq!(
+            select_photos_backup_match(&source, &[exact_uuid.clone(), same_album.clone()])?.uuid,
+            exact_uuid.uuid
+        );
+
+        let source_with_new_uuid = PhotosJxlRecoveryRecord {
+            uuid: "new-jxl-uuid".to_string(),
+            ..source.clone()
+        };
+        assert_eq!(
+            select_photos_backup_match(
+                &source_with_new_uuid,
+                &[exact_uuid.clone(), same_album.clone()],
+            )?
+            .uuid,
+            same_album.uuid
+        );
+
+        let ambiguous = photos_backup_candidate(
+            "another-backup-uuid",
+            "IMG_0001.jpg",
+            &["Family", "2025"],
+        );
+        assert!(
+            select_photos_backup_match(
+                &source_with_new_uuid,
+                &[same_album, ambiguous],
+            )
+            .is_err(),
+            "duplicate filename and album identity must remain explicit instead of choosing the earliest date"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn backup_comparison_is_read_only_and_reports_exact_identity() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let backup = root.path().join("backup");
+        let report_dir = root.path().join("report");
+        fs::create_dir_all(source.join("album"))?;
+        fs::create_dir_all(backup.join("album"))?;
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        fs::write(source.join("album/photo.jpg"), jpeg)?;
+        fs::write(backup.join("album/photo.jpeg"), jpeg)?;
+        let source_before = file_hash(&source.join("album/photo.jpg"))?;
+        let backup_before = file_hash(&backup.join("album/photo.jpeg"))?;
+
+        let summary = run_recovery_comparison(&source, &backup, &report_dir)?;
+
+        assert_eq!(summary.matched, 1);
+        assert_eq!(summary.source_only, 0);
+        assert_eq!(summary.backup_only, 0);
+        assert_eq!(summary.different, 0);
+        assert_eq!(summary.needs_review, 0);
+        assert_eq!(file_hash(&source.join("album/photo.jpg"))?, source_before);
+        assert_eq!(file_hash(&backup.join("album/photo.jpeg"))?, backup_before);
+        let report = fs::read_to_string(summary.report.context("comparison report")?)?;
+        assert!(report.contains("exact-bytes"));
+        assert!(report.contains("album/photo.jpg"));
+        assert!(
+            !report.contains(&root.path().to_string_lossy().to_string()),
+            "comparison report must not expose absolute user paths"
+        );
         Ok(())
     }
 }

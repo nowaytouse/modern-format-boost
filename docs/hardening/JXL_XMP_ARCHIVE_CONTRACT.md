@@ -95,6 +95,13 @@ records are mirrored under `Reconstruction Blocked`, and uncertain/invalid
 records under `Needs Review`. Non-reconstructible media is never converted by
 a pixel-to-JPEG fallback and remains untouched.
 
+JPEG reconstructibility and metadata-layer agreement are separate facts. If
+the JXL reconstructs the original JPEG but its container XMP differs from an
+adjacent XMP, restoration still succeeds byte-for-byte and the adjacent XMP is
+committed as the output sidecar. The source JXL and source sidecar are retained,
+and the manifest records `MFB_RESTORE_JPEG_ATTENTION`; this preserves both XMP
+layers for review without falsely calling the JPEG non-reconstructible.
+
 For a Photos library or one concrete asset path inside it, the command switches
 automatically to live-library audit. It resolves and re-queries real asset UUIDs,
 hashes the current originals, and adds references for affected assets to
@@ -123,16 +130,19 @@ BLAKE3-derived checkpoint path.
 it does not add another `restore-jpeg` mode. A single JXL accepts one exact
 same-basename backup file or a backup folder. Folder inputs re-probe every JXL
 from its magic bytes and accept a backup original only when the same relative
-directory and basename resolve to one non-JXL static payload. Photos inputs
+directory and basename resolve to one true JPEG payload. Photos inputs
 re-probe live assets already referenced by `MFB JXL Audit/Recovery Needed`, then
-resolve the backup by exact Photos UUID and export the original version plus an
-XMP sidecar through `osxphotos`.
+resolve an exact original filename by one unique same UUID or album hierarchy;
+capture time is reported as evidence but never selects a candidate. They export
+the original version plus an XMP sidecar through `osxphotos`.
 
 The collector never edits either backup or a Photos database. Missing,
 duplicate, changed, JXL-only, or escaped-path results fail closed. Every copied
 media/XMP output is BLAKE3-checked and recorded in the atomic
 `.mfb_recovery_collection.json`; the Photos export database and update mode make
 an interrupted export idempotently resumable.
+`--dry-run` emits every resolved folder/Photos identity without copying media,
+providing a review list that can be redirected for custom export tools.
 
 Single-file input uses the selected file as its overlap boundary and its parent
 only for relative output naming. Both the library default and the GUI's
@@ -143,6 +153,18 @@ disjoint in both directions.
 Valid pixel-only JXL, advertised-but-rejected reconstruction records, and probe
 failures are classified in the manifest and marker tree or live audit albums.
 They are not converted through pixel-to-JPEG fallback and are not deleted.
+
+## Read-only backup comparison
+
+`collect_optimized CURRENT REPORT --backup BACKUP --compare` compares two
+filesystem inputs or two Photos libraries and never mutates either input.
+Filesystem inventory uses true format, mirrored relative identity, XMP role and
+BLAKE3. A JXL/JPEG pair is equivalent only when `djxl` reconstructs the exact
+backup JPEG bytes; names, dates and extensions are not sufficient proof.
+Photos-library comparison uses `osxphotos compare --json`. An atomic
+`mfb_backup_comparison.json` reports matched, source-only, backup-only,
+different and needs-review entries without storing absolute filesystem paths.
+Symlinks, ambiguous identities and failed probes are explicit review items.
 
 ## Restore manifest and delete gate
 

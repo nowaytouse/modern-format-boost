@@ -2242,7 +2242,7 @@ fn handle_irreversible_jpeg_encode_failure(
     input_size: u64,
     options: &ConvertOptions,
     failure: &str,
-) -> Result<TaskResult> {
+) -> TaskResult {
     foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
         if options.require_output_delivery() {
             "jpeg_lossless_fast_img_failed"
@@ -2252,12 +2252,12 @@ fn handle_irreversible_jpeg_encode_failure(
         input,
         failure,
     );
-    Ok(TaskResult::failed(
+    TaskResult::failed(
         input,
         input_size,
         "Failed: JPEG cannot be byte-identically reconstructed; source remains unmodified",
         JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
-    ))
+    )
 }
 
 fn commit_jpeg_to_jxl_success(
@@ -2515,12 +2515,12 @@ pub fn convert_jpeg_to_jxl(
     // Route through the irreversible-media policy so fast delivery can record a
     // skip and standard img mode can attempt the documented direct-encode path.
     if !is_jpeg_complete(&input_bytes) {
-        return handle_irreversible_jpeg_encode_failure(
+        return Ok(handle_irreversible_jpeg_encode_failure(
             input,
             input_size,
             options,
             "JPEG lossless transcode preflight rejected source before cjxl: JPEG is truncated or missing EOI",
-        );
+        ));
     }
 
     if foundation::image_jpeg_analysis::is_ultra_hdr_jpeg(&input_bytes) {
@@ -2577,7 +2577,7 @@ pub fn convert_jpeg_to_jxl(
             ) {
                 return fallback;
             }
-            return handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure);
+            return Ok(handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure));
         }
         Err(e) => {
             return Err(ImgQualityError::ConversionError(format!(
@@ -2694,7 +2694,7 @@ pub fn convert_jpeg_to_jxl(
         {
             return fallback;
         }
-        return handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure);
+        return Ok(handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure));
     }
 
     let ladder = match try_jbrd_reconstruction_ladder(
@@ -2724,12 +2724,12 @@ pub fn convert_jpeg_to_jxl(
         return fallback;
     }
 
-    handle_irreversible_jpeg_encode_failure(
+    Ok(handle_irreversible_jpeg_encode_failure(
         input,
         input_size,
         options,
         &ladder.fail_closed_message(),
-    )
+    ))
 }
 
 fn avifenc_rejects_malformed_exif(stderr: &[u8]) -> bool {
@@ -7170,7 +7170,11 @@ mod tests {
         let base = tmp.path().join("base.jpg");
         let src = tmp.path().join("fake_ultrahdr.jpg");
         image::RgbImage::from_fn(32, 32, |x, y| {
-            image::Rgb([(x * 7) as u8, (y * 7) as u8, ((x + y) * 3) as u8])
+            image::Rgb([
+                u8::try_from(x * 7).expect("fixture red channel fits in u8"),
+                u8::try_from(y * 7).expect("fixture green channel fits in u8"),
+                u8::try_from((x + y) * 3).expect("fixture blue channel fits in u8"),
+            ])
         })
         .save_with_format(&base, image::ImageFormat::Jpeg)
         .expect("write valid base JPEG");

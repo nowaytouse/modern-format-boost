@@ -118,6 +118,7 @@ private enum OperationMode: String, CaseIterable {
     case fastVid
     case restoreJpeg
     case collect
+    case compare
     case mergeXmp
     case iCloudImport
     case diagnostic
@@ -131,6 +132,7 @@ private enum OperationMode: String, CaseIterable {
         case .fastVid: "fast-vid"
         case .restoreJpeg: "restore-jpeg"
         case .collect: "collect"
+        case .compare: "compare"
         case .mergeXmp: "merge-xmp"
         case .iCloudImport: "icloud-import"
         case .diagnostic: "diagnostic"
@@ -157,7 +159,7 @@ private enum OperationMode: String, CaseIterable {
             OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true)
         case .restoreJpeg:
             OperationCapabilities(fixedProcessingMode: .imagesOnly)
-        case .collect, .mergeXmp, .iCloudImport, .diagnostic, .cacheClean, .databaseManager:
+        case .collect, .compare, .mergeXmp, .iCloudImport, .diagnostic, .cacheClean, .databaseManager:
             OperationCapabilities()
         }
     }
@@ -236,7 +238,7 @@ private enum ProcessorCommand {
                 throw HostError(message: localized("error.photos_scope_unavailable"))
             }
         }
-        if request.operationMode == .collect {
+        if request.operationMode == .collect || request.operationMode == .compare {
             guard let backup = request.backupPath, !backup.isEmpty else {
                 throw HostError(message: localized("error.select_backup"))
             }
@@ -1280,7 +1282,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         ultimateCheck.isEnabled = configurationControlsEnabled && capabilities.supportsUltimate
         shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
         resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
-        let backupAvailable = selectedOperation == .collect
+        let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
         backupButton.isEnabled = configurationControlsEnabled && backupAvailable
         let photosScopeAvailable = selectedOperation == .restoreJpeg
@@ -1292,9 +1294,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             let kind = localized("photos.scope.\($0.kind.rawValue)")
             return "\(kind)  \($0.path.joined(separator: " › "))"
         } ?? localized("photos.scope.entire_library")
-        if !ultimateCheck.isEnabled { ultimateCheck.state = .off }
-        if !shortestPathCheck.isEnabled { shortestPathCheck.state = .off }
-        if !resumeCheck.isEnabled { resumeCheck.state = .off }
+        // Disabling controls while a job runs must not discard the user's
+        // selections; only unsupported options should be cleared.
+        if !capabilities.supportsUltimate { ultimateCheck.state = .off }
+        if !capabilities.supportsShortestPath { shortestPathCheck.state = .off }
+        if !capabilities.supportsResume { resumeCheck.state = .off }
     }
 
     private func updateMetadataSafetyNotice() {
@@ -1306,6 +1310,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             key = "metadata.restore_auto"
         case .collect:
             key = "metadata.recovery_collect"
+        case .compare:
+            key = "metadata.backup_compare"
         default:
             key = nil
         }
@@ -1322,7 +1328,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             targetPath: targetField.stringValue,
             processingMode: processing,
             operationMode: selectedOperation,
-            backupPath: selectedOperation == .collect ? backupField.stringValue : nil,
+            backupPath: selectedOperation == .collect || selectedOperation == .compare
+                ? backupField.stringValue : nil,
             ultimate: ultimateCheck.state == .on,
             verbose: verboseCheck.state == .on,
             shortestPath: shortestPathCheck.state == .on,
@@ -1432,7 +1439,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         replaceTitles(operationPopup, with: [
             localized("operation.adjacent"), localized("operation.fast_jxl"),
             localized("operation.fast_avif"), localized("operation.fast_video"),
-            localized("operation.restore_jpeg"), localized("operation.collect"),
+            localized("operation.restore_jpeg"), localized("operation.collect"), localized("operation.compare"),
             localized("operation.merge_xmp"), localized("operation.icloud_import"),
             localized("operation.diagnostic"), localized("operation.cache_clean"),
             localized("operation.database"),
@@ -1573,6 +1580,20 @@ private func runSelfTest() -> Int32 {
             "--mode", "collect", "--verbose", "--backup", "/tmp/backup", "/tmp/audited",
         ] else {
             fputs("native-host self-test recovery backup mapping failed\n", stderr)
+            return 1
+        }
+        let compare = ProcessorRequest(
+            targetPath: "/tmp/current",
+            processingMode: .both,
+            operationMode: .compare,
+            backupPath: "/tmp/backup",
+            ultimate: false,
+            verbose: true
+        )
+        guard try ProcessorCommand.arguments(from: compare) == [
+            "--mode", "compare", "--verbose", "--backup", "/tmp/backup", "/tmp/current",
+        ] else {
+            fputs("native-host self-test backup comparison mapping failed\n", stderr)
             return 1
         }
         let album = PhotosAuditContainer(

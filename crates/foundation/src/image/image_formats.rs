@@ -1243,6 +1243,27 @@ mod tests {
     }
 
     #[test]
+    fn test_webp_detect_compression_classifies_mixed_animation_as_lossy() {
+        let mut animated = webp::synthetic_two_frame_animated_webp_for_test();
+        let Some(idx) = animated.windows(4).position(|window| window == b"VP8L") else {
+            panic!("synthetic animation must contain a VP8L sub-chunk");
+        };
+        animated[idx + 3] = b' ';
+
+        let mut file = NamedTempFile::new().expect("temporary WebP file");
+        file.write_all(&animated).expect("write synthetic WebP");
+        assert_eq!(
+            crate::image_detection::detect_compression(
+                &crate::image_detection::DetectedFormat::WebP,
+                file.path(),
+            )
+            .expect("mixed-codec WebP animation must parse"),
+            crate::image_detection::CompressionType::Lossy,
+            "detect_compression must inspect every ANMF frame, not only the first codec",
+        );
+    }
+
+    #[test]
     fn test_jxl_jbrd_container_classifies_as_jpeg_reconstruction() {
         // JXL container signature box + jbrd box: reversible-to-JPEG semantics.
         let mut data = Vec::new();

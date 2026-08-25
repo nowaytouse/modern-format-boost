@@ -2,9 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-24
+## [Unreleased] - 2026-08-25
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
+
+- **Reliable recovery classification and backup comparison**: Exact JPEG
+  reconstruction is now independent from XMP-layer agreement. Conflicting
+  container/adjacent XMP no longer turns a reversible JXL into a false
+  “irreversible” result: the byte-identical JPEG and adjacent sidecar are
+  delivered while the source JXL is retained with explicit review evidence.
+  Recovery collection accepts only true JPEG originals and resolves Photos
+  backups by exact filename plus unique UUID/album identity without date
+  guessing. A new read-only folder/Photos comparison writes an atomic,
+  path-private BLAKE3 report and is available through CLI and AppKit GUI.
+- **FastImg zero-work and broken-tool behavior**: A run with no eligible media
+  now exits before markers, Photos import, verification gates, or directory
+  cleanup. Unclassifiable modern-static candidates remain an explicit failure.
+  Broken multimedia executables are smoke-tested once per file identity and
+  automatically rechecked after reinstall/replacement, preventing thousands of
+  repeated dyld warnings without latching a repaired tool as unavailable.
 
 - **Exact recovery-original collector**: The existing Rust collector now has a
   single backup-recovery purpose; the obsolete optimized-media relocation path
@@ -12,12 +28,13 @@ All notable changes to this project will be documented in this file.
   non-reconstructible JXLs and extracts only their originals plus XMP. A single
   JXL accepts one same-basename backup file
   or a backup folder; folder backups use one exact relative-directory and
-  basename match after magic-byte format detection. Photos backups use exact
-  audited UUIDs and read-only `osxphotos` original export. Ambiguity, missing
-  UUIDs, JXL-only backups, path escape, concurrent byte changes, or absent XMP
-  proof fail closed. Every delivered file receives a BLAKE3 record in the
-  atomic `.mfb_recovery_collection.json`, and the AppKit GUI exposes the same
-  workflow as “Collect recovery originals”.
+  basename match after magic-byte format detection. Photos backups use an exact
+  original filename plus one unique UUID or album-hierarchy identity and a
+  read-only `osxphotos` original export; capture date never guesses a match.
+  Ambiguity, missing assets, JXL-only backups, path escape, concurrent byte
+  changes, or absent XMP proof fail closed. Every delivered file receives a
+  BLAKE3 record in the atomic `.mfb_recovery_collection.json`, and the AppKit
+  GUI exposes the same workflow as “Collect recovery originals”.
 
 - **Clear recovery naming and libjxl compatibility**: The native operation is
   again named “Restore Original JPEG” instead of exposing its internal audit

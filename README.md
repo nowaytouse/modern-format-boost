@@ -53,8 +53,10 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   after metadata commit. Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
   external XMP is appended as an idempotent overlay and the exact reconstruction
   proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and
-  delivers additional JXL XMP as a separately hashed `.xmp` sidecar, because a
-  one-file enriched JPEG cannot also be byte-identical to the original.
+  delivers adjacent XMP as a separately hashed `.xmp` sidecar. If container XMP
+  and adjacent XMP differ, the JPEG is still classified as exactly reversible;
+  the source JXL is retained with an explicit metadata-review proof so neither
+  metadata layer is silently discarded.
 - Overlay commits use a same-directory temporary file, source identity/hash
   recheck, atomic rename and file/parent flush. A versioned audit chain records
   JBRD, overlay, final-container and reconstruction hashes without storing
@@ -641,6 +643,9 @@ img restore-jpeg /path/to/Library.photoslibrary --photos-folder-id FOLDER_UUID
 # Re-check affected JXLs and collect only their originals + XMP from a backup.
 collect_optimized /path/to/audited /path/to/recovered --backup /path/to/backup --yes
 
+# Compare two folders/files or two Photos libraries without modifying either.
+collect_optimized /path/to/current /path/to/report --backup /path/to/backup --compare
+
 # Video + animated raster (HEVC default)
 vid run /path/to/media
 
@@ -695,12 +700,21 @@ working copy. State handling is explicit:
 - `collect_optimized AUDITED DEST --backup BACKUP` is the recovery handoff.
   It re-probes current JXL bytes instead of trusting stale markers. A single
   audited JXL accepts either one same-basename backup file or a backup folder;
-  folder backups require one content-recognized static original at the same
-  relative directory and basename. Photos backups require the exact audited UUID. It
-  copies/exports only affected originals plus XMP, never writes the backup or a
-  Photos database, rejects ambiguous/missing matches, verifies byte hashes, and
-  leaves `.mfb_recovery_collection.json` as the resumable BLAKE3 proof. The
-  native GUI exposes the same flow as **Collect recovery originals**.
+  folder backups require one true JPEG at the same relative directory and
+  basename. Photos backups require an exact filename plus one unambiguous UUID
+  or album-hierarchy identity; capture date is evidence only and is never used
+  to guess. It copies/exports only affected originals plus XMP, never writes the
+  backup or a Photos database, rejects ambiguous/missing matches, verifies byte
+  hashes, and leaves `.mfb_recovery_collection.json` as the resumable BLAKE3
+  proof. The native GUI exposes the same flow as **Collect recovery originals**.
+  Add `--dry-run` to emit the exact folder/Photos recovery match list without
+  copying media; the list can be redirected for a custom export script.
+- `collect_optimized CURRENT REPORT --backup BACKUP --compare` is read-only.
+  Folder comparison inventories true formats, XMP, relative identities and
+  BLAKE3; JXL/JPEG pairs are equal only after actual byte-exact JPEG
+  reconstruction. Photos comparison delegates to the installed `osxphotos`
+  library comparator. Results are written atomically to
+  `mfb_backup_comparison.json`; the native GUI exposes **Compare backup**.
 - `--allow-size-tolerance`: relaxes the default strict output-size gate.
 - `--allow-expert-options`: permits explicitly gated fallback/experimental
   encoder paths; it does not weaken final verification.

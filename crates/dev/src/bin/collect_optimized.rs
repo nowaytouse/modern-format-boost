@@ -32,6 +32,10 @@ struct Args {
     #[arg(long)]
     dry_run: bool,
 
+    /// Write a read-only difference report instead of collecting originals
+    #[arg(long, conflicts_with = "dry_run")]
+    compare: bool,
+
     /// Skip the interactive confirmation prompt
     #[arg(long)]
     yes: bool,
@@ -54,6 +58,24 @@ fn main() -> Result<()> {
     } else {
         args.destination
     };
+
+    if args.compare {
+        let summary = dev::infra::recovery_collection::run_recovery_comparison(
+            &source,
+            &backup,
+            &destination,
+        )?;
+        println!("\nBackup comparison summary");
+        println!("  matched identities:  {}", summary.matched);
+        println!("  source only:         {}", summary.source_only);
+        println!("  backup only:         {}", summary.backup_only);
+        println!("  different payloads:  {}", summary.different);
+        println!("  needs review:        {}", summary.needs_review);
+        if let Some(report) = summary.report {
+            println!("  comparison report:   {}", report.display());
+        }
+        return Ok(());
+    }
 
     if !args.dry_run && !args.yes {
         print!(
@@ -110,6 +132,29 @@ mod tests {
                 "backup",
             ])
             .is_ok()
+        );
+        assert!(
+            Args::try_parse_from([
+                "collect_optimized",
+                "source",
+                "destination",
+                "--backup",
+                "backup",
+                "--compare",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Args::try_parse_from([
+                "collect_optimized",
+                "source",
+                "destination",
+                "--backup",
+                "backup",
+                "--compare",
+                "--dry-run",
+            ])
+            .is_err()
         );
     }
 }

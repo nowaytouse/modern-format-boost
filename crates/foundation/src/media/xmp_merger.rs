@@ -168,6 +168,8 @@ struct SourceFileIdentity {
 }
 
 fn source_file_identity(path: &Path) -> Result<SourceFileIdentity> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect XMP merge target {}", path.display()))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -176,8 +178,6 @@ fn source_file_identity(path: &Path) -> Result<SourceFileIdentity> {
             path.display()
         );
     }
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
     Ok(SourceFileIdentity {
         len: metadata.len(),
         modified: metadata
@@ -696,7 +696,7 @@ impl XmpMerger {
             };
 
             let path = entry.path();
-            if !is_regular_non_symlink(&path) || path == xmp_path {
+            if !is_regular_non_symlink(path) || path == xmp_path {
                 continue;
             }
 
@@ -949,7 +949,7 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if merging fails.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
-        if self.merge_jxl_xmp_overlay(xmp_path, media_path)? {
+        if Self::merge_jxl_xmp_overlay(xmp_path, media_path)? {
             return Ok(());
         }
         Self::check_exiftool()?;
@@ -971,7 +971,7 @@ impl XmpMerger {
         }
     }
 
-    fn merge_jxl_xmp_overlay(&self, xmp_path: &Path, media_path: &Path) -> Result<bool> {
+    fn merge_jxl_xmp_overlay(xmp_path: &Path, media_path: &Path) -> Result<bool> {
         use crate::image::jxl_utils::JpegReconstructionEligibility;
         use crate::metadata::MetadataLayerOutcome;
 

@@ -725,6 +725,75 @@ static TOOL_PATH_CACHE: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, Option<std::path::PathBuf>>>,
 > = std::sync::OnceLock::new();
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FailedToolIdentity {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+static FAILED_TOOL_IDENTITIES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, FailedToolIdentity>>,
+> = std::sync::OnceLock::new();
+
+fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    let identity = FailedToolIdentity {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    };
+    let failures = FAILED_TOOL_IDENTITIES
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if crate::media_conversion_gate::mutex_guard_or_recover(
+        "failed_tool_identity_cache_read",
+        failures.lock(),
+    )
+    .get(path)
+    .is_some_and(|failed| *failed == identity)
+    {
+        return false;
+    }
+
+    let healthy = match std::process::Command::new(path).arg("-version").output() {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            !stderr.contains("Library not loaded")
+                && !stderr.contains("dyld:")
+                && !stdout.contains("Library not loaded")
+                && !stdout.contains("dyld:")
+        }
+        Err(err) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "dyld_smoke_err",
+                format!("dyld/version smoke check failed with IO error: {err:?}"),
+            );
+            false
+        }
+    };
+    let mut failures = crate::media_conversion_gate::mutex_guard_or_recover(
+        "failed_tool_identity_cache_write",
+        failures.lock(),
+    );
+    if healthy {
+        failures.remove(path);
+    } else {
+        let newly_failed = failures.insert(path.to_path_buf(), identity) != Some(identity);
+        drop(failures);
+        if newly_failed {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_path_smoke_fail",
+                format!(
+                    "WARNING: Tool candidate at '{}' is corrupt or failed its version smoke test; skipping until the binary changes",
+                    path.display()
+                ),
+            );
+        }
+    }
+    healthy
+}
+
 fn tool_override_env_name(name: &str) -> String {
     let mut key = String::from("MFB_TOOL_");
     for ch in name.chars() {
@@ -796,26 +865,7 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     for fallback in &fallbacks {
         let path = std::path::Path::new(fallback);
         if path.is_file() {
-            let is_healthy = !is_multimedia_tool || {
-                // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
-                match std::process::Command::new(path).arg("-version").output() {
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        !stderr.contains("Library not loaded")
-                            && !stderr.contains("dyld:")
-                            && !stdout.contains("Library not loaded")
-                            && !stdout.contains("dyld:")
-                    }
-                    Err(err) => {
-                        crate::media_conversion_gate::delivery_runtime_batch_audit(
-                            "dyld_smoke_err",
-                            format!("dyld/version smoke check failed with IO error: {err:?}"),
-                        );
-                        false
-                    }
-                }
-            };
+            let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(path);
 
             if is_healthy {
                 let resolved = path.to_path_buf();
@@ -826,13 +876,6 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                 .insert(name.to_string(), Some(resolved.clone()));
                 return Some(resolved);
             }
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "tool_path_smoke_fail",
-                format!(
-                    "WARNING: Tool candidate at '{}' is corrupt or failed dyld load smoke test; skipping",
-                    path.display()
-                ),
-            );
         }
     }
 
@@ -873,26 +916,7 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     // to spuriously failing every file in a batch.
     match which::which(name) {
         Ok(path) => {
-            let is_healthy = !is_multimedia_tool || {
-                // Smoke test: confirm real tool binary runs successfully without dyld/Library not loaded crashes
-                match std::process::Command::new(&path).arg("-version").output() {
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        !stderr.contains("Library not loaded")
-                            && !stderr.contains("dyld:")
-                            && !stdout.contains("Library not loaded")
-                            && !stdout.contains("dyld:")
-                    }
-                    Err(err) => {
-                        crate::media_conversion_gate::delivery_runtime_batch_audit(
-                            "dyld_smoke_err",
-                            format!("dyld/version smoke check failed with IO error: {err:?}"),
-                        );
-                        false
-                    }
-                }
-            };
+            let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(&path);
 
             if is_healthy {
                 crate::media_conversion_gate::mutex_guard_or_recover(
@@ -902,14 +926,6 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
                 .insert(name.to_string(), Some(path.clone()));
                 return Some(path);
             }
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "tool_path_smoke_fail",
-                format!(
-                    "WARNING: which resolved path '{}' for '{}' is corrupt or failed dyld load smoke test; skipping",
-                    path.display(),
-                    name
-                ),
-            );
         }
         Err(e) => {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
@@ -1279,6 +1295,39 @@ mod tests {
     fn tool_override_env_name_is_stable_and_shell_safe() {
         assert_eq!(tool_override_env_name("avifenc"), "MFB_TOOL_AVIFENC");
         assert_eq!(tool_override_env_name("avif-enc"), "MFB_TOOL_AVIF_ENC");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn failed_multimedia_tool_is_retried_only_after_binary_changes() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new()?;
+        let tool = tmp.path().join("ffprobe");
+        let counter = tmp.path().join("counter");
+        fs::write(
+            &tool,
+            "#!/bin/sh\nprintf x >> \"$MFB_TEST_TOOL_COUNTER\"\necho 'dyld: Library not loaded' >&2\nexit 1\n",
+        )?;
+        let mut permissions = fs::metadata(&tool)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tool, permissions.clone())?;
+        let _tool = EnvGuard::set("MFB_TOOL_FFPROBE", &tool.to_string_lossy());
+        let _counter = EnvGuard::set("MFB_TEST_TOOL_COUNTER", &counter.to_string_lossy());
+
+        assert_eq!(resolve_tool_path("ffprobe"), None);
+        assert_eq!(resolve_tool_path("ffprobe"), None);
+        assert_eq!(fs::read_to_string(&counter)?, "x");
+
+        fs::write(
+            &tool,
+            "#!/bin/sh\nprintf y >> \"$MFB_TEST_TOOL_COUNTER\"\nexit 0\n# replacement\n",
+        )?;
+        fs::set_permissions(&tool, permissions)?;
+        assert_eq!(resolve_tool_path("ffprobe"), Some(tool));
+        assert_eq!(fs::read_to_string(counter)?, "xy");
+        Ok(())
     }
 
     #[test]

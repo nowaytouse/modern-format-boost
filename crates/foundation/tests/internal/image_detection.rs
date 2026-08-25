@@ -533,7 +533,11 @@ fn synthetic_jp2_raw_codestream(
         let component_bytes = if components <= 256 { 1 } else { 2 };
         let coc_len = 8 + component_bytes;
         cs.extend_from_slice(&[0xFF, 0x53]);
-        cs.extend_from_slice(&(coc_len as u16).to_be_bytes());
+        cs.extend_from_slice(
+            &u16::try_from(coc_len)
+                .expect("COC marker length must fit in a JPEG 2000 marker")
+                .to_be_bytes(),
+        );
         if component_bytes == 1 {
             cs.push(u8::try_from(component).expect("one-byte component"));
         } else {

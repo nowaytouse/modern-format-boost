@@ -66,6 +66,7 @@ enum LaunchMode {
     RestoreJpeg,
     FastVid,
     Collect,
+    Compare,
     MergeXmp,
     IcloudImport,
     Diagnostic,
@@ -88,7 +89,7 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Backup folder or Photos library used by recovery-original collection.
+    /// Backup folder or Photos library used by recovery collection/comparison.
     #[arg(long, value_name = "PATH")]
     backup: Option<PathBuf>,
 
@@ -733,6 +734,7 @@ fn mode_needs_db_health(mode: &LaunchMode) -> bool {
         | LaunchMode::RestoreJpeg
         | LaunchMode::FastVid
         | LaunchMode::Collect
+        | LaunchMode::Compare
         | LaunchMode::MergeXmp
         | LaunchMode::IcloudImport
         | LaunchMode::Diagnostic
@@ -1363,12 +1365,12 @@ fn plan_cli_invocations(
         return Ok(Vec::new());
     }
     anyhow::ensure!(
-        args.backup.is_none() || args.mode == LaunchMode::Collect,
-        "--backup is available only with --mode collect"
+        args.backup.is_none() || matches!(args.mode, LaunchMode::Collect | LaunchMode::Compare),
+        "--backup is available only with --mode collect or --mode compare"
     );
     anyhow::ensure!(
-        args.mode != LaunchMode::Collect || args.backup.is_some(),
-        "--mode collect requires --backup; legacy optimized-media relocation was removed"
+        !matches!(args.mode, LaunchMode::Collect | LaunchMode::Compare) || args.backup.is_some(),
+        "--mode collect/compare requires --backup; legacy optimized-media relocation was removed"
     );
 
     let img_bin = cli_binary(project_root, "img");
@@ -1422,22 +1424,34 @@ fn plan_cli_invocations(
                     args.strategy.as_deref(),
                 ))?);
             }
-            LaunchMode::Collect => {
+            LaunchMode::Collect | LaunchMode::Compare => {
                 let output = args
                     .output
                     .clone()
-                    .unwrap_or_else(|| adjacent_output(input, "recovery_originals"));
+                    .unwrap_or_else(|| {
+                        adjacent_output(
+                            input,
+                            if args.mode == LaunchMode::Compare {
+                                "backup_comparison"
+                            } else {
+                                "recovery_originals"
+                            },
+                        )
+                    });
                 let backup = args
                     .backup
                     .as_ref()
-                    .context("collect recovery originals requires --backup")?;
-                let collect_args = vec![
+                    .context("recovery collection/comparison requires --backup")?;
+                let mut collect_args = vec![
                     input.to_string_lossy().into_owned(),
                     output.to_string_lossy().into_owned(),
                     "--yes".to_string(),
                     "--backup".to_string(),
                     backup.to_string_lossy().into_owned(),
                 ];
+                if args.mode == LaunchMode::Compare {
+                    collect_args.push("--compare".to_string());
+                }
                 commands.push(dev_bin_command(
                     project_root,
                     "collect_optimized",
@@ -1495,6 +1509,7 @@ const fn mode_label(mode: &LaunchMode) -> &'static str {
         LaunchMode::RestoreJpeg => "Restore Original JPEG",
         LaunchMode::FastVid => "Fast Video",
         LaunchMode::Collect => "Collect Recovery Originals",
+        LaunchMode::Compare => "Compare Backup",
         LaunchMode::MergeXmp => "Merge XMP",
         LaunchMode::IcloudImport => "iCloud Import",
         LaunchMode::Diagnostic => "Diagnostic Verify",
@@ -2880,7 +2895,7 @@ mod tests {
 
         let dashboard = build_runtime_dashboard(&args);
 
-        assert_eq!(dashboard.mode_label, "Restore JPEG");
+        assert_eq!(dashboard.mode_label, "Restore Original JPEG");
         assert!(!dashboard.ultimate);
     }
 
@@ -2968,6 +2983,19 @@ mod tests {
                     "--yes",
                     "--backup",
                     "/backup/Album",
+                ],
+            ),
+            (
+                LaunchMode::Compare,
+                Some(PathBuf::from("/backup/Album")),
+                "/repo/target/release/collect_optimized",
+                vec![
+                    "/input/Album",
+                    "/input/Album_backup_comparison",
+                    "--yes",
+                    "--backup",
+                    "/backup/Album",
+                    "--compare",
                 ],
             ),
             (

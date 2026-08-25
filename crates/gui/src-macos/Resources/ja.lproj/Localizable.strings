@@ -30,6 +30,7 @@
 "operation.fast_video" = "高速動画";
 "operation.restore_jpeg" = "元の JPEG を復元";
 "operation.collect" = "復旧用オリジナルを収集";
+"operation.compare" = "バックアップを比較";
 "operation.merge_xmp" = "XMP メタデータを統合";
 "operation.icloud_import" = "iCloud メディアを読み込む";
 "operation.diagnostic" = "診断";
@@ -37,7 +38,8 @@
 "operation.database" = "データベース管理";
 "metadata.jxl_overlay" = "JPEG XL の安全方針：再構築に使う元の box は変更せず、外部 XMP は overlay として追加し、完全再構築を再検証します。";
 "metadata.restore_auto" = "JPEG を自動復元します。ファイル／フォルダでは JPEG をバイト単位で復元し、非可逆項目を元の構造で標識します。写真ライブラリでは実資産 UUID を監査し、対象項目だけを MFB 監査アルバムから参照して媒体バイトは変更しません。";
-"metadata.recovery_collect" = "対象 JXL を実データで再確認し、フォルダでは同じ相対位置と名前の一意な原本、写真ライブラリでは同じ Photos UUID の原本だけを収集します。バックアップは変更せず、曖昧な一致は拒否します。";
+"metadata.recovery_collect" = "対象 JXL を実データで再確認し、真の JPEG 原本だけを収集します。フォルダでは相対 ID の完全一致、写真ライブラリではファイル名の完全一致と一意な UUID またはアルバム ID を要求します。バックアップは変更せず、曖昧な一致は拒否します。";
+"metadata.backup_compare" = "バックアップ比較は読み取り専用です。相対 ID ごとに実際のメディア内容と XMP を調べ、必要に応じて JXL から JPEG への完全復元を検証し、どちらの入力も変更せずレポートだけを書き出します。";
 "option.ultimate" = "最高品質";
 "option.verbose" = "詳細ログ";
 "option.shortest_path" = "写真に読み込む";

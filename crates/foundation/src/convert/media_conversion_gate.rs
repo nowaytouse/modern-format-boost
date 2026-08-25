@@ -799,7 +799,16 @@ pub fn delivery_training_source_path_or_input(path: &Path) -> PathBuf {
 /// (strict-gated).
 #[must_use]
 pub fn delivery_tool_path_or_bare_name(name: &str) -> PathBuf {
-    crate::common_utils::resolve_tool_path(name).unwrap_or_else(|| {
+    static UNRESOLVED: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashSet<String>>,
+    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    if let Some(path) = crate::common_utils::resolve_tool_path(name) {
+        mutex_guard_or_recover("tool_path_unresolved_clear", UNRESOLVED.lock()).remove(name);
+        return path;
+    }
+    if mutex_guard_or_recover("tool_path_unresolved_record", UNRESOLVED.lock())
+        .insert(name.to_string())
+    {
         delivery_strict_batch_audit(
             "tool_path_unresolved",
             format!(
@@ -807,8 +816,8 @@ pub fn delivery_tool_path_or_bare_name(name: &str) -> PathBuf {
                  using bare name for PATH lookup"
             ),
         );
-        PathBuf::from(name)
-    })
+    }
+    PathBuf::from(name)
 }
 
 /// Video quality CRF from encoder tags, or precomputed BPP estimate (audited).

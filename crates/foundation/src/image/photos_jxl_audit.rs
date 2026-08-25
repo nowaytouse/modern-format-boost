@@ -1,7 +1,7 @@
 //! JXL classification for Photos libraries plus idempotent audit-album marking.
 //!
 //! The Photos package is never written directly. Existing assets are added to
-//! native Photos albums through AppleScript, then queried again by UUID for proof.
+//! native `Photos` albums through `AppleScript`, then queried again by UUID for proof.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -83,6 +83,7 @@ pub struct PhotosJxlAuditSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhotosJxlRecoveryRecord {
     pub uuid: String,
+    pub original_filename: String,
     pub source_blake3: String,
     pub album_paths: Vec<Vec<String>>,
 }
@@ -94,6 +95,7 @@ pub struct PhotosBackupOriginalRecord {
     pub original_filename: String,
     pub original_path: PathBuf,
     pub original_uti: String,
+    pub capture_date: Option<String>,
     pub album_paths: Vec<Vec<String>>,
 }
 
@@ -142,6 +144,10 @@ struct PhotosQueryRecord {
     uti: String,
     #[serde(default)]
     uti_original: String,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    date_original: Option<String>,
     #[serde(default)]
     path: Option<PathBuf>,
     #[serde(default)]
@@ -496,7 +502,7 @@ fn album_ids_for_selection(
         selection.kind.as_str()
     );
     if selection.kind == PhotosAuditContainerKind::Album {
-        return Ok([selection.id.clone()].into_iter().collect());
+        return Ok(std::iter::once(selection.id.clone()).collect());
     }
 
     let by_id = containers
@@ -659,6 +665,42 @@ fn query_records_by_uuid(
     Ok(records)
 }
 
+fn query_all_records(osxphotos: &Path, library: &Path) -> Result<Vec<PhotosQueryRecord>> {
+    let output = run_osxphotos(
+        osxphotos,
+        &[
+            "query".to_string(),
+            "--db".to_string(),
+            library.to_string_lossy().to_string(),
+            "--json".to_string(),
+            "--mute".to_string(),
+        ],
+        "query all Photos backup assets",
+    )?;
+    let mut records: Vec<PhotosQueryRecord> = serde_json::from_str(&output)
+        .context("could not parse complete Photos backup query JSON")?;
+    validate_query_records(&records, None)?;
+    records.sort_by(|left, right| left.uuid.cmp(&right.uuid));
+    Ok(records)
+}
+
+fn safe_original_filename(record: &PhotosQueryRecord) -> Result<String> {
+    let original_filename = if record.original_filename.trim().is_empty() {
+        record.filename.clone()
+    } else {
+        record.original_filename.clone()
+    };
+    anyhow::ensure!(
+        !original_filename.trim().is_empty()
+            && Path::new(&original_filename)
+                .file_name()
+                .is_some_and(|name| name == original_filename.as_str()),
+        "Photos asset {} returned an unsafe original filename",
+        record.uuid
+    );
+    Ok(original_filename)
+}
+
 fn source_album_paths(record: &PhotosQueryRecord) -> Vec<Vec<String>> {
     let mut paths = record
         .album_info
@@ -812,7 +854,7 @@ pub fn list_photos_jxl_recovery_records(library: &Path) -> Result<Vec<PhotosJxlR
 
     for record in records {
         let is_marked = current_album_paths(&record).iter().any(|path| {
-            path.get(0).is_some_and(|value| value == AUDIT_ROOT)
+            path.first().is_some_and(|value| value == AUDIT_ROOT)
                 && path.get(1).is_some_and(|value| value == "Recovery Needed")
         });
         if !is_marked {
@@ -829,8 +871,10 @@ pub fn list_photos_jxl_recovery_records(library: &Path) -> Result<Vec<PhotosJxlR
         let source_blake3 = classified
             .source_blake3
             .context("live Photos recovery candidate has no source hash")?;
+        let original_filename = safe_original_filename(&classified.record)?;
         recovery.push(PhotosJxlRecoveryRecord {
             uuid: classified.record.uuid,
+            original_filename,
             source_blake3,
             album_paths,
         });
@@ -851,58 +895,106 @@ pub fn photos_backup_originals_by_uuid(
     let scope = exact_photos_library_scope(library)?;
     let osxphotos = resolve_osxphotos()?;
     let records = query_records_by_uuid(&osxphotos, &scope.library, uuids)?;
-    let mut originals = Vec::with_capacity(records.len());
-    for record in records {
-        anyhow::ensure!(
-            !record.ismissing,
-            "backup Photos asset {} is marked missing",
-            record.uuid
-        );
-        let original_path = record
-            .path
-            .clone()
-            .with_context(|| format!("backup Photos asset {} has no original path", record.uuid))?;
-        let metadata = fs::symlink_metadata(&original_path).with_context(|| {
-            format!(
-                "backup Photos original for UUID {} is unavailable at {}",
-                record.uuid,
-                original_path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0,
-            "backup Photos original for UUID {} is not a non-empty regular file",
-            record.uuid
-        );
-        let original_filename = if record.original_filename.trim().is_empty() {
-            record.filename.clone()
-        } else {
-            record.original_filename.clone()
-        };
-        anyhow::ensure!(
-            !original_filename.trim().is_empty()
-                && Path::new(&original_filename)
-                    .file_name()
-                    .is_some_and(|name| name == original_filename.as_str()),
-            "backup Photos asset {} returned an unsafe original filename",
-            record.uuid
-        );
-        let original_uti = if record.uti_original.trim().is_empty() {
-            record.uti.clone()
-        } else {
-            record.uti_original.clone()
-        };
-        let album_paths = source_album_paths(&record);
-        originals.push(PhotosBackupOriginalRecord {
-            uuid: record.uuid,
-            original_filename,
-            original_path,
-            original_uti,
-            album_paths,
-        });
-    }
+    let mut originals = records
+        .into_iter()
+        .map(photos_backup_original_from_record)
+        .collect::<Result<Vec<_>>>()?;
     originals.sort_by(|left, right| left.uuid.cmp(&right.uuid));
     Ok(originals)
+}
+
+fn photos_backup_original_from_record(
+    record: PhotosQueryRecord,
+) -> Result<PhotosBackupOriginalRecord> {
+    anyhow::ensure!(
+        !record.ismissing,
+        "backup Photos asset {} is marked missing",
+        record.uuid
+    );
+    let original_path = record
+        .path
+        .clone()
+        .with_context(|| format!("backup Photos asset {} has no original path", record.uuid))?;
+    let metadata = fs::symlink_metadata(&original_path).with_context(|| {
+        format!(
+            "backup Photos original for UUID {} is unavailable at {}",
+            record.uuid,
+            original_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0,
+        "backup Photos original for UUID {} is not a non-empty regular file",
+        record.uuid
+    );
+    let original_filename = safe_original_filename(&record)?;
+    let original_uti = if record.uti_original.trim().is_empty() {
+        record.uti.clone()
+    } else {
+        record.uti_original.clone()
+    };
+    let capture_date = record.date_original.clone().or(record.date.clone());
+    let album_paths = source_album_paths(&record);
+    Ok(PhotosBackupOriginalRecord {
+        uuid: record.uuid,
+        original_filename,
+        original_path,
+        original_uti,
+        capture_date,
+        album_paths,
+    })
+}
+
+fn folded_filename_stem(name: &str) -> Result<String> {
+    let safe = Path::new(name);
+    anyhow::ensure!(
+        safe.file_name().is_some_and(|component| component == name),
+        "Photos original filename is unsafe"
+    );
+    let stem = safe
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .context("Photos original filename has no UTF-8 stem")?;
+    anyhow::ensure!(!stem.is_empty(), "Photos original filename has an empty stem");
+    Ok(stem.to_lowercase())
+}
+
+/// Resolve all JPEG candidates in a read-only backup Photos library whose
+/// original filename stem exactly matches one of the requested audited names.
+///
+/// # Errors
+/// Fails closed if a matching database row is missing, unsafe, unreadable, or
+/// cannot be proven to contain a real JPEG payload.
+pub fn photos_backup_original_candidates(
+    library: &Path,
+    requested_names: &[String],
+) -> Result<Vec<PhotosBackupOriginalRecord>> {
+    let requested = requested_names
+        .iter()
+        .map(|name| folded_filename_stem(name))
+        .collect::<Result<BTreeSet<_>>>()?;
+    let scope = exact_photos_library_scope(library)?;
+    let osxphotos = resolve_osxphotos()?;
+    let mut candidates = Vec::new();
+    for record in query_all_records(&osxphotos, &scope.library)? {
+        let Ok(original_filename) = safe_original_filename(&record) else {
+            continue;
+        };
+        let Ok(stem) = folded_filename_stem(&original_filename) else {
+            continue;
+        };
+        if !requested.contains(&stem) {
+            continue;
+        }
+        let candidate = photos_backup_original_from_record(record)?;
+        if crate::image::format_detect::detect_true_format(&candidate.original_path)?
+            == crate::image::format_detect::FormatKind::Jpeg
+        {
+            candidates.push(candidate);
+        }
+    }
+    candidates.sort_by(|left, right| left.uuid.cmp(&right.uuid));
+    Ok(candidates)
 }
 
 fn add_uuids_to_album(album: &[String], uuids: &[String]) -> Result<()> {
@@ -990,8 +1082,11 @@ fn hex_encode(value: &str) -> String {
     value
         .as_bytes()
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::new(), |mut encoded, byte| {
+            use std::fmt::Write;
+            let _ = write!(encoded, "{byte:02x}");
+            encoded
+        })
 }
 
 fn checkpoint_path(scope: &PhotosJxlAuditScope) -> Result<PathBuf> {
@@ -1018,6 +1113,8 @@ fn write_checkpoint(
     assets: &[ClassifiedAsset],
     verified: &BTreeMap<String, BTreeSet<Vec<String>>>,
 ) -> Result<()> {
+    use std::fmt::Write as _;
+
     let updated = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock precedes Unix epoch")?
@@ -1027,28 +1124,30 @@ fn write_checkpoint(
     );
     for asset in assets {
         if asset.target_albums.is_empty() {
-            text.push_str(&format!(
-                "{}\t{}\t{}\t\ttrue\t{}\t{updated}\n",
+            let _ = writeln!(
+                text,
+                "{}\t{}\t{}\t\ttrue\t{}\t{updated}",
                 asset.record.uuid,
                 asset.status.as_str(),
                 asset.source_blake3.as_deref().unwrap_or(""),
                 hex_encode(&asset.reason),
-            ));
+            );
             continue;
         }
         for album in &asset.target_albums {
             let is_verified = verified
                 .get(&asset.record.uuid)
                 .is_some_and(|albums| albums.contains(album));
-            text.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{updated}\n",
+            let _ = writeln!(
+                text,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{updated}",
                 asset.record.uuid,
                 asset.status.as_str(),
                 asset.source_blake3.as_deref().unwrap_or(""),
                 hex_encode(&album.join("/")),
                 is_verified,
                 hex_encode(&asset.reason),
-            ));
+            );
         }
     }
     let parent = path
@@ -1178,6 +1277,8 @@ mod tests {
             original_filename: String::new(),
             uti: String::new(),
             uti_original: String::new(),
+            date: None,
+            date_original: None,
             path: None,
             path_derivatives: Vec::new(),
             ismissing: false,
@@ -1189,7 +1290,7 @@ mod tests {
     fn query_record_validation_is_exact_and_duplicate_safe() {
         let first = "00000000-0000-0000-0000-000000000000";
         let second = "11111111-1111-1111-1111-111111111111";
-        let expected = [first.to_string()].into_iter().collect::<BTreeSet<_>>();
+        let expected = std::iter::once(first.to_string()).collect::<BTreeSet<_>>();
 
         assert!(validate_query_records(&[query_record(first)], Some(&expected)).is_ok());
         assert!(validate_query_records(&[query_record(first), query_record(first)], None).is_err());
@@ -1199,13 +1300,15 @@ mod tests {
     }
 
     #[test]
-    fn audit_album_path_preserves_source_hierarchy() -> Result<()> {
+    fn audit_album_path_preserves_source_hierarchy() {
         let record = PhotosQueryRecord {
             uuid: "00000000-0000-0000-0000-000000000000".to_string(),
             filename: String::new(),
             original_filename: String::new(),
             uti: String::new(),
             uti_original: String::new(),
+            date: None,
+            date_original: None,
             path: None,
             path_derivatives: Vec::new(),
             ismissing: false,
@@ -1225,6 +1328,5 @@ mod tests {
                 "Trip/Day".to_string(),
             ]]
         );
-        Ok(())
     }
 }

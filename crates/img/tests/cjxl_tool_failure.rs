@@ -1,5 +1,7 @@
 use std::fs;
 use std::process::Command;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
 
 // Run the CLI in a child process with an explicit failing `cjxl` override. This
@@ -17,9 +19,8 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         let p = bin_dir.join("cjxl");
         fs::write(
             &p,
-            "#!/bin/sh\ncase \"$1\" in --version|--help|-h) echo 'JPEG XL encoder v0.13.0'; exit 0;; esac\necho 'Error while decoding the JPEG image' >&2\nexit 1\n",
+            "#!/bin/sh\ncase \"$1\" in --version|-version|--help|-h) echo 'JPEG XL encoder v0.13.0'; exit 0;; esac\necho 'Error while decoding the JPEG image' >&2\nexit 1\n",
         )?;
-        use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&p)?.permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&p, perms)?;
@@ -50,7 +51,6 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         .arg("--output")
         .arg(&output_dir)
         .arg("--force")
-        .arg("--plain")
         .env("MFB_TOOL_CJXL", &cjxl_path)
         .output()?;
     let diagnostics = format!(

@@ -1602,7 +1602,7 @@ fn apply_tier2_enriched_delivery_proofs(
 /// This is used by migration workflows that must be restart-safe: a matching
 /// live Photos asset is reused only after its UUID and content hash are proved;
 /// otherwise the candidate is imported and verified through the same bounded
-/// per-item recovery path as FastImg Tier 2.
+/// per-item recovery path as `FastImg` Tier 2.
 pub fn import_or_reconcile_verified_media_candidates(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {

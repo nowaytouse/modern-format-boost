@@ -30,6 +30,7 @@
 "operation.fast_video" = "Fast Video";
 "operation.restore_jpeg" = "Restore Original JPEG";
 "operation.collect" = "Collect recovery originals";
+"operation.compare" = "Compare backup";
 "operation.merge_xmp" = "Merge XMP metadata";
 "operation.icloud_import" = "Import iCloud media";
 "operation.diagnostic" = "Diagnostics";
@@ -37,7 +38,8 @@
 "operation.database" = "Database manager";
 "metadata.jxl_overlay" = "JPEG XL safety: reconstruction-owned boxes stay immutable; external XMP is appended as an overlay and exact reconstruction is re-verified.";
 "metadata.restore_auto" = "Automatic JPEG recovery: files and folders restore byte-exact JPEGs and mirror markers for non-reversible items; a Photos library selection audits live asset UUIDs and references only affected items in MFB audit albums without changing media bytes.";
-"metadata.recovery_collect" = "Recovery collection re-checks affected JXL files live, then copies only exact relative-name matches from a folder backup or exact UUID matches from a Photos backup. Backup media is never modified; ambiguous matches fail closed.";
+"metadata.recovery_collect" = "Recovery collection re-checks affected JXL files live, then copies only true JPEG originals. Folder backups require exact relative identity; Photos backups require an exact filename plus a unique UUID or album identity. Backup media is never modified; ambiguity fails closed.";
+"metadata.backup_compare" = "Backup comparison is read-only. It inventories true media content and XMP by relative identity, verifies exact JXL-to-JPEG reconstruction where applicable, and writes a report without changing either input.";
 "option.ultimate" = "Highest quality";
 "option.verbose" = "Detailed logs";
 "option.shortest_path" = "Import to Photos";

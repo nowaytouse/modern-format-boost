@@ -75,6 +75,7 @@ impl CliProcessingResult for crate::conversion::TaskResult {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     pub input: PathBuf,
     pub output: Option<PathBuf>,
