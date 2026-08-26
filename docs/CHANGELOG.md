@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-08-26
 
+### IMG maintainability and scoped quality signals
+
+- **IMG orchestration cleanup**: replaced the remaining production-path
+  `too_many_arguments` exceptions with named context records and removed the
+  AVIF command builder's manual-unwrapping exception. The conversion, retry,
+  delivery, and recovery state transitions are unchanged while their inputs
+  are now self-documenting at call sites.
+- **Focused `check_all` profile**: added `--package img|vid` for local
+  compile/lint/test checks. Package runs keep default features and explicitly
+  reject `--ci`, so a focused maintenance pass cannot silently become the
+  multi-hour workspace gate; `--fix` remains formatter-only and exits before
+  checks or audits, and its Ruff pass is limited to tracked Python files.
+- **Separate CI package signals**: GitHub now reports independent IMG and VID
+  package-quality jobs alongside the shared repository audit. Release gating
+  requires both package signals, while their results remain independently
+  visible.
+- **Regression-test correctness**: the production matrix's synthetic pixel
+  fixture now preserves the original modulo-byte pattern without a truncating
+  cast or an overflow-to-zero fallback. The existing semantic test inventory
+  was audited; no duplicate test with distinct state-transition coverage was
+  removed.
+- **Dependency freshness**: refreshed the locked transitive dependency
+  revisions with the explicitly requested `cargo update`; no manifest feature
+  or direct dependency was added.
+
 ### IMG production matrix and JPEG orientation hardening
 
 - **Orientation-proof regression fix**: strict JXL delivery verification now

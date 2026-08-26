@@ -58,8 +58,7 @@ fn magick_supports_format(format: &str) -> bool {
     String::from_utf8_lossy(&output.stdout).lines().any(|line| {
         line.split_whitespace()
             .next()
-            .map(|name| name.trim_end_matches('*') == wanted)
-            .unwrap_or(false)
+            .is_some_and(|name| name.trim_end_matches('*') == wanted)
     })
 }
 
@@ -549,12 +548,16 @@ fn real_static_format_matrix_is_decoded_and_extension_spoofing_is_rejected() -> 
     fs::create_dir_all(&fixture_root)?;
     fs::create_dir_all(&decoded_root)?;
 
+    let to_byte = |value: u32| match u8::try_from(value % 256) {
+        Ok(byte) => byte,
+        Err(_) => unreachable!("value modulo 256 always fits in a byte"),
+    };
     let png = fixture_root.join("pattern.png");
     image::RgbImage::from_fn(32, 24, |x, y| {
         image::Rgb([
-            (x * 7 + 11) as u8,
-            (y * 9 + 17) as u8,
-            ((x + y) * 5 + 23) as u8,
+            to_byte(x * 7 + 11),
+            to_byte(y * 9 + 17),
+            to_byte((x + y) * 5 + 23),
         ])
     })
     .save(&png)?;
@@ -728,21 +731,21 @@ fn truncated_jpeg_with_xmp_fails_closed_without_source_or_output_mutation() -> R
     Ok(())
 }
 
-fn synthetic_animated_webp() -> Vec<u8> {
-    fn anmf(duration_ms: u32) -> Vec<u8> {
+fn synthetic_animated_webp() -> Result<Vec<u8>> {
+    fn anmf(duration_ms: u32) -> Result<Vec<u8>> {
         let mut payload = vec![0u8; 16];
-        payload[12] = (duration_ms & 0xff) as u8;
-        payload[13] = ((duration_ms >> 8) & 0xff) as u8;
-        payload[14] = ((duration_ms >> 16) & 0xff) as u8;
+        payload[12] = u8::try_from(duration_ms & 0xff).context("duration low byte")?;
+        payload[13] = u8::try_from((duration_ms >> 8) & 0xff).context("duration middle byte")?;
+        payload[14] = u8::try_from((duration_ms >> 16) & 0xff).context("duration high byte")?;
         payload.extend_from_slice(b"VP8L\x00\x00\x00\x00");
-        let size = u32::try_from(payload.len()).expect("synthetic WebP payload fits u32");
+        let size = u32::try_from(payload.len()).context("synthetic WebP payload fits u32")?;
         let mut chunk = b"ANMF".to_vec();
         chunk.extend_from_slice(&size.to_le_bytes());
         chunk.extend(payload);
         if !chunk.len().is_multiple_of(2) {
             chunk.push(0);
         }
-        chunk
+        Ok(chunk)
     }
 
     let vp8x = [
@@ -752,22 +755,22 @@ fn synthetic_animated_webp() -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&vp8x);
     body.extend_from_slice(&anim);
-    body.extend(anmf(100));
-    body.extend(anmf(200));
+    body.extend(anmf(100)?);
+    body.extend(anmf(200)?);
 
-    let riff_size = u32::try_from(body.len() + 4).expect("synthetic WebP body fits u32");
+    let riff_size = u32::try_from(body.len() + 4).context("synthetic WebP body fits u32")?;
     let mut output = b"RIFF".to_vec();
     output.extend_from_slice(&riff_size.to_le_bytes());
     output.extend_from_slice(b"WEBP");
     output.extend(body);
-    output
+    Ok(output)
 }
 
 #[test]
 fn animated_webp_is_not_admitted_as_a_static_image() -> Result<()> {
     let root = tempfile::tempdir()?;
     let path = root.path().join("animation.jpg");
-    fs::write(&path, synthetic_animated_webp())?;
+    fs::write(&path, synthetic_animated_webp()?)?;
     ensure!(
         detect_true_format(&path)? == FormatKind::WebP,
         "content identity must override the misleading .jpg extension"
@@ -786,7 +789,7 @@ fn animated_webp_is_not_admitted_as_a_static_image() -> Result<()> {
     Ok(())
 }
 
-fn write_ftyp_fixture(path: &Path, major: &[u8; 4], compatible: &[[u8; 4]]) -> Result<()> {
+fn write_ftyp_fixture(path: &Path, major: [u8; 4], compatible: &[[u8; 4]]) -> Result<()> {
     let payload_len = 8usize
         .checked_add(
             compatible
@@ -799,7 +802,7 @@ fn write_ftyp_fixture(path: &Path, major: &[u8; 4], compatible: &[[u8; 4]]) -> R
     let mut bytes = Vec::with_capacity(payload_len + 8);
     bytes.extend_from_slice(&box_size.to_be_bytes());
     bytes.extend_from_slice(b"ftyp");
-    bytes.extend_from_slice(major);
+    bytes.extend_from_slice(&major);
     bytes.extend_from_slice(&0u32.to_be_bytes());
     for brand in compatible {
         bytes.extend_from_slice(brand);
@@ -812,21 +815,21 @@ fn write_ftyp_fixture(path: &Path, major: &[u8; 4], compatible: &[[u8; 4]]) -> R
 fn isobmff_sequence_brands_are_explicitly_classified() -> Result<()> {
     let root = tempfile::tempdir()?;
     let avif_sequence = root.path().join("sequence.avif");
-    write_ftyp_fixture(&avif_sequence, b"avif", &[*b"avis"])?;
+    write_ftyp_fixture(&avif_sequence, *b"avif", &[*b"avis"])?;
     ensure!(
         foundation::image_detection::is_isobmff_animated_sequence(&avif_sequence)?,
         "avis compatible brand must identify an AVIF sequence"
     );
 
     let heic_sequence = root.path().join("sequence.heic");
-    write_ftyp_fixture(&heic_sequence, b"msf1", &[])?;
+    write_ftyp_fixture(&heic_sequence, *b"msf1", &[])?;
     ensure!(
         foundation::image_detection::is_isobmff_animated_sequence(&heic_sequence)?,
         "msf1 major brand must identify a multi-sample sequence"
     );
 
     let still = root.path().join("still.avif");
-    write_ftyp_fixture(&still, b"avif", &[])?;
+    write_ftyp_fixture(&still, *b"avif", &[])?;
     ensure!(
         !foundation::image_detection::is_isobmff_animated_sequence(&still)?,
         "ordinary avif must not be classified as an animation from its brand alone"

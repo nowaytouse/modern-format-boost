@@ -61,6 +61,19 @@ IMG 回归套件直接覆盖公开的检测、转换与交付边界；仅编译�
 cargo test --locked -p img --all-targets -- --nocapture --test-threads=1
 ```
 
+日常维护可以使用 `check_all` 的本地单包检查，避免把整仓库的昂贵门禁
+混入 IMG 判断：
+
+```bash
+cargo run --locked -p dev --bin check_all -- \
+  --allow-non-nightly --package img --required-only --no-expensive
+```
+
+需要单独检查视频时将 `img` 换成 `vid`。单包作用域使用该包的默认特性，
+不会启动工作区 CI 配置；`--ci` 仍然只接受工作区作用域。GitHub 也把它们
+显示为独立的 `IMG package quality` 与 `VID package quality` 作业，因此
+视频失败不会混淆 IMG 的结果。
+
 依赖外部工具的测试会明确报告编码器/解码器不可用，绝不会把未执行的分支宣称为已验证。这是充分的本地生产候选证据，但不等同于所有第三方编解码器或真实 Photos/iCloud 事务在所有机器上都绝无缺陷。
 
 ### 谁适合使用？
@@ -487,14 +500,14 @@ Modern Format Boost 使用分层质量门控降低回归与静默损坏风险；
 
 交付、推理、终端 UI 与训练栈的行为以**可审计的契约文档**为准（CI 密封测试约束）。扩展 `img` / `vid`、探索管线或 PostgreSQL 训练时请优先查阅：
 
-| 层                       | 文档                                                                                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 层                                               | 文档                                                                                                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 媒体转换契约（M1–M251 注册表；M1–M206 交付密封） | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
-| 算法 / 推理门控          | [`ALGORITHM_LAYER_CONTRACT.md`](hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                    |
-| 原生 macOS UI            | [`UI_LAYER_CONTRACT.md`](hardening/UI_LAYER_CONTRACT.md)                                                                                                                  |
-| JXL/XMP 归档与 JPEG 恢复 | [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                    |
-| 日志 / 会话              | [`LOGGING_LAYER_CONTRACT.md`](hardening/LOGGING_LAYER_CONTRACT.md) · [`LOGGING_LAYOUT.md`](hardening/LOGGING_LAYOUT.md)                                                   |
-| 数据库                   | [`DATABASE_LAYER_CONTRACT.md`](hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                      |
+| 算法 / 推理门控                                  | [`ALGORITHM_LAYER_CONTRACT.md`](hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                    |
+| 原生 macOS UI                                    | [`UI_LAYER_CONTRACT.md`](hardening/UI_LAYER_CONTRACT.md)                                                                                                                  |
+| JXL/XMP 归档与 JPEG 恢复                         | [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                    |
+| 日志 / 会话                                      | [`LOGGING_LAYER_CONTRACT.md`](hardening/LOGGING_LAYER_CONTRACT.md) · [`LOGGING_LAYOUT.md`](hardening/LOGGING_LAYOUT.md)                                                   |
+| 数据库                                           | [`DATABASE_LAYER_CONTRACT.md`](hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                      |
 
 **静图质量训练**（high/low 分层、入库审计）：
 

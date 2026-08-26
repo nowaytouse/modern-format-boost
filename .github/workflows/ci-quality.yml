@@ -156,8 +156,67 @@ jobs:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
         run: cargo test --no-default-features --features "std,libc,alloc" --no-fail-fast -- --test-threads=1
 
+  # Keep package-level signals separate from the shared workspace audit. A
+  # failing video path must not hide whether IMG itself is healthy (and vice
+  # versa); both jobs still use the same pinned toolchain and static media
+  # dependency boundary.
+  package-quality:
+    name: "${{ matrix.name }}"
+    needs: validation
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: img
+            name: "2a · IMG package quality"
+          - package: vid
+            name: "2b · VID package quality"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      LIBHEIF_STATIC: "1"
+      LIBHEIF_SYS_STATIC: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install media build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-09
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.package }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.package }}-
+
+      - name: Check ${{ matrix.package }} compilation
+        run: cargo check --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build
+
+      - name: Check ${{ matrix.package }} clippy
+        run: cargo clippy --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build -- -D warnings
+
+      - name: Test ${{ matrix.package }}
+        run: cargo test --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build -- --test-threads=1
+
   health-check:
-    name: "2 · Repository Health Check"
+    name: "2c · Shared Repository Health Check"
     needs: validation
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -179,11 +238,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-07-16
+          toolchain: nightly-2026-08-09
           components: rustfmt, clippy, miri, rust-src, llvm-tools
 
       - name: Ensure required nightly components on pinned toolchain
-        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-07-16
+        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-08-09
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -262,7 +321,7 @@ jobs:
           path: lcov.info
           if-no-files-found: error
 
-      - name: Check health-check outcomes
+      - name: Check shared health-check outcomes
         if: always()
         run: |
           exit_code=0
@@ -307,9 +366,10 @@ jobs:
 
   nightly-release:
     name: Build & Publish Nightly
-    if: github.ref == 'refs/heads/nightly' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.health-check.result == 'success' && needs.security-audit.result == 'success' && needs.validation.result == 'success'
+    if: github.ref == 'refs/heads/nightly' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.health-check.result == 'success' && needs.package-quality.result == 'success' && needs.security-audit.result == 'success' && needs.validation.result == 'success'
     needs:
       - validation
+      - package-quality
       - health-check
       - security-audit
     permissions:
@@ -333,7 +393,7 @@ jobs:
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly-2026-07-16
+          toolchain: nightly-2026-08-09
           components: clippy, rustfmt, miri, rust-src, llvm-tools
 
       - name: Build standalone media dependency installer

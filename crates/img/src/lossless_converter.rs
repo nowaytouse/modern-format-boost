@@ -624,22 +624,36 @@ fn perform_icc_d50_retry(
     retry_out.or(original_result)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn try_pipeline_recovery_fallbacks(
-    input: &Path,
-    _actual_input: &Path,
-    temp_output: &Path,
-    output: &Path,
-    options: &ConvertOptions,
+struct JxlRecoveryFallbackContext<'a> {
+    input: &'a Path,
+    temp_output: &'a Path,
+    output: &'a Path,
+    options: &'a ConvertOptions,
     actual_dist: f32,
     max_threads: usize,
     actual_eff: u8,
     input_size: u64,
-    color_info: Option<&ColorInfo>,
-    stderr: &str,
+    color_info: Option<&'a ColorInfo>,
+    stderr: &'a str,
     original_result: std::result::Result<std::process::Output, JxlDirectEncodeError>,
-) -> FallbackResult {
+}
+
+fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> FallbackResult {
     use std::process::Stdio;
+
+    let JxlRecoveryFallbackContext {
+        input,
+        temp_output,
+        output,
+        options,
+        actual_dist,
+        max_threads,
+        actual_eff,
+        input_size,
+        color_info,
+        stderr,
+        original_result,
+    } = context;
     if !options.allow_expert_options() {
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
             "cjxl_external_recovery_disabled",
@@ -713,6 +727,33 @@ fn try_pipeline_recovery_fallbacks(
             }
         }
     }
+
+    // All secondary ImageMagick exits use the same guarded finalization. Keep
+    // that policy in one closure so a new fallback cannot accidentally skip
+    // the health and size checks.
+    let try_imagemagick_fallback = || {
+        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
+            input,
+            temp_output,
+            actual_dist,
+            actual_eff,
+            max_threads,
+            options.apple_compat(),
+        )
+        .is_ok()
+        {
+            Some(FallbackResult::Finalized(finalize_fallback_jxl(
+                input,
+                temp_output,
+                output,
+                input_size,
+                options,
+                "(imagemagick fallback)",
+            )))
+        } else {
+            None
+        }
+    };
 
     // Not a grayscale ICC error, or ImageMagick fallback failed
     // Try FFmpeg pipeline as before
@@ -962,24 +1003,8 @@ fn try_pipeline_recovery_fallbacks(
                         );
                         log_detail!(&line);
                         log_detail!(" SECONDARY FALLBACK: Trying ImageMagick pipeline...",);
-                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-                            input,
-                            temp_output,
-                            actual_dist,
-                            actual_eff,
-                            max_threads,
-                            options.apple_compat(),
-                        )
-                        .is_ok()
-                        {
-                            return FallbackResult::Finalized(finalize_fallback_jxl(
-                                input,
-                                temp_output,
-                                output,
-                                input_size,
-                                options,
-                                "(imagemagick fallback)",
-                            ));
+                        if let Some(result) = try_imagemagick_fallback() {
+                            return result;
                         }
                         FallbackResult::Exhausted(original_result)
                     }
@@ -989,24 +1014,8 @@ fn try_pipeline_recovery_fallbacks(
                         log_detail!(
                             "Pipeline Recovery: FFmpeg fallback exhausted; engaging ImageMagick secondary pre-decode stage",
                         );
-                        if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-                            input,
-                            temp_output,
-                            actual_dist,
-                            actual_eff,
-                            max_threads,
-                            options.apple_compat(),
-                        )
-                        .is_ok()
-                        {
-                            return FallbackResult::Finalized(finalize_fallback_jxl(
-                                input,
-                                temp_output,
-                                output,
-                                input_size,
-                                options,
-                                "(imagemagick fallback)",
-                            ));
+                        if let Some(result) = try_imagemagick_fallback() {
+                            return result;
                         }
                         FallbackResult::Exhausted(original_result)
                     }
@@ -1019,24 +1028,8 @@ fn try_pipeline_recovery_fallbacks(
                     log_detail!(&line);
                 }
                 log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-                if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-                    input,
-                    temp_output,
-                    actual_dist,
-                    actual_eff,
-                    max_threads,
-                    options.apple_compat(),
-                )
-                .is_ok()
-                {
-                    return FallbackResult::Finalized(finalize_fallback_jxl(
-                        input,
-                        temp_output,
-                        output,
-                        input_size,
-                        options,
-                        "(imagemagick fallback)",
-                    ));
+                if let Some(result) = try_imagemagick_fallback() {
+                    return result;
                 }
                 FallbackResult::Exhausted(original_result)
             }
@@ -1050,24 +1043,8 @@ fn try_pipeline_recovery_fallbacks(
             log_detail!("  Recommended Action: Install via Homebrew: 'brew install ffmpeg'");
 
             log_detail!(foundation::infra::static_logs::messages::LOSSLESS_FALLBACK_MAGICK);
-            if foundation::jxl_utils::try_imagemagick_fallback_with_effort(
-                input,
-                temp_output,
-                actual_dist,
-                actual_eff,
-                max_threads,
-                options.apple_compat(),
-            )
-            .is_ok()
-            {
-                return FallbackResult::Finalized(finalize_fallback_jxl(
-                    input,
-                    temp_output,
-                    output,
-                    input_size,
-                    options,
-                    "(imagemagick fallback)",
-                ));
+            if let Some(result) = try_imagemagick_fallback() {
+                return result;
             }
             FallbackResult::Exhausted(original_result)
         }
@@ -1352,20 +1329,19 @@ pub fn convert_to_jxl(
                 || stderr.contains("libpng warning")
                 || foundation::jxl_utils::is_grayscale_icc_cjxl_error(&stderr)
             {
-                match try_pipeline_recovery_fallbacks(
+                match try_pipeline_recovery_fallbacks(JxlRecoveryFallbackContext {
                     input,
-                    &actual_input,
-                    &temp_output,
-                    &output,
+                    temp_output: &temp_output,
+                    output: &output,
                     options,
                     actual_dist,
                     max_threads,
                     actual_eff,
                     input_size,
                     color_info,
-                    &stderr,
-                    result,
-                ) {
+                    stderr: &stderr,
+                    original_result: result,
+                }) {
                     FallbackResult::Finalized(res) => return res,
                     FallbackResult::Exhausted(orig) => orig,
                 }
@@ -1984,20 +1960,34 @@ fn run_exiftool_restore_all_metadata(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_jbrd_retry_from_temp(
-    candidate: &Path,
-    temp_output: &Path,
-    output: &Path,
-    input: &Path,
+struct JbrdRetryContext<'a> {
+    candidate: &'a Path,
+    temp_output: &'a Path,
+    output: &'a Path,
+    input: &'a Path,
     input_size: u64,
-    options: &ConvertOptions,
+    options: &'a ConvertOptions,
     max_threads: usize,
-    label: &str,
+    label: &'a str,
     proof: JpegTranscodeProof,
-    diagnostics: &mut JpegJbrdLadderDiagnostics,
+    diagnostics: &'a mut JpegJbrdLadderDiagnostics,
     mode: JpegLosslessTranscodePlanMode,
-) -> Option<Result<TaskResult>> {
+}
+
+fn run_jbrd_retry_from_temp(context: JbrdRetryContext<'_>) -> Option<Result<TaskResult>> {
+    let JbrdRetryContext {
+        candidate,
+        temp_output,
+        output,
+        input,
+        input_size,
+        options,
+        max_threads,
+        label,
+        proof,
+        diagnostics,
+        mode,
+    } = context;
     foundation::media_conversion_gate::delivery_remove_file_or_audit(
         "jpeg_jbrd_retry_temp_output",
         temp_output,
@@ -2377,19 +2367,19 @@ fn try_jbrd_reconstruction_ladder(
         ) {
             Ok(tmp1) => match run_jpegtran_layer(input, tmp1.path(), "all", true) {
                 Ok(jpegtran_out) if jpegtran_out.status.success() => {
-                    if let Some(result) = run_jbrd_retry_from_temp(
-                        tmp1.path(),
+                    if let Some(result) = run_jbrd_retry_from_temp(JbrdRetryContext {
+                        candidate: tmp1.path(),
                         temp_output,
                         output,
                         input,
                         input_size,
                         options,
                         max_threads,
-                        "jpegtran optimize retry",
-                        JpegTranscodeProof::PixelEquivalence,
-                        &mut ladder,
-                        encode_plan_mode,
-                    ) {
+                        label: "jpegtran optimize retry",
+                        proof: JpegTranscodeProof::PixelEquivalence,
+                        diagnostics: &mut ladder,
+                        mode: encode_plan_mode,
+                    }) {
                         return JbrdLadderResult::Recovered(result);
                     }
                 }
@@ -2427,19 +2417,21 @@ fn try_jbrd_reconstruction_ladder(
                         match std::fs::copy(tmp_struct.path(), tmp2.path()) {
                             Ok(_) => match run_exiftool_restore_all_metadata(input, tmp2.path()) {
                                 Ok(exiftool_out) if exiftool_out.status.success() => {
-                                    if let Some(result) = run_jbrd_retry_from_temp(
-                                        tmp2.path(),
-                                        temp_output,
-                                        output,
-                                        input,
-                                        input_size,
-                                        options,
-                                        max_threads,
-                                        "metadata-safe structural rebuild retry",
-                                        JpegTranscodeProof::PixelEquivalence,
-                                        &mut ladder,
-                                        encode_plan_mode,
-                                    ) {
+                                    if let Some(result) =
+                                        run_jbrd_retry_from_temp(JbrdRetryContext {
+                                            candidate: tmp2.path(),
+                                            temp_output,
+                                            output,
+                                            input,
+                                            input_size,
+                                            options,
+                                            max_threads,
+                                            label: "metadata-safe structural rebuild retry",
+                                            proof: JpegTranscodeProof::PixelEquivalence,
+                                            diagnostics: &mut ladder,
+                                            mode: encode_plan_mode,
+                                        })
+                                    {
                                         return JbrdLadderResult::Recovered(result);
                                     }
                                 }
@@ -2855,7 +2847,6 @@ fn detect_avif_input_color_model(input: &Path) -> AvifencInputColorModel {
     }
 }
 
-#[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 fn build_avifenc_command(
     input: &Path,
     output: &Path,
@@ -2865,10 +2856,7 @@ fn build_avifenc_command(
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    let effective_speed = match speed {
-        Some(configured_speed) => configured_speed,
-        None => 0,
-    };
+    let effective_speed = speed.unwrap_or_default();
     builder.speed(effective_speed).jobs("all");
     match detect_avif_input_color_model(input) {
         AvifencInputColorModel::Grayscale => {
@@ -3949,19 +3937,19 @@ fn try_jxl_pre_avif_fallback(
         })?;
 
     match probe_jxl_pre_avif_fallback_with(input_payload_size, active_policy, |distance| {
-        let output_size = encode_jxl_probe_to_output(
+        let output_size = encode_jxl_probe_to_output(JxlProbeContext {
             input,
             actual_input,
-            &candidate_output,
+            output: &candidate_output,
             distance,
             effort,
             max_threads,
-            options.apple_compat(),
-            options.allow_expert_options(),
+            apple_compat: options.apple_compat(),
+            allow_expert_options: options.allow_expert_options(),
             icc_path,
             color_info,
-            "Pre-AVIF fallback probe",
-        )?;
+            stage_label: "Pre-AVIF fallback probe",
+        })?;
         if active_policy.fits(output_size, input_payload_size) {
             foundation::fast_img::verify_pixel_equivalence_integrity(
                 input,
@@ -4418,22 +4406,35 @@ fn encode_direct_jxl_probe_with_effort(
     }
 }
 
-// Probe plumbing carries the full encode context per the shared verifier
-// contract; grouping it into a struct would fork the type per call site.
-#[allow(clippy::too_many_arguments)]
-fn encode_jxl_probe_to_output(
-    input: &Path,
-    actual_input: &Path,
-    output: &Path,
+#[derive(Clone, Copy)]
+struct JxlProbeContext<'a> {
+    input: &'a Path,
+    actual_input: &'a Path,
+    output: &'a Path,
     distance: f32,
     effort: u8,
     max_threads: usize,
     apple_compat: bool,
     allow_expert_options: bool,
-    icc_path: Option<&Path>,
-    color_info: Option<&ColorInfo>,
-    stage_label: &str,
-) -> std::result::Result<u64, String> {
+    icc_path: Option<&'a Path>,
+    color_info: Option<&'a ColorInfo>,
+    stage_label: &'a str,
+}
+
+fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Result<u64, String> {
+    let JxlProbeContext {
+        input,
+        actual_input,
+        output,
+        distance,
+        effort,
+        max_threads,
+        apple_compat,
+        allow_expert_options,
+        icc_path,
+        color_info,
+        stage_label,
+    } = context;
     foundation::media_conversion_gate::delivery_remove_file_or_audit(
         "jxl probe output pre-clean",
         output,
@@ -4597,19 +4598,19 @@ fn try_explore_ultimate_jxl_distance(
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| e.to_string())?;
-            let result = encode_jxl_probe_to_output(
+            let result = encode_jxl_probe_to_output(JxlProbeContext {
                 input,
                 actual_input,
-                &candidate_output,
+                output: &candidate_output,
                 distance,
-                exploration_effort,
+                effort: exploration_effort,
                 max_threads,
-                options.apple_compat(),
-                options.allow_expert_options(),
+                apple_compat: options.apple_compat(),
+                allow_expert_options: options.allow_expert_options(),
                 icc_path,
                 color_info,
-                "Screening probe",
-            );
+                stage_label: "Screening probe",
+            });
             foundation::media_conversion_gate::delivery_remove_file_or_audit(
                 "jxl screening probe candidate cleanup",
                 &candidate_output,
@@ -4659,19 +4660,19 @@ fn try_explore_ultimate_jxl_distance(
         let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-        let finalist_result = encode_jxl_probe_to_output(
+        let finalist_result = encode_jxl_probe_to_output(JxlProbeContext {
             input,
             actual_input,
-            &candidate_output,
-            finalist.distance,
-            exploration_effort,
+            output: &candidate_output,
+            distance: finalist.distance,
+            effort: exploration_effort,
             max_threads,
-            options.apple_compat(),
-            options.allow_expert_options(),
+            apple_compat: options.apple_compat(),
+            allow_expert_options: options.allow_expert_options(),
             icc_path,
             color_info,
-            "Finalist encode",
-        );
+            stage_label: "Finalist encode",
+        });
         total_iterations = total_iterations.saturating_add(1);
 
         match finalist_result {
@@ -4812,19 +4813,19 @@ fn try_explore_ultimate_jxl_distance(
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-            let refinement_result = encode_jxl_probe_to_output(
+            let refinement_result = encode_jxl_probe_to_output(JxlProbeContext {
                 input,
                 actual_input,
-                &candidate_output,
-                candidate_distance,
-                exploration_effort,
+                output: &candidate_output,
+                distance: candidate_distance,
+                effort: exploration_effort,
                 max_threads,
-                options.apple_compat(),
-                options.allow_expert_options(),
+                apple_compat: options.apple_compat(),
+                allow_expert_options: options.allow_expert_options(),
                 icc_path,
                 color_info,
-                "Quality-boundary refinement",
-            );
+                stage_label: "Quality-boundary refinement",
+            });
             refinement_iterations += 1;
             total_iterations = total_iterations.saturating_add(1);
 
@@ -4916,11 +4917,11 @@ fn try_explore_ultimate_jxl_distance(
         accepted_distance,
         output_size: fs::metadata(temp_output)?.len(),
         iterations: total_iterations,
-        // Exact equality is intentional: `accepted_distance` originates from
-        // this same `best_candidate.distance` value (copied, not recomputed),
-        // so identity comparison identifies the accepted ladder finalist.
-        #[allow(clippy::float_cmp)]
-        ladder_phase: accepted_distance == best_candidate.distance && best_candidate.ladder_phase,
+        // Compare the value identity without a floating-point ordering
+        // assumption: `accepted_distance` is copied from this finalist, not
+        // recomputed, so equal IEEE-754 bits identify the ladder phase.
+        ladder_phase: accepted_distance.to_bits() == best_candidate.distance.to_bits()
+            && best_candidate.ladder_phase,
         screened_best_distance: screening.best_distance,
         screened_best_size: screening.best_output_size,
         promoted_distances: screening

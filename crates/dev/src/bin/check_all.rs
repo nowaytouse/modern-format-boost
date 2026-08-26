@@ -2,14 +2,31 @@
 //! Checks code formatting, Cargo.toml validity, changelog versions, and runs
 //! tests. `--fix` is a local, formatter-only mode and exits before audits.
 
-use anyhow::{Context, Result};
-use clap::Parser;
+use anyhow::{Context, Result, bail};
+use clap::{Parser, ValueEnum};
 use dev::infra::hardening::read_text_file;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum PackageScope {
+    Workspace,
+    Img,
+    Vid,
+}
+
+impl PackageScope {
+    const fn package_name(self) -> Option<&'static str> {
+        match self {
+            Self::Workspace => None,
+            Self::Img => Some("img"),
+            Self::Vid => Some("vid"),
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "check_all", about = "MFB Multi-Language Auditor")]
@@ -22,6 +39,14 @@ struct Args {
 
     #[arg(long = "no-expensive", help = "Skip slow checks")]
     no_expensive: bool,
+
+    #[arg(
+        long = "package",
+        value_enum,
+        default_value_t = PackageScope::Workspace,
+        help = "Limit Rust compilation, lint, docs, and tests to one package (local profile)"
+    )]
+    package: PackageScope,
 
     #[arg(
         long = "fix",
@@ -629,20 +654,39 @@ const fn ci_feature_args() -> [&'static str; 3] {
     ["--all-features", "--features", "foundation/ci-static-build"]
 }
 
-fn cargo_check_args(ci: bool) -> Vec<String> {
-    let mut args = vec![
-        "check".to_string(),
-        "--workspace".to_string(),
-        "--all-targets".to_string(),
-        "--locked".to_string(),
-    ];
+fn cargo_check_args(ci: bool, package: PackageScope) -> Vec<String> {
+    let mut args = vec!["check".to_string()];
+    if let Some(package_name) = package.package_name() {
+        args.extend(["-p".to_string(), package_name.to_string()]);
+    } else {
+        args.push("--workspace".to_string());
+    }
+    args.extend(["--all-targets".to_string(), "--locked".to_string()]);
     if ci {
         args.extend([
             "--all-features".to_string(),
             "--features".to_string(),
             "foundation/ci-static-build".to_string(),
         ]);
+    } else if package == PackageScope::Workspace {
+        // The workspace profile deliberately exercises every feature. A
+        // focused package run stays on that package's default feature set so
+        // it remains a fast, reproducible local signal instead of pulling in
+        // unrelated optional toolchains (for example system GMP).
+        args.push("--all-features".to_string());
+    }
+    args
+}
+
+fn cargo_test_args(package: PackageScope) -> Vec<String> {
+    let mut args = vec!["test".to_string(), "--locked".to_string()];
+    if let Some(package_name) = package.package_name() {
+        args.extend(["-p".to_string(), package_name.to_string()]);
     } else {
+        args.push("--workspace".to_string());
+    }
+    args.push("--all-targets".to_string());
+    if package == PackageScope::Workspace {
         args.push("--all-features".to_string());
     }
     args
@@ -805,6 +849,9 @@ fn run_ci_health_rust_tests(repo_root: &Path) -> Result<()> {
 fn main() -> Result<()> {
     bootstrap_macos_path();
     let args = Args::parse();
+    if args.ci && args.package != PackageScope::Workspace {
+        bail!("--package is a local profile and cannot be combined with --ci");
+    }
     if args.ci {
         apply_ci_runner_env();
     }
@@ -835,8 +882,10 @@ fn main() -> Result<()> {
             &["fmt", "--all"],
         )?;
         // Python
-        if command_exists("ruff") {
-            run_required(&repo_root, "ruff format", "ruff", &["format", "."])?;
+        if command_exists("ruff") && !py_files.is_empty() {
+            let mut ruff_args = vec!["format".to_string()];
+            ruff_args.extend(py_files.iter().cloned());
+            run_required_vec(&repo_root, "ruff format", "ruff", &ruff_args)?;
         }
         // Shell
         if command_exists("shfmt") && !shell_files.is_empty() {
@@ -895,6 +944,7 @@ fn main() -> Result<()> {
 
     println!("--- Modern Quality Suite ---");
     println!("Root: {}", repo_root.display());
+    println!("Rust scope: {:?}", args.package);
     println!("Nightly: {}", nc.status_line());
     if nc.toolchain && !nc.missing_components().is_empty() {
         println!(
@@ -972,7 +1022,7 @@ fn main() -> Result<()> {
 
     // 4. cargo check
     println!("Checking compilation (cargo check)...");
-    let check_args = cargo_check_args(args.ci);
+    let check_args = cargo_check_args(args.ci, args.package);
     let check_status = Command::new("cargo")
         .args(&check_args)
         .status()
@@ -1023,14 +1073,36 @@ fn main() -> Result<()> {
     }
 
     run_python_syntax_check(&repo_root, &py_files)?;
-    run_required(
-        &repo_root,
-        "Running ultra-strict clippy",
-        "cargo",
-        &["run", "--locked", "-p", "dev", "--bin", "clippy_strict"],
-    )?;
+    if args.package == PackageScope::Workspace {
+        run_required(
+            &repo_root,
+            "Running ultra-strict clippy",
+            "cargo",
+            &["run", "--locked", "-p", "dev", "--bin", "clippy_strict"],
+        )?;
+    } else {
+        let package_name = args
+            .package
+            .package_name()
+            .context("package scope has no package name")?;
+        run_required(
+            &repo_root,
+            &format!("Running clippy for {package_name}"),
+            "cargo",
+            &[
+                "clippy",
+                "--locked",
+                "-p",
+                package_name,
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )?;
+    }
 
-    if !args.ci {
+    if !args.ci && args.package == PackageScope::Workspace {
         ensure_edge_test_media(&repo_root)?;
     }
 
@@ -1038,9 +1110,11 @@ fn main() -> Result<()> {
     if args.ci {
         run_ci_health_rust_tests(&repo_root)?;
     } else {
-        println!("Running workspace tests...");
+        let scope_name = args.package.package_name().unwrap_or("workspace");
+        println!("Running {scope_name} tests...");
+        let test_args = cargo_test_args(args.package);
         let test_status = Command::new("cargo")
-            .args(["test", "--workspace", "--locked", "--all-features"])
+            .args(&test_args)
             .status()
             .context("run cargo test")?;
         if !test_status.success() {
@@ -1051,7 +1125,11 @@ fn main() -> Result<()> {
     }
 
     // 8b. DB sentinel backfill SSOT check retained from the Python auditor.
-    verify_normalize_stale_embed_measurement_slots(&repo_root)?;
+    if args.package == PackageScope::Workspace {
+        verify_normalize_stale_embed_measurement_slots(&repo_root)?;
+    } else {
+        println!("  Skipped: workspace DB sentinel check (package scope)");
+    }
 
     if !args.required_only {
         if nc.rustfmt {
@@ -1068,16 +1146,20 @@ fn main() -> Result<()> {
 
         if !args.ci && !args.no_expensive && nc.llvm_tools {
             if cargo_subcommand_exists("llvm-cov") {
+                let mut coverage_args = vec!["llvm-cov".to_string(), "--summary-only".to_string()];
+                if args.package == PackageScope::Workspace {
+                    coverage_args.insert(1, "--all-features".to_string());
+                }
+                if let Some(package_name) = args.package.package_name() {
+                    coverage_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                } else {
+                    coverage_args.insert(1, "--workspace".to_string());
+                }
                 run_optional(
                     &repo_root,
                     "cargo llvm-cov --summary-only",
                     "cargo",
-                    &[
-                        "llvm-cov",
-                        "--workspace",
-                        "--all-features",
-                        "--summary-only",
-                    ],
+                    &coverage_args.iter().map(String::as_str).collect::<Vec<_>>(),
                     false,
                 )?;
             } else if args.verbose {
@@ -1148,23 +1230,31 @@ fn main() -> Result<()> {
         }
 
         if !args.ci {
+            let mut doc_args = vec!["doc".to_string(), "--no-deps".to_string()];
+            if let Some(package_name) = args.package.package_name() {
+                doc_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+            } else {
+                doc_args.splice(1..1, ["--workspace".to_string()]);
+            }
             run_optional(
                 &repo_root,
                 "cargo doc",
                 "cargo",
-                &["doc", "--workspace", "--no-deps"],
+                &doc_args.iter().map(String::as_str).collect::<Vec<_>>(),
                 false,
             )?;
             if nc.toolchain {
+                let mut strict_doc_args = vec!["doc".to_string(), "--no-deps".to_string()];
+                if let Some(package_name) = args.package.package_name() {
+                    strict_doc_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+                } else {
+                    strict_doc_args.splice(1..1, ["--workspace".to_string()]);
+                }
                 run_optional_vec_env(
                     &repo_root,
                     "cargo doc -D warnings (rustdoc lints)",
                     "cargo",
-                    &[
-                        "doc".to_string(),
-                        "--workspace".to_string(),
-                        "--no-deps".to_string(),
-                    ],
+                    &strict_doc_args,
                     &[("RUSTDOCFLAGS", "-D warnings")],
                     false,
                 )?;
@@ -1173,6 +1263,16 @@ fn main() -> Result<()> {
             }
         }
 
+        let mut cargo_insta_args = vec![
+            "insta".to_string(),
+            "test".to_string(),
+            "--unreferenced=reject".to_string(),
+        ];
+        if let Some(package_name) = args.package.package_name() {
+            cargo_insta_args.splice(2..2, ["-p".to_string(), package_name.to_string()]);
+        } else {
+            cargo_insta_args.splice(2..2, ["--workspace".to_string()]);
+        }
         for (sub, label, args_list) in [
             ("audit", "cargo audit", vec!["audit".to_string()]),
             (
@@ -1183,12 +1283,7 @@ fn main() -> Result<()> {
             (
                 "insta",
                 "cargo insta test (snapshot regression check)",
-                vec![
-                    "insta".to_string(),
-                    "test".to_string(),
-                    "--workspace".to_string(),
-                    "--unreferenced=reject".to_string(),
-                ],
+                cargo_insta_args.clone(),
             ),
         ] {
             if cargo_subcommand_exists(sub) {
@@ -1198,14 +1293,27 @@ fn main() -> Result<()> {
 
         let bench_files = git_files
             .iter()
-            .filter(|file| file.contains("benches/") && file.ends_with(".rs"))
+            .filter(|file| {
+                file.contains("benches/")
+                    && file.ends_with(".rs")
+                    && args
+                        .package
+                        .package_name()
+                        .is_none_or(|package| file.starts_with(&format!("crates/{package}/")))
+            })
             .count();
         if bench_files > 0 {
+            let mut bench_args = vec!["bench".to_string(), "--no-run".to_string()];
+            if let Some(package_name) = args.package.package_name() {
+                bench_args.splice(1..1, ["-p".to_string(), package_name.to_string()]);
+            } else {
+                bench_args.splice(1..1, ["--workspace".to_string()]);
+            }
             run_optional(
                 &repo_root,
                 &format!("cargo bench --no-run (compile check, {bench_files} bench file(s))"),
                 "cargo",
-                &["bench", "--workspace", "--no-run"],
+                &bench_args.iter().map(String::as_str).collect::<Vec<_>>(),
                 args.ci,
             )?;
         } else {
@@ -1223,17 +1331,22 @@ fn main() -> Result<()> {
                 )?;
             }
             if cargo_subcommand_exists("hack") {
+                let mut hack_args = vec![
+                    "hack".to_string(),
+                    "check".to_string(),
+                    "--each-feature".to_string(),
+                    "--no-dev-deps".to_string(),
+                ];
+                if let Some(package_name) = args.package.package_name() {
+                    hack_args.splice(2..2, ["-p".to_string(), package_name.to_string()]);
+                } else {
+                    hack_args.splice(2..2, ["--workspace".to_string()]);
+                }
                 run_optional(
                     &repo_root,
                     "cargo hack feature matrix",
                     "cargo",
-                    &[
-                        "hack",
-                        "check",
-                        "--workspace",
-                        "--each-feature",
-                        "--no-dev-deps",
-                    ],
+                    &hack_args.iter().map(String::as_str).collect::<Vec<_>>(),
                     args.ci,
                 )?;
             }
@@ -1528,7 +1641,7 @@ fn main() -> Result<()> {
         println!("  OK: rustdoc check passed");
     }
 
-    println!("\nALL AUDITS PASSED SUCCESFULLY");
+    println!("\nALL AUDITS PASSED SUCCESSFULLY");
     Ok(())
 }
 
@@ -1658,9 +1771,24 @@ mod tests {
 
     #[test]
     fn ci_cargo_check_targets_the_root_workspace() {
-        let args = cargo_check_args(true);
+        let args = cargo_check_args(true, PackageScope::Workspace);
         let rendered = args.join(" ");
         assert!(rendered.contains("--workspace"));
+        assert!(rendered.contains("--all-features"));
+    }
+
+    #[test]
+    fn package_scope_targets_only_selected_package_without_all_features() {
+        for (scope, name) in [(PackageScope::Img, "img"), (PackageScope::Vid, "vid")] {
+            let check = cargo_check_args(false, scope).join(" ");
+            let test = cargo_test_args(scope).join(" ");
+            assert!(check.contains(&format!("-p {name}")));
+            assert!(!check.contains("--workspace"));
+            assert!(!check.contains("--all-features"));
+            assert!(test.contains(&format!("-p {name}")));
+            assert!(!test.contains("--workspace"));
+            assert!(!test.contains("--all-features"));
+        }
     }
 
     #[test]

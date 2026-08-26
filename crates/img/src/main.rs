@@ -2016,15 +2016,15 @@ impl ImageBatchFinalization<'_> {
                 ));
             }
 
-            auto_convert_directory_output_completeness_verification(
-                self.config,
+            auto_convert_directory_output_completeness_verification(OutputCompletenessContext {
+                config: self.config,
                 output_dir,
-                self.recursive,
+                recursive: self.recursive,
                 ignored_count,
                 failed_count,
-                &mut result,
-                &mut post_run_errors,
-            );
+                result: &mut result,
+                post_run_errors: &mut post_run_errors,
+            });
         }
 
         if !result.paused
@@ -2401,6 +2401,15 @@ struct ArchiveFlag(bool);
 
 #[derive(Clone, Copy)]
 struct ExpertOptionsFlag(bool);
+
+#[derive(Clone, Copy)]
+struct ResumeLocalDeliveryFlag(bool);
+
+#[derive(Clone, Copy)]
+struct ReuseImportProofFlag(bool);
+
+#[derive(Clone, Copy)]
+struct RemoveSelectedRootFlag(bool);
 
 #[derive(Clone, Copy)]
 struct FastImgRunOptions<'a> {
@@ -3262,18 +3271,20 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     )?;
 
     if !encode_complete_or_later(&marker.stage) {
-        fast_img_run_encode_phase(
-            &mut marker,
-            &source_jpegs,
-            &current_source_hashes,
-            &scan_failures,
-            &src_dir,
-            &working_copy,
-            RetryFlag(retry_failed_sources_from_cleanup || retry_failed_sources_before_cleanup),
-            ArchiveFlag(archive),
-            ExpertOptionsFlag(allow_expert_options),
+        fast_img_run_encode_phase(FastImgEncodeContext {
+            marker: &mut marker,
+            source_jpegs: &source_jpegs,
+            current_source_hashes: &current_source_hashes,
+            scan_failures: &scan_failures,
+            src_dir: &src_dir,
+            working_copy: &working_copy,
+            retry_failed_sources_from_cleanup: RetryFlag(
+                retry_failed_sources_from_cleanup || retry_failed_sources_before_cleanup,
+            ),
+            archive: ArchiveFlag(archive),
+            allow_expert_options: ExpertOptionsFlag(allow_expert_options),
             strategy,
-        )?;
+        })?;
     }
 
     foundation::restore_delivery_directory_metadata(&saved_dir_timestamps, &src_dir, &working_copy)
@@ -3285,21 +3296,23 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             )
         })?;
 
-    fast_img_run_verification_and_delivery_pipeline(
-        &mut marker,
-        &source_jpegs,
-        &current_source_hashes,
-        &src_dir,
-        &working_copy,
-        &saved_dir_timestamps,
-        retry_failed_sources_from_cleanup,
-        resume_local_delivery_for_shortest_path,
+    fast_img_run_verification_and_delivery_pipeline(FastImgDeliveryContext {
+        marker: &mut marker,
+        source_jpegs: &source_jpegs,
+        current_source_hashes: &current_source_hashes,
+        src_dir: &src_dir,
+        working_copy: &working_copy,
+        saved_dir_timestamps: &saved_dir_timestamps,
+        retry_failed_sources_from_cleanup: RetryFlag(retry_failed_sources_from_cleanup),
+        resume_local_delivery_for_shortest_path: ResumeLocalDeliveryFlag(
+            resume_local_delivery_for_shortest_path,
+        ),
         shortest_path,
-        reuse_marker_import_proof,
-        &modern_lossy_candidates,
-        remove_selected_root,
+        reuse_marker_import_proof: ReuseImportProofFlag(reuse_marker_import_proof),
+        modern_lossy_candidates: &modern_lossy_candidates,
+        remove_selected_root: RemoveSelectedRootFlag(remove_selected_root),
         strategy,
-    )?;
+    })?;
 
     Ok(())
 }
@@ -6504,8 +6517,7 @@ fn restore_jpeg_commit_xmp_sidecar(
                     adjacent.display()
                 );
                 source_retention_reason = Some(format!(
-                    "exact JPEG reconstruction succeeded, but the JXL container XMP ({}) differs from the adjacent XMP ({}); the adjacent XMP was delivered and the source JXL was retained so both metadata layers remain available for review",
-                    extracted_hash, adjacent_hash
+                    "exact JPEG reconstruction succeeded, but the JXL container XMP ({extracted_hash}) differs from the adjacent XMP ({adjacent_hash}); the adjacent XMP was delivered and the source JXL was retained so both metadata layers remain available for review"
                 ));
                 expected_hash = staged_hash;
             }
@@ -8423,19 +8435,32 @@ fn fast_img_commit_transcode_complete(marker: &mut WorkingCopyMarker, strategy: 
     marker.stage = FastImgStageName::TranscodeComplete;
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fast_img_run_encode_phase(
-    marker: &mut WorkingCopyMarker,
-    source_jpegs: &[std::path::PathBuf],
-    current_source_hashes: &std::collections::BTreeMap<String, String>,
-    scan_failures: &std::collections::BTreeMap<String, String>,
-    src_dir: &std::path::Path,
-    working_copy: &std::path::Path,
+struct FastImgEncodeContext<'a> {
+    marker: &'a mut WorkingCopyMarker,
+    source_jpegs: &'a [std::path::PathBuf],
+    current_source_hashes: &'a std::collections::BTreeMap<String, String>,
+    scan_failures: &'a std::collections::BTreeMap<String, String>,
+    src_dir: &'a std::path::Path,
+    working_copy: &'a std::path::Path,
     retry_failed_sources_from_cleanup: RetryFlag,
     archive: ArchiveFlag,
     allow_expert_options: ExpertOptionsFlag,
-    strategy: &str,
-) -> anyhow::Result<()> {
+    strategy: &'a str,
+}
+
+fn fast_img_run_encode_phase(context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
+    let FastImgEncodeContext {
+        marker,
+        source_jpegs,
+        current_source_hashes,
+        scan_failures,
+        src_dir,
+        working_copy,
+        retry_failed_sources_from_cleanup,
+        archive,
+        allow_expert_options,
+        strategy,
+    } = context;
     let encode_label = if strategy == "avif" {
         "MEME MODE"
     } else {
@@ -8881,22 +8906,40 @@ fn fast_img_deliver_modern_lossy_static_tier(
     Ok((deleted, already_deleted, pruned))
 }
 
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
-fn fast_img_run_verification_and_delivery_pipeline(
-    marker: &mut WorkingCopyMarker,
-    source_jpegs: &[std::path::PathBuf],
-    current_source_hashes: &std::collections::BTreeMap<String, String>,
-    src_dir: &std::path::Path,
-    working_copy: &std::path::Path,
-    saved_dir_timestamps: &foundation::metadata::DirectoryTimestampsMap,
-    retry_failed_sources_from_cleanup: bool,
-    resume_local_delivery_for_shortest_path: bool,
+struct FastImgDeliveryContext<'a> {
+    marker: &'a mut WorkingCopyMarker,
+    source_jpegs: &'a [std::path::PathBuf],
+    current_source_hashes: &'a std::collections::BTreeMap<String, String>,
+    src_dir: &'a std::path::Path,
+    working_copy: &'a std::path::Path,
+    saved_dir_timestamps: &'a foundation::metadata::DirectoryTimestampsMap,
+    retry_failed_sources_from_cleanup: RetryFlag,
+    resume_local_delivery_for_shortest_path: ResumeLocalDeliveryFlag,
     shortest_path: ShortestPathFlag,
-    reuse_marker_import_proof: bool,
-    modern_lossy_candidates: &[ModernLossyStaticCandidate],
-    remove_selected_root: bool,
-    strategy: &str,
+    reuse_marker_import_proof: ReuseImportProofFlag,
+    modern_lossy_candidates: &'a [ModernLossyStaticCandidate],
+    remove_selected_root: RemoveSelectedRootFlag,
+    strategy: &'a str,
+}
+
+fn fast_img_run_verification_and_delivery_pipeline(
+    context: FastImgDeliveryContext<'_>,
 ) -> anyhow::Result<()> {
+    let FastImgDeliveryContext {
+        marker,
+        source_jpegs,
+        current_source_hashes,
+        src_dir,
+        working_copy,
+        saved_dir_timestamps,
+        retry_failed_sources_from_cleanup,
+        resume_local_delivery_for_shortest_path,
+        shortest_path,
+        reuse_marker_import_proof,
+        modern_lossy_candidates,
+        remove_selected_root,
+        strategy,
+    } = context;
     let mode_name = if strategy == "avif" {
         "AVIF-only (Meme Mode)"
     } else {
@@ -8928,7 +8971,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let mut expected_count = fast_img_effective_expected_count(
         marker,
         source_jpegs.len(),
-        resume_local_delivery_for_shortest_path,
+        resume_local_delivery_for_shortest_path.0,
     );
 
     // Fail early if all sources failed during encoding
@@ -8962,7 +9005,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     if fast_img_post_gate1_policy(shortest_path) == FastImgPostGate1Policy::LocalOnlyDelivery {
-        if retry_failed_sources_from_cleanup {
+        if retry_failed_sources_from_cleanup.0 {
             fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
                 marker,
                 source_jpegs.len(),
@@ -8995,7 +9038,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 marker,
                 src_dir,
                 modern_lossy_candidates,
-                remove_selected_root,
+                remove_selected_root.0,
             )?
         } else {
             (0, 0, 0)
@@ -9003,7 +9046,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         let (source_deleted, source_already_deleted) =
             fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
         let source_dirs_pruned =
-            fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
+            fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root.0)?;
         marker.stage = FastImgStageName::CleanupComplete;
         marker.error = None;
         write_marker_atomic(marker)?;
@@ -9034,7 +9077,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             tracing::info!(
                 target: "fast_img",
                 imported = library_handle.imported_assets.len(),
-                gate3_retry = reuse_marker_import_proof,
+                gate3_retry = reuse_marker_import_proof.0,
                 "fast-img refreshed persisted Photos UUID proof for retry/resume"
             );
             library_handle
@@ -9075,7 +9118,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         expected_count = fast_img_effective_expected_count(
             marker,
             source_jpegs.len(),
-            resume_local_delivery_for_shortest_path,
+            resume_local_delivery_for_shortest_path.0,
         );
         marker.stage = FastImgStageName::ImportComplete;
         marker.error = None;
@@ -9144,7 +9187,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let (source_deleted, source_already_deleted) =
         fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
     let source_dirs_pruned =
-        fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
+        fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root.0)?;
     tracing::info!(
         target: "fast_img",
         deleted = source_deleted,
@@ -9254,16 +9297,26 @@ fn auto_convert_build_options(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn auto_convert_directory_output_completeness_verification(
-    config: &AutoConvertConfig,
-    output_dir: &std::path::Path,
+struct OutputCompletenessContext<'a> {
+    config: &'a AutoConvertConfig,
+    output_dir: &'a std::path::Path,
     recursive: bool,
     ignored_count: usize,
     failed_count: usize,
-    result: &mut foundation::Summary,
-    post_run_errors: &mut Vec<String>,
-) {
+    result: &'a mut foundation::Summary,
+    post_run_errors: &'a mut Vec<String>,
+}
+
+fn auto_convert_directory_output_completeness_verification(context: OutputCompletenessContext<'_>) {
+    let OutputCompletenessContext {
+        config,
+        output_dir,
+        recursive,
+        ignored_count,
+        failed_count,
+        result,
+        post_run_errors,
+    } = context;
     log_detail!("");
     foundation::log_static!(
         info,
@@ -9411,11 +9464,11 @@ mod fast_img_hardening_tests {
     )]
     use super::{
         ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag, ExpertOptionsFlag,
-        FastImgCleanupCompleteSourceState, FastImgInputPlan, FastImgPostGate1Policy,
-        FastImgRunOptions, FastImgTranscodeError, FreshFlag, RESTORE_JPEG_MANIFEST_NAME,
-        RecursiveFlag, RestoreJpegAuditRecord, RestoreJpegAuditStatus, RestoreJpegCommitProof,
-        RestoreJpegManifestRecord, RetryFlag, ShortestPathFlag, canonicalize_img_run_roots,
-        command_requires_database, fast_img_archive_stale_working_copy,
+        FastImgCleanupCompleteSourceState, FastImgEncodeContext, FastImgInputPlan,
+        FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, FreshFlag,
+        RESTORE_JPEG_MANIFEST_NAME, RecursiveFlag, RestoreJpegAuditRecord, RestoreJpegAuditStatus,
+        RestoreJpegCommitProof, RestoreJpegManifestRecord, RetryFlag, ShortestPathFlag,
+        canonicalize_img_run_roots, command_requires_database, fast_img_archive_stale_working_copy,
         fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
@@ -10875,18 +10928,18 @@ mod fast_img_hardening_tests {
             },
         );
 
-        fast_img_run_encode_phase(
-            &mut marker,
-            std::slice::from_ref(&src),
-            &current_source_hashes,
-            &BTreeMap::new(),
-            &src_root,
-            &wc,
-            RetryFlag(false),
-            ArchiveFlag(false),
-            ExpertOptionsFlag(false),
-            "jxl",
-        )?;
+        fast_img_run_encode_phase(FastImgEncodeContext {
+            marker: &mut marker,
+            source_jpegs: std::slice::from_ref(&src),
+            current_source_hashes: &current_source_hashes,
+            scan_failures: &BTreeMap::new(),
+            src_dir: &src_root,
+            working_copy: &wc,
+            retry_failed_sources_from_cleanup: RetryFlag(false),
+            archive: ArchiveFlag(false),
+            allow_expert_options: ExpertOptionsFlag(false),
+            strategy: "jxl",
+        })?;
 
         let entry = marker
             .blake3_log
@@ -10962,18 +11015,18 @@ mod fast_img_hardening_tests {
 
         // Run the encode phase — it will detect stale proof, re-encode,
         // and must write back to a.JXL (not a (1).JXL)
-        fast_img_run_encode_phase(
-            &mut marker,
-            std::slice::from_ref(&src),
-            &current_source_hashes,
-            &BTreeMap::new(),
-            &src_root,
-            &wc,
-            RetryFlag(false),
-            ArchiveFlag(false),
-            ExpertOptionsFlag(false),
-            "jxl",
-        )?;
+        fast_img_run_encode_phase(FastImgEncodeContext {
+            marker: &mut marker,
+            source_jpegs: std::slice::from_ref(&src),
+            current_source_hashes: &current_source_hashes,
+            scan_failures: &BTreeMap::new(),
+            src_dir: &src_root,
+            working_copy: &wc,
+            retry_failed_sources_from_cleanup: RetryFlag(false),
+            archive: ArchiveFlag(false),
+            allow_expert_options: ExpertOptionsFlag(false),
+            strategy: "jxl",
+        })?;
 
         let entry = marker
             .blake3_log

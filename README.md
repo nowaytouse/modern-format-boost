@@ -106,6 +106,20 @@ Run the focused suite with:
 cargo test --locked -p img --all-targets -- --nocapture --test-threads=1
 ```
 
+For a fast, package-scoped maintenance signal, use the local `check_all`
+profile:
+
+```bash
+cargo run --locked -p dev --bin check_all -- \
+  --allow-non-nightly --package img --required-only --no-expensive
+```
+
+Use `--package vid` to inspect the video package separately. Package scope
+keeps the package's default features and does not invoke the workspace CI
+profile; `--ci` remains workspace-only. GitHub exposes the same boundaries as
+independent `IMG package quality` and `VID package quality` jobs, so a video
+failure cannot be mistaken for an IMG result.
+
 External-tool cases are explicitly tool-gated and report an unavailable
 encoder/decoder; they never claim that an unexecuted branch was verified.
 This is strong local production-candidate evidence, not a promise that every
@@ -816,14 +830,14 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 **fail-closed contracts** (enforced in CI). Use these when extending `img` /
 `vid`, exploration, or the PostgreSQL training stack.
 
-| Layer                              | Document                                                                                                                                                                            |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layer                                                               | Document                                                                                                                                                                            |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Media conversion contract (M1–M251 registry; M1–M206 delivery seal) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](docs/hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](docs/hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
-| Algorithm / inference gates        | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
-| Terminal + native macOS UI         | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
-| JXL/XMP archive + JPEG restoration | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
-| Logging / session                  | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
-| Database                           | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
+| Algorithm / inference gates                                         | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
+| Terminal + native macOS UI                                          | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
+| JXL/XMP archive + JPEG restoration                                  | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
+| Logging / session                                                   | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
+| Database                                                            | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
 
 **Static image quality training** (high/low tiers, ingest audit):
 

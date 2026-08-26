@@ -989,7 +989,7 @@ fn photos_backup_original_from_record(
     } else {
         record.uti_original.clone()
     };
-    let capture_date = record.date_original.clone().or(record.date.clone());
+    let capture_date = record.date_original.clone().or_else(|| record.date.clone());
     let album_paths = source_album_paths(&record);
     Ok(PhotosBackupOriginalRecord {
         uuid: record.uuid,
