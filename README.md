@@ -16,9 +16,8 @@ static and time-based media:
 
 - **`img run`** is the general static-image pipeline. Exact local detection is
   the default; PostgreSQL is consulted only when an optional quality heuristic
-  is explicitly enabled. The current CLI delivers **JXL only** (`--codec
-hevc`); `--codec av1` is rejected with an instruction to use FastImg Meme
-  Mode.
+  is explicitly enabled. The current CLI delivers **JXL only**; `--codec av1`
+  is rejected with an instruction to use FastImg Meme Mode.
 - **`img fast-img`** is the bounded, checkpointed production path. Its default
   `jxl` strategy converts true JPEG bitstreams to reversible JXL and runs a
   second, destructive-gated Photos-delivery tier for positively proven lossy
@@ -49,8 +48,10 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   quality, metadata and integrity gates pass. Size-constrained routes compare
   encoded media payloads and require the candidate to fit the active policy;
   if no candidate fits, the source is retained and the result is skip/failure.
-- JPEG→JXL delivery requires a byte-identical `djxl --reconstruct_jpeg` proof
-  after metadata commit. Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
+- JPEG→JXL delivery requires a byte-identical JPEG reconstruction proof from
+  the installed `djxl` (the version-neutral default output path; no
+  version-specific `--reconstruct_jpeg` flag is assumed) after metadata commit.
+  Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
   external XMP is appended as an idempotent overlay and the exact reconstruction
   proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and
   delivers adjacent XMP as a separately hashed `.xmp` sidecar. If container XMP
@@ -68,6 +69,48 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   the active size/quality policy. Runtime rises with the number, complexity and
   diversity of inputs; `--ultimate` deliberately trades more time for a finer
   search.
+
+### IMG production matrix
+
+The IMG regression suite exercises public conversion and detection boundaries;
+a successful compile alone is not treated as production evidence. The current
+matrix covers:
+
+- content-based identity for JPEG, PNG, GIF, WebP, TIFF, BMP, JXL, AVIF, HEIC,
+  HEIF and JP2, including misleading extensions, truncated headers and garbage;
+- baseline, progressive and grayscale JPEGs, plus CMYK's explicit
+  fail-closed path;
+- all EXIF Orientation values 1–8, byte-identical JBRD reconstruction, source
+  retention and one-output accounting;
+- JPEGs with and without XMP sidecars and with an ICC profile, including XMP
+  extraction and source-sidecar immutability;
+- UltraHDR/MPF JPEG detection, gain-map metadata boundaries and HDR synthesis
+  refusal/retention paths covered by the foundation image-analysis tests;
+- real PNG/TIFF/WebP/GIF/AVIF/JXL/HEIC fixtures, static-versus-animated
+  classification, authoritative decoder checks, dimensions and non-empty
+  pixels; and
+- malformed/truncated input, metadata overlay, output-count and empty-source
+  cleanup contracts covered by the foundation and IMG suites.
+
+At this revision, `cargo test --locked -p img --all-targets -- --list` reports
+246 tests across the package. The dedicated production matrix adds explicit
+regressions for truncated JPEG + XMP source retention, animated WebP chunk
+classification, AVIF/HEIC sequence-brand boundaries, and Tier 2 empty-directory
+pruning that preserves unrelated hidden files. The count is a reproducible
+inventory, not a claim that every optional external codec or live Photos
+transaction ran on every host.
+
+Run the focused suite with:
+
+```bash
+cargo test --locked -p img --all-targets -- --nocapture --test-threads=1
+```
+
+External-tool cases are explicitly tool-gated and report an unavailable
+encoder/decoder; they never claim that an unexecuted branch was verified.
+This is strong local production-candidate evidence, not a promise that every
+third-party codec or a live Photos/iCloud transaction is universally defect
+free.
 
 ### Who should use it
 
@@ -122,10 +165,11 @@ outcomes over silent quality damage:
    recommended to output processed files to a separate directory (e.g., using
    `-o /path/to/output`) rather than using in-place conversion (`--in-place`),
    especially for irreplaceable media.
-2. **Beta Software**: While this program has been extensively tested,
-   debugged, and optimized to prevent quality or data loss (as seen in the
-   changelog), it is not guaranteed to be 100% bug-free. Please report any
-   issues you encounter on GitHub.
+2. **Production-candidate status**: IMG has a fail-closed delivery contract,
+   a 246-test local regression matrix, and explicit source-retention proofs.
+   A release still depends on the target machine's codec versions and, for
+   Photos workflows, a real macOS/TCC/iCloud acceptance run. Keep an
+   independent backup and report any reproducible issue on GitHub.
 3. **Computation Insight**: While optimized for efficiency (especially on Apple
    Silicon M-series), processing massive batches in `--ultimate` mode can still
    be time-consuming. It will occupy system resources for an extended period;
@@ -774,7 +818,7 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 
 | Layer                              | Document                                                                                                                                                                            |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Media conversion delivery (M1–M66) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](docs/hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](docs/hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
+| Media conversion contract (M1–M251 registry; M1–M206 delivery seal) | [`MEDIA_CONVERSION_LAYER_CONTRACT.md`](docs/hardening/MEDIA_CONVERSION_LAYER_CONTRACT.md) · [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](docs/hardening/MEDIA_CONVERSION_DELIVERY_SEAL.md) |
 | Algorithm / inference gates        | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
 | Terminal + native macOS UI         | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
 | JXL/XMP archive + JPEG restoration | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
@@ -890,8 +934,9 @@ are preserved.
 **12. Does `restore-jpeg` require an export or audit mode?**
 
 No. The input decides the safe behavior. A normal file/folder reconstructs
-byte-identical JPEGs and may remove an exact source only after the durable
-Manifest V3 delete gate; pixel-only/rejected reconstruction gets a recovery
+byte-identical JPEGs using the installed `djxl` reconstruction path and may
+remove an exact source only after the durable Manifest V3 delete gate;
+pixel-only/rejected reconstruction gets a recovery
 marker and invalid/unreadable data gets a review marker under the same relative
 tree. A Photos library performs live UUID audit instead and references only the
 affected existing assets in `MFB JXL Audit` albums. MFB does not rewrite media

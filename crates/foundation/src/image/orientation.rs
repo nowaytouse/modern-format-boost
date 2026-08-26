@@ -548,10 +548,25 @@ fn diff_orientation_images(
     let output_dims = (out_img.width(), out_img.height());
     let raw_dims = (raw_source.width(), raw_source.height());
 
-    if matches!(
-        tol,
-        DiffTolerance::JxlOrientation | DiffTolerance::JxlPixelEquivalent
-    ) && orientation_swaps_dimensions(src_orient)
+    // A byte-reconstructible JXL preserves the JPEG's raw scan order.  Its
+    // EXIF orientation describes display geometry, but `djxl` emits those raw
+    // pixels.  Compare raw dimensions for every orientation when the strict
+    // JXL delivery proof is active; restricting this to 5..=8 made 180°/mirror
+    // orientations fail even though their JPEG bitstream was exact.
+    if tol == DiffTolerance::JxlOrientation && raw_dims == output_dims {
+        tracing::info!(
+            target: "orientation_pixel_diff",
+            orientation = src_orient,
+            raw_width = raw_dims.0,
+            raw_height = raw_dims.1,
+            output = %output.display(),
+            "pixel-diff: JXL lossless output decodes to raw JPEG dimensions; verifying raw source structure"
+        );
+        return diff_dynamic_images(raw_source, out_img, tol, output);
+    }
+
+    if tol == DiffTolerance::JxlPixelEquivalent
+        && orientation_swaps_dimensions(src_orient)
         && oriented_dims != output_dims
         && raw_dims == output_dims
     {
@@ -1002,16 +1017,18 @@ mod tests {
         let raw_source = patterned_image(2, 3);
         let decoded_lossless_jxl = raw_source.clone();
 
-        let result = diff_orientation_images(
-            &raw_source,
-            6,
-            &decoded_lossless_jxl,
-            DiffTolerance::JxlOrientation,
-            std::path::Path::new("out.jxl"),
-        )
-        .expect("raw-orientation JXL proof should not fail dimension check");
+        for orientation in 1..=8 {
+            let result = diff_orientation_images(
+                &raw_source,
+                orientation,
+                &decoded_lossless_jxl,
+                DiffTolerance::JxlOrientation,
+                std::path::Path::new("out.jxl"),
+            )
+            .expect("raw-orientation JXL proof should not fail dimension check");
 
-        assert_eq!(result, PixelDiffResult::Match);
+            assert_eq!(result, PixelDiffResult::Match, "orientation {orientation}");
+        }
     }
 
     #[test]

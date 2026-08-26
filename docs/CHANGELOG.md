@@ -2,7 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-25
+## [Unreleased] - 2026-08-26
+
+### IMG production matrix and JPEG orientation hardening
+
+- **Orientation-proof regression fix**: strict JXL delivery verification now
+  compares the decoded JPEG's raw scan order for every EXIF Orientation value
+  when the installed `djxl` preserves JBRD dimensions. The former 5–8-only
+  guard incorrectly rejected valid 180° and mirror-orientation JPEGs; a
+  1–8 regression test now locks the actual reconstruction semantics.
+- **Real static-format matrix**: added tool-gated production tests for
+  content identity, extension spoofing, static/animated boundaries and
+  authoritative decoding across PNG, TIFF, WebP, GIF, AVIF, JXL and HEIC,
+  alongside baseline/progressive/grayscale/CMYK JPEG, XMP and ICC coverage.
+  The matrix also locks truncated JPEG + XMP source retention, animated WebP
+  chunk classification, AVIF/HEIC sequence-brand boundaries and Tier 2
+  empty-directory pruning. The package currently lists 246 tests; optional
+  codec branches report their availability instead of being counted as run.
+  Missing host tools are reported explicitly rather than counted as exercised.
+- **Documentation contract sync**: bilingual README files now describe the
+  version-neutral `djxl` reconstruction path, the M1–M251 registry versus the
+  M1–M206 delivery seal, IMG production-candidate evidence and its remaining
+  real Photos/TCC gate.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
