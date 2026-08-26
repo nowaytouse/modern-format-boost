@@ -799,9 +799,8 @@ pub fn delivery_training_source_path_or_input(path: &Path) -> PathBuf {
 /// (strict-gated).
 #[must_use]
 pub fn delivery_tool_path_or_bare_name(name: &str) -> PathBuf {
-    static UNRESOLVED: std::sync::LazyLock<
-        std::sync::Mutex<std::collections::HashSet<String>>,
-    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    static UNRESOLVED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
     if let Some(path) = crate::common_utils::resolve_tool_path(name) {
         mutex_guard_or_recover("tool_path_unresolved_clear", UNRESOLVED.lock()).remove(name);
         return path;

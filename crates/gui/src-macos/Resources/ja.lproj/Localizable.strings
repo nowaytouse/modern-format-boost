@@ -39,7 +39,7 @@
 "metadata.jxl_overlay" = "JPEG XL の安全方針：再構築に使う元の box は変更せず、外部 XMP は overlay として追加し、完全再構築を再検証します。";
 "metadata.restore_auto" = "JPEG を自動復元します。ファイル／フォルダでは JPEG をバイト単位で復元し、非可逆項目を元の構造で標識します。写真ライブラリでは実資産 UUID を監査し、対象項目だけを MFB 監査アルバムから参照して媒体バイトは変更しません。";
 "metadata.recovery_collect" = "対象 JXL を実データで再確認し、真の JPEG 原本だけを収集します。フォルダでは相対 ID の完全一致、写真ライブラリではファイル名の完全一致と一意な UUID またはアルバム ID を要求します。バックアップは変更せず、曖昧な一致は拒否します。";
-"metadata.backup_compare" = "バックアップ比較は読み取り専用です。相対 ID ごとに実際のメディア内容と XMP を調べ、必要に応じて JXL から JPEG への完全復元を検証し、どちらの入力も変更せずレポートだけを書き出します。";
+"metadata.backup_compare" = "写真ライブラリ比較は読み取り専用で、ネイティブアセットの差分だけを報告し、どちらのライブラリも変更しません。フォルダ／ファイル比較は専用の外部重複排除ツールに任せます。";
 "option.ultimate" = "最高品質";
 "option.verbose" = "詳細ログ";
 "option.shortest_path" = "写真に読み込む";
@@ -60,6 +60,7 @@
 "error.select_target" = "ファイルまたはフォルダを選択／ドロップしてください";
 "error.select_backup" = "対応するバックアップフォルダまたは写真ライブラリを選択してください";
 "error.backup_kind_mismatch" = "監査元とバックアップは両方とも通常フォルダ、または両方とも写真ライブラリである必要があります";
+"error.photos_compare_required" = "バックアップ比較は 2 つの写真ライブラリパッケージでのみ利用できます。フォルダ／ファイルには専用の外部重複排除ツールを使用してください。";
 "error.backend_local" = "バックエンドのパスがローカルではありません";
 "error.task_running" = "メディアタスクがすでに実行中です";
 "error.option_unavailable" = "選択した操作ではこのオプションを利用できません";

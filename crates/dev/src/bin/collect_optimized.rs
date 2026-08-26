@@ -32,7 +32,7 @@ struct Args {
     #[arg(long)]
     dry_run: bool,
 
-    /// Write a read-only difference report instead of collecting originals
+    /// Compare two Photos libraries read-only instead of collecting originals
     #[arg(long, conflicts_with = "dry_run")]
     compare: bool,
 

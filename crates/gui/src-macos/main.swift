@@ -247,6 +247,13 @@ private enum ProcessorCommand {
             else {
                 throw HostError(message: localized("error.backup_kind_mismatch"))
             }
+            if request.operationMode == .compare {
+                guard isPhotosLibraryPackagePath(request.targetPath),
+                      isPhotosLibraryPackagePath(backup)
+                else {
+                    throw HostError(message: localized("error.photos_compare_required"))
+                }
+            }
         } else if request.backupPath != nil {
             throw HostError(message: localized("error.option_unavailable"))
         }
@@ -1583,15 +1590,15 @@ private func runSelfTest() -> Int32 {
             return 1
         }
         let compare = ProcessorRequest(
-            targetPath: "/tmp/current",
+            targetPath: "/tmp/current.photoslibrary",
             processingMode: .both,
             operationMode: .compare,
-            backupPath: "/tmp/backup",
+            backupPath: "/tmp/backup.photoslibrary",
             ultimate: false,
             verbose: true
         )
         guard try ProcessorCommand.arguments(from: compare) == [
-            "--mode", "compare", "--verbose", "--backup", "/tmp/backup", "/tmp/current",
+            "--mode", "compare", "--verbose", "--backup", "/tmp/backup.photoslibrary", "/tmp/current.photoslibrary",
         ] else {
             fputs("native-host self-test backup comparison mapping failed\n", stderr)
             return 1

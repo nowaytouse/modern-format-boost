@@ -39,7 +39,7 @@
 "metadata.jxl_overlay" = "JPEG XL safety: reconstruction-owned boxes stay immutable; external XMP is appended as an overlay and exact reconstruction is re-verified.";
 "metadata.restore_auto" = "Automatic JPEG recovery: files and folders restore byte-exact JPEGs and mirror markers for non-reversible items; a Photos library selection audits live asset UUIDs and references only affected items in MFB audit albums without changing media bytes.";
 "metadata.recovery_collect" = "Recovery collection re-checks affected JXL files live, then copies only true JPEG originals. Folder backups require exact relative identity; Photos backups require an exact filename plus a unique UUID or album identity. Backup media is never modified; ambiguity fails closed.";
-"metadata.backup_compare" = "Backup comparison is read-only. It inventories true media content and XMP by relative identity, verifies exact JXL-to-JPEG reconstruction where applicable, and writes a report without changing either input.";
+"metadata.backup_compare" = "Photos-library comparison is read-only and reports native asset differences without changing either library. Folder/file comparison is intentionally left to a dedicated external deduplicator.";
 "option.ultimate" = "Highest quality";
 "option.verbose" = "Detailed logs";
 "option.shortest_path" = "Import to Photos";
@@ -60,6 +60,7 @@
 "error.select_target" = "Choose or drop a file/folder first";
 "error.select_backup" = "Choose the matching backup folder or Photos library first";
 "error.backup_kind_mismatch" = "The audited source and backup must both be folders or both be Photos libraries";
+"error.photos_compare_required" = "Backup comparison is available only for two Photos library packages. Use a dedicated file deduplicator for folders/files.";
 "error.backend_local" = "Backend path is not local";
 "error.task_running" = "A media task is already running";
 "error.option_unavailable" = "This option is not available for the selected operation";

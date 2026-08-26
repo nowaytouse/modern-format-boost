@@ -415,6 +415,7 @@ vid strategy --codec hevc /path/to/video.mp4
 - `--force-video`：强制将动画图像视为视频，不考虑循环意图 (Loop Intent)。
 - `img restore-jpeg INPUT` 不再要求用户选择行为模式。普通文件或文件夹会逐字节恢复所有精确可逆 JPEG 与已核验 XMP；需要从备份恢复或无法判定的 JXL 保持原样，并按原目录生成 `Reconstruction Blocked` / `Needs Review` 标记。选择照片图库（或图库包内的一个具体资产路径）时会自动实时核验 UUID：精确可逆资产不作标记，受影响的现有资产以引用方式加入保留原文件夹/相册层级的 `MFB JXL Audit` 相册。MFB 不改写媒体字节，也不直接编辑 Photos 数据库文件；仅由 Photos 记录相册成员关系。外部 BLAKE3/UUID 检查点用于可恢复、幂等重跑。原生 AppKit GUI 会在选中图库后显示实时文件夹/相册选择器；CLI 通过 `img photos-albums` 提供相同 UUID。相册范围精确匹配，文件夹范围按 Photos 原生层级展开其全部后代相册，不按显示名称猜测，也不混用不兼容的数据库文件夹标识。
 - `collect_optimized AUDITED DEST --backup BACKUP` 负责后续原件收集，并会再次读取当前 JXL 内容，不盲信旧标记。选择单个 JXL 时可指定同名备份原件或备份文件夹；普通备份文件夹只接受相同相对目录、相同文件名主干且内容识别为静态图片的唯一原件；备份图库只接受相同 Photos UUID。流程仅复制/导出真正受影响的原件与 XMP，不修改备份或 Photos 数据库；缺失、歧义、格式不符都会显式失败。成功或部分成功状态写入带逐文件 BLAKE3 的 `.mfb_recovery_collection.json`，可安全重跑。原生 GUI 中对应“收集恢复原件”。
+- `collect_optimized CURRENT REPORT --backup BACKUP --compare` 仅支持两个照片图库包的只读比对。它委托已安装的 `osxphotos` 比对原生资产，只生成原子写入且不含绝对路径的 `mfb_backup_comparison.json`，不会修改图库或媒体。普通文件/文件夹的查重不属于 MFB，请使用专用外部查重工具；原生 GUI 对这类输入会明确拒绝。
 
 ### 高级子命令
 

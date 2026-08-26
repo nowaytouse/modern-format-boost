@@ -167,15 +167,15 @@ rescue, but that is a derivative and does not repair JPEG bitstream identity.
 
 ## Read-only backup comparison
 
-`collect_optimized CURRENT REPORT --backup BACKUP --compare` compares two
-filesystem inputs or two Photos libraries and never mutates either input.
-Filesystem inventory uses true format, mirrored relative identity, XMP role and
-BLAKE3. A JXL/JPEG pair is equivalent only when `djxl` reconstructs the exact
-backup JPEG bytes; names, dates and extensions are not sufficient proof.
+`collect_optimized CURRENT REPORT --backup BACKUP --compare` accepts **two
+Photos library packages only** and never mutates either library or its assets.
 Photos-library comparison uses `osxphotos compare --json`. An atomic
-`mfb_backup_comparison.json` reports matched, source-only, backup-only,
-different and needs-review entries without storing absolute filesystem paths.
-Symlinks, ambiguous identities and failed probes are explicit review items.
+`mfb_backup_comparison.json` reports matched, source-only, backup-only and
+different native-asset entries without storing absolute filesystem paths.
+Folder/file comparison is intentionally outside MFB's scope; users should use
+a dedicated external deduplication tool for ordinary filesystem inputs.
+Non-Photos inputs, symlinks and incomplete upstream reports fail closed before
+any report is written.
 
 ## Restore manifest and delete gate
 

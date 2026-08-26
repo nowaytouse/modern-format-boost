@@ -1393,10 +1393,8 @@ fn tier2_image_data_sha256(path: &Path) -> Result<String> {
         ))
     })?;
     if !output.status.success() {
-        let diagnostic = crate::io_utils::tail_error_lines(
-            &String::from_utf8_lossy(&output.stderr),
-            3,
-        );
+        let diagnostic =
+            crate::io_utils::tail_error_lines(&String::from_utf8_lossy(&output.stderr), 3);
         return Err(ImgQualityError::AnalysisError(format!(
             "tier-2 ImageDataHash failed for {}: {diagnostic}",
             path.display()

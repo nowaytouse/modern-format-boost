@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 
+- **Photos-only backup comparison boundary**: `collect_optimized --compare`
+  now accepts only two Photos library packages and remains strictly read-only.
+  The CLI and AppKit GUI reject ordinary files/folders with an explicit
+  handoff to a dedicated external deduplication tool; native asset reports
+  continue to be written atomically without touching either library.
+- **AVIF test-surface simplification**: removed the duplicate dev parity case
+  that repeated the authoritative `AvifencBuilder` quality/legacy-flag unit
+  coverage; the AVIF argument-order and runtime format probes remain intact.
+- **CI formatting gate repair**: the Rust sources reported by the latest
+  repository-health and deep-audit jobs are now rustfmt-clean, removing the
+  formatting failure that stopped those jobs before semantic checks ran.
+- **Finder metadata cleanup boundary**: verified FastImg source cleanup now
+  removes a genuine Finder `.DS_Store` only when it is the sole remaining
+  entry in an authorized empty directory; arbitrary hidden/user files and
+  look-alike payloads remain protected.
+- **Recovery-tool smoke coverage**: a controlled Photos-library audit classified
+  the debug corpus and the read-only library comparison produced a path-private
+  native-asset report. Recovery collection also failed closed when its backup
+  contained only JXL assets and no provable original JPEG, while a temporary
+  folder fixture with a pixel-equivalent JPEG recovered successfully.
+
 - **JXL XMP fallback barrier**: If append-only JXL XMP enrichment cannot prove
   a safe commit, MFB now retains the JXL and sidecar instead of invoking Exiv2.
   Unclassified destinations are likewise retained; no secondary metadata writer
@@ -35,8 +56,10 @@ All notable changes to this project will be documented in this file.
   delivered while the source JXL is retained with explicit review evidence.
   Recovery collection accepts only true JPEG originals and resolves Photos
   backups by exact filename plus unique UUID/album identity without date
-  guessing. A new read-only folder/Photos comparison writes an atomic,
-  path-private BLAKE3 report and is available through CLI and AppKit GUI.
+  guessing. A new read-only Photos-library comparison writes an atomic,
+  path-private BLAKE3 report and is available through CLI and AppKit GUI;
+  ordinary folder/file deduplication is intentionally delegated to a
+  dedicated external tool.
 - **FastImg zero-work and broken-tool behavior**: A run with no eligible media
   now exits before markers, Photos import, verification gates, or directory
   cleanup. Unclassifiable modern-static candidates remain an explicit failure.
@@ -295,8 +318,9 @@ All notable changes to this project will be documented in this file.
   The shared cleanup refuses Photos Library packages, symlink/out-of-root
   candidates and dangerous roots, and uses non-recursive `remove_dir` so any
   remaining or concurrently created content prevents deletion. A single-file
-  selection never authorizes deleting its parent, and hidden files such as
-  `.DS_Store` are retained rather than removed to manufacture an empty folder.
+  selection never authorizes deleting its parent. A genuine Finder `.DS_Store`
+  is removed only when it is the sole entry; arbitrary hidden files and
+  look-alike payloads remain protected.
 - **Fail-closed workspace fixer**: `check_all --fix` now stops on the first
   formatter or fixer failure instead of discarding child exit statuses. A real
   Ruff failure therefore remains visible and cannot be reported as a clean fix.

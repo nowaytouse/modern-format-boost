@@ -1,7 +1,7 @@
 use std::fs;
-use std::process::Command;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 use tempfile::tempdir;
 
 // Run the CLI in a child process with an explicit failing `cjxl` override. This

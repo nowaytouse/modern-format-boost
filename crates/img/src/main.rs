@@ -5559,10 +5559,13 @@ fn fast_img_prune_empty_source_dirs(
             dirs.push(dir.to_path_buf());
         }
     }
+    // A verified delivery may leave Finder's generated `.DS_Store` as the only
+    // entry. Treat that metadata exactly like an empty directory, while still
+    // preserving every non-Finder hidden/user file through the scoped helper.
     let result = if remove_selected_root {
-        foundation::io_utils::prune_empty_directories_within(src_dir, &dirs)
+        foundation::io_utils::prune_delivered_directories_within(src_dir, &dirs)
     } else {
-        foundation::io_utils::prune_empty_descendants_within(src_dir, &dirs)
+        foundation::io_utils::prune_delivered_descendants_within(src_dir, &dirs)
     };
     result.with_context(|| {
         format!(
@@ -6029,6 +6032,7 @@ struct RestoreJpegCommitProof {
     reconstruction_hash: String,
     output_hash: String,
     xmp_sidecar: Option<RestoreJpegSidecarProof>,
+    source_xmp_sidecar: Option<RestoreJpegSidecarProof>,
     source_retention_reason: Option<String>,
     verified_unix_seconds: u64,
     djxl_version: String,
@@ -6043,6 +6047,7 @@ struct RestoreJpegSidecarProof {
 #[derive(Debug, Default)]
 struct RestoreJpegXmpCommit {
     sidecar: Option<RestoreJpegSidecarProof>,
+    source_sidecar: Option<RestoreJpegSidecarProof>,
     source_retention_reason: Option<String>,
 }
 
@@ -6513,6 +6518,27 @@ fn restore_jpeg_commit_xmp_sidecar(
         expected_hash = calculate_blake3_hash(&temp_xmp)?;
     }
 
+    let source_sidecar = adjacent
+        .as_deref()
+        .map(|path| {
+            let hash = calculate_blake3_hash(path).with_context(|| {
+                format!(
+                    "restore-jpeg failed to hash source XMP sidecar {}",
+                    path.display()
+                )
+            })?;
+            anyhow::ensure!(
+                hash == expected_hash,
+                "restore-jpeg source XMP sidecar changed before commit: {}",
+                path.display()
+            );
+            Ok(RestoreJpegSidecarProof {
+                path: path.to_path_buf(),
+                hash,
+            })
+        })
+        .transpose()?;
+
     if sidecar_output.exists() {
         let current_hash = calculate_blake3_hash(&sidecar_output)?;
         if current_hash == expected_hash {
@@ -6522,6 +6548,7 @@ fn restore_jpeg_commit_xmp_sidecar(
                     path: sidecar_output,
                     hash: current_hash,
                 }),
+                source_sidecar,
                 source_retention_reason,
             });
         }
@@ -6558,6 +6585,7 @@ fn restore_jpeg_commit_xmp_sidecar(
             path: sidecar_output,
             hash: current_hash,
         }),
+        source_sidecar,
         source_retention_reason,
     })
 }
@@ -6683,6 +6711,7 @@ where
             reconstruction_hash: reconstructed_hash,
             output_hash,
             xmp_sidecar: None,
+            source_xmp_sidecar: None,
             source_retention_reason: None,
             verified_unix_seconds: restore_jpeg_verified_unix_seconds()?,
             djxl_version: restore_jpeg_djxl_version()?.to_string(),
@@ -6714,6 +6743,7 @@ fn restore_jpeg_build_current_proof(
         restore_jpeg_decode_to_temp,
     )?;
     proof.xmp_sidecar = xmp_commit.sidecar;
+    proof.source_xmp_sidecar = xmp_commit.source_sidecar;
     proof.source_retention_reason = xmp_commit.source_retention_reason;
     Ok(proof)
 }
@@ -6859,6 +6889,7 @@ fn restore_single_jpeg(
         }
     };
     proof.xmp_sidecar = xmp_commit.sidecar;
+    proof.source_xmp_sidecar = xmp_commit.source_sidecar;
     proof.source_retention_reason = xmp_commit.source_retention_reason;
 
     Ok(RestoreJpegResult { committed, proof })
@@ -6954,17 +6985,10 @@ fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow
         );
     }
     if let Some(sidecar) = &proof.xmp_sidecar {
-        let sidecar_hash = calculate_blake3_hash(&sidecar.path).with_context(|| {
-            format!(
-                "restore-jpeg delete gate failed to hash XMP sidecar {}",
-                sidecar.path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            sidecar_hash == sidecar.hash,
-            "restore-jpeg delete gate: stale XMP sidecar proof for {}",
-            sidecar.path.display()
-        );
+        restore_jpeg_verify_sidecar_proof(sidecar)?;
+    }
+    if let Some(sidecar) = &proof.source_xmp_sidecar {
+        restore_jpeg_verify_sidecar_proof(sidecar)?;
     }
     tracing::info!(
         target: "restore_jpeg_delete",
@@ -6982,11 +7006,56 @@ fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow
             output.display()
         )
     })?;
-    safe_delete_matching_xmp_sidecar(input, output).map_err(|err| {
-        anyhow::anyhow!(
-            "restore-jpeg delete gate failed to delete matching XMP sidecar for {} using restored output {}: {err}",
-            input.display(),
-            output.display()
+    if let Some(sidecar) = &proof.source_xmp_sidecar {
+        restore_jpeg_delete_verified_sidecar(input, output, sidecar)?;
+    }
+    Ok(true)
+}
+
+fn restore_jpeg_verify_sidecar_proof(proof: &RestoreJpegSidecarProof) -> anyhow::Result<String> {
+    let metadata = std::fs::symlink_metadata(&proof.path).with_context(|| {
+        format!(
+            "restore-jpeg delete gate failed to inspect proved XMP sidecar {}",
+            proof.path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "restore-jpeg delete gate refused proved XMP sidecar that is not a regular file: {}",
+        proof.path.display()
+    );
+    let sidecar_hash = calculate_blake3_hash(&proof.path).with_context(|| {
+        format!(
+            "restore-jpeg delete gate failed to hash XMP sidecar {}",
+            proof.path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        sidecar_hash == proof.hash,
+        "restore-jpeg delete gate: stale XMP sidecar proof for {}",
+        proof.path.display()
+    );
+    Ok(sidecar_hash)
+}
+
+fn restore_jpeg_delete_verified_sidecar(
+    source: &Path,
+    output: &Path,
+    proof: &RestoreJpegSidecarProof,
+) -> anyhow::Result<bool> {
+    let sidecar_hash = restore_jpeg_verify_sidecar_proof(proof)?;
+    tracing::info!(
+        target: "restore_jpeg_delete",
+        source = %source.display(),
+        output = %output.display(),
+        xmp_sidecar = %proof.path.display(),
+        xmp_sidecar_blake3 = %sidecar_hash,
+        "restore-jpeg delete-gate PASS: removing the exact proved XMP sidecar"
+    );
+    foundation::io_utils::safe_remove_file(&proof.path).with_context(|| {
+        format!(
+            "restore-jpeg delete gate failed to delete proved XMP sidecar {}",
+            proof.path.display()
         )
     })?;
     Ok(true)
@@ -9621,6 +9690,7 @@ mod fast_img_hardening_tests {
         )?;
         let xmp_commit = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
         proof.xmp_sidecar = xmp_commit.sidecar;
+        proof.source_xmp_sidecar = xmp_commit.source_sidecar;
         proof.source_retention_reason = xmp_commit.source_retention_reason;
         Ok(proof)
     }
@@ -9730,6 +9800,7 @@ mod fast_img_hardening_tests {
             reconstruction_hash: "jpeg-hash".to_string(),
             output_hash: "jpeg-hash".to_string(),
             xmp_sidecar: None,
+            source_xmp_sidecar: None,
             source_retention_reason: None,
             verified_unix_seconds: 1,
             djxl_version: "djxl test-version".to_string(),
@@ -11371,6 +11442,10 @@ mod fast_img_hardening_tests {
         std::fs::create_dir_all(&empty_leaf)?;
         std::fs::create_dir_all(&keep_leaf)?;
         std::fs::create_dir_all(&unrelated_empty)?;
+        std::fs::write(
+            empty_leaf.join(".DS_Store"),
+            [0, 0, 0, 1, b'B', b'u', b'd', b'1', 0],
+        )?;
         std::fs::write(keep_leaf.join("keep.png"), b"png")?;
         let mut marker = WorkingCopyMarker::new(src_root.clone(), root.path().join("out"), 1);
         marker.blake3_log.insert(

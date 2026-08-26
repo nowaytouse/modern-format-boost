@@ -918,7 +918,7 @@ pub fn photos_backup_originals_by_uuid(
     let records = query_records_by_uuid(&osxphotos, &scope.library, uuids)?;
     let mut originals = records
         .into_iter()
-        .map(photos_backup_original_from_record)
+        .map(|record| photos_backup_original_from_record(record, &scope.library))
         .collect::<Result<Vec<_>>>()?;
     originals.sort_by(|left, right| left.uuid.cmp(&right.uuid));
     Ok(originals)
@@ -926,26 +926,61 @@ pub fn photos_backup_originals_by_uuid(
 
 fn photos_backup_original_from_record(
     record: PhotosQueryRecord,
+    library_root: &Path,
 ) -> Result<PhotosBackupOriginalRecord> {
     anyhow::ensure!(
         !record.ismissing,
         "backup Photos asset {} is marked missing",
         record.uuid
     );
-    let original_path = record
+    let recorded_path = record
         .path
         .clone()
         .with_context(|| format!("backup Photos asset {} has no original path", record.uuid))?;
-    let metadata = fs::symlink_metadata(&original_path).with_context(|| {
+    let metadata = fs::symlink_metadata(&recorded_path).with_context(|| {
         format!(
             "backup Photos original for UUID {} is unavailable at {}",
             record.uuid,
-            original_path.display()
+            recorded_path.display()
         )
     })?;
     anyhow::ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0,
         "backup Photos original for UUID {} is not a non-empty regular file",
+        record.uuid
+    );
+    let library_root = fs::canonicalize(library_root).with_context(|| {
+        format!(
+            "resolve selected backup Photos library for UUID {}: {}",
+            record.uuid,
+            library_root.display()
+        )
+    })?;
+    let original_path = fs::canonicalize(&recorded_path).with_context(|| {
+        format!(
+            "resolve backup Photos original for UUID {}: {}",
+            record.uuid,
+            recorded_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        original_path.starts_with(&library_root),
+        "backup Photos original for UUID {} escaped the selected library: {}",
+        record.uuid,
+        original_path.display()
+    );
+    let resolved_metadata = fs::symlink_metadata(&original_path).with_context(|| {
+        format!(
+            "recheck backup Photos original for UUID {}: {}",
+            record.uuid,
+            original_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        resolved_metadata.is_file()
+            && !resolved_metadata.file_type().is_symlink()
+            && resolved_metadata.len() > 0,
+        "backup Photos original for UUID {} is not a non-empty regular file after resolution",
         record.uuid
     );
     let original_filename = safe_original_filename(&record)?;
@@ -1010,7 +1045,7 @@ pub fn photos_backup_original_candidates(
         if !requested.contains(&stem) {
             continue;
         }
-        let candidate = photos_backup_original_from_record(record)?;
+        let candidate = photos_backup_original_from_record(record, &scope.library)?;
         if crate::image::format_detect::detect_true_format(&candidate.original_path)?
             == crate::image::format_detect::FormatKind::Jpeg
         {
@@ -1352,5 +1387,27 @@ mod tests {
                 "Trip/Day".to_string(),
             ]]
         );
+    }
+
+    #[test]
+    fn backup_original_path_is_confined_to_selected_library() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let library = root.path().join("Library.photoslibrary");
+        let originals = library.join("originals");
+        fs::create_dir_all(&originals)?;
+        let inside = originals.join("IMG_0001.JPG");
+        fs::write(&inside, b"backup-jpeg")?;
+        let mut record = query_record("00000000-0000-0000-0000-000000000000");
+        record.original_filename = "IMG_0001.JPG".to_string();
+        record.path = Some(inside.clone());
+
+        let resolved = photos_backup_original_from_record(record.clone(), &library)?;
+        assert_eq!(resolved.original_path, inside.canonicalize()?);
+
+        let outside = root.path().join("outside.jpg");
+        fs::write(&outside, b"outside")?;
+        record.path = Some(outside);
+        assert!(photos_backup_original_from_record(record, &library).is_err());
+        Ok(())
     }
 }

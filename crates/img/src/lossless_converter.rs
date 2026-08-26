@@ -2577,7 +2577,9 @@ pub fn convert_jpeg_to_jxl(
             ) {
                 return fallback;
             }
-            return Ok(handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure));
+            return Ok(handle_irreversible_jpeg_encode_failure(
+                input, input_size, options, &failure,
+            ));
         }
         Err(e) => {
             return Err(ImgQualityError::ConversionError(format!(
@@ -2694,7 +2696,9 @@ pub fn convert_jpeg_to_jxl(
         {
             return fallback;
         }
-        return Ok(handle_irreversible_jpeg_encode_failure(input, input_size, options, &failure));
+        return Ok(handle_irreversible_jpeg_encode_failure(
+            input, input_size, options, &failure,
+        ));
     }
 
     let ladder = match try_jbrd_reconstruction_ladder(

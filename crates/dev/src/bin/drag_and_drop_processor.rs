@@ -1355,6 +1355,15 @@ fn resolve_restore_jpeg_launch_output(
     Ok((output, is_photos_audit))
 }
 
+fn is_photos_library_package_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+        })
+}
+
 fn plan_cli_invocations(
     args: &Args,
     project_root: &Path,
@@ -1372,6 +1381,20 @@ fn plan_cli_invocations(
         !matches!(args.mode, LaunchMode::Collect | LaunchMode::Compare) || args.backup.is_some(),
         "--mode collect/compare requires --backup; legacy optimized-media relocation was removed"
     );
+    if args.mode == LaunchMode::Compare {
+        let backup = args
+            .backup
+            .as_deref()
+            .context("--mode compare requires --backup")?;
+        anyhow::ensure!(
+            is_photos_library_package_path(backup)
+                && args
+                    .inputs
+                    .iter()
+                    .all(|input| is_photos_library_package_path(input)),
+            "--mode compare only supports comparing two Photos libraries; use an external file deduplicator for folders/files"
+        );
+    }
 
     let img_bin = cli_binary(project_root, "img");
     let vid_bin = cli_binary(project_root, "vid");
@@ -1425,19 +1448,16 @@ fn plan_cli_invocations(
                 ))?);
             }
             LaunchMode::Collect | LaunchMode::Compare => {
-                let output = args
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| {
-                        adjacent_output(
-                            input,
-                            if args.mode == LaunchMode::Compare {
-                                "backup_comparison"
-                            } else {
-                                "recovery_originals"
-                            },
-                        )
-                    });
+                let output = args.output.clone().unwrap_or_else(|| {
+                    adjacent_output(
+                        input,
+                        if args.mode == LaunchMode::Compare {
+                            "backup_comparison"
+                        } else {
+                            "recovery_originals"
+                        },
+                    )
+                });
                 let backup = args
                     .backup
                     .as_ref()
@@ -2988,14 +3008,14 @@ mod tests {
             ),
             (
                 LaunchMode::Compare,
-                Some(PathBuf::from("/backup/Album")),
+                Some(PathBuf::from("/backup/Album.photoslibrary")),
                 "/repo/target/release/collect_optimized",
                 vec![
-                    "/input/Album",
-                    "/input/Album_backup_comparison",
+                    "/input/Album.photoslibrary",
+                    "/input/Album.photoslibrary_backup_comparison",
                     "--yes",
                     "--backup",
-                    "/backup/Album",
+                    "/backup/Album.photoslibrary",
                     "--compare",
                 ],
             ),
@@ -3014,8 +3034,13 @@ mod tests {
         ];
 
         for (mode, backup, program, expected_args) in modes {
+            let input = if mode == LaunchMode::Compare {
+                PathBuf::from("/input/Album.photoslibrary")
+            } else {
+                target.clone()
+            };
             let args = Args {
-                inputs: vec![target.clone()],
+                inputs: vec![input],
                 mode,
                 output: None,
                 backup,
@@ -3043,6 +3068,41 @@ mod tests {
             assert_eq!(commands[0].program, PathBuf::from(program));
             assert_eq!(commands[0].args, expected_args);
         }
+    }
+
+    #[test]
+    fn compare_planner_rejects_folder_inputs() {
+        let args = Args {
+            inputs: vec![PathBuf::from("/input/Album")],
+            mode: LaunchMode::Compare,
+            output: None,
+            backup: Some(PathBuf::from("/backup/Album")),
+            archive: false,
+            shortest_path: false,
+            retry: false,
+            force: false,
+            dry_run: true,
+            resume: false,
+            no_resume: false,
+            ultimate: false,
+            in_place: false,
+            verbose: false,
+            base_dir: None,
+            plain: true,
+            watch: false,
+            images_only: false,
+            videos_only: false,
+            strategy: None,
+            photos_album_id: None,
+            photos_folder_id: None,
+        };
+        let error = plan_cli_invocations(&args, Path::new("/repo"), None)
+            .expect_err("folder comparison must be rejected before spawning a worker");
+        assert!(
+            error
+                .to_string()
+                .contains("only supports comparing two Photos libraries")
+        );
     }
 
     #[test]

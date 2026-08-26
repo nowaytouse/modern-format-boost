@@ -643,7 +643,8 @@ img restore-jpeg /path/to/Library.photoslibrary --photos-folder-id FOLDER_UUID
 # Re-check affected JXLs and collect only their originals + XMP from a backup.
 collect_optimized /path/to/audited /path/to/recovered --backup /path/to/backup --yes
 
-# Compare two folders/files or two Photos libraries without modifying either.
+# Compare two Photos libraries without modifying either library.
+# For folder/file deduplication, use a dedicated external deduplication tool.
 collect_optimized /path/to/current /path/to/report --backup /path/to/backup --compare
 
 # Video + animated raster (HEVC default)
@@ -711,12 +712,13 @@ working copy. State handling is explicit:
   exposes the same flow as **Collect recovery originals**.
   Add `--dry-run` to emit the exact folder/Photos recovery match list without
   copying media; the list can be redirected for a custom export script.
-- `collect_optimized CURRENT REPORT --backup BACKUP --compare` is read-only.
-  Folder comparison inventories true formats, XMP, relative identities and
-  BLAKE3; JXL/JPEG pairs are equal only after actual byte-exact JPEG
-  reconstruction. Photos comparison delegates to the installed `osxphotos`
-  library comparator. Results are written atomically to
-  `mfb_backup_comparison.json`; the native GUI exposes **Compare backup**.
+- `collect_optimized CURRENT REPORT --backup BACKUP --compare` is a read-only
+  comparison of **two Photos library packages only**. It delegates native asset
+  comparison to the installed `osxphotos` comparator and writes an atomic,
+  path-private `mfb_backup_comparison.json` report without changing either
+  library or any media. Folder/file comparison is deliberately not part of
+  MFB; use a dedicated external deduplication tool for that job. The native
+  GUI exposes the same **Compare backup** action and rejects non-Photos inputs.
 - `--allow-size-tolerance`: relaxes the default strict output-size gate.
 - `--allow-expert-options`: permits explicitly gated fallback/experimental
   encoder paths; it does not weaken final verification.
@@ -880,8 +882,10 @@ empty descendants and a user-selected directory root if it becomes truly
 empty. Selecting one file never authorizes removal of its implicit parent
 folder. Cleanup refuses Photos Library packages, dangerous roots and
 out-of-root/symlink candidates, and uses non-recursive empty-directory removal;
-any remaining media, sidecar, `.DS_Store` or concurrently created file keeps
-the directory.
+any remaining media, sidecar, user-hidden file, or concurrently created file
+keeps the directory. A valid Finder-generated `.DS_Store` is removed only
+when it is the sole remaining entry; look-alike or user-created hidden files
+are preserved.
 
 **12. Does `restore-jpeg` require an export or audit mode?**
 
