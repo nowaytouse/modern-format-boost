@@ -11,11 +11,18 @@ All notable changes to this project will be documented in this file.
   AVIF command builder's manual-unwrapping exception. The conversion, retry,
   delivery, and recovery state transitions are unchanged while their inputs
   are now self-documenting at call sites.
+- **IMG phase boundaries**: split the CLI `run` dispatch, FastImg job planning, verified-result
+  application, and Photos audit dispatch into named helpers. The build script
+  now has a direct `main`, reruns when its Homebrew-root inputs change, and no
+  longer carries an unused workspace-root probe; animated strategy matching
+  remains exhaustive without duplicating its construction.
 - **Focused `check_all` profile**: added `--package img|vid` for local
   compile/lint/test checks. Package runs keep default features and explicitly
   reject `--ci`, so a focused maintenance pass cannot silently become the
   multi-hour workspace gate; `--fix` remains formatter-only and exits before
   checks or audits, and its Ruff pass is limited to tracked Python files.
+  Package-scoped tests now run with one test thread so external codec probes
+  and process-wide test guards cannot produce nondeterministic failures.
 - **Separate CI package signals**: GitHub now reports independent IMG and VID
   package-quality jobs alongside the shared repository audit. Release gating
   requires both package signals, while their results remain independently

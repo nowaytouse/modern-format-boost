@@ -217,13 +217,6 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             })
         }
 
-        (ImageType::Animated, _, _) => Ok(ConversionStrategy {
-            target: TargetFormat::NoConversion,
-            reason: "Animated image: outside img static-conversion domain".to_string(),
-            command: String::new(),
-            expected_reduction: 0.0,
-        }),
-
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("JXL");
@@ -239,6 +232,12 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                 ),
                 expected_reduction: foundation::constants::EXPECTED_REDUCTION_JXL_LOSSY_STATIC,
             })
+        }
+
+        // Animated inputs return above; this arm keeps the tuple match
+        // exhaustive without duplicating the animated strategy construction.
+        (ImageType::Animated, _, _) => {
+            unreachable!("animated strategy was handled before the static match")
         }
 
         // Unproven compression semantics must not unlock a lossy re-encode:
@@ -578,10 +577,10 @@ fn resolve_output_path(
         "img_resolve_output",
     )
     .map_err(ImgQualityError::ConversionError)?;
-    let output = match output_dir {
-        None => input.with_extension(extension),
-        Some(dir) => dir.join(file_stem).with_extension(extension),
-    };
+    let output = output_dir.map_or_else(
+        || input.with_extension(extension),
+        |dir| dir.join(file_stem).with_extension(extension),
+    );
     foundation::conversion::validate_output_path(&output, None)
         .map_err(ImgQualityError::ConversionError)?;
     Ok(output)

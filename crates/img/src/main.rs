@@ -10,6 +10,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
 use foundation::common_utils::calculate_blake3_hash;
+use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 use foundation::fast_img::{
     IntegrityResult, PhotosImportCandidate, apply_library_assets_to_marker,
     apply_tier2_library_assets_to_marker, build_fast_img_output_import_candidates,
@@ -416,6 +417,207 @@ fn acquire_command_lock(command: &Commands) -> Option<foundation::infra::process
     }
 }
 
+fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyhow::Result<()> {
+    let Commands::Run {
+        input,
+        output,
+        force,
+        recursive,
+        delete_original,
+        in_place,
+        explore,
+        match_quality,
+        compress,
+        apple_compat,
+        no_apple_compat,
+        ultimate,
+        archive,
+        allow_size_tolerance,
+        no_allow_size_tolerance,
+        allow_expert_options,
+        preserve_timestamps,
+        preserve,
+        verbose,
+        plain,
+
+        base_dir,
+        resume: resume_flag,
+        no_resume,
+        codec,
+    } = command
+    else {
+        unreachable!("run_img_command called with a non-run command");
+    };
+    let (input, base_dir) = canonicalize_img_run_roots(&input, base_dir.as_deref());
+    let resume = foundation::checkpoint::resolve_resume_choice(
+        &input,
+        output.as_deref(),
+        resume_flag,
+        no_resume,
+    )?;
+    let apple_compat = apple_compat && !no_apple_compat;
+    let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+    let should_delete = delete_original || in_place;
+
+    let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
+
+    let flag_mode = match foundation::validate_flags_result_with_ultimate(foundation::FlagRequest {
+        base: foundation::FlagBase {
+            explore,
+            match_quality,
+            compress,
+        },
+        tier: foundation::FlagTier { ultimate },
+    }) {
+        Ok(mode) => mode,
+        Err(e) => {
+            log_fatal!(foundation::infra::static_logs::messages::LABEL_CONFIG, &e);
+            std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+        }
+    };
+
+    // Fail-fast if critical sub-tools are missing
+    if let Err(e) = foundation::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]) {
+        log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &e);
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+
+    foundation::progress_mode::configure_terminal_ux(plain);
+    foundation::progress_mode::set_verbose_mode(verbose);
+    foundation::progress_mode::maybe_log_inference_analytics_hint(verbose);
+    // Create run log first; all subsequent output is captured here
+    if let Err(e) = foundation::progress_mode::set_default_run_log_file("img") {
+        log_fatal!(
+            foundation::infra::static_logs::messages::LABEL_RUN_LOG,
+            &format!(
+                "{}: {}",
+                foundation::infra::static_logs::messages::RUN_LOG_OPEN_FAIL,
+                e
+            )
+        );
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+    foundation::log_summary_header!(&format!(
+        "{} {}",
+        symbols::VIDEO,
+        flag_mode.description_en()
+    ));
+    foundation::log_stat!(
+        foundation::infra::static_logs::messages::LABEL_STRATEGY,
+        foundation::delivery_codec_strategy::img_run_routing_summary(img_static_delivery)
+    );
+    foundation::log_stat!(
+        foundation::infra::static_logs::messages::LABEL_MAPPING,
+        &foundation::infra::static_logs::messages::MSG_MAIN_IMAGE_MAPPING
+            .replace("{}", symbols::IMAGE)
+    );
+    if apple_compat {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            format!(
+                "{shield} {bold}Apple Compatibility Audit: Hardware-optimized encoding enabled{reset}",
+                shield = symbols::SHIELD,
+                bold = colors::BOLD,
+                reset = colors::RESET,
+            )
+        );
+        unsafe { std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1") };
+    }
+
+    if in_place {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            format!(
+                "{save} {bold}Destructive Write Audit: In-place modification enabled{reset}",
+                save = symbols::SAVE,
+                bold = colors::BOLD,
+                reset = colors::RESET,
+            )
+        );
+    }
+    if ultimate {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            format!(
+                "{search} {bold}Quality Audit: Ultimate-tier precision encoding enabled{reset}",
+                search = symbols::SEARCH,
+                bold = colors::BOLD,
+                reset = colors::RESET,
+            )
+        );
+    }
+    if archive {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            "Archive Audit: encoder effort/preset overrides enabled"
+        );
+    }
+    if allow_expert_options {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            "Expert Options Audit: gated encoder/decoder fallbacks enabled; final verification remains mandatory"
+        );
+    }
+    if !allow_size_tolerance {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            format!(
+                "{chart} {bold}Precision Audit: Strict bit-for-bit size threshold enforcement enabled{reset}",
+                chart = symbols::CHART,
+                bold = colors::BOLD,
+                reset = colors::RESET,
+            )
+        );
+    }
+
+    if cache.is_some() {
+        foundation::database::report_db_status();
+    }
+
+    let mut config_flags = ConfigFlags::USE_GPU;
+    config_flags.set(ConfigFlags::FORCE, force);
+    config_flags.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
+    config_flags.set(ConfigFlags::PRESERVE_TIMESTAMPS, preserve_timestamps);
+    config_flags.set(ConfigFlags::PRESERVE_METADATA, preserve);
+    config_flags.set(ConfigFlags::COMPRESS, compress);
+    config_flags.set(ConfigFlags::APPLE_COMPAT, apple_compat);
+    config_flags.set(ConfigFlags::IN_PLACE, in_place);
+    config_flags.set(ConfigFlags::EXPLORE_SMALLER, explore);
+    config_flags.set(ConfigFlags::MATCH_QUALITY, match_quality);
+    config_flags.set(ConfigFlags::ULTIMATE_MODE, ultimate);
+    config_flags.set(ConfigFlags::ARCHIVE_MODE, archive);
+    config_flags.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
+    config_flags.set(ConfigFlags::ALLOW_EXPERT_OPTIONS, allow_expert_options);
+    config_flags.set(ConfigFlags::VERBOSE, verbose);
+    let config = AutoConvertConfig {
+        output_dir: output,
+        base_dir,
+        flags: config_flags,
+        child_threads: 0,
+        cache,
+        error_mode: foundation::BatchErrorMode::current(),
+    };
+
+    let workload = foundation::thread_manager::WorkloadType::Image;
+    let thread_config = foundation::thread_manager::get_balanced_thread_config(workload);
+    let mut config = config;
+    config.child_threads = thread_config.child_threads;
+
+    if input.is_file() {
+        auto_convert_single_file(&input, &config)?;
+    } else if input.is_dir() {
+        auto_convert_directory(&input, &config, recursive, resume)?;
+    } else {
+        log_fatal!(
+            "Input",
+            &foundation::infra::static_logs::messages::MSG_CONVERSION_VALIDATE_EXIST
+                .replace("{}", &input.display().to_string()),
+        );
+        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+    Ok(())
+}
+
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
@@ -433,205 +635,9 @@ fn main_inner() -> anyhow::Result<()> {
     let _lock_guard = acquire_command_lock(&cli.command);
 
     match cli.command {
-        Commands::Run {
-            input,
-            output,
-            force,
-            recursive,
-            delete_original,
-            in_place,
-            explore,
-            match_quality,
-            compress,
-            apple_compat,
-            no_apple_compat,
-            ultimate,
-            archive,
-            allow_size_tolerance,
-            no_allow_size_tolerance,
-            allow_expert_options,
-            preserve_timestamps,
-            preserve,
-            verbose,
-            plain,
-
-            base_dir,
-            resume: resume_flag,
-            no_resume,
-            codec,
-        } => {
-            use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
-
-            let (input, base_dir) = canonicalize_img_run_roots(&input, base_dir.as_deref());
-            let resume = foundation::checkpoint::resolve_resume_choice(
-                &input,
-                output.as_deref(),
-                resume_flag,
-                no_resume,
-            )?;
-            let apple_compat = apple_compat && !no_apple_compat;
-            let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
-            let should_delete = delete_original || in_place;
-
-            let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
-
-            let flag_mode =
-                match foundation::validate_flags_result_with_ultimate(foundation::FlagRequest {
-                    base: foundation::FlagBase {
-                        explore,
-                        match_quality,
-                        compress,
-                    },
-                    tier: foundation::FlagTier { ultimate },
-                }) {
-                    Ok(mode) => mode,
-                    Err(e) => {
-                        log_fatal!(foundation::infra::static_logs::messages::LABEL_CONFIG, &e);
-                        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-                    }
-                };
-
-            // Fail-fast if critical sub-tools are missing
-            if let Err(e) = foundation::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]) {
-                log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &e);
-                std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-            }
-
-            foundation::progress_mode::configure_terminal_ux(plain);
-            foundation::progress_mode::set_verbose_mode(verbose);
-            foundation::progress_mode::maybe_log_inference_analytics_hint(verbose);
-            // Create run log first; all subsequent output is captured here
-            if let Err(e) = foundation::progress_mode::set_default_run_log_file("img") {
-                log_fatal!(
-                    foundation::infra::static_logs::messages::LABEL_RUN_LOG,
-                    &format!(
-                        "{}: {}",
-                        foundation::infra::static_logs::messages::RUN_LOG_OPEN_FAIL,
-                        e
-                    )
-                );
-                std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-            }
-            foundation::log_summary_header!(&format!(
-                "{} {}",
-                symbols::VIDEO,
-                flag_mode.description_en()
-            ));
-            foundation::log_stat!(
-                foundation::infra::static_logs::messages::LABEL_STRATEGY,
-                foundation::delivery_codec_strategy::img_run_routing_summary(img_static_delivery)
-            );
-            foundation::log_stat!(
-                foundation::infra::static_logs::messages::LABEL_MAPPING,
-                &foundation::infra::static_logs::messages::MSG_MAIN_IMAGE_MAPPING
-                    .replace("{}", symbols::IMAGE)
-            );
-            if apple_compat {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    format!(
-                        "{shield} {bold}Apple Compatibility Audit: Hardware-optimized encoding enabled{reset}",
-                        shield = symbols::SHIELD,
-                        bold = colors::BOLD,
-                        reset = colors::RESET,
-                    )
-                );
-                unsafe { std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1") };
-            }
-
-            if in_place {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    format!(
-                        "{save} {bold}Destructive Write Audit: In-place modification enabled{reset}",
-                        save = symbols::SAVE,
-                        bold = colors::BOLD,
-                        reset = colors::RESET,
-                    )
-                );
-            }
-            if ultimate {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    format!(
-                        "{search} {bold}Quality Audit: Ultimate-tier precision encoding enabled{reset}",
-                        search = symbols::SEARCH,
-                        bold = colors::BOLD,
-                        reset = colors::RESET,
-                    )
-                );
-            }
-            if archive {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    "Archive Audit: encoder effort/preset overrides enabled"
-                );
-            }
-            if allow_expert_options {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    "Expert Options Audit: gated encoder/decoder fallbacks enabled; final verification remains mandatory"
-                );
-            }
-            if !allow_size_tolerance {
-                log_stat!(
-                    foundation::infra::static_logs::messages::LABEL_CONFIG,
-                    format!(
-                        "{chart} {bold}Precision Audit: Strict bit-for-bit size threshold enforcement enabled{reset}",
-                        chart = symbols::CHART,
-                        bold = colors::BOLD,
-                        reset = colors::RESET,
-                    )
-                );
-            }
-
-            if cache.is_some() {
-                foundation::database::report_db_status();
-            }
-
-            let mut config_flags = ConfigFlags::USE_GPU;
-            config_flags.set(ConfigFlags::FORCE, force);
-            config_flags.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
-            config_flags.set(ConfigFlags::PRESERVE_TIMESTAMPS, preserve_timestamps);
-            config_flags.set(ConfigFlags::PRESERVE_METADATA, preserve);
-            config_flags.set(ConfigFlags::COMPRESS, compress);
-            config_flags.set(ConfigFlags::APPLE_COMPAT, apple_compat);
-            config_flags.set(ConfigFlags::IN_PLACE, in_place);
-            config_flags.set(ConfigFlags::EXPLORE_SMALLER, explore);
-            config_flags.set(ConfigFlags::MATCH_QUALITY, match_quality);
-            config_flags.set(ConfigFlags::ULTIMATE_MODE, ultimate);
-            config_flags.set(ConfigFlags::ARCHIVE_MODE, archive);
-            config_flags.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
-            config_flags.set(ConfigFlags::ALLOW_EXPERT_OPTIONS, allow_expert_options);
-            config_flags.set(ConfigFlags::VERBOSE, verbose);
-            let config = AutoConvertConfig {
-                output_dir: output,
-                base_dir,
-                flags: config_flags,
-                child_threads: 0,
-                cache,
-                error_mode: foundation::BatchErrorMode::current(),
-            };
-
-            let workload = foundation::thread_manager::WorkloadType::Image;
-            let thread_config = foundation::thread_manager::get_balanced_thread_config(workload);
-            let mut config = config;
-            config.child_threads = thread_config.child_threads;
-
-            if input.is_file() {
-                auto_convert_single_file(&input, &config)?;
-            } else if input.is_dir() {
-                auto_convert_directory(&input, &config, recursive, resume)?;
-            } else {
-                log_fatal!(
-                    "Input",
-                    &foundation::infra::static_logs::messages::MSG_CONVERSION_VALIDATE_EXIST
-                        .replace("{}", &input.display().to_string()),
-                );
-                std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-            }
+        command @ Commands::Run { .. } => {
+            run_img_command(command, cache)?;
         }
-
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = foundation::restore_timestamps_from_source_to_output(&source, &output) {
                 foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
@@ -751,7 +757,7 @@ fn main_inner() -> anyhow::Result<()> {
                 recursive,
                 force,
                 keep_source,
-                selected_container,
+                selected_container.as_ref(),
             )?;
         }
     }
@@ -6138,9 +6144,11 @@ struct RestoreJpegAuditArtifacts {
 }
 
 #[derive(Debug, Default)]
-struct RestoreJpegParallelOutcome {
+struct RestoreJpegProcessOutcome {
     restored: usize,
     skipped: usize,
+    deleted_sources: usize,
+    deleted_source_dirs: Vec<PathBuf>,
     records: Vec<RestoreJpegManifestRecord>,
     metadata_reviews: Vec<RestoreJpegFailure>,
     failures: Vec<RestoreJpegFailure>,
@@ -7510,7 +7518,7 @@ fn restore_jpeg_keep_source_parallel(
     input_root: &Path,
     output_root: &Path,
     force: bool,
-) -> anyhow::Result<RestoreJpegParallelOutcome> {
+) -> anyhow::Result<RestoreJpegProcessOutcome> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let available_workers = match std::thread::available_parallelism() {
@@ -7583,13 +7591,152 @@ fn restore_jpeg_keep_source_parallel(
             }),
         }
     }
-    Ok(RestoreJpegParallelOutcome {
+    Ok(RestoreJpegProcessOutcome {
         restored: restored.load(Ordering::Relaxed),
         skipped: skipped.load(Ordering::Relaxed),
+        deleted_sources: 0,
+        deleted_source_dirs: Vec::new(),
         records,
         metadata_reviews,
         failures,
     })
+}
+
+fn restore_jpeg_process_candidates(
+    files: &[PathBuf],
+    input_root: &Path,
+    output_root: &Path,
+    force: bool,
+    keep_source: bool,
+) -> anyhow::Result<RestoreJpegProcessOutcome> {
+    if keep_source {
+        let outcome = restore_jpeg_keep_source_parallel(files, input_root, output_root, force)?;
+        for review in &outcome.metadata_reviews {
+            eprintln!(
+                "[METADATA-REVIEW] {}: {}",
+                review.source.display(),
+                review.reason
+            );
+        }
+        for failed in &outcome.failures {
+            eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
+        }
+        if !outcome.records.is_empty() {
+            write_restore_jpeg_manifest(output_root, &outcome.records).with_context(|| {
+                format!(
+                    "restore-jpeg failed to commit retained-source manifest after {} files",
+                    files.len()
+                )
+            })?;
+        }
+        return Ok(outcome);
+    }
+
+    let mut outcome = RestoreJpegProcessOutcome::default();
+    for (index, file) in files.iter().enumerate() {
+        match restore_single_jpeg(file, input_root, output_root, force) {
+            Ok(result) => {
+                if result.committed {
+                    outcome.restored += 1;
+                } else {
+                    outcome.skipped += 1;
+                }
+                if let Some(reason) = &result.proof.source_retention_reason {
+                    eprintln!("[METADATA-REVIEW] {}: {reason}", file.display());
+                    outcome.metadata_reviews.push(RestoreJpegFailure {
+                        source: file.clone(),
+                        reason: reason.clone(),
+                    });
+                }
+                if record_and_delete_restored_jpeg_source(
+                    output_root,
+                    &mut outcome.records,
+                    &result.proof,
+                )? {
+                    outcome.deleted_sources += 1;
+                    if let Some(parent) = file.parent() {
+                        outcome.deleted_source_dirs.push(parent.to_path_buf());
+                    }
+                }
+            }
+            Err(error) => {
+                let failure = RestoreJpegFailure {
+                    source: file.clone(),
+                    reason: format!("{error:#}"),
+                };
+                eprintln!(
+                    "[FAIL    ] {}: {}",
+                    failure.source.display(),
+                    failure.reason
+                );
+                outcome.failures.push(failure);
+            }
+        }
+
+        let processed = index + 1;
+        if processed.is_multiple_of(250) || processed == files.len() {
+            println!(
+                "[RESTORE ] processed {processed}/{} exact-reconstruction candidates (new={} existing={} failed={})",
+                files.len(),
+                outcome.restored,
+                outcome.skipped,
+                outcome.failures.len()
+            );
+        }
+    }
+    Ok(outcome)
+}
+
+fn run_restore_jpeg_photos_audit(
+    input: &Path,
+    output_dir: Option<&Path>,
+    force: bool,
+    keep_source: bool,
+    selected_container: Option<&foundation::image::photos_jxl_audit::PhotosAuditContainerSelection>,
+) -> anyhow::Result<bool> {
+    let Some(mut scope) = foundation::image::photos_jxl_audit::detect_photos_audit_scope(input)?
+    else {
+        return Ok(false);
+    };
+    anyhow::ensure!(
+        output_dir.is_none() && !force && !keep_source,
+        "Photos-library JXL audit selects its own persistent checkpoint; --output, --force, and --keep-source are local-folder options"
+    );
+    anyhow::ensure!(
+        scope.selected_asset_path.is_none() || selected_container.is_none(),
+        "Photos album/folder selection requires the library package, not one concrete asset"
+    );
+    scope.selected_container = selected_container.cloned();
+    let audit_scope = scope.selected_container.as_ref().map_or_else(
+        || {
+            if scope.selected_asset_path.is_some() {
+                "asset".to_string()
+            } else {
+                "whole-library".to_string()
+            }
+        },
+        |selection| format!("{}:{}", selection.kind.as_str(), selection.id),
+    );
+    let summary = foundation::image::photos_jxl_audit::run_photos_jxl_audit(&scope)?;
+    println!("Succeeded: {}", summary.audited);
+    println!("Skipped: 0");
+    println!("Ignored: 0");
+    println!("Failed: 0");
+    println!(
+        "[AUDIT   ] Photos library={} scope={} audited={} exact={} recovery_needed={} needs_review={} album_links_verified={} checkpoint={}",
+        summary.library.display(),
+        audit_scope,
+        summary.audited,
+        summary.exact,
+        summary.recovery_needed,
+        summary.needs_review,
+        summary.album_links_verified,
+        summary.checkpoint.display(),
+    );
+    println!(
+        "[DONE    ] Photos added only existing asset references to mirrored MFB audit albums; MFB did not rewrite media bytes or edit Photos Library package files directly"
+    );
+    Ok(true)
 }
 
 fn run_restore_jpeg(
@@ -7598,48 +7745,9 @@ fn run_restore_jpeg(
     recursive: bool,
     force: bool,
     keep_source: bool,
-    selected_container: Option<foundation::image::photos_jxl_audit::PhotosAuditContainerSelection>,
+    selected_container: Option<&foundation::image::photos_jxl_audit::PhotosAuditContainerSelection>,
 ) -> anyhow::Result<()> {
-    if let Some(mut scope) = foundation::image::photos_jxl_audit::detect_photos_audit_scope(input)?
-    {
-        anyhow::ensure!(
-            output_dir.is_none() && !force && !keep_source,
-            "Photos-library JXL audit selects its own persistent checkpoint; --output, --force, and --keep-source are local-folder options"
-        );
-        anyhow::ensure!(
-            scope.selected_asset_path.is_none() || selected_container.is_none(),
-            "Photos album/folder selection requires the library package, not one concrete asset"
-        );
-        scope.selected_container = selected_container;
-        let audit_scope = scope.selected_container.as_ref().map_or_else(
-            || {
-                if scope.selected_asset_path.is_some() {
-                    "asset".to_string()
-                } else {
-                    "whole-library".to_string()
-                }
-            },
-            |selection| format!("{}:{}", selection.kind.as_str(), selection.id),
-        );
-        let summary = foundation::image::photos_jxl_audit::run_photos_jxl_audit(&scope)?;
-        println!("Succeeded: {}", summary.audited);
-        println!("Skipped: 0");
-        println!("Ignored: 0");
-        println!("Failed: 0");
-        println!(
-            "[AUDIT   ] Photos library={} scope={} audited={} exact={} recovery_needed={} needs_review={} album_links_verified={} checkpoint={}",
-            summary.library.display(),
-            audit_scope,
-            summary.audited,
-            summary.exact,
-            summary.recovery_needed,
-            summary.needs_review,
-            summary.album_links_verified,
-            summary.checkpoint.display(),
-        );
-        println!(
-            "[DONE    ] Photos added only existing asset references to mirrored MFB audit albums; MFB did not rewrite media bytes or edit Photos Library package files directly"
-        );
+    if run_restore_jpeg_photos_audit(input, output_dir, force, keep_source, selected_container)? {
         return Ok(());
     }
 
@@ -7767,88 +7875,15 @@ fn run_restore_jpeg(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let mut restored = 0usize;
-    let mut skipped = 0usize;
-    let mut deleted_sources = 0usize;
-    let mut deleted_source_dirs = Vec::new();
-    let mut restore_records = Vec::new();
-    let mut metadata_reviews = Vec::new();
-    let mut processing_failures = Vec::new();
-
-    if keep_source {
-        let outcome = restore_jpeg_keep_source_parallel(&files, &input_root, &output_root, force)?;
-        restored = outcome.restored;
-        skipped = outcome.skipped;
-        restore_records = outcome.records;
-        for review in &outcome.metadata_reviews {
-            eprintln!(
-                "[METADATA-REVIEW] {}: {}",
-                review.source.display(),
-                review.reason
-            );
-        }
-        metadata_reviews = outcome.metadata_reviews;
-        for failed in &outcome.failures {
-            eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
-        }
-        processing_failures.extend(outcome.failures);
-        if !restore_records.is_empty() {
-            write_restore_jpeg_manifest(&output_root, &restore_records).with_context(|| {
-                format!(
-                    "restore-jpeg failed to commit retained-source manifest after {file_count} files"
-                )
-            })?;
-        }
-    } else {
-        for (index, file) in files.iter().enumerate() {
-            match restore_single_jpeg(file, &input_root, &output_root, force) {
-                Ok(result) => {
-                    if result.committed {
-                        restored += 1;
-                    } else {
-                        skipped += 1;
-                    }
-                    if let Some(reason) = &result.proof.source_retention_reason {
-                        eprintln!("[METADATA-REVIEW] {}: {reason}", file.display());
-                        metadata_reviews.push(RestoreJpegFailure {
-                            source: file.clone(),
-                            reason: reason.clone(),
-                        });
-                    }
-                    if record_and_delete_restored_jpeg_source(
-                        &output_root,
-                        &mut restore_records,
-                        &result.proof,
-                    )? {
-                        deleted_sources += 1;
-                        if let Some(parent) = file.parent() {
-                            deleted_source_dirs.push(parent.to_path_buf());
-                        }
-                    }
-                }
-                Err(error) => {
-                    let failure = RestoreJpegFailure {
-                        source: file.clone(),
-                        reason: format!("{error:#}"),
-                    };
-                    eprintln!(
-                        "[FAIL    ] {}: {}",
-                        failure.source.display(),
-                        failure.reason
-                    );
-                    processing_failures.push(failure);
-                }
-            }
-
-            let processed = index + 1;
-            if processed.is_multiple_of(250) || processed == file_count {
-                println!(
-                    "[RESTORE ] processed {processed}/{file_count} exact-reconstruction candidates (new={restored} existing={skipped} failed={})",
-                    processing_failures.len()
-                );
-            }
-        }
-    }
+    let outcome =
+        restore_jpeg_process_candidates(&files, &input_root, &output_root, force, keep_source)?;
+    let restored = outcome.restored;
+    let skipped = outcome.skipped;
+    let deleted_sources = outcome.deleted_sources;
+    let deleted_source_dirs = outcome.deleted_source_dirs;
+    let restore_records = outcome.records;
+    let metadata_reviews = outcome.metadata_reviews;
+    let processing_failures = outcome.failures;
 
     if !restore_records.is_empty() {
         foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
@@ -8448,18 +8483,320 @@ struct FastImgEncodeContext<'a> {
     strategy: &'a str,
 }
 
-fn fast_img_run_encode_phase(context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
+impl FastImgEncodeContext<'_> {
+    fn plan_jobs(&mut self) -> anyhow::Result<(Vec<FastImgTranscodeJob>, usize)> {
+        let marker = &mut *self.marker;
+        let source_jpegs = self.source_jpegs;
+        let current_source_hashes = self.current_source_hashes;
+        let scan_failures = self.scan_failures;
+        let src_dir = self.src_dir;
+        let working_copy = self.working_copy;
+        let retry_failed_sources_from_cleanup = self.retry_failed_sources_from_cleanup.0;
+        let strategy = self.strategy;
+        let mut completed_from_resume = 0usize;
+        let mut jobs = Vec::new();
+
+        for source in source_jpegs {
+            let rel = source.strip_prefix(src_dir).map_err(|err| {
+                anyhow::anyhow!(
+                    "fast-img scan produced path outside source root: source={} root={} ({err})",
+                    source.display(),
+                    src_dir.display()
+                )
+            })?;
+            let rel_key = rel.to_string_lossy().to_string();
+
+            if let Some(reason) = scan_failures.get(&rel_key) {
+                let src_hash = current_source_hashes
+                    .get(&rel_key)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing scanned source hash for {rel_key}"))?;
+                marker.blake3_log.remove(&rel_key);
+                marker.skipped_sources.remove(&rel_key);
+                marker.failed_sources.insert(
+                    rel_key.clone(),
+                    SkippedSourceEntry {
+                        src: src_hash,
+                        reason: reason.clone(),
+                    },
+                );
+                println!("[FAIL    ] {rel_key} {reason}");
+                tracing::error!(
+                    target: "fast_img_failures",
+                    file = %rel_key,
+                    reason = %reason,
+                    "fast-img scan failure retained before encode"
+                );
+                continue;
+            }
+
+            if let Some(entry) = marker.skipped_sources.get(&rel_key) {
+                fast_img_emit_explicit_skip(&rel_key, &entry.reason);
+                continue;
+            }
+            if marker.failed_sources.contains_key(&rel_key) && !retry_failed_sources_from_cleanup {
+                if let Some(entry) = marker.failed_sources.get(&rel_key) {
+                    fast_img_emit_explicit_skip(
+                        &rel_key,
+                        &format!("failed (no retry): {}", entry.reason),
+                    );
+                }
+                continue;
+            }
+
+            let resume_out = marker
+                .blake3_log
+                .get(&rel_key)
+                .map(|entry| fast_img_marker_entry_output_path(marker, &rel_key, entry))
+                .transpose()?;
+            let existing_output_current = match resume_out.as_ref() {
+                Some(output) if output.exists() => match marker.blake3_log.get(&rel_key) {
+                    Some(entry) => fast_img_skip_hashes_match(source, output, entry)?,
+                    None => false,
+                },
+                _ => false,
+            };
+            if existing_output_current {
+                let resume_out =
+                    resume_out.context("missing fast-img resume output after current proof")?;
+                let resume_out_rel_key = fast_img_output_rel_key(
+                    &resume_out,
+                    working_copy,
+                    "fast_img_resume_output_rel",
+                )?;
+                let expected_hash = marker
+                    .blake3_log
+                    .get(&rel_key)
+                    .map_or("", |e| e.out.as_str());
+                match fast_img_check_reused_delivery(
+                    &resume_out,
+                    strategy,
+                    marker.metadata_policy_version,
+                    expected_hash,
+                )? {
+                    ReuseDecision::Reusable { hash } => {
+                        if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
+                            if entry.out != hash {
+                                entry.library_asset = None;
+                            }
+                            entry.out = hash;
+                            entry.out_rel = Some(resume_out_rel_key.clone());
+                        }
+                        let encode_label = if strategy == "avif" {
+                            "MEME MODE"
+                        } else {
+                            "ENCODE"
+                        };
+                        println!(
+                            "[{encode_label}] reused verified output for {rel_key} -> {resume_out_rel_key}"
+                        );
+                        completed_from_resume += 1;
+                        continue;
+                    }
+                    ReuseDecision::NeedsReencode { reason } => {
+                        tracing::warn!(
+                            target: "fast_img",
+                            source_rel = %rel_key,
+                            reason = %reason,
+                            "reused output invalidated; scheduling clean re-encode"
+                        );
+                        if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
+                            entry.out.clear();
+                            entry.library_asset = None;
+                            entry.out_rel = Some(resume_out_rel_key);
+                        }
+                        foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                            "fast_img invalidate obsolete reused output",
+                            &resume_out,
+                        );
+                        write_marker_atomic(marker)?;
+                    }
+                }
+            }
+
+            // If the marker already has a recorded out_rel for this source from a
+            // prior run, pre-claim that exact path before calling
+            // `fast_img_planned_output_rel`.  Without this, `reserve_output_path`
+            // would see the on-disk JXL, find it unclaimed, and bump to a
+            // collision suffix (`a (1).JXL`) — diverging from the marker record.
+            //
+            // `pre_claim_output_path` bypasses the `None if exists_on_disk => true`
+            // arm and inserts the (output → input) pair directly.  We then call
+            // `reserve_output_path` with the marker path (not the naive
+            // `rel.with_extension("JXL")`) so that even a genuine prior-run
+            // collision path like `a (1).JXL` is honoured.
+            let (_reserved_out, out_rel_key) = if let Some(recorded_out_rel) = marker
+                .blake3_log
+                .get(&rel_key)
+                .and_then(|e| e.out_rel.as_deref())
+            {
+                let recorded_out = working_copy.join(recorded_out_rel);
+                foundation::conversion::pre_claim_output_path(source, &recorded_out);
+                tracing::debug!(
+                    target: "fast_img",
+                    rel = %rel_key,
+                    recorded_out_rel = %recorded_out_rel,
+                    "pre-claimed marker output path for stale-proof reencode"
+                );
+                let reserved = foundation::conversion::reserve_output_path(source, &recorded_out);
+                let out_rel_key = fast_img_output_rel_key(
+                    &reserved,
+                    working_copy,
+                    "fast_img_resume_reencode_rel",
+                )?;
+                if reserved != recorded_out {
+                    tracing::warn!(
+                        target: "fast_img",
+                        rel = %rel_key,
+                        recorded = %recorded_out_rel,
+                        actual = %reserved.display(),
+                        "stale-proof reencode: marker out_rel was already taken by another source; using new path"
+                    );
+                }
+                (reserved, out_rel_key)
+            } else {
+                fast_img_planned_output_rel(source, working_copy, rel, strategy)?
+            };
+
+            jobs.push(FastImgTranscodeJob {
+                source: source.clone(),
+                src_hash: current_source_hashes
+                    .get(&rel_key)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing scanned source hash for {rel_key}"))?,
+                rel_key,
+                out_rel_key,
+            });
+        }
+
+        Ok((jobs, completed_from_resume))
+    }
+}
+
+struct FastImgEncodeResultSummary {
+    encoded: usize,
+    session_converted: u64,
+    session_source_bytes: u64,
+    session_output_bytes: u64,
+    session_failed: usize,
+    session_skipped: usize,
+}
+
+fn fast_img_apply_encode_results(
+    marker: &mut WorkingCopyMarker,
+    results: Vec<FastImgJobResult>,
+    completed_from_resume: usize,
+    src_dir: &Path,
+    working_copy: &Path,
+) -> anyhow::Result<FastImgEncodeResultSummary> {
+    let mut summary = FastImgEncodeResultSummary {
+        encoded: completed_from_resume,
+        session_converted: 0,
+        session_source_bytes: 0,
+        session_output_bytes: 0,
+        session_failed: 0,
+        session_skipped: 0,
+    };
+
+    for result in results {
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                println!("[FAIL    ] {} {}", err.rel_key, err.reason);
+                fast_img_remove_failed_encode_output(working_copy, &err)?;
+                marker.blake3_log.remove(&err.rel_key);
+                marker.skipped_sources.remove(&err.rel_key);
+                marker.failed_sources.insert(
+                    err.rel_key,
+                    SkippedSourceEntry {
+                        src: err.src_hash,
+                        reason: err.reason,
+                    },
+                );
+                summary.session_failed += 1;
+                write_marker_atomic(marker)?;
+                continue;
+            }
+        };
+        match outcome {
+            FastImgTranscodeOutcome::Converted(proof) => {
+                // Session size summary counts ONLY files converted in this run:
+                // resume-reused, skipped, and failed items are excluded by
+                // construction (failed returns above; Skipped takes the other arm).
+                let src_abs = src_dir.join(&proof.rel_key);
+                let out_abs = working_copy.join(&proof.out_rel);
+                let src_len = std::fs::metadata(&src_abs)
+                    .with_context(|| {
+                        format!(
+                            "stat converted source for size summary: {}",
+                            src_abs.display()
+                        )
+                    })?
+                    .len();
+                let out_len = std::fs::metadata(&out_abs)
+                    .with_context(|| {
+                        format!(
+                            "stat converted JXL output for size summary: {}",
+                            out_abs.display()
+                        )
+                    })?
+                    .len();
+                summary.session_converted += 1;
+                summary.session_source_bytes = summary
+                    .session_source_bytes
+                    .checked_add(src_len)
+                    .context("source byte accumulation overflowed u64")?;
+                summary.session_output_bytes = summary
+                    .session_output_bytes
+                    .checked_add(out_len)
+                    .context("output byte accumulation overflowed u64")?;
+                marker.skipped_sources.remove(&proof.rel_key);
+                marker.failed_sources.remove(&proof.rel_key);
+                marker.blake3_log.insert(
+                    proof.rel_key,
+                    Blake3Entry {
+                        out_rel: Some(proof.out_rel),
+                        src: proof.src_hash,
+                        out: proof.out_hash,
+                        library_asset: None,
+                    },
+                );
+                summary.encoded += 1;
+                marker.encoded_count = summary.encoded;
+            }
+            FastImgTranscodeOutcome::Skipped(proof) => {
+                fast_img_emit_explicit_skip(&proof.rel_key, &proof.reason);
+                summary.session_skipped += 1;
+                marker.blake3_log.remove(&proof.rel_key);
+                marker.failed_sources.remove(&proof.rel_key);
+                marker.skipped_sources.insert(
+                    proof.rel_key,
+                    SkippedSourceEntry {
+                        src: proof.src_hash,
+                        reason: proof.reason,
+                    },
+                );
+            }
+        }
+        write_marker_atomic(marker)?;
+    }
+
+    Ok(summary)
+}
+
+fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
+    let total = context.source_jpegs.len();
+    let (jobs, completed_from_resume) = context.plan_jobs()?;
     let FastImgEncodeContext {
         marker,
         source_jpegs,
         current_source_hashes,
-        scan_failures,
         src_dir,
         working_copy,
-        retry_failed_sources_from_cleanup,
         archive,
         allow_expert_options,
         strategy,
+        ..
     } = context;
     let encode_label = if strategy == "avif" {
         "MEME MODE"
@@ -8471,172 +8808,6 @@ fn fast_img_run_encode_phase(context: FastImgEncodeContext<'_>) -> anyhow::Resul
     } else {
         "source JPEG"
     };
-    let total = source_jpegs.len();
-    let mut completed_from_resume = 0usize;
-    let mut jobs = Vec::new();
-
-    for source in source_jpegs {
-        let rel = source.strip_prefix(src_dir).map_err(|err| {
-            anyhow::anyhow!(
-                "fast-img scan produced path outside source root: source={} root={} ({err})",
-                source.display(),
-                src_dir.display()
-            )
-        })?;
-        let rel_key = rel.to_string_lossy().to_string();
-
-        if let Some(reason) = scan_failures.get(&rel_key) {
-            let src_hash = current_source_hashes
-                .get(&rel_key)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing scanned source hash for {rel_key}"))?;
-            marker.blake3_log.remove(&rel_key);
-            marker.skipped_sources.remove(&rel_key);
-            marker.failed_sources.insert(
-                rel_key.clone(),
-                SkippedSourceEntry {
-                    src: src_hash,
-                    reason: reason.clone(),
-                },
-            );
-            println!("[FAIL    ] {rel_key} {reason}");
-            tracing::error!(
-                target: "fast_img_failures",
-                file = %rel_key,
-                reason = %reason,
-                "fast-img scan failure retained before encode"
-            );
-            continue;
-        }
-
-        if let Some(entry) = marker.skipped_sources.get(&rel_key) {
-            fast_img_emit_explicit_skip(&rel_key, &entry.reason);
-            continue;
-        }
-        if marker.failed_sources.contains_key(&rel_key) && !retry_failed_sources_from_cleanup.0 {
-            if let Some(entry) = marker.failed_sources.get(&rel_key) {
-                fast_img_emit_explicit_skip(
-                    &rel_key,
-                    &format!("failed (no retry): {}", entry.reason),
-                );
-            }
-            continue;
-        }
-
-        let resume_out = marker
-            .blake3_log
-            .get(&rel_key)
-            .map(|entry| fast_img_marker_entry_output_path(marker, &rel_key, entry))
-            .transpose()?;
-        let existing_output_current = match resume_out.as_ref() {
-            Some(output) if output.exists() => match marker.blake3_log.get(&rel_key) {
-                Some(entry) => fast_img_skip_hashes_match(source, output, entry)?,
-                None => false,
-            },
-            _ => false,
-        };
-        if existing_output_current {
-            let resume_out =
-                resume_out.context("missing fast-img resume output after current proof")?;
-            let resume_out_rel_key =
-                fast_img_output_rel_key(&resume_out, working_copy, "fast_img_resume_output_rel")?;
-            let expected_hash = marker
-                .blake3_log
-                .get(&rel_key)
-                .map_or("", |e| e.out.as_str());
-            match fast_img_check_reused_delivery(
-                &resume_out,
-                strategy,
-                marker.metadata_policy_version,
-                expected_hash,
-            )? {
-                ReuseDecision::Reusable { hash } => {
-                    if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
-                        if entry.out != hash {
-                            entry.library_asset = None;
-                        }
-                        entry.out = hash;
-                        entry.out_rel = Some(resume_out_rel_key.clone());
-                    }
-                    println!(
-                        "[{encode_label}] reused verified output for {rel_key} -> {resume_out_rel_key}"
-                    );
-                    completed_from_resume += 1;
-                    continue;
-                }
-                ReuseDecision::NeedsReencode { reason } => {
-                    tracing::warn!(
-                        target: "fast_img",
-                        source_rel = %rel_key,
-                        reason = %reason,
-                        "reused output invalidated; scheduling clean re-encode"
-                    );
-                    if let Some(entry) = marker.blake3_log.get_mut(&rel_key) {
-                        entry.out.clear();
-                        entry.library_asset = None;
-                        entry.out_rel = Some(resume_out_rel_key);
-                    }
-                    foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                        "fast_img invalidate obsolete reused output",
-                        &resume_out,
-                    );
-                    write_marker_atomic(marker)?;
-                }
-            }
-        }
-
-        // If the marker already has a recorded out_rel for this source from a
-        // prior run, pre-claim that exact path before calling
-        // `fast_img_planned_output_rel`.  Without this, `reserve_output_path`
-        // would see the on-disk JXL, find it unclaimed, and bump to a
-        // collision suffix (`a (1).JXL`) — diverging from the marker record.
-        //
-        // `pre_claim_output_path` bypasses the `None if exists_on_disk => true`
-        // arm and inserts the (output → input) pair directly.  We then call
-        // `reserve_output_path` with the marker path (not the naive
-        // `rel.with_extension("JXL")`) so that even a genuine prior-run
-        // collision path like `a (1).JXL` is honoured.
-        let (_reserved_out, out_rel_key) = if let Some(recorded_out_rel) = marker
-            .blake3_log
-            .get(&rel_key)
-            .and_then(|e| e.out_rel.as_deref())
-        {
-            let recorded_out = working_copy.join(recorded_out_rel);
-            foundation::conversion::pre_claim_output_path(source, &recorded_out);
-            tracing::debug!(
-                target: "fast_img",
-                rel = %rel_key,
-                recorded_out_rel = %recorded_out_rel,
-                "pre-claimed marker output path for stale-proof reencode"
-            );
-            let reserved = foundation::conversion::reserve_output_path(source, &recorded_out);
-            let out_rel_key =
-                fast_img_output_rel_key(&reserved, working_copy, "fast_img_resume_reencode_rel")?;
-            if reserved != recorded_out {
-                tracing::warn!(
-                    target: "fast_img",
-                    rel = %rel_key,
-                    recorded = %recorded_out_rel,
-                    actual = %reserved.display(),
-                    "stale-proof reencode: marker out_rel was already taken by another source; using new path"
-                );
-            }
-            (reserved, out_rel_key)
-        } else {
-            fast_img_planned_output_rel(source, working_copy, rel, strategy)?
-        };
-
-        jobs.push(FastImgTranscodeJob {
-            source: source.clone(),
-            src_hash: current_source_hashes
-                .get(&rel_key)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing scanned source hash for {rel_key}"))?,
-            rel_key,
-            out_rel_key,
-        });
-    }
-
     let pending = jobs.len();
     if pending > 0 {
         let thread_config = foundation::thread_manager::get_balanced_thread_config(
@@ -8685,103 +8856,24 @@ fn fast_img_run_encode_phase(context: FastImgEncodeContext<'_>) -> anyhow::Resul
                 .collect::<Vec<_>>()
         });
 
-        let mut encoded = completed_from_resume;
-        let mut session_converted: u64 = 0;
-        let mut session_source_bytes: u64 = 0;
-        let mut session_output_bytes: u64 = 0;
-        let mut session_failed = 0usize;
-        let mut session_skipped = 0usize;
-        for result in results {
-            let outcome = match result {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    println!("[FAIL    ] {} {}", err.rel_key, err.reason);
-                    fast_img_remove_failed_encode_output(working_copy, &err)?;
-                    marker.blake3_log.remove(&err.rel_key);
-                    marker.skipped_sources.remove(&err.rel_key);
-                    marker.failed_sources.insert(
-                        err.rel_key,
-                        SkippedSourceEntry {
-                            src: err.src_hash,
-                            reason: err.reason,
-                        },
-                    );
-                    session_failed += 1;
-                    write_marker_atomic(marker)?;
-                    continue;
-                }
-            };
-            match outcome {
-                FastImgTranscodeOutcome::Converted(proof) => {
-                    // Session size summary counts ONLY files converted in this run:
-                    // resume-reused, skipped, and failed items are excluded by
-                    // construction (failed returns above; Skipped takes the other arm).
-                    let src_abs = src_dir.join(&proof.rel_key);
-                    let out_abs = working_copy.join(&proof.out_rel);
-                    let src_len = std::fs::metadata(&src_abs)
-                        .with_context(|| {
-                            format!(
-                                "stat converted source for size summary: {}",
-                                src_abs.display()
-                            )
-                        })?
-                        .len();
-                    let out_len = std::fs::metadata(&out_abs)
-                        .with_context(|| {
-                            format!(
-                                "stat converted JXL output for size summary: {}",
-                                out_abs.display()
-                            )
-                        })?
-                        .len();
-                    session_converted += 1;
-                    session_source_bytes = session_source_bytes
-                        .checked_add(src_len)
-                        .context("source byte accumulation overflowed u64")?;
-                    session_output_bytes = session_output_bytes
-                        .checked_add(out_len)
-                        .context("output byte accumulation overflowed u64")?;
-                    marker.skipped_sources.remove(&proof.rel_key);
-                    marker.failed_sources.remove(&proof.rel_key);
-                    marker.blake3_log.insert(
-                        proof.rel_key,
-                        Blake3Entry {
-                            out_rel: Some(proof.out_rel),
-                            src: proof.src_hash,
-                            out: proof.out_hash,
-                            library_asset: None,
-                        },
-                    );
-                    encoded += 1;
-                    marker.encoded_count = encoded;
-                    write_marker_atomic(marker)?;
-                }
-                FastImgTranscodeOutcome::Skipped(proof) => {
-                    fast_img_emit_explicit_skip(&proof.rel_key, &proof.reason);
-                    session_skipped += 1;
-                    marker.blake3_log.remove(&proof.rel_key);
-                    marker.failed_sources.remove(&proof.rel_key);
-                    marker.skipped_sources.insert(
-                        proof.rel_key,
-                        SkippedSourceEntry {
-                            src: proof.src_hash,
-                            reason: proof.reason,
-                        },
-                    );
-                }
-            }
-            write_marker_atomic(marker)?;
-        }
+        let summary = fast_img_apply_encode_results(
+            marker,
+            results,
+            completed_from_resume,
+            src_dir,
+            working_copy,
+        )?;
         print_fast_img_session_size_summary(
-            session_converted,
-            session_source_bytes,
-            session_output_bytes,
+            summary.session_converted,
+            summary.session_source_bytes,
+            summary.session_output_bytes,
             u64::try_from(completed_from_resume)
                 .context("fast-img resume reuse count exceeds u64")?,
         )?;
-        if session_skipped > 0 {
+        if summary.session_skipped > 0 {
             println!(
-                "[SKIP    ] {session_skipped} {source_kind}(s) explicitly skipped during encode"
+                "[SKIP    ] {} {source_kind}(s) explicitly skipped during encode",
+                summary.session_skipped
             );
             for (rel, entry) in &marker.skipped_sources {
                 let reason = &entry.reason;
@@ -8794,8 +8886,11 @@ fn fast_img_run_encode_phase(context: FastImgEncodeContext<'_>) -> anyhow::Resul
                 );
             }
         }
-        if session_failed > 0 {
-            println!("[FAIL    ] {session_failed} {source_kind}(s) failed and were left in place");
+        if summary.session_failed > 0 {
+            println!(
+                "[FAIL    ] {} {source_kind}(s) failed and were left in place",
+                summary.session_failed
+            );
             // Enumerate per-file reasons so the user knows exactly which files
             // failed without grepping log shards.
             for (rel, entry) in &marker.failed_sources {
@@ -13432,6 +13527,7 @@ mod fast_img_hardening_tests {
             return Ok(());
         }
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let src_dir = root.path().join("src");
         let wc = root.path().join("wc");
         std::fs::create_dir_all(&src_dir)?;

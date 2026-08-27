@@ -1,21 +1,11 @@
 // Build script for img
 // Dynamically detect system library paths for dav1d and libheif
 
-fn main() -> Result<(), Box<dyn core::error::Error>> {
+fn main() {
     // macOS Homebrew and Linker Workarounds
     if cfg!(target_os = "macos") {
-        let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
-            Ok(val) => val,
-            Err(e) => return Err(Box::new(e)),
-        };
-        let Some(_workspace_root) = std::path::Path::new(&manifest_dir)
-            .parent()
-            .and_then(|path| path.parent())
-        else {
-            return Err(Box::from(
-                "Could not find workspace root from manifest directory",
-            ));
-        };
+        println!("cargo:rerun-if-env-changed=MFB_HOME_ROOT");
+        println!("cargo:rerun-if-env-changed=HOME");
 
         let home_root = std::env::var("MFB_HOME_ROOT")
             .map(std::path::PathBuf::from)
@@ -47,5 +37,4 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
         // Ensure we link to libc++ specifically on macOS
         println!("cargo:rustc-link-lib=c++");
     }
-    Ok(())
 }

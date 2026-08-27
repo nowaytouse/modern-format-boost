@@ -548,9 +548,9 @@ fn real_static_format_matrix_is_decoded_and_extension_spoofing_is_rejected() -> 
     fs::create_dir_all(&fixture_root)?;
     fs::create_dir_all(&decoded_root)?;
 
-    let to_byte = |value: u32| match u8::try_from(value % 256) {
-        Ok(byte) => byte,
-        Err(_) => unreachable!("value modulo 256 always fits in a byte"),
+    let to_byte = |value: u32| {
+        u8::try_from(value % 256)
+            .unwrap_or_else(|_| unreachable!("value modulo 256 always fits in a byte"))
     };
     let png = fixture_root.join("pattern.png");
     image::RgbImage::from_fn(32, 24, |x, y| {

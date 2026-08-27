@@ -767,14 +767,16 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
     );
 
     let mut cjxl_fallback_color = foundation::ffprobe_json::ColorInfo::default();
-    let color_for_precision = match color_info {
-        None => foundation::media_conversion_gate::color_info_for_cjxl_prep(
-            input,
-            None,
-            &mut cjxl_fallback_color,
-        ),
-        Some(info) => info,
-    };
+    let color_for_precision = color_info.map_or_else(
+        || {
+            foundation::media_conversion_gate::color_info_for_cjxl_prep(
+                input,
+                None,
+                &mut cjxl_fallback_color,
+            )
+        },
+        |info| info,
+    );
     let precision = ImagePrecisionProfile::inspect(input, color_for_precision);
     let pix_fmt = foundation::media_conversion_gate::precision_still_pipe_rgb_pix_fmt(&precision);
 
@@ -1603,10 +1605,10 @@ fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
 }
 
 fn cjxl_exit_summary(status: ExitStatus) -> String {
-    match status.code() {
-        Some(code) => format!("exit code {code}"),
-        None => "terminated by signal".to_string(),
-    }
+    status.code().map_or_else(
+        || "terminated by signal".to_string(),
+        |code| format!("exit code {code}"),
+    )
 }
 
 fn cjxl_failure_summary(stage: &str, output: &foundation::process_runner::ProcessOutput) -> String {
@@ -2119,10 +2121,7 @@ fn run_standard_jpeg_lossless_fallback(
     }
     cleanup_temp_output(temp_output, input);
 
-    let primary_stderr = match &primary {
-        Ok(out) => out.stderr.as_str(),
-        Err(_) => "",
-    };
+    let primary_stderr = primary.as_ref().map_or("", |out| out.stderr.as_str());
     if !is_jpeg_reconstruction_cjxl_error(primary_stderr) {
         return None;
     }
