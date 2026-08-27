@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-26
+## [Unreleased] - 2026-08-28
 
 ### IMG maintainability and scoped quality signals
 
@@ -27,6 +27,14 @@ All notable changes to this project will be documented in this file.
   package-quality jobs alongside the shared repository audit. Release gating
   requires both package signals, while their results remain independently
   visible.
+- **IMG CI runtime dependencies**: the package-quality runner now installs the
+  authoritative `libavif-bin` and `libimage-exiftool-perl` tools used by AVIF
+  pixel and metadata tests, preventing environment-only failures from hiding
+  real regressions.
+- **Test-harness entry routing**: Cargo-launched IMG integration tests now use
+  the explicit `test-harness` invoker token; the entry guard permits that
+  temporary runner wrapper while continuing to reject untrusted production
+  shell wrappers.
 - **Regression-test correctness**: the production matrix's synthetic pixel
   fixture now preserves the original modulo-byte pattern without a truncating
   cast or an overflow-to-zero fallback. The existing semantic test inventory

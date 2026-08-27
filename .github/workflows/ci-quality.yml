@@ -186,7 +186,9 @@ jobs:
       - name: Install media build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config
+          sudo apt-get install -y \
+            build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config \
+            libavif-bin libimage-exiftool-perl
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@v1

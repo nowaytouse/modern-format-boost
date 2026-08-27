@@ -52,6 +52,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         .arg(&output_dir)
         .arg("--force")
         .env("MFB_TOOL_CJXL", &cjxl_path)
+        .env("MFB_INVOKER", "test-harness")
         .output()?;
     let diagnostics = format!(
         "{}{}",

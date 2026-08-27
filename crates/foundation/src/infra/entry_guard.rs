@@ -69,7 +69,13 @@ impl CliEntryGuard<'_> {
     /// environment is missing or invalid.
     pub fn assert(self) -> Result<()> {
         assert_canonical_argv0(self.expected_bin)?;
-        if let Some(wrapper) = shell_wrapper_in_ancestry(6) {
+        // Cargo integration tests launch child binaries through a temporary
+        // shell script.  The explicit test-harness token is already part of
+        // every CLI allow-list, so honor it here instead of mistaking Cargo's
+        // runner for an untrusted production wrapper.
+        if resolved_invoker() != INVOKER_TEST_HARNESS
+            && let Some(wrapper) = shell_wrapper_in_ancestry(6)
+        {
             bail!(
                 "refusing shell-wrapped invocation of {} (ancestor: {wrapper:?}). {}",
                 self.expected_bin,
