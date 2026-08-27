@@ -28,9 +28,10 @@ All notable changes to this project will be documented in this file.
   requires both package signals, while their results remain independently
   visible.
 - **IMG CI runtime dependencies**: the package-quality runner now installs the
-  authoritative `libavif-bin` and `libimage-exiftool-perl` tools used by AVIF
-  pixel and metadata tests, preventing environment-only failures from hiding
-  real regressions.
+  authoritative AVIF, JXL, metadata, and FFmpeg CLI tools
+  (`libavif-bin`, `libjxl-tools`, `libimage-exiftool-perl`, and `ffmpeg`) used
+  by IMG's pixel, metadata, and failure-path tests, preventing environment-only
+  failures from hiding real regressions.
 - **Test-harness entry routing**: Cargo-launched IMG integration tests now use
   the explicit `test-harness` invoker token; the entry guard permits that
   temporary runner wrapper while continuing to reject untrusted production
