@@ -320,11 +320,14 @@ jobs:
           for tool in avifenc avifdec magick exiftool jpegtran ffmpeg ffprobe; do
             printf '[IMG tool] %s -> ' "$tool"
             case "$tool" in
-              exiftool) exiftool -ver ;;
-              jpegtran) jpegtran -version ;;
-              ffmpeg|ffprobe) "$tool" -version 2>&1 | head -1 ;;
-              *) "$tool" --version 2>&1 | head -1 ;;
+              exiftool) version_output="$(exiftool -ver)" ;;
+              jpegtran) version_output="$(jpegtran -version 2>&1)" ;;
+              ffmpeg|ffprobe) version_output="$("$tool" -version 2>&1)" ;;
+              *) version_output="$("$tool" --version 2>&1)" ;;
             esac
+            # Do not pipe the producer through head: with pipefail, FFmpeg
+            # reports EPIPE after head closes its multi-line version output.
+            printf '%s\n' "${version_output%%$'\n'*}"
           done
           avifenc --version 2>&1 | grep -F "$LIBAVIF_VERSION"
           avifdec --version 2>&1 | grep -F "$LIBAVIF_VERSION"
