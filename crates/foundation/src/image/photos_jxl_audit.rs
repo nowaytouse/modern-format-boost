@@ -252,11 +252,22 @@ fn photos_last_library(osxphotos: &Path) -> Result<Option<PathBuf>> {
         .last_library)
 }
 
+fn active_photos_library_matches(osxphotos: &Path, canonical: &Path) -> Result<bool> {
+    let Some(discovered) = photos_last_library(osxphotos)? else {
+        return Ok(false);
+    };
+    let discovered = fs::canonicalize(&discovered).with_context(|| {
+        format!(
+            "Photos reported an active library that is not readable: {}",
+            discovered.display()
+        )
+    })?;
+    Ok(discovered == canonical)
+}
+
 fn ensure_active_library(osxphotos: &Path, library: &Path) -> Result<()> {
     let canonical = fs::canonicalize(library)?;
-    let active_matches = photos_last_library(osxphotos)?
-        .and_then(|path| fs::canonicalize(path).ok())
-        .is_some_and(|path| path == canonical);
+    let active_matches = active_photos_library_matches(osxphotos, &canonical)?;
     if active_matches {
         return Ok(());
     }
@@ -275,10 +286,7 @@ fn ensure_active_library(osxphotos: &Path, library: &Path) -> Result<()> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     for _ in 0..30 {
-        if photos_last_library(osxphotos)?
-            .and_then(|path| fs::canonicalize(path).ok())
-            .is_some_and(|path| path == canonical)
-        {
+        if active_photos_library_matches(osxphotos, &canonical)? {
             return Ok(());
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -605,14 +613,26 @@ fn query_records(
     validate_query_records(&records, None)?;
     if let Some(selected) = &scope.selected_asset_path {
         let canonical_selected = fs::canonicalize(selected)?;
-        records.retain(|record| {
-            record
-                .path
-                .iter()
-                .chain(&record.path_derivatives)
-                .filter_map(|path| fs::canonicalize(path).ok())
-                .any(|path| path == canonical_selected)
-        });
+        let mut selected_records = Vec::with_capacity(records.len());
+        for record in records {
+            let mut matches = false;
+            for path in record.path.iter().chain(&record.path_derivatives) {
+                let canonical_path = fs::canonicalize(path).with_context(|| {
+                    format!(
+                        "Photos query returned an unreadable asset path: {}",
+                        path.display()
+                    )
+                })?;
+                if canonical_path == canonical_selected {
+                    matches = true;
+                    break;
+                }
+            }
+            if matches {
+                selected_records.push(record);
+            }
+        }
+        records = selected_records;
         anyhow::ensure!(
             records.len() == 1,
             "selected Photos asset resolved to {} database rows; expected exactly one",
@@ -639,8 +659,11 @@ fn query_records_by_uuid(
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
-    let scratch = crate::process_lock::get_mfb_tmp_dir()?;
-    let mut uuid_file = tempfile::NamedTempFile::new_in(scratch)?;
+    let mut uuid_file = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "Photos audit UUID query",
+        Some("mfb-photos-uuids-"),
+        Some(".txt"),
+    )?;
     for uuid in uuids {
         writeln!(uuid_file, "{uuid}")?;
     }

@@ -767,12 +767,12 @@ fn select_photos_backup_match<'a>(
     candidates: &'a [PhotosBackupOriginalRecord],
 ) -> Result<&'a PhotosBackupOriginalRecord> {
     let source_stem = folded_filename_stem(&source.original_filename)?;
-    let same_stem = candidates
-        .iter()
-        .filter(|candidate| {
-            folded_filename_stem(&candidate.original_filename).is_ok_and(|stem| stem == source_stem)
-        })
-        .collect::<Vec<_>>();
+    let mut same_stem = Vec::new();
+    for candidate in candidates {
+        if folded_filename_stem(&candidate.original_filename)? == source_stem {
+            same_stem.push(candidate);
+        }
+    }
     let same_uuid = same_stem
         .iter()
         .copied()

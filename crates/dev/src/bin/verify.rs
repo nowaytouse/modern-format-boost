@@ -495,16 +495,20 @@ fn load_restore_jpeg_manifest(
                 ));
                 continue;
             }
-            if parts[7]
-                .parse::<u64>()
-                .ok()
-                .filter(|value| *value > 0)
-                .is_none()
-            {
-                errors.push(format!(
-                    "line {line_idx}: verified_unix_seconds must be a positive integer"
-                ));
-                continue;
+            match parts[7].parse::<u64>() {
+                Ok(value) if value > 0 => {}
+                Ok(_) => {
+                    errors.push(format!(
+                        "line {line_idx}: verified_unix_seconds must be a positive integer"
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    errors.push(format!(
+                        "line {line_idx}: verified_unix_seconds is not a valid integer: {error}"
+                    ));
+                    continue;
+                }
             }
             if parts[8].trim().is_empty() {
                 errors.push(format!("line {line_idx}: missing MFB version"));

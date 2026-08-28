@@ -54,8 +54,18 @@ fn is_potential_media(ext: &str) -> bool {
 }
 
 fn is_regular_non_symlink(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            crate::media_conversion_gate::delivery_metadata_path_audit(
+                "xmp_candidate_stat",
+                path,
+                format!("cannot inspect candidate while matching XMP sidecar: {error}"),
+            );
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

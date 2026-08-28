@@ -126,14 +126,13 @@ pub fn probe_jpeg_reconstruction_eligibility(
         first_nonempty_tool_line(&strict.stderr)
     };
 
-    let mut pixel_command = DjxlBuilder::new()
-        .input(path)
-        .output(Path::new("-"))
-        .build();
-    pixel_command
-        .arg("--output_format=png")
-        .arg("--disable_output")
-        .arg("--quiet");
+    let pixel_temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+        "jxl_pixel_reconstruction_probe",
+        "mfb-jxl-pixel-",
+    )
+    .map_err(|error| format!("pixel reconstruction temp allocation failed: {error}"))?;
+    let pixel_output = pixel_temp_dir.path().join("decoded.png");
+    let mut pixel_command = DjxlBuilder::new().input(path).output(&pixel_output).build();
     let pixel = run_jxl_reconstruction_probe(&mut pixel_command, "JXL pixel health probe")?;
     if !pixel.status.success() {
         return Err(format!(

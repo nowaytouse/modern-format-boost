@@ -741,7 +741,19 @@ fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
     };
     let identity = FailedToolIdentity {
         len: metadata.len(),
-        modified: metadata.modified().ok(),
+        modified: match metadata.modified() {
+            Ok(modified) => Some(modified),
+            Err(error) => {
+                crate::media_conversion_gate::delivery_runtime_path_audit(
+                    "tool_identity_metadata",
+                    path,
+                    format!(
+                        "tool modification time unavailable; using size-only identity: {error}"
+                    ),
+                );
+                None
+            }
+        },
     };
     let failures = FAILED_TOOL_IDENTITIES
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));

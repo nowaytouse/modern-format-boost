@@ -577,10 +577,10 @@ fn resolve_output_path(
         "img_resolve_output",
     )
     .map_err(ImgQualityError::ConversionError)?;
-    let output = output_dir.map_or_else(
-        || input.with_extension(extension),
-        |dir| dir.join(file_stem).with_extension(extension),
-    );
+    let output = match output_dir {
+        Some(dir) => dir.join(file_stem).with_extension(extension),
+        None => input.with_extension(extension),
+    };
     foundation::conversion::validate_output_path(&output, None)
         .map_err(ImgQualityError::ConversionError)?;
     Ok(output)

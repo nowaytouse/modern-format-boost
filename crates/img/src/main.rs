@@ -6918,11 +6918,11 @@ fn restore_single_jpeg(
 fn restore_jpeg_delete_verified_source(proof: &RestoreJpegCommitProof) -> anyhow::Result<bool> {
     let input = &proof.source;
     let output = &proof.output;
-    anyhow::ensure!(
-        proof.source_retention_reason.is_none(),
-        "restore-jpeg delete gate refused source cleanup while metadata requires review: {}",
-        proof.source_retention_reason.as_deref().unwrap_or_default()
-    );
+    if let Some(reason) = proof.source_retention_reason.as_deref() {
+        anyhow::bail!(
+            "restore-jpeg delete gate refused source cleanup while metadata requires review: {reason}"
+        );
+    }
     if !input.exists() {
         tracing::info!(
             target: "restore_jpeg_delete",

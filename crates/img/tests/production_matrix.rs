@@ -20,12 +20,21 @@ fn tool_available(tool: &str) -> bool {
         return false;
     };
     ["--help", "--version", "-version"].iter().any(|argument| {
-        Command::new(&path)
+        match Command::new(&path)
             .arg(argument)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .is_ok_and(|status| status.success())
+        {
+            Ok(status) => status.success(),
+            Err(error) => {
+                eprintln!(
+                    "image matrix tool probe failed for {} ({argument}): {error}",
+                    path.display()
+                );
+                false
+            }
+        }
     })
 }
 

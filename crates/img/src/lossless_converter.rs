@@ -767,15 +767,10 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
     );
 
     let mut cjxl_fallback_color = foundation::ffprobe_json::ColorInfo::default();
-    let color_for_precision = color_info.map_or_else(
-        || {
-            foundation::media_conversion_gate::color_info_for_cjxl_prep(
-                input,
-                None,
-                &mut cjxl_fallback_color,
-            )
-        },
-        |info| info,
+    let color_for_precision = foundation::media_conversion_gate::color_info_for_cjxl_prep(
+        input,
+        color_info,
+        &mut cjxl_fallback_color,
     );
     let precision = ImagePrecisionProfile::inspect(input, color_for_precision);
     let pix_fmt = foundation::media_conversion_gate::precision_still_pipe_rgb_pix_fmt(&precision);
@@ -2855,7 +2850,10 @@ fn build_avifenc_command(
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    let effective_speed = speed.unwrap_or_default();
+    let effective_speed = match speed {
+        Some(value) => value,
+        None => 0,
+    };
     builder.speed(effective_speed).jobs("all");
     match detect_avif_input_color_model(input) {
         AvifencInputColorModel::Grayscale => {
