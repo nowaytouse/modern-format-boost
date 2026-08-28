@@ -322,6 +322,7 @@ jobs:
             case "$tool" in
               exiftool) exiftool -ver ;;
               jpegtran) jpegtran -version ;;
+              ffmpeg|ffprobe) "$tool" -version 2>&1 | head -1 ;;
               *) "$tool" --version 2>&1 | head -1 ;;
             esac
           done
