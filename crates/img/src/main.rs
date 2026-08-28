@@ -6431,7 +6431,7 @@ fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Re
         .input(input)
         .output(temp_xmp)
         .build();
-    command.arg("--output_format=xmp");
+    command.args(["--output_format", "xmp"]);
     let extract =
         run_restore_image_command(command, "restore-jpeg XMP extraction").with_context(|| {
             format!(
