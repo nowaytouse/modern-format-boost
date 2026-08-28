@@ -321,6 +321,7 @@ jobs:
             printf '[IMG tool] %s -> ' "$tool"
             case "$tool" in
               exiftool) exiftool -ver ;;
+              jpegtran) jpegtran -version ;;
               *) "$tool" --version 2>&1 | head -1 ;;
             esac
           done
