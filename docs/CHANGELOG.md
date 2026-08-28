@@ -32,6 +32,11 @@ All notable changes to this project will be documented in this file.
   `v0.12.0` static `cjxl`/`djxl`/`jxlinfo` toolchain with a verified SHA-256
   digest. Pixel, metadata, and restore-jpeg tests therefore exercise the
   current CLI contract instead of Ubuntu's legacy `libjxl-tools` 0.7 interface.
+- **IMG stable toolchain baseline**: the IMG job now overlays checksum-pinned
+  official stable releases of libavif 1.4.2, ImageMagick 7.1.2-30, ExifTool
+  13.59, and libjpeg-turbo 3.2.0. FFmpeg/ffprobe stay on the runner's formal
+  package and must expose the libx265 encoder, while local development may
+  continue using the ahead versions required by `TOOL.md`.
 - **Test-harness entry routing**: Cargo-launched IMG integration tests now use
   the explicit `test-harness` invoker token; the entry guard permits that
   temporary runner wrapper while continuing to reject untrusted production

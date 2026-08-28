@@ -188,7 +188,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config \
-            libavif-bin libimage-exiftool-perl libjxl-tools ffmpeg
+            libavif-bin libimage-exiftool-perl libjxl-tools ffmpeg \
+            imagemagick libjpeg-turbo-progs webp unzip
 
       - name: Install pinned modern libjxl CLI tools for IMG
         if: matrix.package == 'img'
@@ -217,6 +218,117 @@ jobs:
           djxl_version="$(djxl --version 2>&1)"
           grep -q -- "v0.12.0" <<< "$djxl_version"
           printf '%s\n' "$djxl_version"
+
+      # Keep the local development policy (HEAD/nightly where available)
+      # separate from CI: IMG uses checksum-pinned, non-prerelease releases so
+      # a runner cannot silently fall back to an obsolete distro CLI.
+      - name: Install pinned stable IMG media toolchain
+        if: matrix.package == 'img'
+        env:
+          LIBAVIF_TAG: v1.4.2
+          LIBAVIF_VERSION: 1.4.2
+          LIBAVIF_ARCHIVE_SHA256: faf58a670ffbfdc0e3559e6d37592cff277c447dd39453f1cd1d7d7f5a20b8ef
+          IMAGEMAGICK_VERSION: 7.1.2-30
+          IMAGEMAGICK_ARCHIVE_SHA256: 372af8a3fd61ef5f15c6331cde3e21f840eb165d8b533f34ed05d68736dd682e
+          EXIFTOOL_VERSION: '13.59'
+          EXIFTOOL_ARCHIVE_SHA256: 668ea3acececb7235fbd0f4900e72d5f12c9b07e5c778fd36cb1e9b5828fd65a
+          LIBJPEG_TURBO_VERSION: 3.2.0
+          LIBJPEG_TURBO_ARCHIVE_SHA256: 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
+        run: |
+          set -euo pipefail
+          tools_root="$RUNNER_TEMP/mfb-img-tools"
+          mkdir -p "$tools_root"
+
+          # Official libavif release artifact (statically linked avifenc/avifdec).
+          libavif_archive="$tools_root/libavif-linux.zip"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/AOMediaCodec/libavif/releases/download/${LIBAVIF_TAG}/linux-artifacts.zip" \
+            -o "$libavif_archive"
+          printf '%s  %s\n' "$LIBAVIF_ARCHIVE_SHA256" "$libavif_archive" | sha256sum --check -
+          mkdir -p "$tools_root/libavif"
+          unzip -q "$libavif_archive" -d "$tools_root/libavif"
+          for tool in avifenc avifdec; do
+            test -x "$tools_root/libavif/$tool"
+            sudo install -m 0755 "$tools_root/libavif/$tool" "/usr/local/bin/$tool"
+          done
+
+          # Official ImageMagick AppImage avoids Ubuntu's legacy IM6 command
+          # surface while keeping a stable, reproducible IM7 binary in CI.
+          imagemagick_archive="$tools_root/imagemagick.AppImage"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/ImageMagick/ImageMagick/releases/download/${IMAGEMAGICK_VERSION}/ImageMagick-${IMAGEMAGICK_VERSION}-gcc-x86_64.AppImage" \
+            -o "$imagemagick_archive"
+          printf '%s  %s\n' "$IMAGEMAGICK_ARCHIVE_SHA256" "$imagemagick_archive" | sha256sum --check -
+          chmod +x "$imagemagick_archive"
+          (cd "$tools_root" && "$imagemagick_archive" --appimage-extract >/dev/null)
+          magick_root="$tools_root/squashfs-root"
+          test -x "$magick_root/AppRun"
+          magick_wrapper="$tools_root/magick-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "cd \"$magick_root\"" \
+            'exec ./AppRun "$@"' > "$magick_wrapper"
+          sudo install -m 0755 "$magick_wrapper" /usr/local/bin/magick
+
+          # Official ExifTool release; keep its bundled Perl library adjacent
+          # to the launcher instead of mixing it with the distro module tree.
+          exiftool_archive="$tools_root/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" \
+            -o "$exiftool_archive"
+          printf '%s  %s\n' "$EXIFTOOL_ARCHIVE_SHA256" "$exiftool_archive" | sha256sum --check -
+          tar -xzf "$exiftool_archive" -C "$tools_root"
+          exiftool_root="$tools_root/Image-ExifTool-${EXIFTOOL_VERSION}"
+          test -x "$exiftool_root/exiftool"
+          exiftool_wrapper="$tools_root/exiftool-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "export PERL5LIB=\"$exiftool_root/lib\${PERL5LIB:+:\$PERL5LIB}\"" \
+            "exec \"$exiftool_root/exiftool\" \"\$@\"" > "$exiftool_wrapper"
+          sudo install -m 0755 "$exiftool_wrapper" /usr/local/bin/exiftool
+
+          # Build the official libjpeg-turbo release so jpegtran is not tied to
+          # the runner's potentially stale distro utility package.
+          jpeg_archive="$tools_root/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/${LIBJPEG_TURBO_VERSION}/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz" \
+            -o "$jpeg_archive"
+          printf '%s  %s\n' "$LIBJPEG_TURBO_ARCHIVE_SHA256" "$jpeg_archive" | sha256sum --check -
+          tar -xzf "$jpeg_archive" -C "$tools_root"
+          cmake -S "$tools_root/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}" \
+            -B "$tools_root/libjpeg-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DENABLE_SHARED=OFF \
+            -DWITH_TURBOJPEG=OFF \
+            -DWITH_SIMD=ON \
+            -DENABLE_TESTING=OFF
+          cmake --build "$tools_root/libjpeg-build" --parallel 2
+          sudo cmake --install "$tools_root/libjpeg-build"
+
+          # ffmpeg/ffprobe remain the Ubuntu formal-release pair (upstream does
+          # not publish portable official binaries); assert the codec contract
+          # used by the shared IMG foundation instead of accepting a stub.
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -hide_banner -h encoder=libx265 >/dev/null
+          ffprobe -version >/dev/null
+
+          for tool in avifenc avifdec magick exiftool jpegtran ffmpeg ffprobe; do
+            printf '[IMG tool] %s -> ' "$tool"
+            case "$tool" in
+              exiftool) exiftool -ver ;;
+              *) "$tool" --version 2>&1 | head -1 ;;
+            esac
+          done
+          avifenc --version 2>&1 | grep -F "$LIBAVIF_VERSION"
+          avifdec --version 2>&1 | grep -F "$LIBAVIF_VERSION"
+          magick -version 2>&1 | grep -F "ImageMagick ${IMAGEMAGICK_VERSION}"
+          exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+          jpegtran -version 2>&1 | grep -F "libjpeg-turbo version ${LIBJPEG_TURBO_VERSION}"
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@v1
