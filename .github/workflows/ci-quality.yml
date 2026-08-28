@@ -231,7 +231,7 @@ jobs:
           IMAGEMAGICK_VERSION: 7.1.2-30
           IMAGEMAGICK_ARCHIVE_SHA256: 372af8a3fd61ef5f15c6331cde3e21f840eb165d8b533f34ed05d68736dd682e
           EXIFTOOL_VERSION: '13.59'
-          EXIFTOOL_ARCHIVE_SHA256: 668ea3acececb7235fbd0f4900e72d5f12c9b07e5c778fd36cb1e9b5828fd65a
+          EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac
           LIBJPEG_TURBO_VERSION: 3.2.0
           LIBJPEG_TURBO_ARCHIVE_SHA256: 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
         run: |
@@ -273,13 +273,13 @@ jobs:
 
           # Official ExifTool release; keep its bundled Perl library adjacent
           # to the launcher instead of mixing it with the distro module tree.
-          exiftool_archive="$tools_root/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz"
+          exiftool_archive="$tools_root/exiftool-${EXIFTOOL_VERSION}.tar.gz"
           curl -fsSL --retry 5 --retry-all-errors \
-            "https://exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" \
             -o "$exiftool_archive"
           printf '%s  %s\n' "$EXIFTOOL_ARCHIVE_SHA256" "$exiftool_archive" | sha256sum --check -
           tar -xzf "$exiftool_archive" -C "$tools_root"
-          exiftool_root="$tools_root/Image-ExifTool-${EXIFTOOL_VERSION}"
+          exiftool_root="$tools_root/exiftool-${EXIFTOOL_VERSION}"
           test -x "$exiftool_root/exiftool"
           exiftool_wrapper="$tools_root/exiftool-wrapper"
           printf '%s\n' \
