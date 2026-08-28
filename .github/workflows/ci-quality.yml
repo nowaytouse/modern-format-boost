@@ -190,6 +190,34 @@ jobs:
             build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config \
             libavif-bin libimage-exiftool-perl libjxl-tools ffmpeg
 
+      - name: Install pinned modern libjxl CLI tools for IMG
+        if: matrix.package == 'img'
+        env:
+          LIBJXL_VERSION: v0.12.0
+          LIBJXL_ARCHIVE_SHA256: 5318a1ea40adad76d023e0c17a03d4627f8282f83cb2b575e69be8e74f1ff456
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y lzip
+          archive="$RUNNER_TEMP/jxl-linux-x86_64-static.tar.lz"
+          tools_root="$RUNNER_TEMP/libjxl-static"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjxl/libjxl/releases/download/${LIBJXL_VERSION}/jxl-linux-x86_64-static.tar.lz" \
+            -o "$archive"
+          printf '%s  %s\n' "$LIBJXL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          mkdir -p "$tools_root"
+          lzip -dc "$archive" | tar -xf - -C "$tools_root"
+          for tool in cjxl djxl jxlinfo; do
+            test -x "$tools_root/tools/$tool"
+            sudo install -m 0755 "$tools_root/tools/$tool" "/usr/local/bin/$tool"
+          done
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v djxl)" = "/usr/local/bin/djxl"
+          djxl_help="$(djxl -h 2>&1)"
+          grep -q -- "--output_format" <<< "$djxl_help"
+          djxl_version="$(djxl --version 2>&1)"
+          grep -q -- "v0.12.0" <<< "$djxl_version"
+          printf '%s\n' "$djxl_version"
+
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:

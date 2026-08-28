@@ -27,11 +27,11 @@ All notable changes to this project will be documented in this file.
   package-quality jobs alongside the shared repository audit. Release gating
   requires both package signals, while their results remain independently
   visible.
-- **IMG CI runtime dependencies**: the package-quality runner now installs the
-  authoritative AVIF, JXL, metadata, and FFmpeg CLI tools
-  (`libavif-bin`, `libjxl-tools`, `libimage-exiftool-perl`, and `ffmpeg`) used
-  by IMG's pixel, metadata, and failure-path tests, preventing environment-only
-  failures from hiding real regressions.
+- **IMG CI runtime parity**: the package-quality runner installs the required
+  AVIF, metadata, and FFmpeg CLI tools, while IMG overlays the pinned upstream
+  `v0.12.0` static `cjxl`/`djxl`/`jxlinfo` toolchain with a verified SHA-256
+  digest. Pixel, metadata, and restore-jpeg tests therefore exercise the
+  current CLI contract instead of Ubuntu's legacy `libjxl-tools` 0.7 interface.
 - **Test-harness entry routing**: Cargo-launched IMG integration tests now use
   the explicit `test-harness` invoker token; the entry guard permits that
   temporary runner wrapper while continuing to reject untrusted production
