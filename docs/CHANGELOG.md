@@ -28,7 +28,8 @@ All notable changes to this project will be documented in this file.
   with a 64-KiB head/tail bound and retained in size-rotated run logs without
   flooding the terminal; the newest 64 files per program are retained by
   default. Forensic validators no longer use quiet switches, ffprobe errors are
-  visible, and the native GUI reports processor preflight diagnostics.
+  visible, and the native GUI reports processor preflight diagnostics while
+  bounding both preflight output and Photos-hierarchy responses during the read.
   ExifTool minor-error/quiet builder APIs were removed, non-zero exits and
   missing outputs now fail explicitly, and metadata I/O errors can no longer be
   reported as successful skips. CI uses the checksum-pinned official libjxl

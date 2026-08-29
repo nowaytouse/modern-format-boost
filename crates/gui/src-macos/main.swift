@@ -358,6 +358,25 @@ private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String
     return chunks
 }
 
+private func readBoundedProcessOutput(
+    _ handle: FileHandle,
+    limit: Int
+) throws -> (data: Data, exceeded: Bool) {
+    precondition(limit >= 0 && limit < Int.max)
+    let sentinelLimit = limit + 1
+    var data = Data()
+    while let chunk = try handle.read(upToCount: maxProcessLogChunkBytes), !chunk.isEmpty {
+        if data.count < sentinelLimit {
+            data.append(chunk.prefix(sentinelLimit - data.count))
+        }
+    }
+    let exceeded = data.count > limit
+    if exceeded {
+        data.removeSubrange(limit...)
+    }
+    return (data, exceeded)
+}
+
 private final class ProcessLogBackpressure: @unchecked Sendable {
     private let lock = NSLock()
     private let maxBytes: Int
@@ -539,17 +558,20 @@ private func queryPhotosAuditContainers(binary: URL, library: String) throws -> 
     process.standardOutput = combined
     process.standardError = combined
     try process.run()
-    let data = combined.fileHandleForReading.readDataToEndOfFile()
+    let capture = try readBoundedProcessOutput(
+        combined.fileHandleForReading,
+        limit: 16 * 1024 * 1024
+    )
     process.waitUntilExit()
-    guard data.count <= 16 * 1024 * 1024 else {
+    guard !capture.exceeded else {
         throw HostError(message: localized("error.photos_scope_too_large"))
     }
     guard process.terminationStatus == 0 else {
-        let detail = String(decoding: data.prefix(8_192), as: UTF8.self)
+        let detail = String(decoding: capture.data.prefix(8_192), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         throw HostError(message: localized("error.photos_scope_load", detail))
     }
-    let containers = try JSONDecoder().decode([PhotosAuditContainer].self, from: data)
+    let containers = try JSONDecoder().decode([PhotosAuditContainer].self, from: capture.data)
     let ids = Set(containers.map(\.id))
     guard ids.count == containers.count,
           containers.allSatisfy({
@@ -614,15 +636,20 @@ private final class NativeHost {
         process.standardError = output
         do {
             try process.run()
-            let diagnosticData = output.fileHandleForReading.readDataToEndOfFile()
+            let capture = try readBoundedProcessOutput(
+                output.fileHandleForReading,
+                limit: maxProcessLogChunkBytes
+            )
             process.waitUntilExit()
             if process.terminationStatus == 0 {
                 return localized("status.processor_ready")
             }
-            let diagnostic = String(
-                decoding: diagnosticData.prefix(maxProcessLogChunkBytes),
-                as: UTF8.self
-            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            var diagnostic = String(decoding: capture.data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if capture.exceeded {
+                if !diagnostic.isEmpty { diagnostic.append("\n") }
+                diagnostic.append(localized("log.omitted", UInt64(1)))
+            }
             return diagnostic.isEmpty
                 ? localized("status.processor_failed")
                 : "\(localized("status.processor_failed")): \(diagnostic)"
@@ -1678,6 +1705,17 @@ private func runSelfTest() -> Int32 {
         let chunks = drainProcessLogChunks(&oversized, flush: false)
         guard chunks.count == 1, chunks[0].utf8.count == maxProcessLogChunkBytes, oversized.count == 17 else {
             fputs("native-host self-test log chunk bound failed\n", stderr)
+            return 1
+        }
+        let boundedPipe = Pipe()
+        boundedPipe.fileHandleForWriting.write(Data(repeating: 0x61, count: 128))
+        try boundedPipe.fileHandleForWriting.close()
+        let boundedCapture = try readBoundedProcessOutput(
+            boundedPipe.fileHandleForReading,
+            limit: 32
+        )
+        guard boundedCapture.exceeded, boundedCapture.data.count == 32 else {
+            fputs("native-host self-test process output bound failed\n", stderr)
             return 1
         }
         let backpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
