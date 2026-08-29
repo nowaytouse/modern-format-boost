@@ -11,6 +11,7 @@
 //!   / estimation)
 
 use crate::builder_base::ToolBuilder;
+use anyhow::Context;
 use rug::Rational;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -232,6 +233,15 @@ fn scan_packet_payload_bytes(
     path: &Path,
     stream_kinds: &BTreeMap<u32, PacketStreamKind>,
 ) -> anyhow::Result<(u64, u64, u64)> {
+    let stderr_capture = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+        "ffprobe_packet_scan_stderr",
+        None,
+        Some(".log"),
+    )
+    .context("strict packet scan failed to allocate stderr capture")?;
+    let stderr_file = stderr_capture
+        .reopen()
+        .context("strict packet scan failed to open stderr capture")?;
     let mut command = Command::new(crate::constants::TOOL_FFPROBE);
     command
         .args([
@@ -245,7 +255,8 @@ fn scan_packet_payload_bytes(
         ])
         .arg(path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(stderr_file));
+    let command_line = crate::common_utils::format_command_for_audit(&command);
     let context = format!("strict pure-media packet scan for {}", path.display());
     let mut child = command
         .spawn()
@@ -318,8 +329,19 @@ fn scan_packet_payload_bytes(
     let packet_sizes = reader
         .join()
         .map_err(|_| anyhow::anyhow!("{context}: packet reader panicked"))??;
+    let stderr = crate::infra::logging::read_bounded_diagnostic_file(stderr_capture.path())
+        .with_context(|| format!("{context}: failed to read ffprobe diagnostics"))?;
+    crate::infra::logging::log_captured_process_output(&command_line, status, "", &stderr);
     if !status.success() {
-        anyhow::bail!("{context}: ffprobe exited {:?}", status.code());
+        anyhow::bail!(
+            "{context}: ffprobe exited {:?}: {}",
+            status.code(),
+            if stderr.trim().is_empty() {
+                "no diagnostic output"
+            } else {
+                stderr.trim()
+            }
+        );
     }
     Ok(packet_sizes)
 }

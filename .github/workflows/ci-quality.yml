@@ -215,7 +215,22 @@ jobs:
           test "$(command -v djxl)" = "/usr/local/bin/djxl"
           djxl_help="$(djxl -h 2>&1)"
           grep -q -- "--output_format" <<< "$djxl_help"
-          grep -q -- "--reconstruct_jpeg" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
           djxl_version="$(djxl --version 2>&1)"
           grep -q -- "v0.12.0" <<< "$djxl_version"
           printf '%s\n' "$djxl_version"
@@ -438,7 +453,22 @@ jobs:
           test "$(command -v djxl)" = "/usr/local/bin/djxl"
           djxl_help="$(djxl -h 2>&1)"
           grep -q -- "--output_format" <<< "$djxl_help"
-          grep -q -- "--reconstruct_jpeg" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
           djxl_version="$(djxl --version 2>&1)"
           grep -q -- "v0.12.0" <<< "$djxl_version"
           printf '%s\n' "$djxl_version"
@@ -601,7 +631,22 @@ jobs:
           test "$(command -v djxl)" = "/usr/local/bin/djxl"
           djxl_help="$(djxl -h 2>&1)"
           grep -q -- "--output_format" <<< "$djxl_help"
-          grep -q -- "--reconstruct_jpeg" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
           djxl_version="$(djxl --version 2>&1)"
           grep -q -- "v0.12.0" <<< "$djxl_version"
           printf '%s\n' "$djxl_version"

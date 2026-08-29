@@ -2419,7 +2419,7 @@ impl FineTuneEncoder<'_> {
         )
         .context("Failed to create stderr temp file")?;
         let stderr_path = stderr_temp.path().to_path_buf();
-        Self::attach_stderr_capture(&mut cmd, &stderr_temp);
+        Self::attach_stderr_capture(&mut cmd, &stderr_temp)?;
         self.ensure_output_parent_exists();
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
@@ -2644,19 +2644,12 @@ impl FineTuneEncoder<'_> {
     fn attach_stderr_capture(
         cmd: &mut std::process::Command,
         stderr_temp: &tempfile::NamedTempFile,
-    ) {
-        match stderr_temp.reopen() {
-            Ok(file) => {
-                cmd.stderr(file);
-            }
-            Err(err) => {
-                crate::media_conversion_gate::delivery_encode_batch_audit(
-                    "gpu_coarse_stderr_capture",
-                    format!("failed to reopen stderr temp file for capture: {err}"),
-                );
-                cmd.stderr(Stdio::null());
-            }
-        }
+    ) -> Result<()> {
+        let file = stderr_temp
+            .reopen()
+            .context("failed to open GPU coarse-search stderr capture")?;
+        cmd.stderr(file);
+        Ok(())
     }
 
     fn ensure_output_parent_exists(&self) {
@@ -2778,7 +2771,8 @@ impl FineTuneEncoder<'_> {
             return String::new();
         }
 
-        let stderr_content = match std::fs::read_to_string(stderr_path) {
+        let stderr_content = match crate::infra::logging::read_bounded_diagnostic_file(stderr_path)
+        {
             Ok(content) => content,
             Err(err) => {
                 crate::media_conversion_gate::explore_gpu_coarse_explore_audit(
@@ -2789,7 +2783,10 @@ impl FineTuneEncoder<'_> {
                         err
                     ),
                 );
-                String::new()
+                return format!(
+                    "\n   FFmpeg stderr capture could not be read from {}: {err}",
+                    stderr_path.display()
+                );
             }
         };
 

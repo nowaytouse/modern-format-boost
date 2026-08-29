@@ -363,7 +363,7 @@ impl ManagedProcess {
 
         crate::infra::logging::log_captured_process_output(
             &self.command_line,
-            &status,
+            status,
             &stdout,
             &stderr,
         );

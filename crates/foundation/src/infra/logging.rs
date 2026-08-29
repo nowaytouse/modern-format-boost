@@ -25,7 +25,7 @@
 use crate::modern_ui::{colors, symbols};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashSet};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::Level;
@@ -445,6 +445,7 @@ static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
 static LOG_FILE_INCLUDES_PROGRESS: OnceLock<bool> = OnceLock::new();
 
 pub const DEFAULT_MAX_LOG_FILE_SIZE_BYTES: u64 = 30 * 1024 * 1024;
+pub const DEFAULT_MAX_LOG_FILES: usize = 64;
 
 /// When true (`MFB_LOG_PROGRESS=1`), `mfb::progress` events are written to
 /// run/jsonl/rotating logs.
@@ -994,14 +995,14 @@ fn persistent_log_dir() -> PathBuf {
 }
 
 /// Logging configuration. Default: TRACE level, unified log directory, 30 MiB
-/// per log file.
+/// per log file, and the newest 64 files per program.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
     /// Max size per log file (bytes). Default = 30 MiB.
     pub max_file_size: u64,
     /// Max number of log files to keep in `log_dir`; older ones are deleted.
-    /// Default `usize::MAX` = no limit.
+    /// Default = 64 files per program.
     pub max_files: usize,
     /// Minimum level (TRACE = most comprehensive).
     pub level: Level,
@@ -1012,7 +1013,7 @@ impl Default for LogConfig {
         Self {
             log_dir: Self::unified_log_dir(),
             max_file_size: DEFAULT_MAX_LOG_FILE_SIZE_BYTES,
-            max_files: usize::MAX,
+            max_files: DEFAULT_MAX_LOG_FILES,
             level: Level::TRACE,
         }
     }
@@ -1212,8 +1213,8 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
         config.log_dir.display()
     );
 
-    // Only prune old logs when an explicit limit is set (default usize::MAX = no
-    // limit).
+    // A caller may explicitly opt out with usize::MAX; the default is bounded so
+    // repeated media probes cannot grow the persistent log directory forever.
     if config.max_files != usize::MAX {
         cleanup_old_logs(&config.log_dir, program_name, config.max_files)?;
     }
@@ -1348,14 +1349,14 @@ pub fn log_external_tool(
     }
 }
 
-const CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES: usize = 256 * 1024;
+const CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES: usize = 64 * 1024;
 
 /// Keep captured tool diagnostics in the file/run logs without flooding the
 /// terminal. The capture itself remains bounded by the process runner, and a
 /// truncation marker makes any omitted bytes explicit rather than silent.
 pub(crate) fn log_captured_process_output(
     command_line: &str,
-    status: &std::process::ExitStatus,
+    status: std::process::ExitStatus,
     stdout: &str,
     stderr: &str,
 ) {
@@ -1417,6 +1418,39 @@ fn truncate_captured_tool_output(output: &str) -> String {
         output.len(),
         &output[tail_start..]
     )
+}
+
+/// Read a diagnostic file without loading an unbounded tool log into memory.
+/// Large files retain equally sized head and tail regions with an explicit gap.
+pub(crate) fn read_bounded_diagnostic_file(path: &Path) -> io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let total = file.metadata()?.len();
+    let limit = u64::try_from(CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES).map_err(|error| {
+        io::Error::other(format!("diagnostic limit conversion failed: {error}"))
+    })?;
+    if total <= limit {
+        let capacity = usize::try_from(total).map_err(|error| {
+            io::Error::other(format!("diagnostic size conversion failed: {error}"))
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut bytes)?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+
+    let half = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES / 2;
+    let mut head = vec![0_u8; half];
+    file.read_exact(&mut head)?;
+    let tail_offset = total
+        .checked_sub(u64::try_from(half).map_err(io::Error::other)?)
+        .ok_or_else(|| io::Error::other("diagnostic tail offset underflow"))?;
+    file.seek(SeekFrom::Start(tail_offset))?;
+    let mut tail = vec![0_u8; half];
+    file.read_exact(&mut tail)?;
+    Ok(format!(
+        "{}\n...[captured diagnostic truncated: {total} bytes total]...\n{}",
+        String::from_utf8_lossy(&head),
+        String::from_utf8_lossy(&tail)
+    ))
 }
 
 #[derive(Debug)]
@@ -1603,8 +1637,34 @@ mod tests {
     fn test_log_config_default() {
         let config = LogConfig::default();
         assert_eq!(config.max_file_size, 30 * 1024 * 1024);
-        assert_eq!(config.max_files, usize::MAX);
+        assert_eq!(config.max_files, DEFAULT_MAX_LOG_FILES);
         assert_eq!(config.level, Level::TRACE);
+    }
+
+    #[test]
+    fn captured_tool_output_retains_head_tail_and_marks_omission() {
+        let input = format!("HEAD{}TAIL", "x".repeat(CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES));
+        let output = truncate_captured_tool_output(&input);
+
+        assert!(output.starts_with("HEAD"));
+        assert!(output.ends_with("TAIL"));
+        assert!(output.contains("captured diagnostic truncated"));
+        assert!(output.len() < input.len());
+    }
+
+    #[test]
+    fn bounded_diagnostic_file_retains_head_tail() {
+        let mut file = tempfile::NamedTempFile::new().unwrap_or_else(|error| panic!("{error}"));
+        let input = format!("HEAD{}TAIL", "x".repeat(CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES));
+        file.write_all(input.as_bytes())
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let output =
+            read_bounded_diagnostic_file(file.path()).unwrap_or_else(|error| panic!("{error}"));
+        assert!(output.starts_with("HEAD"));
+        assert!(output.ends_with("TAIL"));
+        assert!(output.contains("captured diagnostic truncated"));
+        assert!(output.len() < input.len());
     }
 
     #[test]

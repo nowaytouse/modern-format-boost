@@ -98,7 +98,7 @@ pub(in crate::metadata) fn is_metadata_delivery_soft_error(err: &io::Error) -> b
     exiftool_combined_output_indicates_no_source_tags(&err.to_string())
 }
 
-/// ExifTool is optional for a best-effort delivery report, but absence must be
+/// `ExifTool` is optional for a best-effort delivery report, but absence must be
 /// represented as `SkippedNoTool` rather than silently reported as `Applied`.
 #[must_use]
 pub(in crate::metadata) fn is_exiftool_unavailable(err: &io::Error) -> bool {

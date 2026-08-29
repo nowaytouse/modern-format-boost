@@ -10,7 +10,6 @@ use crate::VmafBuilder;
 use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
@@ -39,6 +38,15 @@ enum DjxlReconstructionMode {
     DefaultJpegOutput,
 }
 
+impl DjxlReconstructionMode {
+    const fn audit_label(self) -> &'static str {
+        match self {
+            Self::ExplicitFlag => "explicit --reconstruct_jpeg",
+            Self::DefaultJpegOutput => "legacy extension-selected JPEG output",
+        }
+    }
+}
+
 fn djxl_diagnostic(output: &std::process::Output) -> String {
     crate::infra::logging::combined_tool_output(
         &String::from_utf8_lossy(&output.stdout),
@@ -61,6 +69,31 @@ fn djxl_reported_exact_jpeg_reconstruction(diagnostic: &str) -> bool {
         || diagnostic.contains("reconstructed jpeg")
         || (diagnostic.contains("jpeg reconstruction")
             && (diagnostic.contains("complete") || diagnostic.contains("success")))
+}
+
+/// Whether `djxl` rejected the explicit option itself, rather than rejecting
+/// JPEG reconstruction for this input.
+///
+/// The option name must be present so an unrelated "invalid image" diagnostic
+/// can never weaken strict reconstruction into the legacy compatibility path.
+#[must_use]
+pub fn djxl_rejected_explicit_reconstruction_option(diagnostic: &str) -> bool {
+    diagnostic.lines().any(|line| {
+        let line = line.to_ascii_lowercase();
+        line.contains("reconstruct_jpeg")
+            && [
+                "unknown argument",
+                "unknown option",
+                "unrecognized argument",
+                "unrecognized option",
+                "unsupported argument",
+                "unsupported option",
+                "invalid argument",
+                "invalid option",
+            ]
+            .iter()
+            .any(|marker| line.contains(marker))
+    })
 }
 
 /// Whether `djxl` positively reported exact JPEG reconstruction without its
@@ -91,64 +124,75 @@ fn run_jxl_reconstruction_probe(
     .map_err(|error| format!("{context} failed: {error}"))
 }
 
-fn detect_djxl_reconstruction_mode() -> Result<DjxlReconstructionMode, String> {
-    static CAPABILITY: OnceLock<Result<DjxlReconstructionMode, String>> = OnceLock::new();
-
-    CAPABILITY
-        .get_or_init(|| {
-            let mut command = crate::DjxlBuilder::new().arg("-h").build();
-            let output = run_jxl_reconstruction_probe(&mut command, "djxl capability probe")?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let help = crate::infra::logging::combined_tool_output(&stdout, &stderr);
-            if !output.status.success() {
-                return Err(format!(
-                    "djxl capability probe failed with {}: {}",
-                    output.status,
-                    if help.is_empty() {
-                        "no diagnostic output"
-                    } else {
-                        help.as_str()
-                    }
-                ));
-            }
-            if help.contains("--reconstruct_jpeg") {
-                return Ok(DjxlReconstructionMode::ExplicitFlag);
-            }
-            let help_lower = help.to_ascii_lowercase();
-            if help_lower
-                .lines()
-                .any(|line| line.contains("output") && line.contains("jpeg"))
-            {
-                return Ok(DjxlReconstructionMode::DefaultJpegOutput);
-            }
-            Err(
-                "installed djxl advertises neither explicit JPEG reconstruction nor JPEG output; exact reconstruction cannot be classified safely"
-                    .into(),
-            )
-        })
-        .clone()
-}
-
 fn run_exact_jpeg_reconstruction_with_mode(
     input: &Path,
     output: &Path,
     context: &str,
     mode: DjxlReconstructionMode,
 ) -> Result<std::process::Output, String> {
-    let mut command = crate::DjxlBuilder::new().input(input).output(output).build();
+    let mut command = crate::DjxlBuilder::new()
+        .input(input)
+        .output(output)
+        .build();
     if mode == DjxlReconstructionMode::ExplicitFlag {
         command.arg("--reconstruct_jpeg");
     }
     run_jxl_reconstruction_probe(&mut command, context)
 }
 
-/// Reconstruct the original JPEG using the strongest operation advertised by
-/// the installed official decoder.
+fn run_strict_jpeg_reconstruction(
+    input: &Path,
+    output: &Path,
+    context: &str,
+) -> Result<(std::process::Output, DjxlReconstructionMode), String> {
+    let explicit = run_exact_jpeg_reconstruction_with_mode(
+        input,
+        output,
+        context,
+        DjxlReconstructionMode::ExplicitFlag,
+    )?;
+    let explicit_diagnostic = djxl_diagnostic(&explicit);
+    if !djxl_rejected_explicit_reconstruction_option(&explicit_diagnostic) {
+        return Ok((explicit, DjxlReconstructionMode::ExplicitFlag));
+    }
+
+    crate::log_info!(
+        crate::infra::static_logs::messages::LABEL_JXL,
+        &format!(
+            "djxl does not implement --reconstruct_jpeg; retrying the same input through its official extension-selected JPEG interface: {}",
+            first_nonempty_tool_line(explicit_diagnostic.as_bytes())
+        )
+    );
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(output)
+    {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "{context}: failed to reset explicit reconstruction output before the compatibility attempt: {error}"
+            ));
+        }
+    }
+    let legacy = run_exact_jpeg_reconstruction_with_mode(
+        input,
+        output,
+        context,
+        DjxlReconstructionMode::DefaultJpegOutput,
+    )?;
+    Ok((legacy, DjxlReconstructionMode::DefaultJpegOutput))
+}
+
+/// Reconstruct the original JPEG using the strict explicit operation whenever
+/// the installed decoder accepts it.
 ///
-/// libjxl releases differ: some expose `--reconstruct_jpeg`, while newer builds
-/// perform reconstruction for a `.jpg` output without exposing that flag. Both
-/// paths require an explicit reconstruction diagnostic and reject pixel fallback.
+/// libjxl help text is not a capability contract: current builds can implement
+/// `--reconstruct_jpeg` without listing it. The real input is therefore tried
+/// with the explicit option first. The official `.jpg` extension interface is
+/// used only when the decoder explicitly rejects that option as unsupported.
+/// Both paths require positive reconstruction evidence and reject pixel fallback.
 ///
 /// # Errors
 /// Returns an error for missing decoder capability, decoder failure, pixel
@@ -158,8 +202,7 @@ pub fn run_exact_jpeg_reconstruction(
     output: &Path,
     context: &str,
 ) -> Result<std::process::Output, String> {
-    let mode = detect_djxl_reconstruction_mode()?;
-    let result = run_exact_jpeg_reconstruction_with_mode(input, output, context, mode)?;
+    let (result, mode) = run_strict_jpeg_reconstruction(input, output, context)?;
     if !djxl_completed_exact_jpeg_reconstruction(&result) {
         let diagnostic = djxl_diagnostic(&result);
         let reason = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {
@@ -170,7 +213,8 @@ pub fn run_exact_jpeg_reconstruction(
             "djxl rejected exact JPEG reconstruction"
         };
         return Err(format!(
-            "{context}: {reason} (status {}): {}",
+            "{context}: {reason} via {} (status {}): {}",
+            mode.audit_label(),
             result.status,
             first_nonempty_tool_line(diagnostic.as_bytes())
         ));
@@ -202,8 +246,6 @@ pub fn probe_jpeg_reconstruction_eligibility(
     if !JxlinfoBuilder::new().check_available() || !DjxlBuilder::new().check_available() {
         return Err("jxlinfo and djxl are required for exact JPEG reconstruction probing".into());
     }
-    let reconstruction_mode = detect_djxl_reconstruction_mode()?;
-
     let mut info_command = JxlinfoBuilder::new().input(path).build();
     let info = run_jxl_reconstruction_probe(&mut info_command, "JXL structure probe")?;
     let mut info_diagnostic = info.stdout;
@@ -229,11 +271,10 @@ pub fn probe_jpeg_reconstruction_eligibility(
         Some(".jpg"),
     )
     .map_err(|error| format!("strict JPEG reconstruction temp allocation failed: {error}"))?;
-    let strict = run_exact_jpeg_reconstruction_with_mode(
+    let (strict, strict_mode) = run_strict_jpeg_reconstruction(
         path,
         strict_output.path(),
         "strict JPEG reconstruction probe",
-        reconstruction_mode,
     )?;
     if djxl_completed_exact_jpeg_reconstruction(&strict)
         && strict_output
@@ -245,12 +286,21 @@ pub fn probe_jpeg_reconstruction_eligibility(
     }
     let diagnostic = djxl_diagnostic(&strict);
     let strict_diagnostic = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {
-        "djxl used pixel-to-JPEG fallback instead of exact reconstruction".to_string()
+        format!(
+            "djxl used pixel-to-JPEG fallback instead of exact reconstruction via {}",
+            strict_mode.audit_label()
+        )
     } else if strict.status.success() {
-        "djxl returned success without a non-empty JPEG and positive exact-reconstruction evidence"
-            .to_string()
+        format!(
+            "djxl returned success without a non-empty JPEG and positive exact-reconstruction evidence via {}",
+            strict_mode.audit_label()
+        )
     } else {
-        first_nonempty_tool_line(diagnostic.as_bytes())
+        format!(
+            "{} via {}",
+            first_nonempty_tool_line(diagnostic.as_bytes()),
+            strict_mode.audit_label()
+        )
     };
 
     let pixel_temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
@@ -336,7 +386,7 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
     let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", output.stdout.len());
     crate::infra::logging::log_captured_process_output(
         &command_line,
-        &output.status,
+        output.status,
         &stdout_summary,
         &String::from_utf8_lossy(&output.stderr),
     );
@@ -354,29 +404,27 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
         return None;
     }
 
-    if !output.stdout.is_empty() {
-        if let Err(e) = std::fs::write(temp_icc.path(), &output.stdout) {
-            crate::media_conversion_gate::delivery_jxl_path_audit(
-                "delivery_jxl",
-                src,
-                format!(
-                    "JXL METADATA AUDIT: Failed to write extracted ICC profile to temp file for \
-                     '{}' | Disk I/O Error: {}",
-                    src.display(),
-                    e
-                ),
-            );
-            return None;
-        }
-        Some(temp_icc)
-    } else {
+    if output.stdout.is_empty() {
         crate::media_conversion_gate::delivery_jxl_path_audit(
             "delivery_jxl",
             src,
             "ExifTool returned no ICC payload; no profile was extracted",
         );
-        None
+        return None;
     }
+    if let Err(e) = std::fs::write(temp_icc.path(), &output.stdout) {
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            format!(
+                "JXL METADATA AUDIT: Failed to write extracted ICC profile to temp file for '{}' | Disk I/O Error: {}",
+                src.display(),
+                e
+            ),
+        );
+        return None;
+    }
+    Some(temp_icc)
 }
 
 /// Returns true if a cjxl stderr output indicates an ICC D50 illuminant
@@ -440,7 +488,7 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> anyhow::Result<Option<tempfile:
     let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", output.stdout.len());
     crate::infra::logging::log_captured_process_output(
         &command_line,
-        &output.status,
+        output.status,
         &stdout_summary,
         &String::from_utf8_lossy(&output.stderr),
     );
@@ -581,7 +629,7 @@ pub fn verify_jxl_has_icc(path: &Path) -> anyhow::Result<bool> {
     let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", out.stdout.len());
     crate::infra::logging::log_captured_process_output(
         &command_line,
-        &out.status,
+        out.status,
         &stdout_summary,
         &String::from_utf8_lossy(&out.stderr),
     );
@@ -1484,6 +1532,21 @@ mod tests {
         ));
         assert!(djxl_used_pixel_to_jpeg_fallback(
             "could not decode losslessly to JPEG; retrying with --pixels_to_jpeg"
+        ));
+        assert!(djxl_rejected_explicit_reconstruction_option(
+            "Unknown argument: --reconstruct_jpeg"
+        ));
+        assert!(djxl_rejected_explicit_reconstruction_option(
+            "unrecognized option '--reconstruct_jpeg'"
+        ));
+        assert!(!djxl_rejected_explicit_reconstruction_option(
+            "--reconstruct_jpeg: Failed to decode image"
+        ));
+        assert!(!djxl_rejected_explicit_reconstruction_option(
+            "invalid JPEG reconstruction data"
+        ));
+        assert!(!djxl_rejected_explicit_reconstruction_option(
+            "invalid argument: damaged input\nUsage: --reconstruct_jpeg"
         ));
     }
 

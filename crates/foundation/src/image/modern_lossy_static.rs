@@ -266,11 +266,12 @@ fn detect_modern_compression_authoritative(
                 path.display()
             )));
         }
-        Err(_) => {
+        Err(err) => {
             tracing::debug!(
                 target: "modern_lossy_static",
                 path = %path.display(),
                 format = ?format,
+                error = %err,
                 "forensic tool unavailable; falling back to spec-level compression probe"
             );
         }

@@ -326,14 +326,11 @@ fn official_source_decode_command(
                 .arg(source)
                 .arg(output);
         }
-        OfficialSourceDecoder::Heif => {
+        OfficialSourceDecoder::Heif | OfficialSourceDecoder::Jxl => {
             command.arg(source).arg(output);
         }
         OfficialSourceDecoder::WebP => {
             command.arg(source).arg("-o").arg(output);
-        }
-        OfficialSourceDecoder::Jxl => {
-            command.arg(source).arg(output);
         }
     }
     command

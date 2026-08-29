@@ -306,7 +306,7 @@ fn run_captured(cmd: &mut Command) -> Result<()> {
         foundation::process_runner::video_process_hard_timeout(),
         "create-live-photo external command",
     )
-        .with_context(|| format!("run {:?}", cmd.get_program()))?;
+    .with_context(|| format!("run {:?}", cmd.get_program()))?;
     let diagnostic = command_diagnostic(&output);
     if !output.status.success() {
         bail!("command failed with status {}: {diagnostic}", output.status);

@@ -37,7 +37,7 @@ fn is_exiftool_available() -> bool {
 fn audit_exiftool_output(context: &str, output: &Output) {
     crate::infra::logging::log_captured_process_output(
         context,
-        &output.status,
+        output.status,
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
     );
@@ -411,9 +411,7 @@ fn append_jxl_metadata_rehydrate_without_orientation_args(
     }
     // Loading MWG makes `-all:all` copy writable composite tags and synthesize
     // XMP fields that were absent from the source; rehydrate physical tags only.
-    builder
-        .arg("-api")
-        .arg("LargeFileSupport=1");
+    builder.arg("-api").arg("LargeFileSupport=1");
 }
 
 /// CONTRACT: argv fragment for the nuclear rebuild pass (`-all=` then restore
@@ -434,8 +432,7 @@ fn append_nuclear_repair_exiftool(builder: &mut crate::ExiftoolBuilder, src: &Pa
         .arg(crate::constants::EXIFTOOL_ARG_UNSAFE)
         .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE);
     append_source_metadata_copy_args(builder, src, dst_ext.eq_ignore_ascii_case("jxl"));
-    builder
-        .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE);
+    builder.arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE);
 }
 
 // Rationale: This function handles complex, sequential initialization or
@@ -525,10 +522,7 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     // Copy physical source tags only. Loading MWG makes `-all:all` include
     // writable composite tags and synthesizes metadata absent from the source.
     // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile.
-    builder
-        .arg("-api")
-        .arg("LargeFileSupport=1")
-        .input(dst);
+    builder.arg("-api").arg("LargeFileSupport=1").input(dst);
 
     let mut output = builder.build().output()?;
 

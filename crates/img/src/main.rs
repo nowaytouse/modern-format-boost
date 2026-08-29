@@ -6422,7 +6422,13 @@ fn restore_jpeg_extract_xmp_to_temp(input: &Path, temp_xmp: &Path) -> anyhow::Re
         })?;
     if !extract.status.success() {
         let stderr = String::from_utf8_lossy(&extract.stderr);
-        let _ = restore_jpeg_remove_temp(temp_xmp, "XMP extraction failure");
+        if let Err(cleanup_error) = restore_jpeg_remove_temp(temp_xmp, "XMP extraction failure") {
+            anyhow::bail!(
+                "restore-jpeg XMP extraction failed for {}: {}; additionally temp cleanup failed: {cleanup_error}",
+                input.display(),
+                stderr.trim()
+            );
+        }
         anyhow::bail!(
             "restore-jpeg XMP extraction failed for {}: {}",
             input.display(),
@@ -6808,7 +6814,13 @@ fn restore_single_jpeg(
     let committed = match commit_result {
         Ok(committed) => committed,
         Err(err) => {
-            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed exact payload commit");
+            if let Err(cleanup_error) =
+                restore_jpeg_remove_temp(&proof_snapshot, "failed exact payload commit")
+            {
+                return Err(err.context(format!(
+                    "restore-jpeg exact payload commit also failed to clean proof snapshot: {cleanup_error}"
+                )));
+            }
             return Err(err);
         }
     };
@@ -6821,7 +6833,13 @@ fn restore_single_jpeg(
                     &output,
                 );
             }
-            let _ = restore_jpeg_remove_temp(&proof_snapshot, "failed XMP sidecar delivery");
+            if let Err(cleanup_error) =
+                restore_jpeg_remove_temp(&proof_snapshot, "failed XMP sidecar delivery")
+            {
+                return Err(error.context(format!(
+                    "restore-jpeg XMP delivery also failed to clean proof snapshot: {cleanup_error}"
+                )));
+            }
             return Err(error);
         }
     };
@@ -7381,7 +7399,16 @@ fn write_restore_jpeg_audit_artifacts(
                     )
                 });
             }
-            Err(_) => String::new(),
+            Err(error) => {
+                tracing::warn!(
+                    target: "restore_jpeg_audit",
+                    source = %record.source.display(),
+                    status = record.status.as_str(),
+                    error = %error,
+                    "restore-jpeg audit could not hash a non-exact candidate; recording an explicit empty hash"
+                );
+                String::new()
+            }
         };
         content.push_str(&restore_jpeg_hex_encode(&source_rel));
         content.push('\t');

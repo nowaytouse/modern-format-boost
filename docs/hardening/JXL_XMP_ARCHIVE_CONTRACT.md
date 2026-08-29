@@ -17,6 +17,15 @@ The complete existing container is copied byte-for-byte, one validated `xml `
 box is appended, and exact JPEG reconstruction is proved again. Repeating the
 same overlay is an idempotent no-op.
 
+The decoder is invoked with `--reconstruct_jpeg` on the real input first. Its
+help output is not used to infer support because released/development builds may
+accept an option they do not list. Only a diagnostic that explicitly rejects
+that option permits the extension-selected `.jpg` compatibility interface. A
+supported strict operation that rejects the media never falls through. In both
+cases, a zero exit status is insufficient: positive reconstruction output,
+non-empty JPEG, no pixel fallback, JPEG health, and the outer BLAKE3/byte proof
+remain mandatory.
+
 ## Durable overlay commit
 
 The commit order is fixed:
@@ -64,7 +73,7 @@ FastImg JXL Tier 2 admits only positively proven lossy, static WebP, JP2, JXL,
 AVIF, or codec-constrained HEIC originals. When no sidecar exists, the original
 media bytes are imported and verified unchanged.
 
-When an adjacent XMP exists, Tier 2 instead:
+When an adjacent XMP exists on a JXL container, Tier 2 instead:
 
 1. validates the XMP;
 2. creates an isolated copy of the media;
@@ -78,6 +87,16 @@ When an adjacent XMP exists, Tier 2 instead:
 
 If staging, metadata merge, import, or live-library verification fails, both the
 source and sidecar remain. Tier 2 never deletes an unproved sidecar.
+
+AVIF, HEIC/HEIF, WebP, and JP2 with adjacent XMP are deliberately retained and
+reported instead of being passed through ExifTool/Exiv2. These formats can carry
+HDR gain maps, auxiliary item relationships, authenticity/signature data, and
+unknown properties or chunks. Proving only the primary image payload unchanged
+does not prove those archival layers survived a container rewrite. A native,
+format-specific overlay/relationship proof is required before embedded XMP
+delivery can be enabled for them. Any JPEG APP11 segment blocks generic XMP
+rewrites because APP11 can carry JPEG XT, JUMBF, provenance, or other protected
+structure; a PNG `caBX` chunk blocks rewrites because it carries C2PA data.
 
 ## `restore-jpeg` input-driven behavior
 

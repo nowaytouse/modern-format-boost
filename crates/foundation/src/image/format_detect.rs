@@ -293,7 +293,7 @@ pub const fn forensic_tool_for_format(format: FormatKind) -> Option<ForensicForm
         FormatKind::Png => Some(ForensicFormatTool {
             format,
             tool: crate::constants::TOOL_PNGCHECK,
-            args_before_path: &["-q"],
+            args_before_path: &[],
             purpose: "PNG chunk/CRC check",
         }),
         FormatKind::Heic | FormatKind::Heif => {
@@ -350,7 +350,7 @@ pub const fn forensic_tool_for_format(format: FormatKind) -> Option<ForensicForm
         | FormatKind::Dds => Some(ForensicFormatTool {
             format,
             tool: crate::constants::TOOL_IDENTIFY,
-            args_before_path: &["-quiet"],
+            args_before_path: &[],
             purpose: "ImageMagick decoder identification check",
         }),
         FormatKind::Unknown => None,
@@ -497,6 +497,12 @@ fn validate_format_with_tool(
             path.display()
         ))
     })?;
+    crate::infra::logging::log_captured_process_output(
+        &crate::common_utils::format_command_for_audit(&command),
+        output.status,
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
 
     if output.status.success() {
         // Per-file success is retained in debug logs; printing thousands of lines in
@@ -857,7 +863,7 @@ mod tests {
     fn forensic_tool_policy_uses_exact_authoritative_tools() {
         let dedicated: &[(FormatKind, &str, &[&str])] = &[
             (FormatKind::Jpeg, crate::constants::TOOL_JPEGINFO, &["-c"]),
-            (FormatKind::Png, crate::constants::TOOL_PNGCHECK, &["-q"]),
+            (FormatKind::Png, crate::constants::TOOL_PNGCHECK, &[]),
             (
                 FormatKind::Avif,
                 crate::constants::TOOL_AVIFDEC,
@@ -908,7 +914,7 @@ mod tests {
             let policy = forensic_tool_for_format(format)
                 .unwrap_or_else(|| panic!("missing generic decoder policy for {format:?}"));
             assert_eq!(policy.tool, crate::constants::TOOL_IDENTIFY);
-            assert_eq!(policy.args_before_path, ["-quiet"]);
+            assert!(policy.args_before_path.is_empty());
         }
 
         #[cfg(not(feature = "v1_21"))]

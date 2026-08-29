@@ -1570,7 +1570,25 @@ pub fn convert_to_jxl_probe(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             // Copy metadata into the temp file to get an exact size estimate
-            let _ = foundation::metadata::preserve_for_delivery(input, &temp_output);
+            let metadata_report = foundation::metadata::preserve_for_delivery(input, &temp_output)
+                .map_err(|error| {
+                    ImgQualityError::ConversionError(format!(
+                        "JXL probe metadata preservation failed for {}: {error}",
+                        input.display()
+                    ))
+                })?;
+            if metadata_report.any_partial_or_skipped() {
+                foundation::media_conversion_gate::delivery_metadata_batch_audit(
+                    "jxl_probe_metadata",
+                    format!(
+                        "JXL probe metadata outcome for {}: exif={:?} xattr={:?} timestamps={:?}",
+                        input.display(),
+                        metadata_report.exif,
+                        metadata_report.xattr,
+                        metadata_report.timestamps
+                    ),
+                );
+            }
             let output_size = fs::metadata(&temp_output)?.len();
             if let Err(e) = verify_jxl_health(&temp_output) {
                 cleanup_temp_output(&temp_output, input);
@@ -2849,10 +2867,7 @@ fn build_avifenc_command(
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    let effective_speed = match speed {
-        Some(value) => value,
-        None => 0,
-    };
+    let effective_speed = speed.unwrap_or_default();
     builder.speed(effective_speed).jobs("all");
     match detect_avif_input_color_model(input) {
         AvifencInputColorModel::Grayscale => {

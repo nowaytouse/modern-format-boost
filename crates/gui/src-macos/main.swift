@@ -609,14 +609,23 @@ private final class NativeHost {
         let process = Process()
         process.executableURL = binary
         process.arguments = ["--help"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
         do {
             try process.run()
+            let diagnosticData = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            return process.terminationStatus == 0
-                ? localized("status.processor_ready")
-                : localized("status.processor_failed")
+            if process.terminationStatus == 0 {
+                return localized("status.processor_ready")
+            }
+            let diagnostic = String(
+                decoding: diagnosticData.prefix(maxProcessLogChunkBytes),
+                as: UTF8.self
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            return diagnostic.isEmpty
+                ? localized("status.processor_failed")
+                : "\(localized("status.processor_failed")): \(diagnostic)"
         } catch {
             return "\(localized("status.processor_failed")): \(error.localizedDescription)"
         }

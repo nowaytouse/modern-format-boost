@@ -2874,8 +2874,11 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
 /// Returns whether Exiv2 may be used after the primary XMP merge failed.
 ///
 /// JXL uses an append-only XML overlay so its existing container/JBRD bytes
-/// stay frozen. An arbitrary secondary metadata writer is therefore unsafe.
-/// Unknown destination identity is also retained rather than guessed.
+/// stay frozen. AVIF/HEIF/WebP/JP2 may carry HDR/auxiliary relationships,
+/// provenance, and unknown structures that a generic writer cannot prove it
+/// preserved. An arbitrary secondary metadata writer is therefore unsafe for
+/// these containers. Unknown destination identity is also retained rather than
+/// guessed.
 fn exiv2_xmp_fallback_allowed(dst: &Path) -> io::Result<bool> {
     let format = crate::image::format_detect::detect_true_format(dst).map_err(|error| {
         io::Error::other(format!(
@@ -2883,11 +2886,7 @@ fn exiv2_xmp_fallback_allowed(dst: &Path) -> io::Result<bool> {
             dst.display()
         ))
     })?;
-    Ok(!matches!(
-        format,
-        crate::image::format_detect::FormatKind::Jxl
-            | crate::image::format_detect::FormatKind::Unknown
-    ))
+    Ok(!crate::xmp_merger::xmp_rewrite_requires_immutable_container(format))
 }
 
 fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
@@ -2944,7 +2943,7 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
                 if !fallback_allowed {
                     crate::progress_mode::xmp_merge_failure(&err_str);
                     return Err(io::Error::other(format!(
-                        "Failed to merge XMP sidecar {} into {}: {err_str}; refusing Exiv2 fallback for JXL because it can rewrite reconstruction-owned container bytes",
+                        "Failed to merge XMP sidecar {} into {}: {err_str}; refusing Exiv2 fallback because it cannot prove preservation of protected modern-container bytes and relationships",
                         xmp.display(),
                         dst.display()
                     )));

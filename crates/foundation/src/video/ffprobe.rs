@@ -1382,7 +1382,7 @@ pub fn get_duration(path: &Path) -> Option<f64> {
     let mut command = crate::ffmpeg_builder::FfprobeBuilder::new();
     command
         .input(path)
-        .loglevel("quiet")
+        .loglevel("error")
         .show_entries("format=duration")
         .print_format("default=noprint_wrappers=1:nokey=1");
     let mut process = command.build();
@@ -1434,7 +1434,7 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     let mut command = crate::ffmpeg_builder::FfprobeBuilder::new();
     command
         .input(path)
-        .loglevel("quiet")
+        .loglevel("error")
         .count_frames()
         .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
         .show_entries("stream=nb_read_frames")

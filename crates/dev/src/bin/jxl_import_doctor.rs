@@ -598,7 +598,10 @@ fn process_output_diagnostic(output: &Output) -> String {
         (true, true) => String::new(),
     };
     if diagnostic.is_empty() {
-        format!("process exited with {} and no diagnostic output", output.status)
+        format!(
+            "process exited with {} and no diagnostic output",
+            output.status
+        )
     } else if diagnostic.len() > 8192 {
         format!(
             "{}\n...[diagnostic truncated: {} bytes]...",
@@ -812,34 +815,6 @@ fn inspect_with_djxl(path: &Path, djxl: &Path) -> Option<Finding> {
 }
 
 fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
-    let help = Command::new(djxl)
-        .arg("-h")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
-    if !help.status.success() {
-        return Err(format!(
-            "djxl capability probe failed: {}",
-            process_output_diagnostic(&help)
-        ));
-    }
-    let help_text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&help.stdout),
-        String::from_utf8_lossy(&help.stderr)
-    );
-    let explicit_reconstruction = help_text.contains("--reconstruct_jpeg");
-    if !explicit_reconstruction
-        && !help_text
-            .to_ascii_lowercase()
-            .lines()
-            .any(|line| line.contains("output") && line.contains("jpeg"))
-    {
-        return Err("djxl advertises neither explicit reconstruction nor JPEG output".into());
-    }
-
     let reconstructed = tempfile::Builder::new()
         .prefix("mfb-jxl-doctor-")
         .suffix(".jpg")
@@ -849,17 +824,15 @@ fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
     command
         .arg(path)
         .arg(reconstructed.path())
-        .arg("--num_threads=0");
-    if explicit_reconstruction {
-        command.arg("--reconstruct_jpeg");
-    }
-    let output = command
+        .arg("--num_threads=0")
+        .arg("--reconstruct_jpeg");
+    let explicit = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
-    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output)
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&explicit)
         && reconstructed
             .as_file()
             .metadata()
@@ -867,7 +840,38 @@ fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
     {
         return Ok(true);
     }
-    Err(process_output_diagnostic(&output))
+    let explicit_diagnostic = process_output_diagnostic(&explicit);
+    if !foundation::image::jxl_utils::djxl_rejected_explicit_reconstruction_option(
+        &explicit_diagnostic,
+    ) {
+        return Err(explicit_diagnostic);
+    }
+
+    reconstructed
+        .as_file()
+        .set_len(0)
+        .map_err(|error| format!("cannot reset reconstruction probe output: {error}"))?;
+    let legacy = Command::new(djxl)
+        .arg(path)
+        .arg(reconstructed.path())
+        .arg("--num_threads=0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&legacy)
+        && reconstructed
+            .as_file()
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+    {
+        return Ok(true);
+    }
+    Err(format!(
+        "explicit option unsupported ({explicit_diagnostic}); extension-selected JPEG reconstruction failed: {}",
+        process_output_diagnostic(&legacy)
+    ))
 }
 
 fn resolve_djxl(probe: Probe, path: Option<&Path>) -> Result<Option<PathBuf>, String> {

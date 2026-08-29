@@ -1869,7 +1869,10 @@ fn commit_temp_to_output_with_metadata_inner(
                 );
                 return Err(std::io::Error::new(
                     e.kind(),
-                    format!("Failed to inspect source metadata for {}: {e}", src.display()),
+                    format!(
+                        "Failed to inspect source metadata for {}: {e}",
+                        src.display()
+                    ),
                 ));
             }
         };
@@ -2112,17 +2115,15 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
         .input(output)
         .build();
     let repair_command_line = crate::common_utils::format_command_for_audit(&repair_command);
-    let repair = repair_command
-        .output()
-        .map_err(|err| {
-            std::io::Error::other(format!(
-                "Failed to launch JXL EXIF metadata repair for {}: {err}",
-                output.display()
-            ))
-        })?;
+    let repair = repair_command.output().map_err(|err| {
+        std::io::Error::other(format!(
+            "Failed to launch JXL EXIF metadata repair for {}: {err}",
+            output.display()
+        ))
+    })?;
     crate::infra::logging::log_captured_process_output(
         &repair_command_line,
-        &repair.status,
+        repair.status,
         &String::from_utf8_lossy(&repair.stdout),
         &String::from_utf8_lossy(&repair.stderr),
     );
@@ -2183,17 +2184,15 @@ fn jxl_exiftool_validate_output(output: &Path) -> std::io::Result<std::process::
         .input(output)
         .build();
     let command_line = crate::common_utils::format_command_for_audit(&validate_command);
-    let validate = validate_command
-        .output()
-        .map_err(|err| {
-            std::io::Error::other(format!(
-                "Failed to launch JXL metadata validation for {}: {err}",
-                output.display()
-            ))
-        })?;
+    let validate = validate_command.output().map_err(|err| {
+        std::io::Error::other(format!(
+            "Failed to launch JXL metadata validation for {}: {err}",
+            output.display()
+        ))
+    })?;
     crate::infra::logging::log_captured_process_output(
         &command_line,
-        &validate.status,
+        validate.status,
         &String::from_utf8_lossy(&validate.stdout),
         &String::from_utf8_lossy(&validate.stderr),
     );

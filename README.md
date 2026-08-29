@@ -48,15 +48,17 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   quality, metadata and integrity gates pass. Size-constrained routes compare
   encoded media payloads and require the candidate to fit the active policy;
   if no candidate fits, the source is retained and the result is skip/failure.
-- JPEG→JXL delivery capability-probes the installed official `djxl`. Builds that
-  advertise `--reconstruct_jpeg` use it; builds whose documented interface
-  reconstructs for a `.jpg` output use that path. Both must emit positive JPEG
-  reconstruction evidence, produce a non-empty file, avoid pixel-to-JPEG
-  fallback and pass the byte-identical hash proof after metadata commit.
-  Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
-  external XMP is appended as an idempotent overlay and the exact reconstruction
-  proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and
-  delivers adjacent XMP as a separately hashed `.xmp` sidecar. If container XMP
+- JPEG→JXL delivery tries `djxl --reconstruct_jpeg` on the real JXL; help text is
+  not treated as a capability oracle. The extension-selected `.jpg` interface is
+  retried only when the decoder explicitly rejects that option as unsupported.
+  Both paths must emit positive JPEG reconstruction evidence, produce a non-empty
+  file, avoid pixel-to-JPEG fallback and pass the byte-identical hash proof after
+  metadata commit. Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen.
+  On JPEG→JXL, external XMP is appended **inside the JXL** as an idempotent `xml `
+  overlay and exact reconstruction is proved again. On JXL→JPEG, `restore-jpeg`
+  keeps the recovered JPEG bytes unchanged and delivers the effective appended
+  XMP as a separately hashed `.xmp` sidecar; embedding new XMP into that JPEG
+  would necessarily destroy byte identity. If container XMP
   and adjacent XMP differ, the JPEG is still classified as exactly reversible;
   the source JXL is retained with an explicit metadata-review proof so neither
   metadata layer is silently discarded.
@@ -64,6 +66,15 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   recheck, atomic rename and file/parent flush. A versioned audit chain records
   JBRD, overlay, final-container and reconstruction hashes without storing
   media content; see the [archive contract](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md).
+- Generic metadata writers are not used on AVIF, HEIC/HEIF, WebP, or JP2 when an
+  XMP sidecar must be incorporated. Those containers may carry HDR gain maps,
+  auxiliary-item relationships, provenance/signature data, and unknown
+  properties/chunks that an image-payload hash cannot prove intact. The media and
+  sidecar are retained with an explicit failure until a format-native,
+  structure-preserving overlay path is available; JXL is the currently supported
+  append-only exception. JPEG APP11-bearing inputs are likewise retained because
+  APP11 can carry JPEG XT, JUMBF, provenance, or other structure; PNG `caBX`
+  inputs are retained instead of invalidating C2PA authenticity evidence.
 - This is not a magic size reducer. Container metadata can make the complete
   file larger even when the media payload passes, and a high-quality candidate
   may provide no storage saving at all.

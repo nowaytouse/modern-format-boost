@@ -4,7 +4,7 @@ use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{Context, Result, bail};
 use quick_xml::events::Event;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -128,6 +128,126 @@ fn is_jxl_container(path: &Path) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
         Err(error) => Err(error)
             .with_context(|| format!("failed to read JXL container signature {}", path.display())),
+    }
+}
+
+/// Formats whose archival structure cannot be proved intact after a generic
+/// metadata writer rewrites the container.
+///
+/// JXL has its dedicated append-only overlay path. The other formats retain the
+/// media and sidecar until a native writer can prove auxiliary images, HDR
+/// relationships, provenance data, unknown properties/chunks, and codec bytes.
+#[must_use]
+pub(crate) const fn xmp_rewrite_requires_immutable_container(
+    format: crate::image::format_detect::FormatKind,
+) -> bool {
+    use crate::image::format_detect::FormatKind;
+    matches!(
+        format,
+        FormatKind::Jxl
+            | FormatKind::Avif
+            | FormatKind::Heic
+            | FormatKind::Heif
+            | FormatKind::WebP
+            | FormatKind::Jp2
+            | FormatKind::Unknown
+    )
+}
+
+fn jpeg_has_protected_app11(path: &Path) -> Result<bool> {
+    let total_len = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut soi = [0_u8; 2];
+    file.read_exact(&mut soi)?;
+    if soi != [0xFF, 0xD8] {
+        bail!("invalid JPEG signature while probing protected APP11 structure");
+    }
+
+    loop {
+        let mut byte = [0_u8; 1];
+        file.read_exact(&mut byte)?;
+        if byte[0] != 0xFF {
+            bail!("invalid JPEG marker stream while probing protected APP11 structure");
+        }
+        let marker = loop {
+            file.read_exact(&mut byte)?;
+            if byte[0] != 0xFF {
+                break byte[0];
+            }
+        };
+        if marker == 0xD9 || marker == 0xDA {
+            return Ok(false);
+        }
+        if marker == 0x00 || marker == 0xD8 {
+            bail!("invalid JPEG marker while probing protected APP11 structure");
+        }
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+
+        let mut length = [0_u8; 2];
+        file.read_exact(&mut length)?;
+        let segment_len = u64::from(u16::from_be_bytes(length));
+        if segment_len < 2 {
+            bail!("invalid JPEG segment length while probing protected provenance");
+        }
+        let payload_len = segment_len - 2;
+        let end = file
+            .stream_position()?
+            .checked_add(payload_len)
+            .filter(|end| *end <= total_len)
+            .ok_or_else(|| anyhow::anyhow!("truncated JPEG APP11 probe segment"))?;
+        if marker == 0xEB {
+            return Ok(true);
+        }
+        file.seek(SeekFrom::Start(end))?;
+    }
+}
+
+fn png_has_c2pa_chunk(path: &Path) -> Result<bool> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    let total_len = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut signature = [0_u8; 8];
+    file.read_exact(&mut signature)?;
+    if &signature != PNG_SIGNATURE {
+        bail!("invalid PNG signature while probing protected provenance");
+    }
+
+    loop {
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let payload_len = u64::from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]));
+        let chunk_type = &header[4..8];
+        let end = file
+            .stream_position()?
+            .checked_add(payload_len)
+            .and_then(|value| value.checked_add(4))
+            .filter(|end| *end <= total_len)
+            .ok_or_else(|| anyhow::anyhow!("truncated PNG provenance chunk"))?;
+        if chunk_type == b"caBX" {
+            return Ok(true);
+        }
+        if chunk_type == b"IEND" {
+            return Ok(false);
+        }
+        file.seek(SeekFrom::Start(end))?;
+    }
+}
+
+fn protected_container_reason(
+    path: &Path,
+    format: crate::image::format_detect::FormatKind,
+) -> Result<Option<&'static str>> {
+    use crate::image::format_detect::FormatKind;
+    match format {
+        FormatKind::Jpeg if jpeg_has_protected_app11(path)? => {
+            Ok(Some("JPEG APP11 (JPEG XT/JUMBF-capable) segment"))
+        }
+        FormatKind::Png if png_has_c2pa_chunk(path)? => Ok(Some("PNG caBX provenance chunk")),
+        _ => Ok(None),
     }
 }
 
@@ -264,7 +384,7 @@ impl XmpMerger {
         Ok(xmp_files)
     }
 
-    fn read_parent_paths(&self, parent: &Path) -> Option<Vec<PathBuf>> {
+    fn read_parent_paths(parent: &Path) -> Option<Vec<PathBuf>> {
         let entries = match std::fs::read_dir(parent) {
             Ok(entries) => entries,
             Err(err) => {
@@ -389,12 +509,10 @@ impl XmpMerger {
                 .arg(exiftool_path_arg(xmp_path).as_ref())
                 .build();
             let command_line = crate::common_utils::format_command_for_audit(&command);
-            let output = command
-                .output()
-                .context("Failed to run exiftool")?;
+            let output = command.output().context("Failed to run exiftool")?;
             crate::infra::logging::log_captured_process_output(
                 &command_line,
-                &output.status,
+                output.status,
                 &String::from_utf8_lossy(&output.stdout),
                 &String::from_utf8_lossy(&output.stderr),
             );
@@ -463,13 +581,13 @@ impl XmpMerger {
         None
     }
 
-    fn find_same_name_different_ext(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_same_name_different_ext(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_stem_raw = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
         let xmp_root_stem = crate::media_conversion_gate::path_stem_root_segment(&xmp_stem_raw);
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -496,11 +614,11 @@ impl XmpMerger {
         None
     }
 
-    fn find_case_insensitive(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_case_insensitive(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -521,7 +639,7 @@ impl XmpMerger {
         None
     }
 
-    fn find_fuzzy_match(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_fuzzy_match(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
 
@@ -533,7 +651,7 @@ impl XmpMerger {
             return None;
         }
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -570,11 +688,11 @@ impl XmpMerger {
             .to_lowercase()
     }
 
-    fn find_by_xmp_reference_scan(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_by_xmp_reference_scan(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_filename = xmp_path.file_name()?.to_string_lossy();
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -603,7 +721,7 @@ impl XmpMerger {
                     );
                     crate::infra::logging::log_captured_process_output(
                         &command_line,
-                        &output.status,
+                        output.status,
                         &stdout_summary,
                         &String::from_utf8_lossy(&output.stderr),
                     );
@@ -639,7 +757,7 @@ impl XmpMerger {
         None
     }
 
-    fn find_partial_match(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_partial_match(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
 
@@ -647,7 +765,7 @@ impl XmpMerger {
             return None;
         }
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -677,7 +795,7 @@ impl XmpMerger {
         None
     }
 
-    fn find_in_subdirectories(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_in_subdirectories(xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
 
@@ -759,7 +877,7 @@ impl XmpMerger {
             );
         }
 
-        for path in self.read_parent_paths(parent)? {
+        for path in Self::read_parent_paths(parent)? {
             if !is_regular_non_symlink(&path) {
                 continue;
             }
@@ -786,7 +904,7 @@ impl XmpMerger {
                     );
                     crate::infra::logging::log_captured_process_output(
                         &command_line,
-                        &output.status,
+                        output.status,
                         &stdout_summary,
                         &String::from_utf8_lossy(&output.stderr),
                     );
@@ -857,7 +975,7 @@ impl XmpMerger {
             return Ok((Some(media), "direct_match".to_string()));
         }
 
-        if let Some(media) = self.find_same_name_different_ext(xmp_path) {
+        if let Some(media) = Self::find_same_name_different_ext(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_detail!(
                     &crate::infra::static_logs::messages::MSG_XMP_STRATEGY_2
@@ -867,7 +985,7 @@ impl XmpMerger {
             return Ok((Some(media), "same_name".to_string()));
         }
 
-        if let Some(media) = self.find_case_insensitive(xmp_path) {
+        if let Some(media) = Self::find_case_insensitive(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_XMP,
@@ -902,7 +1020,7 @@ impl XmpMerger {
             return Ok((Some(media), "document_id".to_string()));
         }
 
-        if let Some(media) = self.find_fuzzy_match(xmp_path) {
+        if let Some(media) = Self::find_fuzzy_match(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_detail!(
                     &crate::infra::static_logs::messages::MSG_XMP_STRATEGY_5
@@ -912,7 +1030,7 @@ impl XmpMerger {
             return Ok((Some(media), "fuzzy_match".to_string()));
         }
 
-        if let Some(media) = self.find_by_xmp_reference_scan(xmp_path) {
+        if let Some(media) = Self::find_by_xmp_reference_scan(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_XMP,
@@ -923,7 +1041,7 @@ impl XmpMerger {
             return Ok((Some(media), "xmp_ref_scan".to_string()));
         }
 
-        if let Some(media) = self.find_partial_match(xmp_path) {
+        if let Some(media) = Self::find_partial_match(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_XMP,
@@ -934,7 +1052,7 @@ impl XmpMerger {
             return Ok((Some(media), "partial_match".to_string()));
         }
 
-        if let Some(media) = self.find_in_subdirectories(xmp_path) {
+        if let Some(media) = Self::find_in_subdirectories(xmp_path) {
             if matches!(self.config.log_level, LogLevel::Verbose) {
                 crate::log_info!(
                     crate::infra::static_logs::messages::LABEL_XMP,
@@ -961,6 +1079,24 @@ impl XmpMerger {
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
         if Self::merge_jxl_xmp_overlay(xmp_path, media_path)? {
             return Ok(());
+        }
+        let format = crate::image::format_detect::detect_true_format(media_path).map_err(|error| {
+            anyhow::anyhow!(
+                "refusing XMP merge because destination format cannot be proved for {}: {error}",
+                media_path.display()
+            )
+        })?;
+        if xmp_rewrite_requires_immutable_container(format) {
+            bail!(
+                "refusing destructive XMP rewrite for {format:?} {}; media and sidecar retained because a generic metadata writer cannot prove preservation of HDR/auxiliary relationships, provenance data, unknown container structures, and codec bytes",
+                media_path.display()
+            );
+        }
+        if let Some(reason) = protected_container_reason(media_path, format)? {
+            bail!(
+                "refusing destructive XMP rewrite for {} because it contains a protected {reason}; media and sidecar retained so protected container structure is not invalidated or discarded",
+                media_path.display()
+            );
         }
         Self::check_exiftool()?;
         match self.merge_xmp_core(xmp_path, media_path) {
@@ -1210,7 +1346,7 @@ impl XmpMerger {
         let command_line = crate::common_utils::format_command_for_audit(&cmd);
         crate::infra::logging::log_captured_process_output(
             &command_line,
-            &output.status,
+            output.status,
             &String::from_utf8_lossy(&output.stdout),
             &String::from_utf8_lossy(&output.stderr),
         );
@@ -1589,6 +1725,43 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn generic_xmp_rewrite_is_blocked_for_archival_modern_containers() {
+        use crate::image::format_detect::FormatKind;
+
+        for format in [
+            FormatKind::Jxl,
+            FormatKind::Avif,
+            FormatKind::Heic,
+            FormatKind::Heif,
+            FormatKind::WebP,
+            FormatKind::Jp2,
+            FormatKind::Unknown,
+        ] {
+            assert!(xmp_rewrite_requires_immutable_container(format));
+        }
+        for format in [FormatKind::Jpeg, FormatKind::Png, FormatKind::Tiff] {
+            assert!(!xmp_rewrite_requires_immutable_container(format));
+        }
+    }
+
+    #[test]
+    fn protected_container_markers_block_generic_metadata_rewrite() {
+        let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let jpeg = temp_dir.path().join("signed.jpg");
+        let png = temp_dir.path().join("signed.png");
+        fs::write(&jpeg, [0xFF, 0xD8, 0xFF, 0xEB, 0x00, 0x02, 0xFF, 0xD9])
+            .unwrap_or_else(|error| panic!("JPEG fixture: {error}"));
+        let mut png_bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        png_bytes.extend_from_slice(&0_u32.to_be_bytes());
+        png_bytes.extend_from_slice(b"caBX");
+        png_bytes.extend_from_slice(&0_u32.to_be_bytes());
+        fs::write(&png, png_bytes).unwrap_or_else(|error| panic!("PNG fixture: {error}"));
+
+        assert!(jpeg_has_protected_app11(&jpeg).unwrap_or(false));
+        assert!(png_has_c2pa_chunk(&png).unwrap_or(false));
+    }
+
+    #[test]
     fn test_is_uuid_filename() {
         assert!(XmpMerger::is_uuid_filename(
             "6cdf1517-be7d-4f85-b519-f4aeaac45fdd"
@@ -1645,8 +1818,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(Config::default());
-        let result = merger.find_same_name_different_ext(&xmp);
+        let result = XmpMerger::find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
@@ -1661,8 +1833,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(Config::default());
-        let result = merger.find_case_insensitive(&xmp);
+        let result = XmpMerger::find_case_insensitive(&xmp);
 
         assert!(result.is_some());
     }
@@ -1676,8 +1847,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(Config::default());
-        let result = merger.find_fuzzy_match(&xmp);
+        let result = XmpMerger::find_fuzzy_match(&xmp);
 
         assert!(result.is_some());
     }
@@ -1702,8 +1872,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(Config::default());
-        let result = merger.find_same_name_different_ext(&xmp);
+        let result = XmpMerger::find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
@@ -1718,8 +1887,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
-        let merger = XmpMerger::new(Config::default());
-        let result = merger.find_same_name_different_ext(&xmp);
+        let result = XmpMerger::find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
@@ -1862,7 +2030,10 @@ mod tests {
             .merge_xmp(&xmp_path, &jxl_path)
             .expect_err("raw JXL must not enter a rewriting metadata path");
         assert!(error.to_string().contains("raw JPEG XL codestream"));
-        assert_eq!(fs::read(&jxl_path).unwrap_or_else(|_| panic!("error")), original);
+        assert_eq!(
+            fs::read(&jxl_path).unwrap_or_else(|_| panic!("error")),
+            original
+        );
     }
 
     #[test]

@@ -7,23 +7,33 @@ All notable changes to this project will be documented in this file.
 ### JXL reconstruction and metadata evidence
 
 - **One exact-reconstruction path**: FastImg delivery, `restore-jpeg`, XMP
-  overlay verification, the JXL doctor, and the production matrix now probe the
-  installed official `djxl` interface instead of guessing from a version. An
-  advertised `--reconstruct_jpeg` operation is used directly; an official
-  `.jpg` default-output path is accepted only with a positive reconstruction
-  diagnostic. Both paths reject pixel-to-JPEG fallback, empty output, and the
+  overlay verification, the JXL doctor, and the production matrix now try
+  `--reconstruct_jpeg` on the real input instead of guessing from a version or
+  help text. The official `.jpg` extension-selected path is retried only after
+  an explicit unsupported-option diagnostic. Both paths reject pixel-to-JPEG
+  fallback, empty output, and missing positive reconstruction evidence; the
   later byte-hash proof still decides delivery.
 - **Immutable archival metadata layer**: reconstruction-owned JBRD, Exif, XMP,
   JUMBF, and codestream bytes are no longer rewritten to merge a sidecar. A
   validated XMP overlay is appended through an atomic, fsynced container update,
   followed by JBRD and exact-JPEG reconstruction checks; recovery keeps the
-  reconstructed JPEG untouched and delivers additional XMP separately.
+  reconstructed JPEG untouched and delivers the effective appended XMP as a
+  separately verified sidecar. Generic XMP rewrites now fail closed for
+  AVIF/HEIC/HEIF/WebP/JP2 so HDR/auxiliary relationships, provenance, and unknown
+  container structures cannot be discarded behind an unchanged primary-image
+  hash. JPEG APP11-bearing files also block generic rewrites because APP11 can
+  carry JPEG XT, JUMBF, provenance, or other protected structure; PNG `caBX`
+  inputs are retained so C2PA authenticity evidence is not invalidated.
 - **No silent external-tool success**: media subprocess diagnostics are captured
-  with explicit bounds and retained in run logs without flooding the terminal.
+  with a 64-KiB head/tail bound and retained in size-rotated run logs without
+  flooding the terminal; the newest 64 files per program are retained by
+  default. Forensic validators no longer use quiet switches, ffprobe errors are
+  visible, and the native GUI reports processor preflight diagnostics.
   ExifTool minor-error/quiet builder APIs were removed, non-zero exits and
   missing outputs now fail explicitly, and metadata I/O errors can no longer be
   reported as successful skips. CI uses the checksum-pinned official libjxl
-  v0.12.0 release and verifies its required CLI capabilities before IMG checks.
+  v0.12.0 release and proves strict reconstruction with a healthy synthetic JPEG
+  plus byte comparison instead of assuming the help listing is authoritative.
 
 ### IMG maintainability and scoped quality signals
 

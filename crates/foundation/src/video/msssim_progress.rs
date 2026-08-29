@@ -146,17 +146,32 @@ impl Monitor {
         ffmpeg_args: &[&str],
         channel: &str,
     ) -> Result<(), String> {
-        let mut builder = FfmpegBuilder::new();
-        for arg in ffmpeg_args {
-            builder.arg(arg);
-        }
-        let mut cmd = builder.arg("-progress").arg("pipe:1").output_pipe().build();
-        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
-
         let err = crate::media_conversion_gate::ui_icon_pick(
             crate::modern_ui::symbols::ERROR,
             crate::modern_ui::symbols::plain::ERROR,
         );
+        let mut builder = FfmpegBuilder::new();
+        for arg in ffmpeg_args {
+            builder.arg(arg);
+        }
+        let mut cmd = builder
+            .loglevel("error")
+            .arg("-progress")
+            .arg("pipe:1")
+            .output_pipe()
+            .build();
+        let stderr_capture =
+            crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+                "msssim_ffmpeg_stderr",
+                None,
+                Some(".log"),
+            )
+            .map_err(|error| format!("{err} Failed to allocate FFmpeg stderr capture: {error}"))?;
+        let stderr_file = stderr_capture
+            .reopen()
+            .map_err(|error| format!("{err} Failed to open FFmpeg stderr capture: {error}"))?;
+        cmd.stdout(Stdio::piped()).stderr(Stdio::from(stderr_file));
+        let command_line = crate::common_utils::format_command_for_audit(&cmd);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("{err} Failed to spawn ffmpeg: {e}"))?;
@@ -184,9 +199,19 @@ impl Monitor {
         let status = child
             .wait()
             .map_err(|e| format!("{err} Failed to wait for ffmpeg: {e}"))?;
+        let diagnostic = crate::infra::logging::read_bounded_diagnostic_file(stderr_capture.path())
+            .map_err(|error| format!("{err} Failed to read FFmpeg diagnostics: {error}"))?;
+        crate::infra::logging::log_captured_process_output(&command_line, status, "", &diagnostic);
 
         if !status.success() {
-            return Err(format!("{err} FFmpeg exited with status: {status}"));
+            return Err(format!(
+                "{err} FFmpeg exited with status {status}: {}",
+                if diagnostic.trim().is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.trim()
+                }
+            ));
         }
 
         Ok(())
