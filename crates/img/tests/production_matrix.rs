@@ -175,26 +175,12 @@ fn set_orientation(path: &Path, orientation: u8) -> Result<()> {
 }
 
 fn reconstructed_jpeg(source: &Path, destination: &Path) -> Result<()> {
-    let djxl = tool_path("djxl")?;
-    let mut command = Command::new(djxl);
-    command
-        .arg(source)
-        .arg(destination)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    let output_result = command.output()?;
-    ensure!(
-        output_result.status.success(),
-        "djxl refused exact reconstruction for {}: {}",
-        source.display(),
-        String::from_utf8_lossy(&output_result.stderr)
-    );
-    ensure!(
-        foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output_result),
-        "djxl used pixel-to-JPEG fallback for {}: {}",
-        source.display(),
-        String::from_utf8_lossy(&output_result.stderr)
-    );
+    foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
+        source,
+        destination,
+        "production matrix JPEG reconstruction",
+    )
+    .map_err(anyhow::Error::msg)?;
     ensure!(
         destination.is_file(),
         "djxl did not create {}",

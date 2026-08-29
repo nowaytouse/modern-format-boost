@@ -2,7 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-28
+## [Unreleased] - 2026-08-29
+
+### JXL reconstruction and metadata evidence
+
+- **One exact-reconstruction path**: FastImg delivery, `restore-jpeg`, XMP
+  overlay verification, the JXL doctor, and the production matrix now probe the
+  installed official `djxl` interface instead of guessing from a version. An
+  advertised `--reconstruct_jpeg` operation is used directly; an official
+  `.jpg` default-output path is accepted only with a positive reconstruction
+  diagnostic. Both paths reject pixel-to-JPEG fallback, empty output, and the
+  later byte-hash proof still decides delivery.
+- **Immutable archival metadata layer**: reconstruction-owned JBRD, Exif, XMP,
+  JUMBF, and codestream bytes are no longer rewritten to merge a sidecar. A
+  validated XMP overlay is appended through an atomic, fsynced container update,
+  followed by JBRD and exact-JPEG reconstruction checks; recovery keeps the
+  reconstructed JPEG untouched and delivers additional XMP separately.
+- **No silent external-tool success**: media subprocess diagnostics are captured
+  with explicit bounds and retained in run logs without flooding the terminal.
+  ExifTool minor-error/quiet builder APIs were removed, non-zero exits and
+  missing outputs now fail explicitly, and metadata I/O errors can no longer be
+  reported as successful skips. CI uses the checksum-pinned official libjxl
+  v0.12.0 release and verifies its required CLI capabilities before IMG checks.
 
 ### IMG maintainability and scoped quality signals
 
@@ -67,9 +88,9 @@ All notable changes to this project will be documented in this file.
   codec branches report their availability instead of being counted as run.
   Missing host tools are reported explicitly rather than counted as exercised.
 - **Documentation contract sync**: bilingual README files now describe the
-  version-neutral `djxl` reconstruction path, the M1–M251 registry versus the
-  M1–M206 delivery seal, IMG production-candidate evidence and its remaining
-  real Photos/TCC gate.
+  capability-probed exact `djxl` reconstruction path, the M1–M251 registry
+  versus the M1–M206 delivery seal, IMG production-candidate evidence, and its
+  remaining real Photos/TCC gate.
 
 ### Production Hardening: AVIF Meme Search & Trust Boundaries
 

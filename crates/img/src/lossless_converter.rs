@@ -1945,7 +1945,6 @@ fn run_exiftool_restore_all_metadata(
     builder
         .overwrite_original()
         .preserve_date()
-        .ignore_minor()
         .tags_from_file(source)
         .arg("-all:all")
         .input(target);

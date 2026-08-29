@@ -361,6 +361,13 @@ impl ManagedProcess {
         let stderr =
             stderr.map_err(|error| anyhow::anyhow!("Stderr reader panicked: {error:?}"))??;
 
+        crate::infra::logging::log_captured_process_output(
+            &self.command_line,
+            &status,
+            &stdout,
+            &stderr,
+        );
+
         if !status.success() && self.audit_nonzero_exit {
             crate::media_conversion_gate::delivery_tool_process_failed_audit(
                 "process_runner",

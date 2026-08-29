@@ -1160,6 +1160,7 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
             m.level() <= &tracing::Level::INFO
                 && m.target() != "mfb::ui"
                 && m.target() != "mfb::report"
+                && m.target() != "mfb::tool_output"
         }));
 
     let json_layer = fmt::layer()
@@ -1345,6 +1346,77 @@ pub fn log_external_tool(
             );
         }
     }
+}
+
+const CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES: usize = 256 * 1024;
+
+/// Keep captured tool diagnostics in the file/run logs without flooding the
+/// terminal. The capture itself remains bounded by the process runner, and a
+/// truncation marker makes any omitted bytes explicit rather than silent.
+pub(crate) fn log_captured_process_output(
+    command_line: &str,
+    status: &std::process::ExitStatus,
+    stdout: &str,
+    stderr: &str,
+) {
+    let output = combined_tool_output(stdout, stderr);
+    if output.trim().is_empty() {
+        return;
+    }
+    let output = truncate_captured_tool_output(&output);
+    if status.success() {
+        tracing::info!(
+            target: "mfb::tool_output",
+            command = %command_line,
+            success = true,
+            exit_code = ?status.code(),
+            output = %output,
+            "Captured external-tool diagnostics"
+        );
+    } else {
+        tracing::warn!(
+            target: "mfb::tool_output",
+            command = %command_line,
+            success = false,
+            exit_code = ?status.code(),
+            output = %output,
+            "Captured failed external-tool diagnostics"
+        );
+    }
+}
+
+/// Combine both output streams while retaining their origin for audits and
+/// error messages.
+#[must_use]
+pub(crate) fn combined_tool_output(stdout: &str, stderr: &str) -> String {
+    match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+        (false, false) => format!("STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}"),
+        (false, true) => format!("STDOUT:\n{stdout}"),
+        (true, false) => format!("STDERR:\n{stderr}"),
+        (true, true) => String::new(),
+    }
+}
+
+fn truncate_captured_tool_output(output: &str) -> String {
+    if output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES {
+        return output.to_owned();
+    }
+
+    let half = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES / 2;
+    let mut head_end = half;
+    while head_end > 0 && !output.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = output.len() - half;
+    while tail_start < output.len() && !output.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!(
+        "{}\n...[captured diagnostic truncated: {} bytes total]...\n{}",
+        &output[..head_end],
+        output.len(),
+        &output[tail_start..]
+    )
 }
 
 #[derive(Debug)]

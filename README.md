@@ -48,9 +48,11 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   quality, metadata and integrity gates pass. Size-constrained routes compare
   encoded media payloads and require the candidate to fit the active policy;
   if no candidate fits, the source is retained and the result is skip/failure.
-- JPEG→JXL delivery requires a byte-identical JPEG reconstruction proof from
-  the installed `djxl` (the version-neutral default output path; no
-  version-specific `--reconstruct_jpeg` flag is assumed) after metadata commit.
+- JPEG→JXL delivery capability-probes the installed official `djxl`. Builds that
+  advertise `--reconstruct_jpeg` use it; builds whose documented interface
+  reconstructs for a `.jpg` output use that path. Both must emit positive JPEG
+  reconstruction evidence, produce a non-empty file, avoid pixel-to-JPEG
+  fallback and pass the byte-identical hash proof after metadata commit.
   Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen;
   external XMP is appended as an idempotent overlay and the exact reconstruction
   proof is repeated. `restore-jpeg` keeps the recovered JPEG bytes unchanged and

@@ -1864,10 +1864,13 @@ fn commit_temp_to_output_with_metadata_inner(
             Err(e) => {
                 crate::log_upstream_error!(
                     "Metadata preservation",
-                    "Source metadata probe failed for {} ({e}); treating as missing (M23)",
+                    "Source metadata probe failed for {} ({e})",
                     src.display()
                 );
-                false
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!("Failed to inspect source metadata for {}: {e}", src.display()),
+                ));
             }
         };
 
@@ -2086,7 +2089,10 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
             output,
             "ExifTool unavailable; cannot probe JXL EXIF metadata for Photos import compatibility",
         );
-        return Ok(());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "ExifTool unavailable; JXL EXIF integrity could not be verified",
+        ));
     }
 
     let initial = jxl_exiftool_validate_output(output)?;
@@ -2100,11 +2106,13 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
         "Corrupted Brotli 'Exif' data detected in JXL metadata; stripping EXIF metadata box to \
          preserve Photos import compatibility",
     );
-    let repair = crate::ExiftoolBuilder::new()
+    let mut repair_command = crate::ExiftoolBuilder::new()
         .overwrite_original()
         .arg("-Exif:all=")
         .input(output)
-        .build()
+        .build();
+    let repair_command_line = crate::common_utils::format_command_for_audit(&repair_command);
+    let repair = repair_command
         .output()
         .map_err(|err| {
             std::io::Error::other(format!(
@@ -2112,6 +2120,12 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
                 output.display()
             ))
         })?;
+    crate::infra::logging::log_captured_process_output(
+        &repair_command_line,
+        &repair.status,
+        &String::from_utf8_lossy(&repair.stdout),
+        &String::from_utf8_lossy(&repair.stderr),
+    );
     if !repair.status.success() {
         return Err(std::io::Error::other(format!(
             "JXL EXIF metadata repair failed for {}: stdout={} stderr={}",
@@ -2122,18 +2136,30 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
     }
 
     if let Some(src) = source {
-        if std::fs::metadata(src).is_ok() {
-            crate::metadata::rehydrate_jxl_internal_metadata_without_orientation(src, output)?;
-        } else {
-            crate::media_conversion_gate::delivery_metadata_path_audit(
-                "delivery_metadata_jxl_exif_repair",
-                output,
-                format!(
-                    "JXL EXIF metadata repair stripped corrupt EXIF; source unavailable for \
-                     non-Orientation metadata rehydration ({})",
-                    src.display()
-                ),
-            );
+        match std::fs::metadata(src) {
+            Ok(_) => {
+                crate::metadata::rehydrate_jxl_internal_metadata_without_orientation(src, output)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::media_conversion_gate::delivery_metadata_path_audit(
+                    "delivery_metadata_jxl_exif_repair",
+                    output,
+                    format!(
+                        "JXL EXIF metadata repair stripped corrupt EXIF; source unavailable for \
+                         non-Orientation metadata rehydration ({})",
+                        src.display()
+                    ),
+                );
+            }
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "Failed to inspect source for JXL EXIF rehydration {}: {error}",
+                        src.display()
+                    ),
+                ));
+            }
         }
     }
 
@@ -2150,12 +2176,14 @@ fn repair_corrupt_jxl_brotli_exif_for_delivery(
 fn jxl_exiftool_validate_output(output: &Path) -> std::io::Result<std::process::Output> {
     use crate::builder_base::ToolBuilder;
 
-    let validate = crate::ExiftoolBuilder::new()
+    let mut validate_command = crate::ExiftoolBuilder::new()
         .arg("-validate")
         .arg("-warning")
         .arg("-error")
         .input(output)
-        .build()
+        .build();
+    let command_line = crate::common_utils::format_command_for_audit(&validate_command);
+    let validate = validate_command
         .output()
         .map_err(|err| {
             std::io::Error::other(format!(
@@ -2163,6 +2191,12 @@ fn jxl_exiftool_validate_output(output: &Path) -> std::io::Result<std::process::
                 output.display()
             ))
         })?;
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        &validate.status,
+        &String::from_utf8_lossy(&validate.stdout),
+        &String::from_utf8_lossy(&validate.stderr),
+    );
     if !validate.status.success() {
         return Err(std::io::Error::other(format!(
             "JXL metadata validation failed for {}: stdout={} stderr={}",

@@ -915,14 +915,25 @@ fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
     .map_err(|err| format!("avifdec decode probe scratch tempfile failed: {err}"))?;
     let avifdec = resolve_tool_path("avifdec")
         .ok_or_else(|| "avifdec was not found or failed its runtime health check".to_string())?;
-    let output = std::process::Command::new(avifdec)
-        .arg(path)
-        .arg(temp.path())
-        .stdout(std::process::Stdio::null())
-        .output()
-        .map_err(|err| format!("avifdec decode probe spawn failed: {err}"))?;
-    if output.status.success() {
+    let mut command = std::process::Command::new(avifdec);
+    command.arg(path).arg(temp.path());
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "fast-img AVIF decode probe",
+    )
+    .map_err(|err| format!("avifdec decode probe spawn failed: {err}"))?;
+    if output.status.success()
+        && temp
+            .as_file()
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+    {
         return Ok(());
+    }
+    if output.status.success() {
+        return Err("avifdec decode probe returned success but produced an empty output".into());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
@@ -946,14 +957,25 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
     .map_err(|err| format!("decode probe scratch tempfile failed: {err}"))?;
     let djxl = resolve_tool_path("djxl")
         .ok_or_else(|| "djxl was not found or failed its runtime health check".to_string())?;
-    let output = std::process::Command::new(&djxl)
-        .arg(path)
-        .arg(temp.path())
-        .stdout(std::process::Stdio::null())
-        .output()
-        .map_err(|err| format!("djxl decode probe spawn failed: {err}"))?;
-    if output.status.success() {
+    let mut command = std::process::Command::new(&djxl);
+    command.arg(path).arg(temp.path());
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "fast-img JXL decode probe",
+    )
+    .map_err(|err| format!("djxl decode probe spawn failed: {err}"))?;
+    if output.status.success()
+        && temp
+            .as_file()
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+    {
         return Ok(());
+    }
+    if output.status.success() {
+        return Err("djxl decode probe returned success but produced an empty output".into());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if crate::image::jxl_utils::is_jxl_png_icc_decode_error(&stderr) {
@@ -963,18 +985,31 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             Some(".jpg"),
         )
         .map_err(|err| format!("decode probe JPEG scratch tempfile failed: {err}"))?;
-        let jpeg_output = std::process::Command::new(&djxl)
-            .arg(path)
-            .arg(jpeg_temp.path())
-            .stdout(std::process::Stdio::null())
-            .output()
-            .map_err(|err| format!("djxl JPEG decode probe spawn failed: {err}"))?;
-        if jpeg_output.status.success() {
+        let mut jpeg_command = std::process::Command::new(&djxl);
+        jpeg_command.arg(path).arg(jpeg_temp.path());
+        let jpeg_output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut jpeg_command,
+            std::time::Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "fast-img JXL JPEG decode probe",
+        )
+        .map_err(|err| format!("djxl JPEG decode probe spawn failed: {err}"))?;
+        if jpeg_output.status.success()
+            && jpeg_temp
+                .as_file()
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() > 0)
+        {
             crate::log_detail!(format!(
                 "djxl decode probe retried as JPEG reconstruction after PNG ICC failure: {}",
                 path.display()
             ));
             return Ok(());
+        }
+        if jpeg_output.status.success() {
+            return Err(
+                "djxl JPEG decode probe returned success but produced an empty output".into(),
+            );
         }
         let jpeg_stderr = String::from_utf8_lossy(&jpeg_output.stderr);
         let jpeg_stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(

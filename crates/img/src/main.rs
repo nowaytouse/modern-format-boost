@@ -3790,7 +3790,7 @@ fn avif_input_decoder_command(
             let executable = foundation::common_utils::resolve_tool_path("heif-convert")
                 .context("official libheif heif-convert is required for HEIC/HEIF normalization")?;
             let mut command = std::process::Command::new(executable);
-            command.arg("--quiet").arg(source).arg(temp_path);
+            command.arg(source).arg(temp_path);
             (command, "heif-convert")
         }
         AvifInputDecoder::Jxl => {
@@ -6384,40 +6384,21 @@ fn run_restore_image_command(
     .with_context(|| format!("{context} failed to run"))
 }
 
-fn restore_jpeg_djxl_command(input: &Path, output: &Path) -> std::process::Command {
-    foundation::DjxlBuilder::new()
-        .input(input)
-        .output(output)
-        .build()
-}
-
-fn restore_jpeg_decode_failure(output: &std::process::Output) -> Option<String> {
-    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(output) {
-        None
-    } else if output.status.success() {
-        Some("djxl used pixel-to-JPEG fallback instead of exact reconstruction".to_string())
-    } else {
-        Some(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
 fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
-    let command = restore_jpeg_djxl_command(input, temp_output);
-    let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
-        .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
-    if let Some(diagnostic) = restore_jpeg_decode_failure(&decode) {
-        if let Err(cleanup_err) = restore_jpeg_remove_temp(temp_output, "djxl failure") {
+    if let Err(error) = foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
+        input,
+        temp_output,
+        "restore-jpeg djxl decode",
+    ) {
+        if temp_output.exists()
+            && let Err(cleanup_error) = restore_jpeg_remove_temp(temp_output, "djxl failure")
+        {
             anyhow::bail!(
-                "restore-jpeg djxl failed for {}: {}; additionally cleanup failed: {cleanup_err}",
-                input.display(),
-                diagnostic
+                "restore-jpeg djxl failed for {}: {error}; additionally cleanup failed: {cleanup_error}",
+                input.display()
             );
         }
-        anyhow::bail!(
-            "restore-jpeg djxl failed for {}: {}",
-            input.display(),
-            diagnostic
-        );
+        anyhow::bail!("restore-jpeg djxl failed for {}: {error}", input.display());
     }
     Ok(())
 }
@@ -6798,23 +6779,7 @@ fn restore_single_jpeg(
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
-    let command = restore_jpeg_djxl_command(input, &temp_output);
-    let decode = run_restore_image_command(command, "restore-jpeg djxl decode")
-        .with_context(|| format!("restore-jpeg failed to launch djxl for {}", input.display()))?;
-    if let Some(diagnostic) = restore_jpeg_decode_failure(&decode) {
-        if let Err(cleanup_err) = restore_jpeg_remove_temp(&temp_output, "djxl failure") {
-            anyhow::bail!(
-                "restore-jpeg djxl failed for {}: {}; additionally cleanup failed: {cleanup_err}",
-                input.display(),
-                diagnostic
-            );
-        }
-        anyhow::bail!(
-            "restore-jpeg djxl failed for {}: {}",
-            input.display(),
-            diagnostic
-        );
-    }
+    restore_jpeg_decode_to_temp(input, &temp_output)?;
 
     // Keep the official byte-exact djxl reconstruction for the
     // post-commit byte proof. This avoids launching djxl a second time for
@@ -9586,8 +9551,8 @@ mod fast_img_hardening_tests {
         record_and_delete_restored_jpeg_source, restore_jpeg_audit_marker_path,
         restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
         restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
-        restore_jpeg_delete_verified_source, restore_jpeg_djxl_command, restore_jpeg_hex_encode,
-        restore_jpeg_output_path_for, restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
+        restore_jpeg_delete_verified_source, restore_jpeg_hex_encode, restore_jpeg_output_path_for,
+        restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, restore_single_jpeg, run_fast_img,
         validate_cleanup_complete_marker, validate_fast_img_marker_source_state,
         write_restore_jpeg_manifest,
@@ -9971,16 +9936,6 @@ mod fast_img_hardening_tests {
             Some(11)
         );
         Ok(())
-    }
-
-    #[test]
-    fn restore_jpeg_decoder_uses_version_neutral_default_reconstruction() {
-        let command =
-            restore_jpeg_djxl_command(Path::new("archive.jxl"), Path::new("restored.jpg"));
-        let args: Vec<_> = command.get_args().collect();
-
-        assert!(!args.iter().any(|arg| *arg == "--reconstruct_jpeg"));
-        assert!(!args.iter().any(|arg| *arg == "--pixels_to_jpeg"));
     }
 
     #[test]
@@ -10865,16 +10820,12 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&date_created.stdout).trim(),
             "2025:10:24 12:00:24+08:00"
         );
-        let decode = std::process::Command::new(foundation::constants::TOOL_DJXL)
-            .arg(&out)
-            .arg(&reconstructed)
-            .output()
-            .context("strictly reconstruct refreshed JXL")?;
-        assert!(
-            foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&decode),
-            "strict JXL reconstruction failed: {}",
-            String::from_utf8_lossy(&decode.stderr)
-        );
+        foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
+            &out,
+            &reconstructed,
+            "strictly reconstruct refreshed JXL",
+        )
+        .map_err(anyhow::Error::msg)?;
         assert_eq!(std::fs::read(&reconstructed)?, std::fs::read(&src)?);
         Ok(())
     }

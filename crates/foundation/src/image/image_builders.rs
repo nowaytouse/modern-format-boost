@@ -785,20 +785,6 @@ impl ExiftoolBuilder {
         self
     }
 
-    /// Ignores minor errors and warnings.
-    /// Equivalent to `exiftool -m`.
-    pub fn ignore_minor(&mut self) -> &mut Self {
-        self.arg(constants::EXIFTOOL_ARG_M);
-        self
-    }
-
-    /// Suppresses warnings and logs.
-    /// Equivalent to `exiftool -q`. Call twice for absolute silence.
-    pub fn quiet(&mut self) -> &mut Self {
-        self.arg(constants::EXIFTOOL_ARG_Q);
-        self
-    }
-
     /// Preserves file modification date/time.
     /// Equivalent to `exiftool -P`.
     pub fn preserve_date(&mut self) -> &mut Self {
@@ -1015,8 +1001,6 @@ mod tests {
             .input(Path::new("img.jpg"))
             .tags_from_file(Path::new("src.jpg"))
             .overwrite_original()
-            .ignore_minor()
-            .quiet()
             .preserve_date();
 
         let cmd = builder.build();
@@ -1024,8 +1008,6 @@ mod tests {
 
         assert!(args.contains(&"-tagsfromfile"));
         assert!(args.contains(&"-overwrite_original"));
-        assert!(args.contains(&"-m"));
-        assert!(args.contains(&"-q"));
         assert!(args.contains(&"-P"));
     }
 }

@@ -647,7 +647,6 @@ fn test_magick_path_armor_hardening() {
 fn test_exiftool_nuclear_strip_hardening() {
     let cmd = ExiftoolBuilder::new()
         .strip_all()
-        .ignore_minor()
         .input(Path::new("in.jpg"))
         .build();
     let args: Vec<String> = cmd
@@ -656,7 +655,6 @@ fn test_exiftool_nuclear_strip_hardening() {
         .collect();
 
     assert!(args.contains(&"-all=".to_string()));
-    assert!(args.contains(&"-m".to_string()));
 }
 
 fn test_ffmpeg_global_flag_priority_parity() {

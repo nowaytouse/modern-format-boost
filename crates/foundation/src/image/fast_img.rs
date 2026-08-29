@@ -82,8 +82,6 @@ pub fn verify_jxl_roundtrip_integrity(
     source_jpeg: &Path,
     jxl_output: &Path,
 ) -> Result<IntegrityResult> {
-    use crate::DjxlBuilder;
-    use crate::ToolBuilder;
     use crate::common_utils::calculate_blake3_hash;
 
     // Decode probe: output must exist and be non-empty regardless
@@ -104,19 +102,6 @@ pub fn verify_jxl_roundtrip_integrity(
         ImgQualityError::AnalysisError(format!("integrity: BLAKE3(output) failed: {e}"))
     })?;
 
-    if !DjxlBuilder::check_available() {
-        tracing::error!(
-            target: "fast_img_integrity",
-            output = %jxl_output.display(),
-            output_blake3 = %output_hash,
-            "djxl unavailable; refusing decode-probe-only JXL integrity"
-        );
-        return Err(ImgQualityError::AnalysisError(format!(
-            "integrity: djxl unavailable; refusing decode-probe-only JXL proof for {}",
-            jxl_output.display()
-        )));
-    }
-
     // Decode JXL → JPEG in a temp file
     let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "fast_img_roundtrip",
@@ -126,33 +111,14 @@ pub fn verify_jxl_roundtrip_integrity(
     .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: temp alloc failed: {e}")))?;
     let temp_path = temp.path();
 
-    let mut decode_command = DjxlBuilder::new()
-        .input(jxl_output)
-        .output(temp_path)
-        .build();
-    let decode_output = run_fast_img_command_with_timeout(
-        &mut decode_command,
-        FAST_IMG_MEDIA_PROBE_TIMEOUT,
+    crate::image::jxl_utils::run_exact_jpeg_reconstruction(
+        jxl_output,
+        temp_path,
         "fast-img JXL roundtrip decode",
     )
-    .map_err(|e| ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {e}")))?;
-
-    if !crate::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&decode_output) {
-        let stderr = if decode_output.status.success() {
-            "djxl used pixel-to-JPEG fallback"
-        } else {
-            first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>")
-        };
-        return Err(ImgQualityError::AnalysisError(format!(
-            "integrity: djxl exited non-zero for {}: {stderr}",
-            jxl_output.display()
-        )));
-    }
-    log_suppressed_tool_output(
-        "djxl roundtrip decode output captured",
-        &decode_output.stdout,
-        &decode_output.stderr,
-    );
+    .map_err(|error| {
+        ImgQualityError::AnalysisError(format!("integrity: djxl decode failed: {error}"))
+    })?;
 
     let decoded_hash = calculate_blake3_hash(temp_path).map_err(|e| {
         ImgQualityError::AnalysisError(format!("integrity: BLAKE3(decoded) failed: {e}"))
@@ -409,33 +375,6 @@ pub fn verify_final_delivery_integrity(
             source_hash,
             output_hash,
         })
-    }
-}
-
-fn first_nonempty_tool_line(bytes: &[u8]) -> Option<&str> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.lines().map(str::trim).find(|line| !line.is_empty()),
-        Err(err) => {
-            tracing::debug!(
-                target: "fast_img_integrity",
-                error = %err,
-                "suppressed tool output was not valid UTF-8"
-            );
-            None
-        }
-    }
-}
-
-fn log_suppressed_tool_output(message: &'static str, stdout: &[u8], stderr: &[u8]) {
-    let stdout_line = first_nonempty_tool_line(stdout);
-    let stderr_line = first_nonempty_tool_line(stderr);
-    if stdout_line.is_some() || stderr_line.is_some() {
-        tracing::debug!(
-            target: "fast_img_integrity",
-            stdout = stdout_line.unwrap_or(""),
-            stderr = stderr_line.unwrap_or(""),
-            "{message}"
-        );
     }
 }
 
@@ -4757,7 +4696,6 @@ const MACOS_PS_PATH: &str = "/bin/ps";
 const MACOS_VM_STAT_PATH: &str = "/usr/bin/vm_stat";
 const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
 const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
-const FAST_IMG_MEDIA_PROBE_TIMEOUT: Duration = Duration::from_mins(5);
 #[cfg(target_os = "macos")]
 const MACOS_OPEN_PATH: &str = "/usr/bin/open";
 #[cfg(target_os = "macos")]

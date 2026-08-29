@@ -98,6 +98,17 @@ pub(in crate::metadata) fn is_metadata_delivery_soft_error(err: &io::Error) -> b
     exiftool_combined_output_indicates_no_source_tags(&err.to_string())
 }
 
+/// ExifTool is optional for a best-effort delivery report, but absence must be
+/// represented as `SkippedNoTool` rather than silently reported as `Applied`.
+#[must_use]
+pub(in crate::metadata) fn is_exiftool_unavailable(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::NotFound
+        && err
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("exiftool unavailable")
+}
+
 /// Best-effort metadata preservation for conversion delivery (never blocks on
 /// empty source tags).
 ///
@@ -132,7 +143,7 @@ fn preserve_for_delivery_inner(
 
     match std::fs::metadata(src) {
         Ok(_) => {}
-        Err(e) => {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_DELIVERY_SKIP_MISSING_SOURCE
@@ -142,6 +153,22 @@ fn preserve_for_delivery_inner(
             report.xattr = MetadataLayerOutcome::SkippedNoSourceMetadata;
             report.timestamps = MetadataLayerOutcome::SkippedNoSourceMetadata;
             return Ok(report);
+        }
+        Err(e) => {
+            crate::media_conversion_gate::delivery_metadata_batch_audit(
+                "delivery_metadata",
+                format!(
+                    "metadata source could not be inspected and delivery was refused: {}: {e}",
+                    src.display()
+                ),
+            );
+            return Err(io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to inspect source metadata for delivery from {}: {e}",
+                    src.display()
+                ),
+            ));
         }
     }
 

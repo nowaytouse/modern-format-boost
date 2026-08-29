@@ -7,7 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use walkdir::WalkDir;
 
 const EXIT_BOUNDARY: i32 = 2;
@@ -532,20 +532,36 @@ fn verify_repaired_copy(path: &Path, djxl: &Path) -> Result<(), String> {
         ));
     }
 
+    let pixel_output = tempfile::Builder::new()
+        .prefix("mfb-jxl-doctor-pixels-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|error| format!("cannot allocate pixel verification output: {error}"))?;
     let pixel_decode_ok = Command::new(djxl)
         .arg(path)
-        .arg("-")
-        .args(["--output_format", "png", "--quiet", "--num_threads=0"])
+        .arg(pixel_output.path())
+        .arg("--num_threads=0")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|error| format!("cannot launch local djxl for {}: {error}", path.display()))?
-        .success();
-    if !pixel_decode_ok {
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("cannot launch local djxl for {}: {error}", path.display()))?;
+    if !pixel_decode_ok.status.success() {
         return Err(format!(
-            "local djxl pixel decode rejected repaired copy {}",
-            path.display()
+            "local djxl pixel decode rejected repaired copy {}: {}",
+            path.display(),
+            process_output_diagnostic(&pixel_decode_ok)
+        ));
+    }
+    if !pixel_output
+        .as_file()
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > 0)
+    {
+        return Err(format!(
+            "local djxl returned success without a non-empty pixel decode for {}: {}",
+            path.display(),
+            process_output_diagnostic(&pixel_decode_ok)
         ));
     }
 
@@ -553,23 +569,45 @@ fn verify_repaired_copy(path: &Path, djxl: &Path) -> Result<(), String> {
         .args(["-g", "pixelWidth", "-g", "pixelHeight"])
         .arg(path)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|error| {
             format!(
                 "cannot launch local Apple ImageIO check for {}: {error}",
                 path.display()
             )
-        })?
-        .success();
-    if !imageio_ok {
+        })?;
+    if !imageio_ok.status.success() {
         return Err(format!(
-            "local Apple ImageIO rejected repaired copy {}",
-            path.display()
+            "local Apple ImageIO rejected repaired copy {}: {}",
+            path.display(),
+            process_output_diagnostic(&imageio_ok)
         ));
     }
     Ok(())
+}
+
+fn process_output_diagnostic(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostic = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+        (false, false) => format!("STDOUT: {stdout}\nSTDERR: {stderr}"),
+        (false, true) => format!("STDOUT: {stdout}"),
+        (true, false) => format!("STDERR: {stderr}"),
+        (true, true) => String::new(),
+    };
+    if diagnostic.is_empty() {
+        format!("process exited with {} and no diagnostic output", output.status)
+    } else if diagnostic.len() > 8192 {
+        format!(
+            "{}\n...[diagnostic truncated: {} bytes]...",
+            diagnostic.chars().take(4096).collect::<String>(),
+            diagnostic.len()
+        )
+    } else {
+        diagnostic
+    }
 }
 
 fn verify_repaired_bytes(bytes: &[u8]) -> Result<(), String> {
@@ -722,7 +760,12 @@ fn inspect_inner(path: &Path, probe: Probe, djxl: Option<&Path>) -> Option<Findi
         match djxl_reconstructs(path, djxl) {
             Ok(true) => return None,
             Ok(false) => {}
-            Err(()) => return Some(finding(path, "djxl_launch_failed")),
+            Err(error) => {
+                return Some(finding(
+                    path,
+                    &format!("djxl_reconstruction_probe_failed: {error}"),
+                ));
+            }
         }
     }
 
@@ -761,22 +804,70 @@ fn inspect_with_djxl(path: &Path, djxl: &Path) -> Option<Finding> {
     match djxl_reconstructs(path, djxl) {
         Ok(true) => None,
         Ok(false) => Some(finding(path, "djxl_jpeg_reconstruction_failed")),
-        Err(()) => Some(finding(path, "djxl_launch_failed")),
+        Err(error) => Some(finding(
+            path,
+            &format!("djxl_reconstruction_probe_failed: {error}"),
+        )),
     }
 }
 
-fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, ()> {
-    Command::new(djxl)
-        .arg("-J")
-        .arg(path)
-        .arg("-")
-        .args(["--output_format", "jpg", "--quiet", "--num_threads=0"])
+fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
+    let help = Command::new(djxl)
+        .arg("-h")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .map_err(|_| ())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
+    if !help.status.success() {
+        return Err(format!(
+            "djxl capability probe failed: {}",
+            process_output_diagnostic(&help)
+        ));
+    }
+    let help_text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let explicit_reconstruction = help_text.contains("--reconstruct_jpeg");
+    if !explicit_reconstruction
+        && !help_text
+            .to_ascii_lowercase()
+            .lines()
+            .any(|line| line.contains("output") && line.contains("jpeg"))
+    {
+        return Err("djxl advertises neither explicit reconstruction nor JPEG output".into());
+    }
+
+    let reconstructed = tempfile::Builder::new()
+        .prefix("mfb-jxl-doctor-")
+        .suffix(".jpg")
+        .tempfile()
+        .map_err(|error| format!("cannot allocate reconstruction probe output: {error}"))?;
+    let mut command = Command::new(djxl);
+    command
+        .arg(path)
+        .arg(reconstructed.path())
+        .arg("--num_threads=0");
+    if explicit_reconstruction {
+        command.arg("--reconstruct_jpeg");
+    }
+    let output = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output)
+        && reconstructed
+            .as_file()
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+    {
+        return Ok(true);
+    }
+    Err(process_output_diagnostic(&output))
 }
 
 fn resolve_djxl(probe: Probe, path: Option<&Path>) -> Result<Option<PathBuf>, String> {

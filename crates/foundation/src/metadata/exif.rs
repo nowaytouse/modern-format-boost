@@ -16,6 +16,7 @@
 use crate::builder_base::ToolBuilder;
 use std::io;
 use std::path::Path;
+use std::process::Output;
 use std::sync::OnceLock;
 
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -31,6 +32,30 @@ const QUICKTIME_CONTAINER_DATE_TAGS: &[&str] = &[
 
 fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
+}
+
+fn audit_exiftool_output(context: &str, output: &Output) {
+    crate::infra::logging::log_captured_process_output(
+        context,
+        &output.status,
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn exiftool_failure(context: &str, output: &Output) -> io::Error {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostic = crate::infra::logging::combined_tool_output(&stdout, &stderr);
+    io::Error::other(format!(
+        "{context} failed with {}: {}",
+        output.status,
+        if diagnostic.is_empty() {
+            "no diagnostic output"
+        } else {
+            diagnostic.as_str()
+        }
+    ))
 }
 
 // Deleted redundant and bug-prone local magick_path implementation.
@@ -77,6 +102,13 @@ fn get_best_date_from_source(src: &Path) -> io::Result<Option<String>> {
             ));
         }
     };
+
+    audit_exiftool_output("exiftool metadata date probe", &output);
+    if !output.status.success()
+        && !super::delivery_policy::exiftool_output_indicates_no_source_tags(&output)
+    {
+        return Err(exiftool_failure("ExifTool metadata date probe", &output));
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -192,7 +224,10 @@ pub(super) fn rehydrate_jxl_internal_metadata_without_orientation(
             dst,
             "ExifTool unavailable; cannot rehydrate JXL metadata after EXIF repair",
         );
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "ExifTool unavailable; JXL metadata rehydration was not performed",
+        ));
     }
 
     let jxl_already_has_icc = crate::jxl_utils::verify_jxl_has_icc(dst).map_err(|err| {
@@ -205,6 +240,7 @@ pub(super) fn rehydrate_jxl_internal_metadata_without_orientation(
     builder.input(dst);
 
     let output = builder.build().output()?;
+    audit_exiftool_output("exiftool JXL metadata rehydrate", &output);
     if output.status.success() {
         return Ok(());
     }
@@ -215,15 +251,7 @@ pub(super) fn rehydrate_jxl_internal_metadata_without_orientation(
         );
         return Ok(());
     }
-    if let Some(msg) = exiftool_error_message(&output) {
-        return Err(io::Error::other(format!(
-            "JXL metadata rehydrate failed: {msg}"
-        )));
-    }
-    Err(io::Error::other(format!(
-        "JXL metadata rehydrate failed for {}",
-        dst.display()
-    )))
+    Err(exiftool_failure("JXL metadata rehydrate", &output))
 }
 
 fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) -> io::Result<()> {
@@ -308,34 +336,6 @@ fn preserve_internal_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) ->
     result
 }
 
-/// Extract a meaningful error message from an `ExifTool` output.
-/// `ExifTool` with `-q` writes errors to stdout (not stderr); stderr is often
-/// empty on failure. Returns Some(msg) only when there is a real actionable
-/// error (not just warnings or empty output).
-fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Collect non-Warning lines from both streams
-    let error_lines: Vec<&str> = stderr
-        .lines()
-        .chain(stdout.lines())
-        .filter(|l| {
-            let l = l.trim();
-            !l.is_empty()
-                && !l.starts_with("Warning")
-                && !l.starts_with("  ")
-                && l.contains("Error")
-        })
-        .collect();
-
-    if error_lines.is_empty() {
-        None
-    } else {
-        Some(error_lines.join("; "))
-    }
-}
-
 /// CONTRACT (iCloud / Apple compat on-demand nuclear repair, v8.2.2):
 /// Output extensions eligible for `ImageMagick` + `exiftool -all=` structural
 /// rebuild.
@@ -413,10 +413,7 @@ fn append_jxl_metadata_rehydrate_without_orientation_args(
     // XMP fields that were absent from the source; rehydrate physical tags only.
     builder
         .arg("-api")
-        .arg("LargeFileSupport=1")
-        .quiet()
-        .quiet()
-        .ignore_minor();
+        .arg("LargeFileSupport=1");
 }
 
 /// CONTRACT: argv fragment for the nuclear rebuild pass (`-all=` then restore
@@ -438,9 +435,7 @@ fn append_nuclear_repair_exiftool(builder: &mut crate::ExiftoolBuilder, src: &Pa
         .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE);
     append_source_metadata_copy_args(builder, src, dst_ext.eq_ignore_ascii_case("jxl"));
     builder
-        .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE)
-        .arg("-q")
-        .arg("-m");
+        .arg(crate::constants::EXIFTOOL_ARG_ICC_PROFILE);
 }
 
 // Rationale: This function handles complex, sequential initialization or
@@ -455,7 +450,10 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
                 crate::infra::static_logs::messages::MSG_METADATA_EXIFTOOL_NOT_FOUND,
             );
         });
-        return Ok(());
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "ExifTool unavailable; internal metadata preservation was not performed",
+        ));
     }
 
     // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from
@@ -530,45 +528,11 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
     builder
         .arg("-api")
         .arg("LargeFileSupport=1")
-        .quiet()
-        .quiet()
-        .ignore_minor()
         .input(dst);
 
     let mut output = builder.build().output()?;
 
-    // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
-    // This surfaces warnings like "[minor] Will wrap JXL codestream" and any
-    // exiftool quirks that are silenced by the -m flag.
-    {
-        let stderr_str = String::from_utf8_lossy(&output.stderr);
-        if !output.status.success() {
-            crate::media_conversion_gate::delivery_metadata_path_audit(
-                "delivery_metadata_exif",
-                src,
-                format!(
-                    "exiftool metadata copy failed (src={}, dst={}, exit_code={:?}, stderr={})",
-                    src.display(),
-                    dst.display(),
-                    output.status.code(),
-                    stderr_str.trim()
-                ),
-            );
-        } else if !stderr_str.trim().is_empty() {
-            let trimmed = stderr_str.trim();
-            if !trimmed.contains("No writable tags set")
-                && !trimmed.contains("Wrapped JXL codestream")
-            {
-                log_detail!(&format!(
-                    "{} ExifTool audit warning (src={}, dst={}, stderr={})",
-                    crate::infra::static_logs::messages::LABEL_METADATA,
-                    src.display(),
-                    dst.display(),
-                    trimmed
-                ));
-            }
-        }
-    }
+    audit_exiftool_output("exiftool metadata copy", &output);
 
     let stderr_lossy = String::from_utf8_lossy(&output.stderr);
     let needs_repair =
@@ -623,9 +587,13 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
                         crate::infra::static_logs::messages::MSG_METADATA_REPAIR_MAGICK_FAIL
                             .replace("{}", &String::from_utf8_lossy(&out.stderr)),
                     );
-                    if let Some(msg) = exiftool_error_message(&output) {
-                        return Err(io::Error::other(format!("ExifTool failed: {msg}")));
-                    }
+                    return Err(io::Error::other(format!(
+                        "ImageMagick structural metadata repair failed: {}",
+                        crate::infra::logging::combined_tool_output(
+                            &String::from_utf8_lossy(&out.stdout),
+                            &String::from_utf8_lossy(&out.stderr),
+                        )
+                    )));
                 }
             }
             Err(e) => {
@@ -634,11 +602,15 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
                     crate::infra::static_logs::messages::MSG_METADATA_REPAIR_MAGICK_UNAVAILABLE
                         .replace("{}", &e.to_string()),
                 );
-                if let Some(msg) = exiftool_error_message(&output) {
-                    return Err(io::Error::other(format!("ExifTool failed: {msg}")));
-                }
+                return Err(io::Error::other(format!(
+                    "ImageMagick structural metadata repair unavailable: {e}"
+                )));
             }
         }
+    }
+
+    if needs_repair {
+        audit_exiftool_output("exiftool metadata repair", &output);
     }
 
     if !output.status.success() {
@@ -649,9 +621,7 @@ fn preserve_internal_core(src: &Path, dst: &Path) -> io::Result<()> {
             );
             return Ok(());
         }
-        if let Some(msg) = exiftool_error_message(&output) {
-            return Err(io::Error::other(format!("ExifTool failed: {msg}")));
-        }
+        return Err(exiftool_failure("ExifTool metadata preservation", &output));
     }
 
     let file_name = dst.file_name().ok_or_else(|| {
@@ -699,20 +669,21 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     for tag in QUICKTIME_CONTAINER_DATE_TAGS {
         builder.arg(format!("-{tag}={best_date}"));
     }
-    builder.quiet().ignore_minor().input(dst);
+    builder.input(dst);
 
     let output = builder.build().output()?;
+    audit_exiftool_output("exiftool QuickTime date update", &output);
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Warnings are non-fatal (e.g. tag not writable for this format)
-        if !stderr.trim().is_empty() && !stderr.contains("Warning") {
+        if super::delivery_policy::exiftool_output_indicates_no_source_tags(&output) {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata",
                 crate::infra::static_logs::messages::MSG_METADATA_QT_SET_FAIL
-                    .replace("{}", stderr.trim()),
+                    .replace("{}", "no writable QuickTime date tags"),
             );
+            return Ok(());
         }
+        return Err(exiftool_failure("ExifTool QuickTime date update", &output));
     }
 
     Ok(())

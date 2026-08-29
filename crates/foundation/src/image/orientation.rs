@@ -145,7 +145,6 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
     use crate::image_builders::ExiftoolBuilder;
 
     let mut builder = ExiftoolBuilder::new();
-    builder.ignore_minor();
     append_strip_residual_orientation_args(&mut builder);
     builder.overwrite_original().input(path).build()
 }
@@ -328,7 +327,7 @@ fn official_source_decode_command(
                 .arg(output);
         }
         OfficialSourceDecoder::Heif => {
-            command.arg("--quiet").arg(source).arg(output);
+            command.arg(source).arg(output);
         }
         OfficialSourceDecoder::WebP => {
             command.arg(source).arg("-o").arg(output);
@@ -1040,25 +1039,18 @@ mod tests {
     }
 
     #[test]
-    fn strip_residual_orientation_tag_ignores_minor_exiftool_warnings() {
+    fn strip_residual_orientation_tag_keeps_exiftool_diagnostics_visible() {
         let cmd = super::strip_residual_orientation_command(std::path::Path::new("/tmp/probe.JXL"));
         let args: Vec<_> = cmd
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let ignore_minor_pos = args
-            .iter()
-            .position(|arg| arg == "-m")
-            .expect("strip_residual_orientation_tag must pass -m to exiftool");
         let strip_orientation_pos = args
             .iter()
             .position(|arg| arg == "-Orientation=")
             .expect("strip_residual_orientation_tag must strip Orientation");
 
-        assert!(
-            ignore_minor_pos < strip_orientation_pos,
-            "exiftool -m must be set before Orientation mutation arguments"
-        );
+        assert!(!args.iter().any(|arg| arg == "-m"));
         assert!(
             args.iter().any(|arg| arg == "-all:Orientation="),
             "strip_residual_orientation_tag must remove grouped Orientation instances"

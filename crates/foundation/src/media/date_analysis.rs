@@ -141,7 +141,6 @@ pub fn analyze_directory(dir: &Path, config: &AnalysisConfig) -> Result<Analysis
 
     let mut builder = ExiftoolBuilder::new();
     builder
-        .arg("-m") // Suppress warnings for non-critical errors (e.g., corrupted EXIF in JPEG, PNG without metadata)
         .arg("-r")
         .arg("-j")
         .arg("-G1")

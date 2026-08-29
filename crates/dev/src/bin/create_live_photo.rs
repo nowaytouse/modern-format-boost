@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Local;
 use clap::{Parser, ValueEnum};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -114,7 +114,7 @@ fn create_live_photo(args: &Args) -> Result<()> {
 
     if inject_metadata {
         println!("\nInjecting metadata using makelive...");
-        match run_quiet(
+        match run_captured(
             Command::new(command_path("makelive")?)
                 .args(["-p", "-v"])
                 .arg(&img_path)
@@ -228,7 +228,7 @@ fn extract_heic_cover(
     hq: bool,
 ) -> Result<()> {
     let temp_png = output_dir.join(format!("{base_name}_temp.png"));
-    run_quiet(
+    run_captured(
         Command::new(command_path("ffmpeg")?)
             .args(["-y", "-i"])
             .arg(video_path)
@@ -242,13 +242,13 @@ fn extract_heic_cover(
     } else {
         cmd.args(["-q", "85"]);
     }
-    run_quiet(cmd.args(["-o"]).arg(img_path).arg(&temp_png))?;
+    run_captured(cmd.args(["-o"]).arg(img_path).arg(&temp_png))?;
     let _ = std::fs::remove_file(temp_png);
     Ok(())
 }
 
 fn extract_jpg_cover(video_path: &Path, img_path: &Path, hq: bool) -> Result<()> {
-    run_quiet(
+    run_captured(
         Command::new(command_path("ffmpeg")?)
             .args(["-y", "-i"])
             .arg(video_path)
@@ -282,7 +282,7 @@ fn convert_mov(video_path: &Path, duration: f64, mov_path: &Path, hq: bool) -> R
     } else {
         cmd.args(["-q:v", "2"]);
     }
-    run_quiet(cmd.arg(mov_path))
+    run_captured(cmd.arg(mov_path))
 }
 
 fn command_output(cmd: &mut Command) -> Result<String> {
@@ -290,22 +290,42 @@ fn command_output(cmd: &mut Command) -> Result<String> {
         .output()
         .with_context(|| format!("run {:?}", cmd.get_program()))?;
     if !output.status.success() {
-        bail!("command failed with status {}", output.status);
+        bail!(
+            "command failed with status {}: {}",
+            output.status,
+            command_diagnostic(&output)
+        );
     }
     String::from_utf8(output.stdout).context("command output utf8")
 }
 
-fn run_quiet(cmd: &mut Command) -> Result<()> {
-    let status = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn run_captured(cmd: &mut Command) -> Result<()> {
+    let output = foundation::process_runner::run_command_with_liveness_timeout(
+        cmd,
+        std::time::Duration::from_secs(300),
+        foundation::process_runner::video_process_hard_timeout(),
+        "create-live-photo external command",
+    )
         .with_context(|| format!("run {:?}", cmd.get_program()))?;
-    if !status.success() {
-        bail!("command failed with status {status}");
+    let diagnostic = command_diagnostic(&output);
+    if !output.status.success() {
+        bail!("command failed with status {}: {diagnostic}", output.status);
+    }
+    if !diagnostic.is_empty() {
+        eprintln!("{diagnostic}");
     }
     Ok(())
+}
+
+fn command_diagnostic(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+        (false, false) => format!("STDOUT:\n{stdout}\nSTDERR:\n{stderr}"),
+        (false, true) => format!("STDOUT:\n{stdout}"),
+        (true, false) => format!("STDERR:\n{stderr}"),
+        (true, true) => String::new(),
+    }
 }
 
 fn file_name(path: &Path) -> String {

@@ -6,7 +6,6 @@ use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use walkdir::WalkDir;
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
@@ -138,32 +137,12 @@ fn reconstruct_jpeg_to_temp(jxl: &Path) -> Result<tempfile::NamedTempFile> {
         None,
         Some(".jpg"),
     )?;
-    let mut command = crate::DjxlBuilder::new()
-        .input(jxl)
-        .output(temp.path())
-        .build();
-    let output = crate::process_runner::run_command_with_liveness_timeout(
-        &mut command,
-        Duration::from_secs(120),
-        crate::process_runner::image_process_hard_timeout(),
+    crate::image::jxl_utils::run_exact_jpeg_reconstruction(
+        jxl,
+        temp.path(),
         "XMP JBRD baseline reconstruction",
-    )?;
-    if !crate::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&output) {
-        let diagnostic = if output.status.success() {
-            "djxl used pixel-to-JPEG fallback".to_string()
-        } else {
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or("no djxl diagnostic")
-                .to_string()
-        };
-        bail!(
-            "strict JPEG reconstruction failed before XMP merge for {}: {diagnostic}",
-            jxl.display()
-        );
-    }
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(temp)
 }
 
@@ -263,14 +242,11 @@ impl XmpMerger {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
-                        crate::media_conversion_gate::delivery_metadata_batch_audit(
-                            "delivery_metadata_xmp",
-                            crate::infra::static_logs::messages::MSG_XMP_UNREADABLE
-                                .replace("{}", &err.to_string()),
-                        );
-                    }
-
+                    crate::media_conversion_gate::delivery_metadata_batch_audit(
+                        "delivery_metadata_xmp",
+                        crate::infra::static_logs::messages::MSG_XMP_UNREADABLE
+                            .replace("{}", &err.to_string()),
+                    );
                     continue;
                 }
             };
@@ -292,17 +268,15 @@ impl XmpMerger {
         let entries = match std::fs::read_dir(parent) {
             Ok(entries) => entries,
             Err(err) => {
-                if matches!(self.config.log_level, LogLevel::Verbose) {
-                    crate::media_conversion_gate::delivery_metadata_path_audit(
-                        "delivery_metadata_xmp",
-                        parent,
-                        format!(
-                            "XMP Audit: Failed to read directory {}: {}",
-                            parent.display(),
-                            err
-                        ),
-                    );
-                }
+                crate::media_conversion_gate::delivery_metadata_path_audit(
+                    "delivery_metadata_xmp",
+                    parent,
+                    format!(
+                        "XMP Audit: Failed to read directory {}: {}",
+                        parent.display(),
+                        err
+                    ),
+                );
                 return None;
             }
         };
@@ -312,17 +286,15 @@ impl XmpMerger {
             match entry {
                 Ok(entry) => paths.push(entry.path()),
                 Err(err) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
-                        crate::media_conversion_gate::delivery_metadata_path_audit(
-                            "delivery_metadata_xmp",
-                            parent,
-                            format!(
-                                "XMP Audit: Failed to read directory entry in {}: {}",
-                                parent.display(),
-                                err
-                            ),
-                        );
-                    }
+                    crate::media_conversion_gate::delivery_metadata_path_audit(
+                        "delivery_metadata_xmp",
+                        parent,
+                        format!(
+                            "XMP Audit: Failed to read directory entry in {}: {}",
+                            parent.display(),
+                            err
+                        ),
+                    );
                 }
             }
         }
@@ -330,7 +302,7 @@ impl XmpMerger {
         Some(paths)
     }
 
-    fn extract_xmp_metadata(xmp_path: &Path, log_level: LogLevel) -> Result<XmpFile> {
+    fn extract_xmp_metadata(xmp_path: &Path, _log_level: LogLevel) -> Result<XmpFile> {
         let xmp_data = std::fs::read(xmp_path)
             .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
 
@@ -402,7 +374,7 @@ impl XmpMerger {
             && xmp_info.derived_from.is_none()
             && xmp_info.source.is_none()
         {
-            let output = crate::ExiftoolBuilder::new()
+            let mut command = crate::ExiftoolBuilder::new()
                 .arg("-charset")
                 .arg("filename=utf8")
                 .arg("-api")
@@ -415,21 +387,35 @@ impl XmpMerger {
                 .arg("-Source")
                 .arg("-OriginalDocumentID")
                 .arg(exiftool_path_arg(xmp_path).as_ref())
-                .build()
+                .build();
+            let command_line = crate::common_utils::format_command_for_audit(&command);
+            let output = command
                 .output()
                 .context("Failed to run exiftool")?;
+            crate::infra::logging::log_captured_process_output(
+                &command_line,
+                &output.status,
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            );
 
-            if !output.status.success() && matches!(log_level, LogLevel::Verbose) {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let detail = if stderr.is_empty() {
-                    format!("status {}", output.status)
-                } else {
-                    stderr
-                };
+            if !output.status.success() {
+                let diagnostic = crate::infra::logging::combined_tool_output(
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                );
                 bail!(
                     crate::infra::static_logs::messages::MSG_XMP_EXTRACT_FAIL
                         .replacen("{}", &xmp_path.display().to_string(), 1)
-                        .replacen("{}", &detail, 1)
+                        .replacen(
+                            "{}",
+                            if diagnostic.is_empty() {
+                                "no diagnostic output"
+                            } else {
+                                diagnostic.as_str()
+                            },
+                            1,
+                        )
                 );
             }
 
@@ -602,17 +588,26 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match crate::ExiftoolBuilder::new()
+            let mut command = crate::ExiftoolBuilder::new()
                 .arg("-s3")
                 .arg("-SidecarForExtension")
                 .arg("-XMPFileRef")
                 .arg(exiftool_path_arg(&path).as_ref())
-                .build()
-                .output()
-            {
-                Ok(output) if output.status.success() => output,
+                .build();
+            let command_line = crate::common_utils::format_command_for_audit(&command);
+            let output = match command.output() {
                 Ok(output) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
+                    let stdout_summary = format!(
+                        "<candidate metadata stdout omitted: {} bytes>",
+                        output.stdout.len()
+                    );
+                    crate::infra::logging::log_captured_process_output(
+                        &command_line,
+                        &output.status,
+                        &stdout_summary,
+                        &String::from_utf8_lossy(&output.stderr),
+                    );
+                    if !output.status.success() {
                         crate::media_conversion_gate::delivery_metadata_path_audit(
                             "delivery_metadata_xmp",
                             &path,
@@ -622,17 +617,16 @@ impl XmpMerger {
                                 output.status
                             ),
                         );
+                        continue;
                     }
-                    continue;
+                    output
                 }
                 Err(err) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
-                        crate::media_conversion_gate::delivery_metadata_path_audit(
-                            "delivery_metadata_xmp",
-                            &path,
-                            format!("XMP Audit: Sidecar error for {}: {err}", path.display()),
-                        );
-                    }
+                    crate::media_conversion_gate::delivery_metadata_path_audit(
+                        "delivery_metadata_xmp",
+                        &path,
+                        format!("XMP Audit: Sidecar error for {}: {err}", path.display()),
+                    );
                     continue;
                 }
             };
@@ -691,16 +685,14 @@ impl XmpMerger {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
-                        crate::media_conversion_gate::delivery_metadata_path_audit(
-                            "delivery_metadata_xmp",
-                            xmp_path,
-                            format!(
-                                "XMP Audit: Failed to enter subdirectory near {}: {err}",
-                                xmp_path.display(),
-                            ),
-                        );
-                    }
+                    crate::media_conversion_gate::delivery_metadata_path_audit(
+                        "delivery_metadata_xmp",
+                        xmp_path,
+                        format!(
+                            "XMP Audit: Failed to enter subdirectory near {}: {err}",
+                            xmp_path.display(),
+                        ),
+                    );
                     continue;
                 }
             };
@@ -780,16 +772,25 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match crate::ExiftoolBuilder::new()
+            let mut command = crate::ExiftoolBuilder::new()
                 .arg("-s3")
                 .arg("-DocumentID")
                 .arg(exiftool_path_arg(&path).as_ref())
-                .build()
-                .output()
-            {
-                Ok(output) if output.status.success() => output,
+                .build();
+            let command_line = crate::common_utils::format_command_for_audit(&command);
+            let output = match command.output() {
                 Ok(output) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
+                    let stdout_summary = format!(
+                        "<candidate DocumentID stdout omitted: {} bytes>",
+                        output.stdout.len()
+                    );
+                    crate::infra::logging::log_captured_process_output(
+                        &command_line,
+                        &output.status,
+                        &stdout_summary,
+                        &String::from_utf8_lossy(&output.stderr),
+                    );
+                    if !output.status.success() {
                         crate::media_conversion_gate::delivery_metadata_path_audit(
                             "delivery_metadata_xmp",
                             &path,
@@ -799,17 +800,16 @@ impl XmpMerger {
                                 output.status
                             ),
                         );
+                        continue;
                     }
-                    continue;
+                    output
                 }
                 Err(err) => {
-                    if matches!(self.config.log_level, LogLevel::Verbose) {
-                        crate::media_conversion_gate::delivery_metadata_path_audit(
-                            "delivery_metadata_xmp",
-                            &path,
-                            format!("XMP Audit: DocumentID error for {}: {err}", path.display()),
-                        );
-                    }
+                    crate::media_conversion_gate::delivery_metadata_path_audit(
+                        "delivery_metadata_xmp",
+                        &path,
+                        format!("XMP Audit: DocumentID error for {}: {err}", path.display()),
+                    );
                     continue;
                 }
             };
@@ -992,9 +992,14 @@ impl XmpMerger {
                     media_path.display()
                 )
             })?;
-        if format != crate::image::format_detect::FormatKind::Jxl || !is_jxl_container(media_path)?
-        {
+        if format != crate::image::format_detect::FormatKind::Jxl {
             return Ok(false);
+        }
+        if !is_jxl_container(media_path)? {
+            bail!(
+                "refusing XMP merge for raw JPEG XL codestream {}; append-only metadata overlays require a JPEG XL container so codec and JBRD bytes remain immutable",
+                media_path.display()
+            );
         }
 
         let eligibility = crate::image::jxl_utils::probe_jpeg_reconstruction_eligibility(
@@ -1165,9 +1170,6 @@ impl XmpMerger {
         builder
             .use_stdin()
             .preserve_date()
-            .quiet()
-            .quiet()
-            .ignore_minor()
             .arg("-charset")
             .arg("filename=utf8")
             .arg("-api")
@@ -1205,20 +1207,27 @@ impl XmpMerger {
             .wait_with_output()
             .context("Failed to wait for exiftool merge")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let is_minor_warning = stderr.contains("[minor]");
-            // Harden error detection: check for both explicit "Error:" and implied file
-            // errors
-            let is_real_error = (stderr.contains("Error:")
-                || stderr.contains("Error opening")
-                || stderr.contains("File not found")
-                || stderr.contains("not writing image"))
-                && !is_minor_warning;
+        let command_line = crate::common_utils::format_command_for_audit(&cmd);
+        crate::infra::logging::log_captured_process_output(
+            &command_line,
+            &output.status,
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
 
-            if is_real_error {
-                bail!("ExifTool merge failed: {stderr}");
-            }
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let diagnostic = crate::infra::logging::combined_tool_output(&stdout, &stderr);
+            bail!(
+                "ExifTool merge failed with {}: {}",
+                output.status,
+                if diagnostic.is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.as_str()
+                }
+            );
         }
 
         if self.config.preserve_timestamps {
@@ -1837,6 +1846,23 @@ mod tests {
         let err = XmpMerger::extract_xmp_metadata(&malformed_xmp, LogLevel::Quiet)
             .expect_err("malformed native XMP must fail closed before exiftool fallback");
         assert!(err.to_string().contains("XMP"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn raw_jxl_xmp_merge_is_rejected_without_mutating_bytes() {
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
+        let jxl_path = temp_dir.path().join("raw.jxl");
+        let xmp_path = temp_dir.path().join("raw.xmp");
+        let original = vec![0xFF, 0x0A, 0x01, 0x02, 0x03];
+        fs::write(&jxl_path, &original).unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp_path, b"<x:xmpmeta xmlns:x='adobe:ns:meta/'/>")
+            .unwrap_or_else(|_| panic!("error"));
+
+        let error = XmpMerger::new(Config::default())
+            .merge_xmp(&xmp_path, &jxl_path)
+            .expect_err("raw JXL must not enter a rewriting metadata path");
+        assert!(error.to_string().contains("raw JPEG XL codestream"));
+        assert_eq!(fs::read(&jxl_path).unwrap_or_else(|_| panic!("error")), original);
     }
 
     #[test]

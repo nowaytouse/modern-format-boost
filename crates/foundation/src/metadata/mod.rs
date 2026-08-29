@@ -1024,6 +1024,13 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
 fn record_exif_delivery_result(result: io::Result<()>, report: &mut MetadataDeliveryReport) {
     match result {
         Ok(()) => report.exif = MetadataLayerOutcome::Applied,
+        Err(e) if delivery_policy::is_exiftool_unavailable(&e) => {
+            crate::media_conversion_gate::delivery_metadata_batch_audit(
+                "delivery_metadata_exif",
+                format!("ExifTool unavailable; internal metadata skipped: {e}"),
+            );
+            report.exif = MetadataLayerOutcome::SkippedNoTool;
+        }
         Err(e) if delivery_policy::is_metadata_delivery_soft_error(&e) => {
             crate::media_conversion_gate::delivery_metadata_batch_audit(
                 "delivery_metadata_exif",

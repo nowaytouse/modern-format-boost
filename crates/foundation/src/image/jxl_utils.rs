@@ -10,6 +10,7 @@ use crate::VmafBuilder;
 use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
@@ -32,27 +33,49 @@ fn first_nonempty_tool_line(bytes: &[u8]) -> String {
         .to_string()
 }
 
-/// Whether `djxl` completed without its lossy pixel-to-JPEG fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DjxlReconstructionMode {
+    ExplicitFlag,
+    DefaultJpegOutput,
+}
+
+fn djxl_diagnostic(output: &std::process::Output) -> String {
+    crate::infra::logging::combined_tool_output(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn djxl_used_pixel_to_jpeg_fallback(diagnostic: &str) -> bool {
+    let diagnostic = diagnostic.to_ascii_lowercase();
+    diagnostic.contains("pixels_to_jpeg")
+        || diagnostic.contains("pixels-to-jpeg")
+        || diagnostic.contains("pixel-to-jpeg")
+        || diagnostic.contains("decoded to pixels")
+        || diagnostic.contains("could not decode losslessly to jpeg")
+}
+
+fn djxl_reported_exact_jpeg_reconstruction(diagnostic: &str) -> bool {
+    let diagnostic = diagnostic.to_ascii_lowercase();
+    diagnostic.contains("reconstructed to jpeg")
+        || diagnostic.contains("reconstructed jpeg")
+        || (diagnostic.contains("jpeg reconstruction")
+            && (diagnostic.contains("complete") || diagnostic.contains("success")))
+}
+
+/// Whether `djxl` positively reported exact JPEG reconstruction without its
+/// lossy pixel-to-JPEG fallback.
 ///
-/// Plain `djxl INPUT OUTPUT.jpg` reconstructs JPEG bitstreams by default on
-/// every supported libjxl generation. The newer `--reconstruct_jpeg` switch is
-/// deliberately not required because older production/CI decoders reject it.
+/// A zero exit status is deliberately insufficient: recent libjxl releases can
+/// return success after falling back to a newly encoded JPEG.
 #[must_use]
 pub fn djxl_completed_exact_jpeg_reconstruction(output: &std::process::Output) -> bool {
     if !output.status.success() {
         return false;
     }
-    let diagnostic = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-    .to_ascii_lowercase();
-    !diagnostic.contains("pixels_to_jpeg")
-        && !diagnostic.contains("pixels-to-jpeg")
-        && !diagnostic.contains("pixel-to-jpeg")
-        && !diagnostic.contains("decoded to pixels")
-        && !diagnostic.contains("could not decode losslessly to jpeg")
+    let diagnostic = djxl_diagnostic(output);
+    !djxl_used_pixel_to_jpeg_fallback(&diagnostic)
+        && djxl_reported_exact_jpeg_reconstruction(&diagnostic)
 }
 
 fn run_jxl_reconstruction_probe(
@@ -66,6 +89,100 @@ fn run_jxl_reconstruction_probe(
         context,
     )
     .map_err(|error| format!("{context} failed: {error}"))
+}
+
+fn detect_djxl_reconstruction_mode() -> Result<DjxlReconstructionMode, String> {
+    static CAPABILITY: OnceLock<Result<DjxlReconstructionMode, String>> = OnceLock::new();
+
+    CAPABILITY
+        .get_or_init(|| {
+            let mut command = crate::DjxlBuilder::new().arg("-h").build();
+            let output = run_jxl_reconstruction_probe(&mut command, "djxl capability probe")?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let help = crate::infra::logging::combined_tool_output(&stdout, &stderr);
+            if !output.status.success() {
+                return Err(format!(
+                    "djxl capability probe failed with {}: {}",
+                    output.status,
+                    if help.is_empty() {
+                        "no diagnostic output"
+                    } else {
+                        help.as_str()
+                    }
+                ));
+            }
+            if help.contains("--reconstruct_jpeg") {
+                return Ok(DjxlReconstructionMode::ExplicitFlag);
+            }
+            let help_lower = help.to_ascii_lowercase();
+            if help_lower
+                .lines()
+                .any(|line| line.contains("output") && line.contains("jpeg"))
+            {
+                return Ok(DjxlReconstructionMode::DefaultJpegOutput);
+            }
+            Err(
+                "installed djxl advertises neither explicit JPEG reconstruction nor JPEG output; exact reconstruction cannot be classified safely"
+                    .into(),
+            )
+        })
+        .clone()
+}
+
+fn run_exact_jpeg_reconstruction_with_mode(
+    input: &Path,
+    output: &Path,
+    context: &str,
+    mode: DjxlReconstructionMode,
+) -> Result<std::process::Output, String> {
+    let mut command = crate::DjxlBuilder::new().input(input).output(output).build();
+    if mode == DjxlReconstructionMode::ExplicitFlag {
+        command.arg("--reconstruct_jpeg");
+    }
+    run_jxl_reconstruction_probe(&mut command, context)
+}
+
+/// Reconstruct the original JPEG using the strongest operation advertised by
+/// the installed official decoder.
+///
+/// libjxl releases differ: some expose `--reconstruct_jpeg`, while newer builds
+/// perform reconstruction for a `.jpg` output without exposing that flag. Both
+/// paths require an explicit reconstruction diagnostic and reject pixel fallback.
+///
+/// # Errors
+/// Returns an error for missing decoder capability, decoder failure, pixel
+/// fallback, missing positive reconstruction evidence, or an empty output file.
+pub fn run_exact_jpeg_reconstruction(
+    input: &Path,
+    output: &Path,
+    context: &str,
+) -> Result<std::process::Output, String> {
+    let mode = detect_djxl_reconstruction_mode()?;
+    let result = run_exact_jpeg_reconstruction_with_mode(input, output, context, mode)?;
+    if !djxl_completed_exact_jpeg_reconstruction(&result) {
+        let diagnostic = djxl_diagnostic(&result);
+        let reason = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {
+            "djxl used pixel-to-JPEG fallback"
+        } else if result.status.success() {
+            "djxl returned success without positive exact-reconstruction evidence"
+        } else {
+            "djxl rejected exact JPEG reconstruction"
+        };
+        return Err(format!(
+            "{context}: {reason} (status {}): {}",
+            result.status,
+            first_nonempty_tool_line(diagnostic.as_bytes())
+        ));
+    }
+    if output != Path::new("-") {
+        let metadata = std::fs::metadata(output)
+            .map_err(|error| format!("{context}: reconstructed JPEG is missing: {error}"))?;
+        if metadata.len() == 0 {
+            return Err(format!("{context}: reconstructed JPEG is empty"));
+        }
+    }
+    Ok(result)
 }
 
 /// Classify exact JPEG reconstruction without enabling pixel-to-JPEG fallback.
@@ -85,6 +202,7 @@ pub fn probe_jpeg_reconstruction_eligibility(
     if !JxlinfoBuilder::new().check_available() || !DjxlBuilder::new().check_available() {
         return Err("jxlinfo and djxl are required for exact JPEG reconstruction probing".into());
     }
+    let reconstruction_mode = detect_djxl_reconstruction_mode()?;
 
     let mut info_command = JxlinfoBuilder::new().input(path).build();
     let info = run_jxl_reconstruction_probe(&mut info_command, "JXL structure probe")?;
@@ -111,19 +229,28 @@ pub fn probe_jpeg_reconstruction_eligibility(
         Some(".jpg"),
     )
     .map_err(|error| format!("strict JPEG reconstruction temp allocation failed: {error}"))?;
-    let mut strict_command = DjxlBuilder::new()
-        .input(path)
-        .output(strict_output.path())
-        .build();
-    let strict =
-        run_jxl_reconstruction_probe(&mut strict_command, "strict JPEG reconstruction probe")?;
-    if djxl_completed_exact_jpeg_reconstruction(&strict) {
+    let strict = run_exact_jpeg_reconstruction_with_mode(
+        path,
+        strict_output.path(),
+        "strict JPEG reconstruction probe",
+        reconstruction_mode,
+    )?;
+    if djxl_completed_exact_jpeg_reconstruction(&strict)
+        && strict_output
+            .as_file()
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 0)
+    {
         return Ok(JpegReconstructionEligibility::Exact);
     }
-    let strict_diagnostic = if strict.status.success() {
+    let diagnostic = djxl_diagnostic(&strict);
+    let strict_diagnostic = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {
         "djxl used pixel-to-JPEG fallback instead of exact reconstruction".to_string()
+    } else if strict.status.success() {
+        "djxl returned success without a non-empty JPEG and positive exact-reconstruction evidence"
+            .to_string()
     } else {
-        first_nonempty_tool_line(&strict.stderr)
+        first_nonempty_tool_line(diagnostic.as_bytes())
     };
 
     let pixel_temp_dir = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
@@ -154,6 +281,11 @@ pub fn probe_jpeg_reconstruction_eligibility(
 #[must_use]
 pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
     if !crate::image_builders::ExiftoolBuilder::check_available() {
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            "ExifTool unavailable; ICC extraction was not attempted",
+        );
         return None;
     }
 
@@ -177,12 +309,12 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
             return None;
         }
     };
-    let output = match crate::image_builders::ExiftoolBuilder::new()
+    let mut command = crate::image_builders::ExiftoolBuilder::new()
         .input(src)
         .extract_icc_profile()
-        .build()
-        .output()
-    {
+        .build();
+    let command_line = crate::common_utils::format_command_for_audit(&command);
+    let output = match command.output() {
         Ok(out) => out,
         Err(e) => {
             crate::media_conversion_gate::delivery_jxl_path_audit(
@@ -199,7 +331,30 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
         }
     };
 
-    if output.status.success() && !output.stdout.is_empty() {
+    // ICC is binary metadata; retain only a size marker in logs, never payload
+    // bytes. This keeps the diagnostic useful without leaking private profiles.
+    let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", output.stdout.len());
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        &output.status,
+        &stdout_summary,
+        &String::from_utf8_lossy(&output.stderr),
+    );
+
+    if !output.status.success() {
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            format!(
+                "ExifTool ICC extraction failed with {} ({} bytes captured)",
+                output.status,
+                output.stdout.len()
+            ),
+        );
+        return None;
+    }
+
+    if !output.stdout.is_empty() {
         if let Err(e) = std::fs::write(temp_icc.path(), &output.stdout) {
             crate::media_conversion_gate::delivery_jxl_path_audit(
                 "delivery_jxl",
@@ -215,6 +370,11 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
         }
         Some(temp_icc)
     } else {
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            "ExifTool returned no ICC payload; no profile was extracted",
+        );
         None
     }
 }
@@ -248,7 +408,14 @@ pub fn is_icc_rounding_error(stderr: &str) -> bool {
 /// persistence of the patched profile fails after extraction was attempted.
 pub fn extract_icc_with_d50_patch(src: &Path) -> anyhow::Result<Option<tempfile::NamedTempFile>> {
     if !crate::image_builders::ExiftoolBuilder::check_available() {
-        return Ok(None);
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            "ExifTool unavailable; D50 ICC remediation was not attempted",
+        );
+        return Err(anyhow::anyhow!(
+            "ExifTool unavailable; cannot extract ICC profile for D50 remediation"
+        ));
     }
 
     let temp_icc = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
@@ -262,14 +429,35 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> anyhow::Result<Option<tempfile:
             src.display()
         )
     })?;
-    let output = crate::image_builders::ExiftoolBuilder::new()
+    let mut command = crate::image_builders::ExiftoolBuilder::new()
         .input(src)
         .extract_icc_profile()
-        .build()
+        .build();
+    let command_line = crate::common_utils::format_command_for_audit(&command);
+    let output = command
         .output()
         .with_context(|| format!("Failed to extract ICC profile from {}", src.display()))?;
+    let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", output.stdout.len());
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        &output.status,
+        &stdout_summary,
+        &String::from_utf8_lossy(&output.stderr),
+    );
 
-    if !output.status.success() || output.stdout.is_empty() {
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "ExifTool ICC extraction failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if output.stdout.is_empty() {
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl",
+            src,
+            "ExifTool returned no ICC payload for D50 remediation",
+        );
         return Ok(None);
     }
 
@@ -349,6 +537,14 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
                 return Err(format!("JXL health check failed (jxlinfo exec): {err}"));
             }
         }
+    } else {
+        crate::media_conversion_gate::delivery_jxl_batch_fallback_audit(
+            "delivery_jxl",
+            format!(
+                "JXL AUDIT: jxlinfo unavailable; only the container signature was checked for {}",
+                path.display()
+            ),
+        );
     }
 
     Ok(())
@@ -367,14 +563,28 @@ pub fn is_vmaf_available() -> bool {
 /// with an ICC-absent JXL.
 pub fn verify_jxl_has_icc(path: &Path) -> anyhow::Result<bool> {
     if !crate::image_builders::ExiftoolBuilder::check_available() {
-        return Ok(false); // Cannot verify; assume absent to trigger fallback
+        crate::media_conversion_gate::delivery_jxl_path_audit(
+            "delivery_jxl_icc_probe",
+            path,
+            "ExifTool unavailable; ICC absence is unverified and fallback injection is required",
+        );
+        return Ok(false);
     }
-    let out = crate::image_builders::ExiftoolBuilder::new()
+    let mut command = crate::image_builders::ExiftoolBuilder::new()
         .input(path)
         .extract_icc_profile()
-        .build()
+        .build();
+    let command_line = crate::common_utils::format_command_for_audit(&command);
+    let out = command
         .output()
         .with_context(|| format!("probe embedded JXL ICC profile {}", path.display()))?;
+    let stdout_summary = format!("<binary ICC stdout omitted: {} bytes>", out.stdout.len());
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        &out.status,
+        &stdout_summary,
+        &String::from_utf8_lossy(&out.stderr),
+    );
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let trimmed = stderr.trim();
@@ -1260,6 +1470,22 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn exact_jpeg_reconstruction_requires_positive_evidence_and_rejects_fallback() {
+        assert!(djxl_reported_exact_jpeg_reconstruction(
+            "Reconstructed to JPEG."
+        ));
+        assert!(djxl_reported_exact_jpeg_reconstruction(
+            "JPEG reconstruction complete"
+        ));
+        assert!(!djxl_reported_exact_jpeg_reconstruction(
+            "Decoded to pixels."
+        ));
+        assert!(djxl_used_pixel_to_jpeg_fallback(
+            "could not decode losslessly to JPEG; retrying with --pixels_to_jpeg"
+        ));
+    }
 
     #[test]
     fn test_is_icc_rounding_error() {

@@ -3093,8 +3093,6 @@ pub const EXIFTOOL_ARG_TAGS_FROM_FILE: &str = "-tagsfromfile";
 pub const EXIFTOOL_ARG_ICC_PROFILE: &str = "-icc_profile";
 pub const EXIFTOOL_ARG_B: &str = "-b";
 pub const EXIFTOOL_ARG_ALL: &str = "-all=";
-pub const EXIFTOOL_ARG_M: &str = "-m";
-pub const EXIFTOOL_ARG_Q: &str = "-q";
 pub const EXIFTOOL_ARG_P: &str = "-P";
 pub const EXIFTOOL_ARG_UNSAFE: &str = "-unsafe";
 
