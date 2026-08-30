@@ -238,10 +238,9 @@ fn metadata_values_equivalent(key: &str, expected: &str, actual: &str) -> bool {
             .split_whitespace()
             .map(str::parse::<f64>)
             .collect::<Result<Vec<_>, _>>()
-            .ok()
     };
     match (parse(expected), parse(actual)) {
-        (Some(expected), Some(actual)) if expected.len() == actual.len() => expected
+        (Ok(expected), Ok(actual)) if expected.len() == actual.len() => expected
             .iter()
             .zip(actual)
             .all(|(expected, actual)| (expected - actual).abs() <= 1.0e-8),

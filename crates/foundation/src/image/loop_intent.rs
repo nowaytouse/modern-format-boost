@@ -5628,6 +5628,12 @@ fn extract_frame_to_temp(path: &Path) -> anyhow::Result<Option<std::path::PathBu
         .input(path)
         .frames_v(1)
         .format("image2")
+        // FFmpeg 9 treats a non-pattern image2 target as ambiguous.  We ask
+        // explicitly for a single-file update so the probe remains valid
+        // across current and older FFmpeg releases instead of relying on a
+        // warning-prone implicit muxer mode.
+        .arg("-update")
+        .arg("1")
         .overwrite()
         .output(&temp_path)
         .build()

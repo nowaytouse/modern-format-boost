@@ -2762,6 +2762,7 @@ fn avifenc_rejects_incompatible_icc(stderr: &[u8]) -> bool {
 
 const AVIFENC_TIMEOUT_SECS_ENV: &str = "MFB_AVIFENC_TIMEOUT_SECS";
 const AVIFENC_PROBE_TIMEOUT_SECS_ENV: &str = "MFB_AVIFENC_PROBE_TIMEOUT_SECS";
+const AVIFENC_PRODUCTION_SPEED: u8 = 0;
 
 fn avifenc_timeout_from_env(name: &str, default: Duration) -> anyhow::Result<Duration> {
     let raw = match std::env::var(name) {
@@ -2867,7 +2868,7 @@ fn build_avifenc_command(
     speed: Option<u8>,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
-    let effective_speed = speed.unwrap_or_default();
+    let effective_speed = speed.unwrap_or(AVIFENC_PRODUCTION_SPEED);
     builder.speed(effective_speed).jobs("all");
     match detect_avif_input_color_model(input) {
         AvifencInputColorModel::Grayscale => {

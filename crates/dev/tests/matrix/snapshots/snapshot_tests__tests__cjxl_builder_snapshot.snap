@@ -1,10 +1,11 @@
 ---
-source: crates/dev/tests/snapshot_tests.rs
+source: crates/dev/tests/matrix/snapshot_tests.rs
 expression: args
 ---
 [
     "in.png",
     "out.jxl",
+    "--container=1",
     "-d",
     "0.5",
     "-e",

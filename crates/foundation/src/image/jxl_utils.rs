@@ -276,13 +276,20 @@ pub fn probe_jpeg_reconstruction_eligibility(
         strict_output.path(),
         "strict JPEG reconstruction probe",
     )?;
-    if djxl_completed_exact_jpeg_reconstruction(&strict)
-        && strict_output
+    if djxl_completed_exact_jpeg_reconstruction(&strict) {
+        let strict_output_len = strict_output
             .as_file()
             .metadata()
-            .is_ok_and(|metadata| metadata.len() > 0)
-    {
-        return Ok(JpegReconstructionEligibility::Exact);
+            .map_err(|error| {
+                format!(
+                    "strict JPEG reconstruction output metadata probe failed for {}: {error}",
+                    strict_output.path().display()
+                )
+            })?
+            .len();
+        if strict_output_len > 0 {
+            return Ok(JpegReconstructionEligibility::Exact);
+        }
     }
     let diagnostic = djxl_diagnostic(&strict);
     let strict_diagnostic = if djxl_used_pixel_to_jpeg_fallback(&diagnostic) {

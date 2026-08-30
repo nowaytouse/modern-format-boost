@@ -924,15 +924,15 @@ fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
         "fast-img AVIF decode probe",
     )
     .map_err(|err| format!("avifdec decode probe spawn failed: {err}"))?;
-    if output.status.success()
-        && temp
+    if output.status.success() {
+        let output_len = temp
             .as_file()
             .metadata()
-            .is_ok_and(|metadata| metadata.len() > 0)
-    {
-        return Ok(());
-    }
-    if output.status.success() {
+            .map_err(|err| format!("avifdec decode output metadata probe failed: {err}"))?
+            .len();
+        if output_len > 0 {
+            return Ok(());
+        }
         return Err("avifdec decode probe returned success but produced an empty output".into());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -966,15 +966,15 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
         "fast-img JXL decode probe",
     )
     .map_err(|err| format!("djxl decode probe spawn failed: {err}"))?;
-    if output.status.success()
-        && temp
+    if output.status.success() {
+        let output_len = temp
             .as_file()
             .metadata()
-            .is_ok_and(|metadata| metadata.len() > 0)
-    {
-        return Ok(());
-    }
-    if output.status.success() {
+            .map_err(|err| format!("djxl decode output metadata probe failed: {err}"))?
+            .len();
+        if output_len > 0 {
+            return Ok(());
+        }
         return Err("djxl decode probe returned success but produced an empty output".into());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -994,19 +994,19 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             "fast-img JXL JPEG decode probe",
         )
         .map_err(|err| format!("djxl JPEG decode probe spawn failed: {err}"))?;
-        if jpeg_output.status.success()
-            && jpeg_temp
+        if jpeg_output.status.success() {
+            let output_len = jpeg_temp
                 .as_file()
                 .metadata()
-                .is_ok_and(|metadata| metadata.len() > 0)
-        {
-            crate::log_detail!(format!(
-                "djxl decode probe retried as JPEG reconstruction after PNG ICC failure: {}",
-                path.display()
-            ));
-            return Ok(());
-        }
-        if jpeg_output.status.success() {
+                .map_err(|err| format!("djxl JPEG decode output metadata probe failed: {err}"))?
+                .len();
+            if output_len > 0 {
+                crate::log_detail!(format!(
+                    "djxl decode probe retried as JPEG reconstruction after PNG ICC failure: {}",
+                    path.display()
+                ));
+                return Ok(());
+            }
             return Err(
                 "djxl JPEG decode probe returned success but produced an empty output".into(),
             );

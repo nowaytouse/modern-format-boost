@@ -553,11 +553,17 @@ fn verify_repaired_copy(path: &Path, djxl: &Path) -> Result<(), String> {
             process_output_diagnostic(&pixel_decode_ok)
         ));
     }
-    if !pixel_output
+    let pixel_output_len = pixel_output
         .as_file()
         .metadata()
-        .is_ok_and(|metadata| metadata.len() > 0)
-    {
+        .map_err(|error| {
+            format!(
+                "cannot inspect local djxl pixel output for {}: {error}",
+                path.display()
+            )
+        })?
+        .len();
+    if pixel_output_len == 0 {
         return Err(format!(
             "local djxl returned success without a non-empty pixel decode for {}: {}",
             path.display(),
@@ -832,13 +838,20 @@ fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
-    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&explicit)
-        && reconstructed
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&explicit) {
+        let output_len = reconstructed
             .as_file()
             .metadata()
-            .is_ok_and(|metadata| metadata.len() > 0)
-    {
-        return Ok(true);
+            .map_err(|error| {
+                format!(
+                    "cannot inspect explicit reconstruction output for {}: {error}",
+                    path.display()
+                )
+            })?
+            .len();
+        if output_len > 0 {
+            return Ok(true);
+        }
     }
     let explicit_diagnostic = process_output_diagnostic(&explicit);
     if !foundation::image::jxl_utils::djxl_rejected_explicit_reconstruction_option(
@@ -860,13 +873,20 @@ fn djxl_reconstructs(path: &Path, djxl: &Path) -> Result<bool, String> {
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("cannot launch {}: {error}", djxl.display()))?;
-    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&legacy)
-        && reconstructed
+    if foundation::image::jxl_utils::djxl_completed_exact_jpeg_reconstruction(&legacy) {
+        let output_len = reconstructed
             .as_file()
             .metadata()
-            .is_ok_and(|metadata| metadata.len() > 0)
-    {
-        return Ok(true);
+            .map_err(|error| {
+                format!(
+                    "cannot inspect extension-selected reconstruction output for {}: {error}",
+                    path.display()
+                )
+            })?
+            .len();
+        if output_len > 0 {
+            return Ok(true);
+        }
     }
     Err(format!(
         "explicit option unsupported ({explicit_diagnostic}); extension-selected JPEG reconstruction failed: {}",
