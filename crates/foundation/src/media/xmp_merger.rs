@@ -3,9 +3,11 @@ use crate::builder_base::ToolBuilder;
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{Context, Result, bail};
 use quick_xml::events::Event;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use walkdir::WalkDir;
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
@@ -332,6 +334,122 @@ fn delete_unchanged_sidecar(path: &Path, expected: &SidecarDeleteProof) -> Resul
             path.display()
         )
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModernContainerProof {
+    format: crate::image::format_detect::FormatKind,
+    image_data_hash: String,
+    payload_size: Option<u64>,
+    width: Option<String>,
+    height: Option<String>,
+    frame_count: Option<String>,
+    stable_metadata_hash: String,
+    codec_feature_hash: Option<String>,
+    has_xmp: bool,
+}
+
+fn proof_tag<'a>(record: &'a Map<String, Value>, suffix: &str) -> Option<&'a Value> {
+    let suffix = suffix.to_ascii_lowercase();
+    record.iter().find_map(|(key, value)| {
+        let normalized = key.to_ascii_lowercase();
+        (normalized == suffix || normalized.ends_with(&format!(":{suffix}"))).then_some(value)
+    })
+}
+
+fn proof_value_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::Null => return None,
+        Value::String(text) => text.clone(),
+        _ => canonical_proof_value(value),
+    };
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn proof_has_xmp(record: &Map<String, Value>) -> bool {
+    if let Some(value) = proof_tag(record, "hasxmp")
+        && proof_value_text(value).is_some_and(|text| {
+            text == "1" || text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("yes")
+        })
+    {
+        return true;
+    }
+    record.iter().any(|(key, value)| {
+        let normalized = key.to_ascii_lowercase();
+        (normalized == "xmp"
+            || normalized.starts_with("xmp:")
+            || normalized.starts_with("xmp-")
+            || normalized.contains(":xmp:")
+            || normalized.contains(":xmp-"))
+            && proof_value_text(value).is_some()
+    })
+}
+
+fn modern_proof_key_ignored(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    normalized == "sourcefile"
+        || normalized.starts_with("system:")
+        || normalized.starts_with("macos:")
+        || normalized.starts_with("exiftool:")
+        || normalized.starts_with("composite:")
+        || normalized.ends_with(":sourcefile")
+        || normalized.ends_with(":filename")
+        || normalized.ends_with(":filepath")
+        || normalized.ends_with(":directory")
+        || normalized.ends_with(":filesize")
+        || normalized.contains("filemodifydate")
+        || normalized.contains("fileaccessdate")
+        || normalized.contains("filecreatedate")
+        || normalized.contains("fileinodechangedate")
+        || normalized.contains("processingtime")
+        || normalized.contains("mediadataoffset")
+        || normalized.contains("mediadatasize")
+        || normalized.ends_with(":mediadata")
+        || normalized == "imagedatahash"
+        || normalized.ends_with(":imagedatahash")
+        || normalized == "hasxmp"
+        || normalized.ends_with(":hasxmp")
+        || normalized == "xmp"
+        || normalized.starts_with("xmp:")
+        || normalized.starts_with("xmp-")
+        || normalized.contains(":xmp:")
+        || normalized.contains(":xmp-")
+        || normalized.contains("xmlpacket")
+}
+
+fn canonical_proof_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => {
+            serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
+        }
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_proof_value)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => {
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| {
+                        let encoded_key =
+                            serde_json::to_string(key).unwrap_or_else(|_| format!("{key:?}"));
+                        format!("{encoded_key}:{}", canonical_proof_value(&values[key]))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    }
 }
 
 impl XmpMerger {
@@ -1072,6 +1190,250 @@ impl XmpMerger {
         Ok((None, "no_match".to_string()))
     }
 
+    /// Capture the semantic state of a modern container before or after a
+    /// metadata-only write. The proof deliberately excludes only fields that
+    /// `ExifTool` is expected to change when a box/chunk is inserted (file paths,
+    /// timestamps, offsets and XMP itself); codec payload, dimensions, frame
+    /// count and all other reported container properties remain covered.
+    fn capture_modern_container_proof(
+        path: &Path,
+        format: crate::image::format_detect::FormatKind,
+    ) -> Result<ModernContainerProof> {
+        let mut builder = crate::ExiftoolBuilder::new();
+        builder
+            .arg("-j")
+            .arg("-G1")
+            .arg("-a")
+            .arg("-s")
+            .arg("-u")
+            .arg("-U")
+            .arg("-api")
+            .arg("RequestAll=3")
+            .arg("-all")
+            .arg("-ImageDataHash")
+            .arg("-ImageWidth")
+            .arg("-ImageHeight")
+            .arg("-FrameCount")
+            .arg("-HasXMP")
+            .arg(safe_path_arg(path).as_ref());
+        let mut command = builder.build();
+        let output = crate::convert::process_runner::ManagedProcess::spawn_captured(&mut command)?
+            .wait_liveness_timeout(
+                Duration::from_secs(120),
+                Duration::from_secs(300),
+                "modern container metadata proof",
+            )?;
+        crate::infra::logging::log_captured_process_output(
+            &output.command_line,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        if !output.status.success() {
+            let diagnostic =
+                crate::infra::logging::combined_tool_output(&output.stdout, &output.stderr);
+            bail!(
+                "ExifTool modern-container proof failed with {}: {}",
+                output.status,
+                if diagnostic.is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.as_str()
+                }
+            );
+        }
+
+        let document: Value = serde_json::from_str(&output.stdout)
+            .context("ExifTool modern-container proof returned invalid JSON")?;
+        let record = document
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow::anyhow!("ExifTool modern-container proof returned no record"))?;
+        let image_data_hash = proof_tag(record, "imagedatahash")
+            .and_then(proof_value_text)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("ExifTool proof did not report ImageDataHash"))?;
+        let width = proof_tag(record, "imagewidth").and_then(proof_value_text);
+        let height = proof_tag(record, "imageheight").and_then(proof_value_text);
+        let frame_count = proof_tag(record, "framecount").and_then(proof_value_text);
+        let has_xmp = proof_has_xmp(record);
+        let mut stable = Vec::new();
+        for (key, value) in record {
+            if !modern_proof_key_ignored(key) {
+                stable.push((key.as_str(), canonical_proof_value(value)));
+            }
+        }
+        stable.sort_by(|left, right| left.0.cmp(right.0));
+        let mut stable_bytes = Vec::new();
+        for (key, value) in stable {
+            stable_bytes.extend_from_slice(key.as_bytes());
+            stable_bytes.push(0);
+            stable_bytes.extend_from_slice(value.as_bytes());
+            stable_bytes.push(0xff);
+        }
+        let stable_metadata_hash = blake3::hash(&stable_bytes).to_hex().to_string();
+        let codec_feature_hash = match format {
+            crate::image::format_detect::FormatKind::Avif => Some(
+                crate::image::fast_img::avif_codec_feature_hash(path)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+            ),
+            _ => None,
+        };
+        // ISOBMFF stores XMP as an item in `mdat`; its aggregate mdat size must grow.
+        // ImageDataHash is the exact primary-image payload proof for these formats.
+        let payload_size = match format {
+            crate::image::format_detect::FormatKind::Avif
+            | crate::image::format_detect::FormatKind::Heic
+            | crate::image::format_detect::FormatKind::Heif => None,
+            _ => Some(
+                crate::image::static_payload::measure_as(path, format)
+                    .context("failed to measure immutable modern-container payload")?,
+            ),
+        };
+
+        Ok(ModernContainerProof {
+            format,
+            image_data_hash,
+            payload_size,
+            width,
+            height,
+            frame_count,
+            stable_metadata_hash,
+            codec_feature_hash,
+            has_xmp,
+        })
+    }
+
+    /// Merge a sidecar into AVIF/HEIC/WebP/JP2 using the format-aware `ExifTool`
+    /// writer, then commit only after a before/after proof succeeds. This keeps
+    /// the positive native path for modern containers while retaining a strict
+    /// fail-closed outcome for writers that drop auxiliary or unknown data.
+    fn merge_modern_xmp_with_proof(
+        xmp_path: &Path,
+        media_path: &Path,
+        format: crate::image::format_detect::FormatKind,
+    ) -> Result<()> {
+        Self::check_exiftool()?;
+        let source_identity = source_file_identity(media_path)?;
+        let source_hash = crate::common_utils::calculate_blake3_hash(media_path)
+            .context("failed to hash modern container before XMP merge")?;
+        let xmp_hash = crate::common_utils::calculate_blake3_hash(xmp_path)
+            .context("failed to hash XMP sidecar before modern merge")?;
+        let before = Self::capture_modern_container_proof(media_path, format)?;
+        let parent = crate::media_conversion_gate::output_parent_or_dot(media_path);
+        let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "modern_xmp_native_merge",
+            parent,
+            ".mfb-modern-xmp-",
+            ".tmp",
+        )?;
+        let staged_path = staged.into_temp_path();
+        let copied = std::fs::copy(media_path, &staged_path)
+            .context("failed to stage modern container for native XMP merge")?;
+        if copied != source_identity.len {
+            bail!(
+                "modern container staging length mismatch: expected={} actual={}",
+                source_identity.len,
+                copied
+            );
+        }
+        let staged_hash = crate::common_utils::calculate_blake3_hash(&staged_path)
+            .context("failed to hash staged modern container")?;
+        if staged_hash != source_hash {
+            bail!("modern container changed while staging native XMP merge");
+        }
+
+        let mut builder = crate::ExiftoolBuilder::new();
+        builder
+            .tags_from_file(xmp_path)
+            .arg("-XMP:all")
+            .preserve_date()
+            .overwrite_original()
+            .arg(safe_path_arg(&staged_path).as_ref());
+        let mut command = builder.build();
+        let output = crate::convert::process_runner::ManagedProcess::spawn_captured(&mut command)?
+            .wait_liveness_timeout(
+                Duration::from_secs(120),
+                Duration::from_secs(300),
+                "modern container native XMP merge",
+            )?;
+        crate::infra::logging::log_captured_process_output(
+            &output.command_line,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
+        if !output.status.success() {
+            let diagnostic =
+                crate::infra::logging::combined_tool_output(&output.stdout, &output.stderr);
+            bail!(
+                "native modern-container XMP merge failed with {}: {}",
+                output.status,
+                if diagnostic.is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.as_str()
+                }
+            );
+        }
+
+        let after = Self::capture_modern_container_proof(&staged_path, format)?;
+        if after.format != before.format
+            || after.image_data_hash != before.image_data_hash
+            || after.width != before.width
+            || after.height != before.height
+            || after.frame_count != before.frame_count
+            || after.stable_metadata_hash != before.stable_metadata_hash
+            || after.codec_feature_hash != before.codec_feature_hash
+            || !after.has_xmp
+            || before.payload_size != after.payload_size
+        {
+            bail!(
+                "native modern-container XMP merge failed archival proof; original media and sidecar retained; before={before:?}; after={after:?}"
+            );
+        }
+        let current_hash = crate::common_utils::calculate_blake3_hash(media_path)
+            .context("failed to re-hash modern container before commit")?;
+        let current_identity = source_file_identity(media_path)?;
+        let current_xmp_hash = crate::common_utils::calculate_blake3_hash(xmp_path)
+            .context("failed to re-hash XMP sidecar before commit")?;
+        if current_hash != source_hash || current_identity != source_identity {
+            bail!("modern container changed concurrently during native XMP merge");
+        }
+        if current_xmp_hash != xmp_hash {
+            bail!("XMP sidecar changed concurrently during native modern merge");
+        }
+        let metadata_report =
+            crate::metadata::preserve_filesystem_for_delivery(media_path, &staged_path)?;
+        if matches!(
+            metadata_report.xattr,
+            crate::metadata::MetadataLayerOutcome::PartialAudit
+        ) || matches!(
+            metadata_report.timestamps,
+            crate::metadata::MetadataLayerOutcome::PartialAudit
+        ) {
+            bail!("modern-container filesystem metadata proof was partial");
+        }
+        crate::io_utils::sync_committed_file_and_parent(&staged_path)?;
+        staged_path.persist(media_path).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to atomically commit native modern-container XMP merge: {}",
+                error.error
+            )
+        })?;
+        crate::io_utils::sync_committed_file_and_parent(media_path)
+            .context("failed to flush native modern-container XMP merge")?;
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_XMP,
+            &format!(
+                "Native XMP merge committed with payload and container proof: {}",
+                media_path.display()
+            )
+        );
+        Ok(())
+    }
+
     /// Merge XMP metadata into a media file.
     ///
     /// # Errors
@@ -1086,6 +1448,16 @@ impl XmpMerger {
                 media_path.display()
             )
         })?;
+        if matches!(
+            format,
+            crate::image::format_detect::FormatKind::Avif
+                | crate::image::format_detect::FormatKind::Heic
+                | crate::image::format_detect::FormatKind::Heif
+                | crate::image::format_detect::FormatKind::WebP
+                | crate::image::format_detect::FormatKind::Jp2
+        ) {
+            return Self::merge_modern_xmp_with_proof(xmp_path, media_path, format);
+        }
         if xmp_rewrite_requires_immutable_container(format) {
             bail!(
                 "refusing destructive XMP rewrite for {format:?} {}; media and sidecar retained because a generic metadata writer cannot prove preservation of HDR/auxiliary relationships, provenance data, unknown container structures, and codec bytes",
@@ -1742,6 +2114,56 @@ mod tests {
         for format in [FormatKind::Jpeg, FormatKind::Png, FormatKind::Tiff] {
             assert!(!xmp_rewrite_requires_immutable_container(format));
         }
+    }
+
+    #[test]
+    fn modern_avif_xmp_merge_uses_native_writer_and_proof() -> Result<()> {
+        if !ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let media = temp_dir.path().join("fixture.avif");
+        let xmp = temp_dir.path().join("fixture.xmp");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/metadata_clear_baseline.avif.fixture"),
+            &media,
+        )
+        .unwrap_or_else(|error| panic!("copy AVIF fixture: {error}"));
+        fs::write(
+            &xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">native proof</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        )
+        .unwrap_or_else(|error| panic!("write XMP fixture: {error}"));
+
+        let merger = XmpMerger::new(Config::default());
+        let before_hash = crate::common_utils::calculate_blake3_hash(&media)?;
+        merger.merge_xmp(&xmp, &media)?;
+        let after_hash = crate::common_utils::calculate_blake3_hash(&media)?;
+        assert_ne!(before_hash, after_hash, "native merge must add XMP bytes");
+
+        let mut builder = ExiftoolBuilder::new();
+        builder.arg("-j").arg("-XMP-dc:Description").input(&media);
+        let output = builder.build().output()?;
+        assert!(
+            output.status.success(),
+            "ExifTool readback failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let readback = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            readback.contains("native proof"),
+            "native XMP value was not readable: {readback}"
+        );
+
+        let idempotent_hash = crate::common_utils::calculate_blake3_hash(&media)?;
+        merger.merge_xmp(&xmp, &media)?;
+        assert_eq!(
+            idempotent_hash,
+            crate::common_utils::calculate_blake3_hash(&media)?,
+            "reapplying the same native XMP must be an idempotent no-op"
+        );
+        Ok(())
     }
 
     #[test]

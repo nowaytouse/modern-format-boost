@@ -166,16 +166,27 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         });
     }
 
+    // Existing lossy modern containers stay in their native encoding to avoid
+    // generational loss. Lossless modern containers still enter the JXL path so
+    // the project can apply its archival compression and metadata proof chain.
     if detection.format == DetectedFormat::JXL
         || (detection.format.is_modern_format()
             && detection.compression != CompressionType::Lossless)
     {
+        let reason = if detection.format == DetectedFormat::JXL {
+            format!(
+                "Retaining JPEG XL container ({}) because it is already the archival target",
+                detection.format.as_str()
+            )
+        } else {
+            format!(
+                "Retaining modern lossy container ({}) to avoid generational loss; lossless modern inputs are converted to JXL with feature-preserving metadata proof",
+                detection.format.as_str()
+            )
+        };
         return Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
-            reason: format!(
-                "Retaining modern format ({}) to avoid generational loss",
-                detection.format.as_str()
-            ),
+            reason,
             command: String::new(),
             expected_reduction: 0.0,
         });
@@ -822,7 +833,7 @@ mod tests {
 
         let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::NoConversion);
-        assert!(strategy.reason.contains("generational loss"));
+        assert!(strategy.reason.contains("already the archival target"));
         Ok(())
     }
 
@@ -913,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lossless_modern_source_upgrades_to_jxl() -> Result<()> {
+    fn test_lossless_modern_source_enters_jxl_archival_path() -> Result<()> {
         let detection = DetectionResult {
             file_path: "/test/image.avif".to_string(),
             format: DetectedFormat::AVIF,
@@ -934,7 +945,9 @@ mod tests {
 
         let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::JXL);
+        assert!(strategy.command.contains("cjxl"));
         assert!(strategy.command.contains("-d 0.0"));
+        assert!(strategy.reason.contains("JXL"));
         Ok(())
     }
 }

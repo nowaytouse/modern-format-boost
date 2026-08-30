@@ -2,7 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-29
+## [Unreleased] - 2026-08-30
+
+### Archive-value routing, AVIF Meme Mode, and shared CI repair
+
+- **Lossless modern sources return to the JXL archive route**: ordinary
+  `img run` now converts positively proven lossless WebP, AVIF, HEIC/HEIF, and
+  JP2 alongside PNG/BMP/TIFF, with exact RGBA16 and metadata evidence. Existing
+  JXL plus lossy or semantically unknown modern sources remain byte-for-byte.
+  AVIF uses the authoritative decoder and an explicit gain-map probe; detected
+  or unprovable gain maps retain the native source, while HEIC/HEIF gain maps
+  keep their dedicated HDR-JXL and verified-sidecar route.
+- **No-reencode existing AVIF policy**: FastImg AVIF strategy now reserves the
+  bounded encoder search for non-AVIF inputs. An existing clean AVIF is adopted
+  byte-for-byte; a dirty AVIF receives only a staged ExifTool container cleanup
+  and is accepted only when primary-image SHA-256, decoder-visible codec/HDR/
+  gain-map features, and the clear-metadata audit pass. A matching sidecar is
+  removed only after final delivery proof. JXL Tier 2 also admits positively
+  proven lossy static HEIF instead of relying on the filename brand.
+- **AVIF-domain q75 pivot**: JXL exhaustion still triggers an independent AVIF
+  speed-0 search, but AVIF q75 now chooses the upper or lower search interval.
+  A failed q75 probe falls back to the complete AVIF search, and the final
+  candidate is still encoded and verified in AVIF's own parameter domain.
+- **Workload-specific JXL effort**: direct pixel encoding remains bounded at
+  effort 7 normally and effort 10 for ultimate/archive work. JPEG bitstream
+  transcode uses effort 11 by default because it is a different, fast workload,
+  falls back to effort 10 when expert options are rejected, and still requires
+  exact reconstruction proof. Every `cjxl` output explicitly requests a JXL
+  container so safe XMP boxes are available.
+- **Lossless raster evidence**: the IMG production matrix now performs real
+  PNG/BMP/TIFF/lossless-WebP/lossless-AVIF → JXL encodes, compares decoded
+  RGBA16 pixels exactly, proves source immutability, and validates XMP overlay
+  extraction. The run exposed and fixed TIFF storage-layout tags being audited
+  as portable metadata, harmless chromaticity number formatting being compared
+  as raw strings, and direct `cjxl` rejection of an AVIF that required the
+  authoritative `avifdec` intermediate.
+- **Shared health root cause fixed**: removed the unused orientation-test
+  binding and converted the empty-slice assertion to the Clippy-required
+  form. The reported `check_all`, `fix-gate`, and missing `lcov.info`
+  annotations were downstream effects of those two lint failures rather than
+  independent coverage faults.
 
 ### JXL reconstruction and metadata evidence
 
@@ -18,10 +57,11 @@ All notable changes to this project will be documented in this file.
   validated XMP overlay is appended through an atomic, fsynced container update,
   followed by JBRD and exact-JPEG reconstruction checks; recovery keeps the
   reconstructed JPEG untouched and delivers the effective appended XMP as a
-  separately verified sidecar. Generic XMP rewrites now fail closed for
-  AVIF/HEIC/HEIF/WebP/JP2 so HDR/auxiliary relationships, provenance, and unknown
-  container structures cannot be discarded behind an unchanged primary-image
-  hash. JPEG APP11-bearing files also block generic rewrites because APP11 can
+  separately verified sidecar. AVIF/HEIC/HEIF/WebP/JP2 now use a staged native
+  XMP writer and commit only after primary image-data hash, dimensions/frame
+  count, stable non-XMP container properties, and XMP readback all pass; a
+  failed proof retains the source and sidecar. JPEG APP11-bearing files block
+  generic rewrites because APP11 can
   carry JPEG XT, JUMBF, provenance, or other protected structure; PNG `caBX`
   inputs are retained so C2PA authenticity evidence is not invalidated.
 - **No silent external-tool success**: media subprocess diagnostics are captured
@@ -94,10 +134,11 @@ All notable changes to this project will be documented in this file.
   authoritative decoding across PNG, TIFF, WebP, GIF, AVIF, JXL and HEIC,
   alongside baseline/progressive/grayscale/CMYK JPEG, XMP and ICC coverage.
   The matrix also locks truncated JPEG + XMP source retention, animated WebP
-  chunk classification, AVIF/HEIC sequence-brand boundaries and Tier 2
-  empty-directory pruning. The package currently lists 246 tests; optional
-  codec branches report their availability instead of being counted as run.
-  Missing host tools are reported explicitly rather than counted as exercised.
+  chunk classification, AVIF/HEIC sequence-brand boundaries, lossless-raster
+  pixel equality, and Tier 2 empty-directory pruning. The package-scoped test
+  list is the revision-specific inventory; optional codec branches report their
+  availability instead of being counted as run. Missing host tools are reported
+  explicitly rather than counted as exercised.
 - **Documentation contract sync**: bilingual README files now describe the
   capability-probed exact `djxl` reconstruction path, the M1–M251 registry
   versus the M1–M206 delivery seal, IMG production-candidate evidence, and its

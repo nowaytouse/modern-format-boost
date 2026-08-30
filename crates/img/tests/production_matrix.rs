@@ -10,7 +10,7 @@ use foundation::common_utils::resolve_tool_path;
 use foundation::fast_img::{verify_final_jxl_delivery_integrity, verify_jxl_roundtrip_integrity};
 use foundation::image::format_detect::{FormatKind, detect_true_format};
 use foundation::image_detection::{DetectedFormat, detect_animation};
-use img::lossless_converter::{ConvertFlags, ConvertOptions, convert_jpeg_to_jxl};
+use img::lossless_converter::{ConvertFlags, ConvertOptions, convert_jpeg_to_jxl, convert_to_jxl};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -679,6 +679,162 @@ fn real_static_format_matrix_is_decoded_and_extension_spoofing_is_rejected() -> 
             "format probe changed source {}",
             path.display()
         );
+    }
+    Ok(())
+}
+
+fn add_magick_lossless_fixtures(
+    fixture_root: &Path,
+    png: &Path,
+    fixtures: &mut Vec<(PathBuf, FormatKind)>,
+) -> Result<()> {
+    for (extension, format) in [("bmp", FormatKind::Bmp), ("tiff", FormatKind::Tiff)] {
+        if !magick_supports_format(&extension.to_ascii_uppercase()) {
+            eprintln!("{extension} lossless JXL branch not executed: delegate unavailable");
+            continue;
+        }
+        let source = fixture_root.join(format!("pattern.{extension}"));
+        let mut command = Command::new(tool_path("magick")?);
+        command.arg(png).arg(&source);
+        run_status(command, &format!("create lossless {extension} fixture"))?;
+        fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
+        fixtures.push((source, format));
+    }
+    if magick_supports_format("WEBP") {
+        let source = fixture_root.join("pattern.webp");
+        let mut command = Command::new(tool_path("magick")?);
+        command
+            .arg(png)
+            .args(["-define", "webp:lossless=true"])
+            .arg(&source);
+        run_status(command, "create lossless WebP fixture")?;
+        fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
+        fixtures.push((source, FormatKind::WebP));
+    }
+    Ok(())
+}
+
+fn add_avif_lossless_fixture(
+    fixture_root: &Path,
+    png: &Path,
+    fixtures: &mut Vec<(PathBuf, FormatKind)>,
+) -> Result<()> {
+    if tool_available("avifenc") && tool_available("avifdec") {
+        let source = fixture_root.join("pattern.avif");
+        let mut command = Command::new(tool_path("avifenc")?);
+        command
+            .args(["--lossless", "--speed", "8"])
+            .arg(png)
+            .arg(&source);
+        run_status(command, "create lossless AVIF fixture")?;
+        fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
+        fixtures.push((source, FormatKind::Avif));
+    }
+    Ok(())
+}
+
+fn create_lossless_raster_fixtures(root: &Path) -> Result<Vec<(PathBuf, FormatKind)>> {
+    let fixture_root = root.join("lossless-input");
+    fs::create_dir_all(&fixture_root)?;
+    let png = fixture_root.join("pattern.png");
+    image::RgbImage::from_fn(96, 64, |x, y| {
+        image::Rgb([
+            (x * 5 + y * 3).to_le_bytes()[0],
+            (x * 7 + y * 11).to_le_bytes()[0],
+            (x * 13 + y * 17).to_le_bytes()[0],
+        ])
+    })
+    .save(&png)?;
+    fs::write(png.with_extension("xmp"), MATRIX_XMP)?;
+
+    let mut fixtures = vec![(png.clone(), FormatKind::Png)];
+    add_magick_lossless_fixtures(&fixture_root, &png, &mut fixtures)?;
+    add_avif_lossless_fixture(&fixture_root, &png, &mut fixtures)?;
+    Ok(fixtures)
+}
+
+fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKind) -> Result<()> {
+    let source_before = fs::read(source)?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown");
+    let output_root = root.join(format!("lossless-output-{extension}"));
+    fs::create_dir_all(&output_root)?;
+    let mut options = ConvertOptions {
+        output_dir: Some(output_root.clone()),
+        child_threads: 1,
+        ..ConvertOptions::default()
+    };
+    options.flags.set(ConvertFlags::FORCE, true);
+    options.flags.set(ConvertFlags::ULTIMATE, true);
+
+    let result = convert_to_jxl(source, &options, 0.0, None)?;
+    ensure!(
+        result.success && !result.skipped,
+        "lossless {format:?} conversion did not complete: {}",
+        result.message
+    );
+    let output = PathBuf::from(
+        result
+            .output_path
+            .ok_or_else(|| anyhow!("lossless {format:?} conversion omitted output path"))?,
+    );
+    ensure!(
+        detect_true_format(&output)? == FormatKind::Jxl,
+        "lossless {format:?} output is not JXL"
+    );
+    foundation::jxl_utils::verify_jxl_health(&output)
+        .map_err(|error| anyhow!("lossless {format:?} JXL health failed: {error}"))?;
+
+    let source_decoded_root = output_root.join("source-decoded");
+    let output_decoded_root = output_root.join("output-decoded");
+    fs::create_dir_all(&source_decoded_root)?;
+    fs::create_dir_all(&output_decoded_root)?;
+    let source_decoded = decode_static_fixture_to_png(source, format, &source_decoded_root)?;
+    let output_decoded =
+        decode_static_fixture_to_png(&output, FormatKind::Jxl, &output_decoded_root)?;
+    let source_pixels =
+        foundation::image_detection::open_image_with_limits(&source_decoded)?.to_rgba16();
+    let output_pixels =
+        foundation::image_detection::open_image_with_limits(&output_decoded)?.to_rgba16();
+    ensure!(
+        source_pixels.dimensions() == output_pixels.dimensions()
+            && source_pixels.as_raw() == output_pixels.as_raw(),
+        "lossless {format:?} JXL changed decoded pixels"
+    );
+    ensure!(
+        fs::read(source)? == source_before,
+        "lossless {format:?} conversion changed its source"
+    );
+
+    let extracted = extract_jxl_xmp(&output, &output_root.join("extracted.xmp"))?;
+    ensure!(
+        extracted
+            .windows(b"production-matrix".len())
+            .any(|window| window == b"production-matrix"),
+        "lossless {format:?} JXL did not preserve its adjacent XMP"
+    );
+    ensure!(
+        fs::read(source.with_extension("xmp"))? == MATRIX_XMP,
+        "lossless {format:?} source XMP changed"
+    );
+    Ok(())
+}
+
+#[test]
+fn lossless_static_to_jxl_matrix_is_pixel_exact_and_preserves_xmp() -> Result<()> {
+    if let Some(tool) = ["cjxl", "djxl", "jxlinfo", "exiftool", "magick"]
+        .into_iter()
+        .find(|tool| !tool_available(tool))
+    {
+        eprintln!("Skipping lossless raster JXL matrix: {tool} is unavailable");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    for (source, format) in create_lossless_raster_fixtures(root.path())? {
+        verify_lossless_raster_jxl_case(root.path(), &source, format)?;
     }
     Ok(())
 }

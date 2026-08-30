@@ -1799,6 +1799,20 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
     Ok(committed)
 }
 
+fn metadata_output_policy_for_delivery(
+    source: &Path,
+    output: &Path,
+) -> std::io::Result<crate::metadata::MetadataOutputPolicy> {
+    let source_format = crate::image::format_detect::detect_true_format(source)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let output_format = crate::image::format_detect::detect_true_format(output)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(if source_format == output_format {
+        crate::metadata::MetadataOutputPolicy::Preserve
+    } else {
+        crate::metadata::MetadataOutputPolicy::PreserveSource
+    })
+}
 fn commit_temp_to_output_with_metadata_inner(
     temp: &Path,
     output: &Path,
@@ -2045,7 +2059,7 @@ fn commit_temp_to_output_with_metadata_inner(
                 crate::metadata::verify_output_embedded_metadata(
                     src,
                     output,
-                    crate::metadata::MetadataOutputPolicy::Preserve,
+                    metadata_output_policy_for_delivery(src, output)?,
                 )
                 .map_err(|e| {
                     crate::media_conversion_gate::delivery_remove_file_or_audit(

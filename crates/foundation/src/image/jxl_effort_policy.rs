@@ -5,9 +5,15 @@
 //! quality-search axis: every encode phase receives one policy-selected effort.
 //!
 //! ## Encoder tiers
-//! Only two tiers exist at the algorithm layer:
+//! Direct pixel encoding uses the two bounded production tiers:
 //!   - Normal   → e7  (`ultimate = false`)
-//!   - Ultimate → e11 (`ultimate = true`)
+//!   - Ultimate → e10 (`ultimate = true`)
+//!
+//! JPEG bitstream transcode is a separate primitive. libjxl's e11 path is
+//! optimized for lossless JPEG reconstruction and is selected for that context;
+//! a tool that rejects the expert switch receives the explicit production
+//! fallback. It must not leak into ordinary pixel encoding, where e11 can be
+//! disproportionately slow.
 //!
 //! `archive` is a product mode, not a third encoder tier. Normalize it to the
 //! Ultimate tier here so individual encode paths cannot drift:
@@ -70,10 +76,16 @@ pub fn effort_plan_for_mode(
 ///
 /// The returned vector intentionally contains one item. Quality exploration
 /// may vary distance, but it must not run extra encodes merely to rank effort
-/// levels by output size.
+/// levels by output size. JPEG bitstream transcode is deliberately isolated
+/// from direct pixel encoding because its e11 implementation has different
+/// performance characteristics.
 #[must_use]
-pub fn effort_plan(_kind: JxlEffortContext, ultimate: bool) -> Vec<JxlEffortPlan> {
-    vec![JxlEffortPlan::Single(encoder_effort(ultimate))]
+pub fn effort_plan(kind: JxlEffortContext, ultimate: bool) -> Vec<JxlEffortPlan> {
+    let effort = match kind {
+        JxlEffortContext::DirectEncode => encoder_effort(ultimate),
+        JxlEffortContext::JpegLosslessTranscode => constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
+    };
+    vec![JxlEffortPlan::Single(effort)]
 }
 
 #[cfg(test)]
@@ -90,16 +102,22 @@ mod tests {
         let plan = effort_plan(JxlEffortContext::DirectEncode, false);
         assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
         let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, false);
-        assert_eq!(efforts(&plan), vec![constants::JXL_DEFAULT_EFFORT]);
+        assert_eq!(
+            efforts(&plan),
+            vec![constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT]
+        );
     }
 
     #[test]
-    fn ultimate_tier_produces_e11() {
+    fn ultimate_tier_produces_e10() {
         assert_eq!(encoder_effort(true), constants::JXL_ULTIMATE_EFFORT);
         let plan = effort_plan(JxlEffortContext::DirectEncode, true);
         assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
         let plan = effort_plan(JxlEffortContext::JpegLosslessTranscode, true);
-        assert_eq!(efforts(&plan), vec![constants::JXL_ULTIMATE_EFFORT]);
+        assert_eq!(
+            efforts(&plan),
+            vec![constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT]
+        );
     }
 
     #[test]

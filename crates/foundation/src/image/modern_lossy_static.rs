@@ -2,8 +2,8 @@
 //!
 //! Uses the same authoritative-tools-first, cascading-fallback strategy as PNG
 //! validation. Only static, modern-format, lossy images are admitted.
-//! Generic HEIF is retained because its brand does not identify the primary
-//! item's codec; HEIC has a separate codec-constrained route.
+//! Generic HEIF is admitted only after the same positive static/lossy codec
+//! probe as every other candidate; its filename brand is never used as proof.
 
 use crate::image_detection::{CompressionType, DetectedFormat, detect_compression};
 use crate::unified_error::{ImgQualityError, Result};
@@ -26,7 +26,12 @@ pub struct ModernLossyStaticCandidate {
 pub const fn is_modern_static_image_format(format: FormatKind) -> bool {
     matches!(
         format,
-        FormatKind::WebP | FormatKind::Jp2 | FormatKind::Jxl | FormatKind::Avif | FormatKind::Heic
+        FormatKind::WebP
+            | FormatKind::Jp2
+            | FormatKind::Jxl
+            | FormatKind::Avif
+            | FormatKind::Heic
+            | FormatKind::Heif
     )
 }
 
@@ -37,6 +42,7 @@ const fn detected_format_from_kind(format: FormatKind) -> Option<DetectedFormat>
         FormatKind::Jxl => Some(DetectedFormat::JXL),
         FormatKind::Avif => Some(DetectedFormat::AVIF),
         FormatKind::Heic => Some(DetectedFormat::HEIC),
+        FormatKind::Heif => Some(DetectedFormat::HEIF),
         _ => None,
     }
 }
@@ -290,10 +296,7 @@ mod tests {
         assert!(is_modern_static_image_format(FormatKind::WebP));
         assert!(is_modern_static_image_format(FormatKind::Avif));
         assert!(is_modern_static_image_format(FormatKind::Heic));
-        assert!(
-            !is_modern_static_image_format(FormatKind::Heif),
-            "generic HEIF has no codec guarantee; retain it until the primary item/property association is resolved"
-        );
+        assert!(is_modern_static_image_format(FormatKind::Heif));
         assert!(!is_modern_static_image_format(FormatKind::Jpeg));
         assert!(!is_modern_static_image_format(FormatKind::Png));
         assert!(!is_modern_static_image_format(FormatKind::Gif));

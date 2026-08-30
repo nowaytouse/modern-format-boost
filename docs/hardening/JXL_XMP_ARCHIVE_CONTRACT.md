@@ -1,7 +1,8 @@
 # JXL, XMP, and JPEG Archive Contract
 
 This document is the production contract for reversible JPEG-to-JXL delivery,
-XMP overlays, Tier 2 sidecars, and JPEG restoration.
+lossless raster and proven-lossless modern-container JXL encoding, native XMP
+overlays, FastImg Tier 2 custody, and JPEG restoration.
 
 ## Ownership boundary
 
@@ -25,6 +26,31 @@ supported strict operation that rejects the media never falls through. In both
 cases, a zero exit status is insufficient: positive reconstruction output,
 non-empty JPEG, no pixel fallback, JPEG health, and the outer BLAKE3/byte proof
 remain mandatory.
+
+## Archival source routing
+
+The default IMG route protects functional archive value, not only visible
+metadata:
+
+- true JPEG, including UltraHDR/MPF JPEG, enters reversible JXL only when the
+  original JPEG bytes can be reconstructed exactly;
+- ordinary lossless raster sources such as PNG, BMP, and TIFF, plus modern
+  WebP, AVIF, HEIC/HEIF, and JP2 sources with positive lossless evidence, enter
+  pixel-lossless JXL with decoded RGBA16 equality and metadata audit;
+- AVIF is decoded through the authoritative `avifdec` path only after an
+  explicit gain-map probe. A present or unprovable gain map retains the native
+  source instead of flattening HDR. HEIC/HEIF gain maps use the dedicated HDR
+  JXL path with verified auxiliary sidecars;
+- an existing JXL and every lossy or semantically unknown modern container
+  remains byte-for-byte unchanged. Unknown archive structure is never inferred
+  to be disposable from primary-pixel equality alone.
+
+All `cjxl` outputs explicitly request the JXL container so append-only metadata
+boxes remain available. Direct pixel encoding uses effort 7 normally and effort
+10 for ultimate/archive work because effort 11 can become impractically slow in
+that workload. JPEG bitstream transcode is a distinct, fast workload and uses
+effort 11 by default; an encoder that rejects expert options is retried at effort
+10. Neither path may bypass its pixel or exact-reconstruction proof.
 
 ## Durable overlay commit
 
@@ -67,13 +93,30 @@ nesting beyond 256 levels, more than one million events, malformed XML, unsafe
 container boundaries, duplicate top-level JBRD, and excessive JXL box counts.
 These are fail-closed limits, not permission to truncate metadata.
 
-## Tier 2 sidecars
+## FastImg Tier 2 and AVIF Meme Mode
 
-FastImg JXL Tier 2 admits only positively proven lossy, static WebP, JP2, JXL,
-AVIF, or codec-constrained HEIC originals. When no sidecar exists, the original
-media bytes are imported and verified unchanged.
+FastImg has one byte-preserving custody tier: JXL strategy Tier 2 admits only
+positively proven lossy, static WebP, JP2, JXL, AVIF, HEIC, or HEIF
+originals. It imports the admitted source without re-encoding and performs the
+live Photos UUID/content-hash checks before cleanup.
 
-When an adjacent XMP exists on a JXL container, Tier 2 instead:
+AVIF strategy has no Photos-custody Tier 2. It has two input-driven paths:
+
+1. an existing AVIF is never re-encoded: a metadata-clean file is adopted
+   byte-for-byte; otherwise ExifTool edits only a staged container copy;
+2. the staged AVIF is accepted only when its exact primary-image SHA-256 is
+   unchanged, `avifdec` still reports the same codec/HDR/gain-map features, and
+   the clear-metadata audit passes;
+3. every other confirmed-static input is decoded, searched, and encoded in the
+   AVIF domain with Exif, XMP, and ICC embedding disabled;
+4. the final AVIF must pass pixel, dimension, payload and clear-metadata gates;
+5. if a matching XMP sidecar exists, validate it before processing and remove that
+   exact sidecar only after the same final delivery proof; retain it whenever a
+   gate fails.
+
+When no sidecar exists, the JXL Tier 2 path imports the original media bytes and
+verifies them unchanged. When an adjacent XMP exists on a JXL container, the
+eligible Tier 2 candidate instead:
 
 1. validates the XMP;
 2. creates an isolated copy of the media;
@@ -88,15 +131,17 @@ When an adjacent XMP exists on a JXL container, Tier 2 instead:
 If staging, metadata merge, import, or live-library verification fails, both the
 source and sidecar remain. Tier 2 never deletes an unproved sidecar.
 
-AVIF, HEIC/HEIF, WebP, and JP2 with adjacent XMP are deliberately retained and
-reported instead of being passed through ExifTool/Exiv2. These formats can carry
-HDR gain maps, auxiliary item relationships, authenticity/signature data, and
-unknown properties or chunks. Proving only the primary image payload unchanged
-does not prove those archival layers survived a container rewrite. A native,
-format-specific overlay/relationship proof is required before embedded XMP
-delivery can be enabled for them. Any JPEG APP11 segment blocks generic XMP
-rewrites because APP11 can carry JPEG XT, JUMBF, provenance, or other protected
-structure; a PNG `caBX` chunk blocks rewrites because it carries C2PA data.
+AVIF, HEIC/HEIF, WebP, and JP2 preserving routes use a staged format-native XMP writer
+instead of a generic container rewrite. Commit requires an unchanged primary
+image-data hash, dimensions and frame count, unchanged stable non-XMP
+properties, and successful XMP readback. ISOBMFF aggregate `mdat` size is not an
+invariant because the XMP item itself is stored there. Any failed or incomplete
+proof retains both source and sidecar. AVIF Meme Mode is deliberately outside
+this metadata-preserving writer: it strips embedded metadata and does not merge
+the sidecar into the output. JXL uses the append-only overlay contract above.
+Any JPEG APP11 segment blocks generic XMP rewrites because APP11 can carry JPEG
+XT, JUMBF, provenance, or other protected structure; a PNG `caBX` chunk blocks
+rewrites because it carries C2PA data.
 
 ## `restore-jpeg` input-driven behavior
 

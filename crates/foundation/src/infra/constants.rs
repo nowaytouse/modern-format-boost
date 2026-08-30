@@ -1076,6 +1076,7 @@ pub const JXL_ARG_DISTANCE: &str = "-d";
 pub const JXL_ARG_EFFORT: &str = "-e";
 pub const JXL_ARG_THREADS: &str = "--num_threads";
 pub const JXL_ARG_LOSSLESS_JPEG: &str = "--lossless_jpeg=1";
+pub const JXL_ARG_CONTAINER: &str = "--container=1";
 pub const JXL_ARG_ALLOW_EXPERT_OPTIONS: &str = "--allow_expert_options";
 pub const JXL_ARG_COLOR_SPACE: &str = "color_space";
 pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
@@ -1084,9 +1085,9 @@ pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
 // --- JXL Standardized Parameters ---
 /// Quality distance for ultimate mode (Limit Mode)
 pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
-/// Effort level for ultimate mode (Limit Mode)
-/// Ultimate production effort. Requires `--allow_expert_options` in `cjxl` 0.13.0+.
-pub const JXL_ULTIMATE_EFFORT: u8 = 11;
+/// Effort level for ultimate mode (Limit Mode).
+/// e10 is the highest non-experimental production effort accepted by cjxl.
+pub const JXL_ULTIMATE_EFFORT: u8 = 10;
 /// Default effort level for standard mode
 pub const JXL_DEFAULT_EFFORT: u8 = 7;
 /// Deep production effort retained for explicit compatibility paths.
@@ -1096,7 +1097,7 @@ pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
 /// Disabled production effort due to the documented e9/e10 efficiency
 /// inversion.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
-/// Runtime JXL policy: default mode emits `e7`; ultimate mode emits `e11`.
+/// Runtime JXL policy: default mode emits `e7`; ultimate mode emits production `e10`.
 #[must_use]
 pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
     if ultimate {
@@ -1105,13 +1106,10 @@ pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
         JXL_DEFAULT_EFFORT
     }
 }
-/// Runtime JXL policy: supports production efforts (7/9/11).
+/// Runtime JXL policy: supports the production efforts used by this project.
 #[must_use]
 pub const fn is_supported_jxl_effort(effort: u8) -> bool {
-    effort == JXL_DEFAULT_EFFORT
-        || effort == JXL_DEEP_EFFORT
-        || effort == 10
-        || effort == JXL_ULTIMATE_EFFORT
+    effort == JXL_DEFAULT_EFFORT || effort == JXL_DEEP_EFFORT || effort == JXL_ULTIMATE_EFFORT
 }
 /// Runtime JXL policy with explicit expert/lab opt-in for e11.
 #[must_use]
@@ -3596,8 +3594,9 @@ mod tests {
         assert!(is_supported_jxl_effort(JXL_DEFAULT_EFFORT));
         assert!(is_supported_jxl_effort(JXL_DEEP_EFFORT));
         assert!(is_supported_jxl_effort(JXL_ULTIMATE_EFFORT));
-        // e11 is now JXL_ULTIMATE_EFFORT, so both constants resolve to 11
-        assert_eq!(JXL_ULTIMATE_EFFORT, JXL_EXPERIMENTAL_LOSSLESS_EFFORT);
+        assert_eq!(JXL_ULTIMATE_EFFORT, 10);
+        assert_eq!(JXL_EXPERIMENTAL_LOSSLESS_EFFORT, 11);
+        assert!(!is_supported_jxl_effort(JXL_EXPERIMENTAL_LOSSLESS_EFFORT));
         assert!(is_supported_jxl_effort_with_expert(
             JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             true

@@ -15,15 +15,15 @@
 
 - **`img run`**：只处理静态图片，普通路径只交付 **JXL**。默认使用本地精确检测；只有显式开启可选质量启发功能时才查询 PostgreSQL。
 - **`img fast-img --strategy jxl`**：真实 JPEG → 可逐字节重建的 JXL；确认有损的现代静态格式可进入独立的 Apple Photos 托管路径。
-- **`img fast-img --strategy avif`**：面向已整理表情包的 Meme Mode，使用 AVIF 搜索并清理元数据；这是明确的破坏性策略。
+- **`img fast-img --strategy avif`**：非 AVIF 静图进入 Meme Mode 搜索；已有 AVIF 绝不重复编码。已清洁的 AVIF 逐字节托管，含描述元数据的 AVIF 只做容器级清理，并要求主图像数据哈希保持完全一致。
 - **`vid run`**：拥有视频与动图的 HEVC/AV1 交付。`img` 不会静默转发或代跑 `vid`。
 - **格式识别**：文件头、容器结构与动画证据优先于扩展名；扩展名不决定真实媒体类型。
 
 典型路线：
 
-- 📸 **`img run`**：静图 → JXL；有损现代静图/**跳过**；**动图忽略**
-- ⚡ **`img fast-img --strategy jxl`**：真实 JPEG → 永久可逆 JXL；只有最终重建闸门通过后才允许删除源 JPEG
-- 🧩 **`img fast-img --strategy avif`**：确认静态的图片容器 → AVIF Meme Mode 搜索
+- 📸 **`img run`**：JPEG、普通无损栅格图，以及已被正面证明为无损的现代静态格式（WebP/AVIF/HEIC/JP2）→ JXL；有损或压缩语义不明的现代容器保留原生字节；**动图忽略**
+- ⚡ **`img fast-img --strategy jxl`**：真实 JPEG → 永久可逆 JXL；已证实有损的现代静图进入独立 JXL Tier 2
+- 🧩 **`img fast-img --strategy avif`**：非 AVIF 静图 → 有界 AVIF 质量/大小搜索；已有 AVIF → 原样托管或仅清理容器元数据，绝不重新编码。内嵌 Exif/XMP/ICC 会被清理，增益图等结构性图像项目不会被压平；有效 XMP 侧车只在最终交付证明后删除
 - 🎬 **`vid run`**：H.264、动图 WebP/GIF 等 → HEVC/AV1；由 `--codec` 与 `--apple-compat` 决定
 
 路由实现来源：[`delivery_codec_strategy.rs`](../crates/foundation/src/convert/delivery_codec_strategy.rs)。
@@ -33,7 +33,7 @@
 - 只有通过对应路径的解码、质量、元数据与完整性闸门，候选文件才会交付。受大小约束的路径比较的是编码媒体载荷；找不到符合策略的候选时，保留源文件并明确跳过或失败。
 - JPEG→JXL 会直接用真实 JXL 尝试 `djxl --reconstruct_jpeg`，不会把帮助文本当作能力真相；只有解码器明确报告“不支持该参数”时，才退回由 `.jpg` 扩展名选择的官方兼容接口。两条路径都必须得到正向 JPEG 重建诊断、非空输出、无像素转 JPEG 回退以及逐字节哈希证明，不会因版本号或退出码猜测成功。JBRD、原始 Exif/XMP/JUMBF 与编码数据会被冻结。JPEG→JXL 时，外部 XMP 会作为 `xml ` overlay **追加进 JXL 容器内**并再次核验精确重建；JXL→JPEG 时，`restore-jpeg` 不改写逐字节恢复出的 JPEG，而把最新有效 overlay 作为单独哈希核验的同名 `.xmp` 侧车交付，因为把新增 XMP 嵌进 JPEG 必然会改变原 JPEG 字节。
 - Overlay 采用同目录唯一临时文件、源身份/哈希复核、原子替换与文件/父目录刷盘；版本化审计链记录 JBRD、overlay、最终容器与重建哈希但不记录媒体内容。完整规则见 [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)。
-- AVIF、HEIC/HEIF、WebP 与 JP2 不再交给通用元数据写入器原地重写来“合并”XMP。这些容器可能携带 HDR 增益图、辅助图像关系、真实性/签名数据及未知属性或 chunk，仅比较主图像载荷无法证明它们仍完整。带 JPEG APP11 的文件同样拒绝通用重写，因为 APP11 可能承载 JPEG XT、JUMBF、来源证明或其他结构；PNG `caBX` 则是明确的 C2PA 容器标记。当前默认显式失败并保留媒体与侧车；只有具备追加式冻结证明的 JXL 允许内嵌 overlay。
+- 现代容器的元数据处理采用“先正面合并、再证明”的路径。已证实无损的 AVIF、HEIC/HEIF、WebP 与 JP2 进入 JXL 转换；XMP 会随 JXL 容器写入，并核验像素、尺寸、辅助/HDR/来源证明标记及其余结构元数据。FastImg JXL Tier 2 对原生现代源文件使用暂存副本和格式原生写入器，只有同一组证明通过才提交；AVIF Meme Mode 则明确清理内嵌 Exif/XMP/ICC，不把侧车合并进输出，只在最终证明后精确删除侧车。已有 AVIF 不重新编码：清洁文件逐字节保留，需清理时也必须证明主图像 SHA-256 及 `avifdec` 可见的编码/HDR/增益图特征不变。若选定路径无法证明增益图、辅助项目、签名、未知属性/chunk 或编码载荷完整，才明确保留原始媒体与侧车供复核，绝不静默丢弃。带 JPEG APP11 或 PNG `caBX` 的受保护结构同样必须通过专门证明。
 - 项目不是“魔法缩容器”。完整文件可能因容器与元数据而更大，高质量候选也可能没有任何空间收益。
 - 探索以时间换取更精确的候选：目标是在有效质量/大小策略内寻找最高质量点，而不是无条件得到最小文件。输入越多、越复杂、差异越大，耗时越高；`--ultimate` 会主动扩大搜索成本。
 
@@ -47,14 +47,16 @@ IMG 回归套件直接覆盖公开的检测、转换与交付边界；仅编译�
 - 有/无 XMP 侧车及带 ICC 配置文件的 JPEG，包含 XMP 提取和源侧车不可变核验；
 - foundation 图像分析测试覆盖 UltraHDR/MPF JPEG 检测、增益图元数据边界，以及 HDR
   合成失败关闭与保留原件路径；
-- 真实 PNG/TIFF/WebP/GIF/AVIF/JXL/HEIC 夹具、静图/动图分类、权威解码器、尺寸和非空像素检查；以及
+- 真实 PNG/TIFF/WebP/GIF/AVIF/JXL/HEIC 夹具、静图/动图分类、权威解码器、尺寸和非空像素检查；
+- 合成 PNG/BMP/TIFF → 容器化 JXL 的真实编码，RGBA16 逐像素一致、源文件不变及 XMP overlay 提取核验；以及
 - foundation 与 IMG 套件中已有的损坏/截断输入、元数据 overlay、输出计数和空目录清理契约。
 
-在当前 revision 中，`cargo test --locked -p img --all-targets -- --list` 会列出
-该包的 246 项测试。新增的生产矩阵明确锁定了“截断 JPEG + XMP 保留源文件”、
-动画 WebP 分块分类、AVIF/HEIC sequence brand 边界，以及 Tier 2 清理空目录时
-保留无关隐藏文件等回归。这个数字是可复现的测试清单，不表示每台机器都具备并
-执行了所有可选外部编解码器或真实 Photos 事务。
+`cargo test --locked -p img --all-targets -- --list` 是当前检出 revision 的可复现
+测试清单。生产矩阵锁定“截断 JPEG + XMP 保留源文件”、动画 WebP 分块分类、
+  AVIF/HEIC sequence brand 边界、JXL Tier 2 与 AVIF Meme Mode 路由、已有 AVIF
+  禁止重复编码与容器清理证明，以及清理空目录时保留
+无关隐藏文件等回归。可选编解码器分支会明确报告可用性；清单不表示每台机器都
+执行了所有外部编解码器或真实 Photos 事务。
 
 运行完整 IMG 套件：
 
@@ -99,7 +101,7 @@ cargo run --locked -p dev --bin check_all -- \
 ## ⚠️ 免责声明与重要提示
 
 1. **数据安全第一**：为避免任何潜在的数据丢失，强烈建议将处理后的文件输出到单独的目录（例如，使用 `-o /path/to/output`），而不是使用原地转换 (`--in-place`)，特别是对于不可替代的媒体。
-2. **生产候选状态**：IMG 具有失败关闭的交付契约、246 项本地回归矩阵和明确的源文件保留证明。正式发布仍取决于目标机器的编解码器版本；Photos 流程还需要真实 macOS/TCC/iCloud 验收。不可替代的档案请保留独立备份，并在 GitHub 报告可复现问题。
+2. **生产候选状态**：IMG 具有失败关闭的交付契约、单包可复现测试清单和明确的源文件保留证明。正式发布仍取决于目标机器的编解码器版本；Photos 流程还需要真实 macOS/TCC/iCloud 验收。不可替代的档案请保留独立备份，并在 GitHub 报告可复现问题。
 3. **计算洞察**：虽然针对效率进行了优化（尤其是在苹果 M 系列芯片上），但在 `--ultimate` 模式下处理大规模批处理仍可能耗时较长。它将长时间占用系统资源；请相应地规划您的任务。
 4. **命令语义不同**：普通 `img run` 当前只交付 JXL；FastImg AVIF 用 `--strategy avif`；只有 `vid run` 的 `hevc|av1` 表示视频编码器。不要跨命令推断参数语义。
 
@@ -127,9 +129,9 @@ cargo run --locked -p dev --bin check_all -- \
 每个文件都会经过多阶段决策流水线：
 
 - **阶段 1 — 精确检测**：通过文件头、容器结构与权威工具证据识别 JPEG、WebP、AVIF、HEIC、JP2 等格式；无法证明有损/无损或静态/动画语义时失败关闭。
-- **阶段 2 — 路由与编码**：JPEG 只接受能逐字节重建的 JXL 转码；已证明无损的源可走无损 JXL；已是有损现代静态格式的源通常原样保留。
+- **阶段 2 — 路由与编码**：JPEG 只接受能逐字节重建的 JXL 转码；PNG/TIFF/BMP 以及被正面证明为无损的 WebP/AVIF/HEIC/HEIF/JP2 进入像素精确 JXL；已有 JXL 与有损/语义不明的现代容器保留原编码。
 - **阶段 3 — 异常媒体路径**：普通 IMG 可对非 JPEG 的解码器敌对格式使用受控预处理；JPEG 不以像素相等或重新编码冒充可逆转码，FastImg JXL 也不使用破坏性兜底。
-- **阶段 4 — HDR 增益图处理**：HEIC 增益图资产可合成真实 HDR JXL，并将无法内嵌的深度图/增益图作为 sidecar 保留。UltraHDR JPEG 则通过 JBRD 归档，原始 JPEG（包括 MPF 增益图与私有元数据）必须逐字节重建。显式 UltraHDR 像素合成属于不可归档操作，不会被删除源文件或强交付路径自动采用。
+- **阶段 4 — HDR 增益图处理**：带增益图的 HEIC/HEIF 进入专用 HDR JXL 合成链，并把增益图、深度图等不能内嵌的辅助资产作为逐项核验的 sidecar；AVIF 在解码前由 `avifdec --info` 实时核查增益图，当前无法无损表达时保留原件而不扁平化。UltraHDR JPEG 通过 JBRD 归档，包含 MPF 增益图与私有元数据的原 JPEG 必须逐字节重建。
 - **阶段 5 — img 仅静图**：`img run` 对**已验证动图** **ignore**（`IMG_ANIMATED_HANDOFF`）；**真单帧** GIF/WebP 等可走 JXL；其余动图与所有视频请用 **`vid run`**。
 - **阶段 6 — 循环意图 v3**：共享的循环意图逻辑决定动画媒体是保持类似 GIF 的状态还是进入视频流水线。苹果兼容的现代动画交付策略在此集中管理。
 
@@ -234,20 +236,19 @@ Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/convert/deli
 | JPEG                                        |   ✅   | **无损重建**       | `.jxl`     | 位精确 `cjxl --lossless_jpeg=1`   |
 | UltraHDR JPEG                               |   ✅   | **精确归档**       | `.jxl`     | 完整 MPF/增益图 JPEG 可逐字节重建 |
 | PNG / TIFF / BMP / 其他无损静态图           |   ✅   | **无损转换**       | `.jxl`     | 可能先走迂回路径                  |
-| WebP / AVIF / HEIC / HEIF / JP2 (无损静态)  |   ✅   | **转换**           | `.jxl`     | 允许转换无损现代静态图            |
-| 带有增益图的 HEIC / HEIF                    |   ✅   | **HDR 合成**       | `.jxl`     | 增益图路径合成线性 HDR            |
+| 已证明无损的 WebP / AVIF / HEIC / HEIF / JP2 |   ✅   | **无损转换**       | `.jxl`     | 像素、元数据与已知功能资产逐项核验 |
+| 有损/语义不明的现代容器或已有 JXL             |   ✅   | **逐字节保留**     | 保留原文件 | 避免代际损失或破坏未知归档结构      |
+| 带有增益图的 HEIC / HEIF                      |   ✅   | **专用 HDR 路径**  | `.jxl` + sidecar | 合成 HDR 并核验辅助资产          |
 | 静态验证后的遗留有损静态图                  |   ✅   | **近无损转换**     | `.jxl`     | 当前 `img run` 批量路径专注于 JXL |
-| 有损 WebP / AVIF / HEIC / HEIF / JP2 静态图 |   ✅   | **跳过**           | 保留原文件 | 避免代际损失                      |
-| JXL 静态图                                  |   ✅   | **跳过**           | 保留原文件 | 已经是最佳格式                    |
 | 动画 GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌   | **img 忽略**       | —          | 请用 **`vid run`**                |
 
 ### `img` 入口
 
 | 入口                               | 静图输出                                           | 动图        | AVIF                             |
 | ---------------------------------- | -------------------------------------------------- | ----------- | -------------------------------- |
-| **`img run`**                      | JXL（`hevc`）；现代有损源原样保留                  | **忽略**    | 不可用，`av1` 会被拒绝           |
+| **`img run`**                      | JPEG 与已证明无损静图进入 JXL；现代有损/未知源原样保留 | **忽略**    | 不作为输出 codec；无损 AVIF 可进入 JXL |
 | **`img fast-img --strategy jxl`**  | 真实 JPEG 可逆 JXL；已确认现代有损源进入验证交付层 | 保留/忽略   | 可作为原样交付的现代有损源       |
-| **`img fast-img --strategy avif`** | AVIF Meme Mode                                     | 拒绝/保留   | 唯一 AVIF 编码入口               |
+| **`img fast-img --strategy avif`** | 非 AVIF 静图走有界搜索；已有 AVIF 只原样托管或做容器元数据清理，绝不重复编码 | 拒绝/保留   | 主图像/HDR/增益图特征必须保持一致；有效 XMP 侧车仅在最终证明后删除 |
 | **`smart_convert()`**              | JXL 或按 `determine_strategy` 原样保留             | 域外 ignore | 不可用，请使用 FastImg Meme Mode |
 
 ### 动画媒体决策矩阵（仅 `vid`）
@@ -456,7 +457,8 @@ vid strategy --codec hevc /path/to/video.mp4
 
 ### 详细选项
 
-- `--ultimate`：存档级 **0.01 精度** 搜索（高质量，高时间成本）。
+- `--ultimate`：存档级 **0.01 精度** 搜索，并使用生产 JXL effort 10（高质量，高时间成本）。
+- `--archive`：直接像素编码仍以 effort 10 为生产上限；JPEG 比特流转码属于不同负载，默认使用专用 effort 11，若编码器不支持或该次尝试失败则回退 effort 10，最终仍必须通过逐字节重建证明。
 - `--apple-compat`：启用苹果生态系统兼容性（实况照片/AAE）。CLI 默认为开启；`--no-apple-compat` 可禁用。
 - `--in-place`：替换原始文件。**警告：不可逆。**
 - `-o /dir`：安全输出目录。（推荐）
@@ -533,18 +535,18 @@ macOS 14+ / iOS 17+、Chrome 91+ 和 Firefox 128+ 已提供原生支持。然而
 完全支持。我们使用 `hdr10plus_tool` 提取 SMPTE 2094-40 动态元数据，并通过 `libx265` 的 `--dhdr10-info` 参数将其注回 HEVC 流。请确保已安装该工具以启用此功能。
 
 **3. 为什么跳过 WebP/AVIF/HEIC？**
-静态有损 WebP/AVIF/HEIC/HEIF 通常会被跳过，因为它们本身已经是现代有损格式，重新编码可能会面临代际损失，而收益有限。当前代码中的重要例外包括：
+现代有损源会保留原编码以避免代际损失；被正面证明为无损的 WebP/AVIF/HEIC/HEIF/JP2 则进入 JXL 无损链。AVIF 使用权威 `avifdec` 解码并在解码前核查增益图，输出必须通过 RGBA16 像素、方向、颜色和源元数据证明；已有 JXL 仍是归档目标。其他边界包括：
 
-- 无损现代静态图仍可转换为 JXL
-- HEIC/HEIF 增益图资产可以合成为 HDR JXL
+- 带增益图的 HEIC/HEIF 使用专用 HDR JXL 与已核验辅助 sidecar；AVIF 增益图当前不能安全映射时明确保留原件
 - UltraHDR JPEG 默认通过 JBRD 精确归档，内嵌增益图与私有元数据仍属于原始 JPEG 字节流，可由 `restore-jpeg` 逐字节恢复；不可逆的像素级 HDR 合成不会被默认或删除源文件路径采用
+- FastImg JXL Tier 2 可原样托管已证实有损的现代静图；AVIF Meme Mode 只重编码非 AVIF 输入，已有 AVIF 会原样托管或仅清理容器元数据
 - 动画现代格式不由 `img` 处理；它们通过 `vid` 和 `loop_intent` 进行路由
 
 **4. `img run` 与 FastImg 有什么不同？**
-`img run` 是覆盖面更广的静图优化器：默认使用本地精确检测，也可显式启用数据库质量启发式，并拥有 HDR、精度、颜色与异常格式迂回路径。FastImg 是边界更窄的持久交付工作流：JXL 主层只接受可逐字节重建的真实 JPEG，Tier 2 只托管已被正向证明为有损的现代静图；AVIF Meme Mode 则对已整理的表情包执行有界质量/大小搜索。两者复用底层安全闸门，但候选选择、搜索预算、状态恢复和 Photos 策略并不相同。
+`img run` 是覆盖面更广的静图优化器：默认使用本地精确检测，也可显式启用数据库质量启发式；JPEG 与已证明无损的普通/现代静图进入 JXL，有损或语义不明的现代源保持原编码。FastImg 是边界更窄的持久交付工作流：JXL 主层只接受可逐字节重建的真实 JPEG，JXL Tier 2 只托管已被正向证明为有损的现代静图；AVIF 策略对非 AVIF 静图执行有界编码搜索，对已有 AVIF 则只做原样托管或容器元数据清理，并证明主图像与 HDR/增益图特征不变。两者复用底层安全闸门，但候选选择、搜索预算、状态恢复和 Photos 策略并不相同。
 
 **5. FastImg Tier 2 能否精确判断现代静图的有损/无损？**
-只有存在格式级正向证据时才会判为有损并准入。WebP、JP2、AVIF、HEIC/HEIF 与 JXL 各自使用结构化解析和权威工具证据；`Unknown`、无损、动画、损坏容器和带 JPEG 重建数据的 JXL 都会失败关闭并保留原件。这里的“精确”指不会靠扩展名或猜测把不确定媒体当成有损，并不声称每一种编码都能从容器头证明其量化语义。若存在合法相邻 XMP，Tier 2 会在隔离副本中合并后交给 Photos，并分别核验 Photos 中的增强交付哈希、磁盘源文件哈希与侧车哈希；没有侧车本身是合法状态，不会阻塞导入。
+JXL 策略 Tier 2 只有存在格式级正向证据时才会判为有损并准入。WebP、JP2、AVIF、HEIC/HEIF 与 JXL 各自使用结构化解析和权威工具证据；`Unknown`、无损、动画、损坏容器和带 JPEG 重建数据的 JXL 都会失败关闭并保留原件。AVIF Meme Mode 只对非 AVIF 输入执行有界编码搜索；已有 AVIF 若已清洁则逐字节托管，否则只在暂存副本清理容器元数据，并要求主图像 SHA-256 与 `avifdec` 的编码/HDR/增益图特征完全不变。匹配的有效 XMP 侧车不合并进 Meme Mode 输出，只在最终交付证明通过后精确删除；任何失败都保留源文件和侧车。JXL Tier 2 使用隔离副本的元数据保留路径，并继续核验 Photos UUID/内容哈希。
 
 **6. `restore-jpeg` 会改变原始 JPEG 吗？**
 不会。它按 `djxl` 实际公开能力选择显式 `--reconstruct_jpeg` 或官方 `.jpg` 默认重建，并且只接受带正向重建诊断、非空输出、无像素回退且逐字节哈希一致的 JXL；不支持这两种受控接口的 CLI 会在能力预检阶段被拒绝。重建 JPEG 后也不会再用元数据工具改写该文件。JXL 内追加的 XMP overlay 会作为同名 `.xmp` 侧车单独校验、哈希和提交；删除源 JXL 前，JPEG 与 XMP（如有）的最终哈希都会再次核对。若要求单一“已嵌入新 XMP”的 JPEG，它必然不是原 JPEG 的逐字节副本，因此项目把“精确 JPEG + 已核验 XMP”作为一对交付物。

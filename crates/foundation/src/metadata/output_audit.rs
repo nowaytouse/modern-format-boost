@@ -34,6 +34,15 @@ pub struct OutputMetadataAudit {
     pub output_payload_bytes: u64,
 }
 
+/// Return whether one file already satisfies the removable-metadata policy.
+///
+/// This preflight does not emit a failed delivery audit. Final outputs must
+/// still call [`verify_output_embedded_metadata`].
+pub fn embedded_metadata_is_clear(path: &Path) -> io::Result<bool> {
+    let payload_bytes = removable_payload_bytes(path)?;
+    Ok(clear_mismatches(path, payload_bytes)?.is_empty())
+}
+
 impl OutputMetadataAudit {
     #[must_use]
     pub const fn bytes_cleared(&self) -> u64 {
@@ -67,6 +76,36 @@ const CLEARABLE_TAG_ARGS: &[&str] = &[
     "-Keys:all",
     "-ItemList:all",
     "-UserData:all",
+];
+
+/// Codec-layout fields describe how the source container stores pixels. They
+/// are verified by the pixel/orientation/color gates, not copied as portable
+/// descriptive metadata into a different container.
+const CROSS_CONTAINER_STRUCTURAL_TAGS: &[&str] = &[
+    "BitsPerSample",
+    "Compression",
+    "ExtraSamples",
+    "FillOrder",
+    "ImageHeight",
+    "ImageLength",
+    "ImageWidth",
+    "NewSubfileType",
+    "PhotometricInterpretation",
+    "PlanarConfiguration",
+    "Predictor",
+    "ReferenceBlackWhite",
+    "RowsPerStrip",
+    "SampleFormat",
+    "SamplesPerPixel",
+    "StripByteCounts",
+    "StripOffsets",
+    "SubfileType",
+    "TileByteCounts",
+    "TileLength",
+    "TileOffsets",
+    "TileWidth",
+    "YCbCrPositioning",
+    "YCbCrSubSampling",
 ];
 
 /// Verify embedded metadata for one delivered output against its paired source.
@@ -186,6 +225,30 @@ fn preserve_mismatches(
     mismatches
 }
 
+fn metadata_values_equivalent(key: &str, expected: &str, actual: &str) -> bool {
+    if expected == actual {
+        return true;
+    }
+    let tag = key.rsplit(':').next().unwrap_or(key);
+    if !matches!(tag, "WhitePoint" | "PrimaryChromaticities") {
+        return false;
+    }
+    let parse = |value: &str| {
+        value
+            .split_whitespace()
+            .map(str::parse::<f64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+    };
+    match (parse(expected), parse(actual)) {
+        (Some(expected), Some(actual)) if expected.len() == actual.len() => expected
+            .iter()
+            .zip(actual)
+            .all(|(expected, actual)| (expected - actual).abs() <= 1.0e-8),
+        _ => false,
+    }
+}
+
 fn preserve_source_mismatches(
     src: &BTreeMap<String, String>,
     dst: &BTreeMap<String, String>,
@@ -193,7 +256,7 @@ fn preserve_source_mismatches(
     let mut mismatches = Vec::new();
     for (key, expected) in src {
         match dst.get(key) {
-            Some(actual) if actual == expected => {}
+            Some(actual) if metadata_values_equivalent(key, expected, actual) => {}
             Some(actual) => mismatches.push(format!(
                 "metadata {key} expected={expected:?} actual={actual:?} (possible wrong-source metadata)"
             )),
@@ -275,6 +338,9 @@ fn preserve_audit_excludes_tag(key: &str) -> bool {
     let tag = key.rsplit(':').next().unwrap_or(key);
     tag.eq_ignore_ascii_case("Orientation")
         || tag.eq_ignore_ascii_case("XMPToolkit")
+        || CROSS_CONTAINER_STRUCTURAL_TAGS
+            .iter()
+            .any(|structural| tag.eq_ignore_ascii_case(structural))
         || key.eq_ignore_ascii_case("IFD1:ThumbnailOffset")
         || [
             "Keys:CompatibleBrands",
@@ -525,6 +591,9 @@ mod tests {
             "IFD0:Orientation",
             "XMP-x:XMPToolkit",
             "IFD1:ThumbnailOffset",
+            "IFD0:BitsPerSample",
+            "IFD0:StripOffsets",
+            "IFD0:YCbCrPositioning",
             "Keys:CompatibleBrands",
             "Keys:MajorBrand",
             "Keys:MinorVersion",
@@ -538,12 +607,24 @@ mod tests {
             "MakerNotes:ThumbnailOffset",
             "XMP-photoshop:DateCreated",
             "XMP-xmp:CreateDate",
+            "IFD0:WhitePoint",
         ] {
             assert!(
                 !preserve_audit_excludes_tag(creative),
                 "creative metadata must remain custody-checked: {creative}"
             );
         }
+
+        assert!(metadata_values_equivalent(
+            "IFD0:WhitePoint",
+            "0.3127000034 0.3289999962",
+            "0.3127000032 0.3289999962"
+        ));
+        assert!(!metadata_values_equivalent(
+            "IFD0:WhitePoint",
+            "0.3127 0.3290",
+            "0.3000 0.3200"
+        ));
     }
 
     #[test]

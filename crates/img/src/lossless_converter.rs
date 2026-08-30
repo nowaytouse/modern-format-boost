@@ -1822,10 +1822,10 @@ fn run_cjxl_jpeg_encode_with_effort(
                 format!(
                     "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
                     foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
-                    foundation::constants::JXL_DEEP_EFFORT,
+                    foundation::constants::JXL_ULTIMATE_EFFORT,
                 ),
             );
-            selected_effort = foundation::constants::JXL_DEEP_EFFORT;
+            selected_effort = foundation::constants::JXL_ULTIMATE_EFFORT;
             allow_expert = false;
             continue;
         }
@@ -1889,23 +1889,23 @@ fn jpeg_lossless_encode_plan(
     options: &ConvertOptions,
 ) -> Vec<JxlEffortPlan> {
     match mode {
-        JpegLosslessTranscodePlanMode::Policy | JpegLosslessTranscodePlanMode::StandardFallback => {
+        JpegLosslessTranscodePlanMode::Policy | JpegLosslessTranscodePlanMode::AggressiveE11 => {
             foundation::jxl_effort_policy::effort_plan_for_mode(
                 foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
                 options.ultimate(),
                 options.archive(),
             )
         }
-        JpegLosslessTranscodePlanMode::AggressiveE11 => {
-            vec![JxlEffortPlan::Single(
-                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
-            )]
-        }
+        JpegLosslessTranscodePlanMode::StandardFallback => vec![JxlEffortPlan::Single(
+            foundation::constants::JXL_ULTIMATE_EFFORT,
+        )],
     }
 }
 
-const fn jpeg_aggressive_lossless_enabled(options: &ConvertOptions) -> bool {
-    options.ultimate() || options.require_output_delivery()
+const fn jpeg_aggressive_lossless_enabled(_options: &ConvertOptions) -> bool {
+    // JPEG bitstream transcode gets the dedicated e11 attempt in every mode;
+    // direct pixel encoding remains on the bounded e7/e10 policy.
+    true
 }
 
 fn run_cjxl_jpeg_encode_with_plan_mode(
@@ -3687,28 +3687,86 @@ fn search_highest_fitting_avif_quality_with<Probe>(
 where
     Probe: FnMut(u8) -> std::result::Result<u64, String>,
 {
+    if size_policy.is_none() {
+        return match probe(100) {
+            Ok(_) => (Some(100), 1),
+            Err(_) => (None, 1),
+        };
+    }
+
     let mut probe_count = 0;
-    let mut quality = 100;
     let mut first_fitting = None;
     let mut lowest_oversize = None;
     let mut failed_qualities = BTreeSet::new();
-    loop {
+    let mut probe_quality = |quality: u8| {
         probe_count += 1;
         match probe(quality) {
             Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
                 first_fitting = Some(quality);
-                break;
+                true
             }
-            Ok(_) => lowest_oversize = Some(quality),
+            Ok(_) => {
+                lowest_oversize = Some(quality);
+                false
+            }
             Err(_) => {
                 failed_qualities.insert(quality);
+                false
             }
         }
+    };
 
-        if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
-            break;
+    // q75 is a pivot in AVIF's own quality domain. It does not inherit or
+    // reinterpret a JXL distance: it only decides which half of AVIF's search
+    // interval needs expensive speed-0 probes.
+    let pivot_fits = probe_quality(JXL_AVIF_HANDOFF_QUALITY_FLOOR);
+    drop(probe_quality);
+    if pivot_fits {
+        // 101 is an exclusive sentinel, never passed to the encoder.
+        lowest_oversize = Some(101);
+    } else if failed_qualities.contains(&JXL_AVIF_HANDOFF_QUALITY_FLOOR) {
+        // The pivot supplied no ordering evidence; fall back to the complete
+        // coarse scan rather than guessing which interval contains the answer.
+        lowest_oversize = None;
+        let mut quality = 100;
+        loop {
+            probe_count += 1;
+            match probe(quality) {
+                Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
+                    first_fitting = Some(quality);
+                    break;
+                }
+                Ok(_) => lowest_oversize = Some(quality),
+                Err(_) => {
+                    failed_qualities.insert(quality);
+                }
+            }
+
+            if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
+                break;
+            }
+            quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
         }
-        quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
+    } else {
+        let mut quality = JXL_AVIF_HANDOFF_QUALITY_FLOOR.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
+        loop {
+            probe_count += 1;
+            match probe(quality) {
+                Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
+                    first_fitting = Some(quality);
+                    break;
+                }
+                Ok(_) => lowest_oversize = Some(quality),
+                Err(_) => {
+                    failed_qualities.insert(quality);
+                }
+            }
+
+            if quality == JXL_TO_AVIF_MIN_QUALITY {
+                break;
+            }
+            quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
+        }
     }
 
     let Some(mut best_quality) = first_fitting else {
@@ -3722,7 +3780,7 @@ where
         let Some(oversize_quality) = lowest_oversize else {
             break;
         };
-        if best_quality.saturating_add(1) >= oversize_quality {
+        if u16::from(best_quality) + 1 >= u16::from(oversize_quality) {
             break;
         }
         let midpoint = best_quality + (oversize_quality - best_quality) / 2;
@@ -5151,66 +5209,94 @@ fn preprocess_webp_for_cjxl(
     }
 }
 
-fn preprocess_tiff_for_cjxl(
+fn avif_info_has_gain_map(info: &str) -> Result<bool> {
+    let value = info
+        .lines()
+        .find_map(|line| {
+            let (label, value) = line.split_once(':')?;
+            label.trim().eq_ignore_ascii_case("* Gain map").then_some(value.trim())
+        })
+        .ok_or_else(|| {
+            ImgQualityError::ConversionError(
+                "avifdec did not report Gain map state; refusing to flatten unknown AVIF auxiliary structure"
+                    .to_string(),
+            )
+        })?;
+    Ok(!value.eq_ignore_ascii_case("absent"))
+}
+
+/// Probe an AVIF with the authoritative decoder before a path that cannot
+/// carry auxiliary gain-map data.
+///
+/// An absent state is the only affirmative
+/// proof that flattening is safe; missing or malformed probe output fails
+/// closed.
+pub fn avif_path_has_gain_map(input: &Path) -> Result<bool> {
+    let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
+        .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
+    let mut info_command = Command::new(avifdec);
+    info_command
+        .arg("--info")
+        .arg(foundation::safe_path_arg(input).as_ref());
+    let info = run_image_process(info_command).map_err(ImgQualityError::IoError)?;
+    if !info.status.success() {
+        return Err(ImgQualityError::ConversionError(format!(
+            "avifdec gain-map probe failed: {}",
+            String::from_utf8_lossy(&info.stderr)
+        )));
+    }
+    avif_info_has_gain_map(&String::from_utf8_lossy(&info.stdout))
+}
+
+fn preprocess_avif_for_cjxl(
     input: &Path,
-    options: &ConvertOptions,
-    precision: ImagePrecisionProfile,
-    intermediate_depth: Option<u8>,
-    depth_str: &str,
-    intermediate_suffix: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    let label = if precision.is_float() {
-        "32-bit float OpenEXR"
-    } else {
-        &format!("{depth_str}-bit PNG")
-    };
+    let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
+        .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
+    if avif_path_has_gain_map(input)? {
+        return Err(ImgQualityError::ConversionError(
+            "AVIF carries a gain map that the JXL pixel path cannot preserve; native source retained"
+                .to_string(),
+        ));
+    }
 
     let temp_file = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-        "img_lossless_tiff_intermediate",
+        "img_lossless_avif_png",
         None,
-        Some(intermediate_suffix),
-    )
-    .map_err(ImgQualityError::IoError)?;
+        Some(".png"),
+    )?;
     let temp_path = temp_file.path().to_path_buf();
-
-    let mut builder = foundation::MagickBuilder::new();
-    builder.input(input).output(&temp_path);
-    if precision.is_float() {
-        builder.format("exr");
-    }
-    if let Some(depth) = intermediate_depth {
-        builder.depth(depth);
-    }
-    let out = run_image_process(builder.build()).map_err(ImgQualityError::IoError)?;
-    if out.status.success() && temp_path.exists() {
-        if options.verbose() {
-            log_detail!(&format!("TIFF detected, using ImageMagick to emit {label}"));
-        }
+    let mut command = Command::new(avifdec);
+    command
+        .arg(foundation::safe_path_arg(input).as_ref())
+        .arg(foundation::safe_path_arg(&temp_path).as_ref());
+    let output = run_image_process(command).map_err(ImgQualityError::IoError)?;
+    if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0 {
+        foundation::progress_mode::preprocessing_success();
         Ok((temp_path, Some(temp_file)))
     } else {
-        let err = String::from_utf8_lossy(&out.stderr);
         Err(ImgQualityError::ConversionError(format!(
-            "magick TIFF conversion failed: {err}"
+            "avifdec lossless intermediate failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         )))
     }
 }
 
-fn preprocess_bmp_for_cjxl(
+fn preprocess_lossless_with_magick(
     input: &Path,
-    options: &ConvertOptions,
     precision: ImagePrecisionProfile,
     intermediate_depth: Option<u8>,
     depth_str: &str,
     intermediate_suffix: &str,
+    format_label: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    let label = if precision.is_float() {
-        "32-bit float OpenEXR"
+    let output_label = if precision.is_float() {
+        "32-bit float OpenEXR".to_string()
     } else {
-        &format!("{depth_str}-bit PNG")
+        format!("{depth_str}-bit PNG")
     };
-
     let temp_file = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
-        "img_lossless_tiff_intermediate",
+        "img_lossless_magick_intermediate",
         None,
         Some(intermediate_suffix),
     )
@@ -5225,16 +5311,16 @@ fn preprocess_bmp_for_cjxl(
     if let Some(depth) = intermediate_depth {
         builder.depth(depth);
     }
-    let out = run_image_process(builder.build()).map_err(ImgQualityError::IoError)?;
-    if out.status.success() && temp_path.exists() {
-        if options.verbose() {
-            log_detail!(&format!("BMP detected, using ImageMagick to emit {label}"));
-        }
+    let output = run_image_process(builder.build()).map_err(ImgQualityError::IoError)?;
+    if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0 {
+        log_detail!(&format!(
+            "{format_label} detected, using ImageMagick to emit {output_label}"
+        ));
         Ok((temp_path, Some(temp_file)))
     } else {
-        let err = String::from_utf8_lossy(&out.stderr);
         Err(ImgQualityError::ConversionError(format!(
-            "magick BMP conversion failed: {err}"
+            "magick {format_label} conversion failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         )))
     }
 }
@@ -5524,25 +5610,35 @@ fn prepare_input_for_cjxl(
         }
 
         foundation::constants::EXT_WEBP => preprocess_webp_for_cjxl(input),
+        foundation::constants::EXT_AVIF => preprocess_avif_for_cjxl(input),
 
         foundation::constants::EXT_TIFF | foundation::constants::EXT_TIF => {
-            preprocess_tiff_for_cjxl(
+            preprocess_lossless_with_magick(
                 input,
-                options,
                 precision,
                 intermediate_depth,
                 depth_str,
                 intermediate_suffix,
+                "TIFF",
             )
         }
 
-        foundation::constants::EXT_BMP => preprocess_bmp_for_cjxl(
+        foundation::constants::EXT_BMP => preprocess_lossless_with_magick(
             input,
-            options,
             precision,
             intermediate_depth,
             depth_str,
             intermediate_suffix,
+            "BMP",
+        ),
+
+        "jp2" | "j2k" => preprocess_lossless_with_magick(
+            input,
+            precision,
+            intermediate_depth,
+            depth_str,
+            intermediate_suffix,
+            "JPEG 2000",
         ),
 
         foundation::constants::EXT_HEIC | foundation::constants::EXT_HEIF => {
@@ -6272,8 +6368,8 @@ mod tests {
     #[test]
     fn effort_policy_is_independent_of_size_and_exploration() {
         let eff = foundation::jxl_effort_policy::encoder_effort;
-        assert_eq!(eff(false), 7);
-        assert_eq!(eff(true), 11);
+        assert_eq!(eff(false), foundation::constants::JXL_DEFAULT_EFFORT);
+        assert_eq!(eff(true), foundation::constants::JXL_ULTIMATE_EFFORT);
     }
 
     #[test]
@@ -6383,6 +6479,34 @@ mod tests {
     }
 
     #[test]
+    fn avif_gain_map_probe_is_explicit_and_fail_closed() {
+        assert!(!avif_info_has_gain_map(" * Gain map : Absent").expect("absent state"));
+        assert!(avif_info_has_gain_map(" * Gain map : Present").expect("present state"));
+        assert!(avif_info_has_gain_map(" * XMP Metadata : Absent").is_err());
+    }
+
+    #[test]
+    fn jpeg_transcode_uses_e11_and_has_production_fallback() {
+        let options = ConvertOptions::default();
+        assert!(jpeg_aggressive_lossless_enabled(&options));
+        assert_eq!(
+            jpeg_lossless_encode_plan(JpegLosslessTranscodePlanMode::Policy, &options),
+            vec![JxlEffortPlan::Single(
+                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+            )],
+            "JPEG bitstream transcode should try the dedicated e11 path"
+        );
+
+        assert_eq!(
+            jpeg_lossless_encode_plan(JpegLosslessTranscodePlanMode::StandardFallback, &options),
+            vec![JxlEffortPlan::Single(
+                foundation::constants::JXL_ULTIMATE_EFFORT
+            )],
+            "e11 rejection must fall back to production e10"
+        );
+    }
+
+    #[test]
     fn aggressive_e11_process_error_reaches_standard_fallback_branch() {
         let source = include_str!("lossless_converter.rs");
         let start = source
@@ -6424,7 +6548,7 @@ mod tests {
                 foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
                 true,
             ),
-            vec![JxlEffortPlan::Single(11)]
+            vec![JxlEffortPlan::Single(10)]
         );
     }
 
@@ -6757,11 +6881,15 @@ mod tests {
     #[test]
     fn smoke_jxl_exploration_stays_in_final_encoder_domain() {
         let eff = foundation::jxl_effort_policy::encoder_effort;
-        assert_eq!(eff(true), 11);
-        assert_eq!(eff(false), 7);
+        assert_eq!(eff(true), foundation::constants::JXL_ULTIMATE_EFFORT);
+        assert_eq!(eff(false), foundation::constants::JXL_DEFAULT_EFFORT);
         assert_ne!(
-            foundation::exploration_policy::EncoderDomain::jxl(7),
-            foundation::exploration_policy::EncoderDomain::jxl(11),
+            foundation::exploration_policy::EncoderDomain::jxl(
+                foundation::constants::JXL_DEFAULT_EFFORT,
+            ),
+            foundation::exploration_policy::EncoderDomain::jxl(
+                foundation::constants::JXL_ULTIMATE_EFFORT,
+            ),
             "Effort domains must isolate final-encoder policy parameters"
         );
     }
@@ -6926,9 +7054,8 @@ mod tests {
         );
 
         assert_eq!(quality, Some(89));
-        assert_eq!(probe_count, 7);
-        assert_eq!(probes, vec![100, 90, 80, 85, 87, 88, 89]);
-        const { assert!(AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7) };
+        assert_eq!(probe_count, 6);
+        assert_eq!(probes, vec![75, 88, 94, 91, 89, 90]);
     }
 
     #[test]
@@ -6949,6 +7076,26 @@ mod tests {
     }
 
     #[test]
+    fn jxl_to_avif_failed_q75_pivot_falls_back_to_full_avif_search() {
+        let mut probes = Vec::new();
+        let (quality, _) = search_highest_fitting_avif_quality_with(
+            1_000,
+            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
+            |quality| {
+                probes.push(quality);
+                if quality == JXL_AVIF_HANDOFF_QUALITY_FLOOR {
+                    Err("q75 probe failed".to_string())
+                } else {
+                    Ok(if quality <= 89 { 900 } else { 1_100 })
+                }
+            },
+        );
+
+        assert_eq!(quality, Some(89));
+        assert_eq!(&probes[..3], &[75, 100, 90]);
+    }
+
+    #[test]
     fn jxl_to_avif_search_exhausts_before_preserving_source() {
         assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 0);
         let (quality, probe_count) = search_highest_fitting_avif_quality_with(
@@ -6958,7 +7105,7 @@ mod tests {
         );
 
         assert_eq!(quality, None);
-        assert_eq!(probe_count, 11);
+        assert_eq!(probe_count, 9);
     }
 
     #[test]
@@ -6978,11 +7125,8 @@ mod tests {
             avif_handoff_selection_label(quality.unwrap_or_default()),
             "emergency AVIF fallback"
         );
-        assert_eq!(probe_count, 14);
-        assert_eq!(
-            probes,
-            vec![100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0, 5, 2, 1]
-        );
+        assert_eq!(probe_count, 11);
+        assert_eq!(probes, vec![75, 65, 55, 45, 35, 25, 15, 5, 0, 2, 1]);
     }
 
     #[test]

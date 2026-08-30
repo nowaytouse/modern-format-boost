@@ -116,6 +116,10 @@ impl ToolBuilder for CjxlBuilder {
             cmd.arg("-");
         }
 
+        // MFB outputs are archival files, not raw codestreams: metadata
+        // overlays require the JXL container even when cjxl would omit it.
+        cmd.arg(constants::JXL_ARG_CONTAINER);
+
         if let Some(d) = self.distance
             && !self.lossless_jpeg
         {
@@ -130,8 +134,8 @@ impl ToolBuilder for CjxlBuilder {
             debug_assert!(
                 constants::is_supported_jxl_effort_with_expert(e, self.allow_expert_options)
                     || lossless_encode_e11,
-                "unsupported cjxl effort {e}; runtime policy permits e7/e8/e11 by default, e11 \
-                 for JPEG lossless encode, and e11 for explicit expert options; e9 is disabled"
+                "unsupported cjxl effort {e}; runtime policy permits e7/e8/e10, plus e11 \
+                 for JPEG lossless encode or explicit expert options; e9 is disabled"
             );
             if lossless_encode_e11 || expert_e11 {
                 cmd.arg(constants::JXL_ARG_ALLOW_EXPERT_OPTIONS);
@@ -254,8 +258,9 @@ mod tests {
             })
             .collect();
 
-        // lossless_jpeg overrides distance, so -d is omitted
+        // lossless_jpeg overrides distance, so -d is omitted.
         assert!(!args.contains(&"-d"));
+        assert!(args.contains(&"--container=1"));
 
         assert!(args.contains(&"-e"));
         assert!(args.contains(&"7"));
@@ -296,15 +301,21 @@ mod tests {
     }
 
     #[test]
-    fn cjxl_builder_accepts_e11_as_ultimate_effort() {
-        // e11 is now JXL_ULTIMATE_EFFORT, supported by default
+    fn cjxl_builder_accepts_e10_as_ultimate_effort() {
+        // Ultimate is the highest non-experimental production effort.
         let mut builder = CjxlBuilder::new();
         builder
             .input(Path::new("in.png"))
             .output(Path::new("out.jxl"))
             .effort(constants::JXL_ULTIMATE_EFFORT);
 
-        let _cmd = builder.build(); // Should not panic
+        let cmd = builder.build();
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|arg| arg == "10"));
+        assert!(!args.iter().any(|arg| arg == "--allow_expert_options"));
     }
 
     #[test]

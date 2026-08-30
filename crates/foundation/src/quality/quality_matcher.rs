@@ -2523,78 +2523,46 @@ pub fn tiff_enabled() -> bool {
 #[must_use]
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
-
-    // Modern lossy static formats: skip to avoid generational loss.
-    // WebP/AVIF lossy static are skipped; HEIC/HEIF lossy static follow the same
-    // pattern.
-    let is_modern_lossy = !is_lossless
-        && matches!(
-            codec,
-            SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic | SourceCodec::JpegXl
-        );
-
+    let normalized = format_str.trim().to_ascii_lowercase();
+    let is_jpeg2000 = matches!(
+        normalized.as_str(),
+        "jp2" | "j2k" | "jpeg2000" | "jpeg 2000" | "jpeg-2000"
+    );
     let is_jxl = matches!(codec, SourceCodec::JpegXl);
-
-    // Lossless HEIC/HEIF: allow conversion to JXL (archival-friendly format).
-    // Lossless HEIC/HEIF is rare but valuable; JXL provides better compression
-    // and broader compatibility while maintaining mathematical losslessness.
-    let is_heic_lossless = matches!(codec, SourceCodec::Heic) && is_lossless;
-
+    let is_modern_lossy_container = !is_lossless
+        && (is_jpeg2000
+            || matches!(
+                codec,
+                SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic
+            ));
     let is_tiff_disabled = matches!(codec, SourceCodec::Tiff) && !tiff_enabled();
+    let should_skip = is_jxl || is_modern_lossy_container || is_tiff_disabled;
 
-    let should_skip = is_modern_lossy || is_jxl || is_tiff_disabled;
-
-    let reason = if should_skip {
-        let codec_name = match codec {
-            SourceCodec::Tiff if is_tiff_disabled => {
-                "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)"
+    let reason = if is_tiff_disabled {
+        "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)".to_string()
+    } else if is_jxl {
+        crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE
+            .replace("{}", "JPEG XL archival target")
+    } else if is_modern_lossy_container {
+        let codec_name = if is_jpeg2000 {
+            if is_lossless {
+                "lossless JPEG 2000 container"
+            } else {
+                "lossy JPEG 2000 container"
             }
-            SourceCodec::WebpStatic => "lossy WebP",
-            SourceCodec::Avif => "lossy AVIF",
-            SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF",
-            SourceCodec::Heic => "lossless HEIC/HEIF (converts to JXL)",
-            SourceCodec::JpegXl => "JPEG XL (already optimal)",
-            SourceCodec::H264
-            | SourceCodec::H265
-            | SourceCodec::Vvc
-            | SourceCodec::Vp8
-            | SourceCodec::Vp9
-            | SourceCodec::Av1
-            | SourceCodec::Av2
-            | SourceCodec::Mpeg4
-            | SourceCodec::Mpeg2
-            | SourceCodec::Mpeg1
-            | SourceCodec::Wmv
-            | SourceCodec::Theora
-            | SourceCodec::RealVideo
-            | SourceCodec::FlashVideo
-            | SourceCodec::ProRes
-            | SourceCodec::DnxHD
-            | SourceCodec::Mjpeg
-            | SourceCodec::Ffv1
-            | SourceCodec::UtVideo
-            | SourceCodec::HuffYuv
-            | SourceCodec::RawVideo
-            | SourceCodec::Lagarith
-            | SourceCodec::MagicYuv
-            | SourceCodec::Gif
-            | SourceCodec::Apng
-            | SourceCodec::WebpAnimated
-            | SourceCodec::Jpeg
-            | SourceCodec::Png
-            | SourceCodec::Bmp
-            | SourceCodec::Tiff
-            | SourceCodec::Unknown => "modern lossy format",
-        };
-        if is_tiff_disabled {
-            codec_name.to_string()
         } else {
-            crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE
-                .replace("{}", codec_name)
-        }
-    } else if is_heic_lossless {
-        // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.
-        String::new()
+            match codec {
+                SourceCodec::WebpStatic if is_lossless => "lossless WebP container",
+                SourceCodec::WebpStatic => "lossy WebP container",
+                SourceCodec::Avif if is_lossless => "lossless AVIF container",
+                SourceCodec::Avif => "lossy AVIF container",
+                SourceCodec::Heic if is_lossless => "lossless HEIC/HEIF container",
+                SourceCodec::Heic => "lossy HEIC/HEIF container",
+                SourceCodec::JpegXl => "JPEG XL container",
+                _ => "modern image container",
+            }
+        };
+        crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE.replace("{}", codec_name)
     } else {
         String::new()
     };
@@ -3163,10 +3131,12 @@ mod tests {
         assert!(should_skip_image_format("jxl", true).should_skip);
         assert!(should_skip_image_format("jxl", false).should_skip);
 
-        // Modern lossless static: convert to JXL
+        // Lossless modern inputs enter the JXL archival path; only lossy
+        // containers are retained to avoid generational loss.
         assert!(!should_skip_image_format("webp", true).should_skip);
         assert!(!should_skip_image_format("avif", true).should_skip);
-        assert!(!should_skip_image_format("heic", true).should_skip); // lossless HEIC → JXL
+        assert!(!should_skip_image_format("heic", true).should_skip);
+        assert!(!should_skip_image_format("jp2", true).should_skip);
 
         // Legacy formats: convert to JXL
         assert!(!should_skip_image_format("jpeg", false).should_skip);
@@ -3183,7 +3153,8 @@ mod tests {
         unsafe {
             std::env::remove_var("MFB_ENABLE_TIFF");
         }
-        assert!(!should_skip_image_format("heif", true).should_skip); // lossless HEIF → JXL
+        assert!(!should_skip_image_format("heif", true).should_skip);
+        assert!(should_skip_image_format("heif", false).should_skip);
     }
 
     #[test]

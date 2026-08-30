@@ -1309,7 +1309,12 @@ fn parse_exiftool_image_data_sha256(stdout: &[u8]) -> Result<String> {
     Ok(hash.to_ascii_lowercase())
 }
 
-fn tier2_image_data_sha256(path: &Path) -> Result<String> {
+/// Return `ExifTool`'s SHA-256 over the encoded primary-image payload.
+///
+/// This is intentionally separate from the whole-file BLAKE3: container-only
+/// metadata edits may change file bytes, but must never change encoded image
+/// data.
+pub fn image_data_sha256(path: &Path) -> Result<String> {
     use crate::ToolBuilder;
 
     let mut builder = crate::ExiftoolBuilder::new();
@@ -1327,7 +1332,7 @@ fn tier2_image_data_sha256(path: &Path) -> Result<String> {
     )
     .map_err(|error| {
         ImgQualityError::AnalysisError(format!(
-            "tier-2 ImageDataHash command failed for {}: {error}",
+            "ImageDataHash command failed for {}: {error}",
             path.display()
         ))
     })?;
@@ -1335,11 +1340,224 @@ fn tier2_image_data_sha256(path: &Path) -> Result<String> {
         let diagnostic =
             crate::io_utils::tail_error_lines(&String::from_utf8_lossy(&output.stderr), 3);
         return Err(ImgQualityError::AnalysisError(format!(
-            "tier-2 ImageDataHash failed for {}: {diagnostic}",
+            "ImageDataHash failed for {}: {diagnostic}",
             path.display()
         )));
     }
     parse_exiftool_image_data_sha256(&output.stdout)
+}
+
+/// Hash the stable codec/transform/HDR/gain-map report emitted by `avifdec`.
+/// File paths, progress text, and XMP presence are excluded because a
+/// metadata-only edit is expected to change only the latter.
+pub fn avif_codec_feature_hash(path: &Path) -> Result<String> {
+    let avifdec = crate::common_utils::resolve_tool_path("avifdec").ok_or_else(|| {
+        ImgQualityError::AnalysisError(
+            "avifdec is required for AVIF archive-feature proof".to_string(),
+        )
+    })?;
+    let mut command = std::process::Command::new(avifdec);
+    command.arg("--info").arg(path);
+    let command_line = crate::common_utils::format_command_for_audit(&command);
+    let output = run_fast_img_command_with_timeout(
+        &mut command,
+        Duration::from_secs(120),
+        "AVIF archive-feature proof",
+    )
+    .map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "avifdec archive-feature proof failed to run for {}: {error}",
+            path.display()
+        ))
+    })?;
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        output.status,
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    if !output.status.success() {
+        let diagnostic = crate::infra::logging::combined_tool_output(
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        return Err(ImgQualityError::AnalysisError(format!(
+            "avifdec archive-feature proof failed for {} with {}: {}",
+            path.display(),
+            output.status,
+            if diagnostic.is_empty() {
+                "no diagnostic output"
+            } else {
+                diagnostic.as_str()
+            }
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let normalized = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("Decoding with codec")
+                && !line.starts_with("Image decoded:")
+                && !line.starts_with("* XMP Metadata")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if normalized.is_empty() {
+        return Err(ImgQualityError::AnalysisError(
+            "avifdec archive-feature proof returned no stable feature report".to_string(),
+        ));
+    }
+    Ok(blake3::hash(normalized.as_bytes()).to_hex().to_string())
+}
+
+/// Copy an existing AVIF into `staged_path` and enforce Meme Mode's removable
+/// metadata policy without decoding or re-encoding its AV1 image items.
+///
+/// Clean inputs remain byte-identical. Dirty inputs are rewritten only by
+/// `ExifTool`'s container metadata editor, then accepted only when the exact
+/// primary-image SHA-256 is unchanged and the normal clear-policy audit passes.
+pub fn prepare_existing_avif_meme_candidate(source: &Path, staged_path: &Path) -> Result<String> {
+    use crate::ToolBuilder;
+
+    let format = crate::image::format_detect::detect_true_format(source)?;
+    if format != crate::image::format_detect::FormatKind::Avif {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF candidate has unexpected true format {format:?}: {}",
+            source.display()
+        )));
+    }
+    let source_identity = crate::common_utils::calculate_blake3_hash(source).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF source hash failed for {}: {error}",
+            source.display()
+        ))
+    })?;
+    let source_image_data = image_data_sha256(source)?;
+    let source_codec_features = avif_codec_feature_hash(source)?;
+    let source_len = std::fs::metadata(source)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "existing AVIF source stat failed for {}: {error}",
+                source.display()
+            ))
+        })?
+        .len();
+    let copied = std::fs::copy(source, staged_path).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF staging copy failed {} -> {}: {error}",
+            source.display(),
+            staged_path.display()
+        ))
+    })?;
+    if copied != source_len
+        || crate::common_utils::calculate_blake3_hash(staged_path).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "existing AVIF staged hash failed for {}: {error}",
+                staged_path.display()
+            ))
+        })? != source_identity
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF staging custody mismatch: {}",
+            source.display()
+        )));
+    }
+
+    if !crate::metadata::embedded_metadata_is_clear(staged_path).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF metadata preflight failed for {}: {error}",
+            source.display()
+        ))
+    })? {
+        let mut builder = crate::ExiftoolBuilder::new();
+        builder
+            .strip_all()
+            .preserve_date()
+            .overwrite_original()
+            .input(staged_path);
+        let mut command = builder.build();
+        let command_line = crate::common_utils::format_command_for_audit(&command);
+        let output = run_fast_img_command_with_timeout(
+            &mut command,
+            Duration::from_secs(120),
+            "existing AVIF metadata-only sanitization",
+        )
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "existing AVIF metadata sanitizer failed to run for {}: {error}",
+                source.display()
+            ))
+        })?;
+        crate::infra::logging::log_captured_process_output(
+            &command_line,
+            output.status,
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        if !output.status.success() {
+            let diagnostic = crate::infra::logging::combined_tool_output(
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            );
+            return Err(ImgQualityError::AnalysisError(format!(
+                "existing AVIF metadata sanitizer failed for {} with {}: {}",
+                source.display(),
+                output.status,
+                if diagnostic.is_empty() {
+                    "no diagnostic output"
+                } else {
+                    diagnostic.as_str()
+                }
+            )));
+        }
+    }
+
+    let staged_image_data = image_data_sha256(staged_path)?;
+    if staged_image_data != source_image_data {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF metadata sanitization changed encoded primary-image data for {}; source retained",
+            source.display()
+        )));
+    }
+    if avif_codec_feature_hash(staged_path)? != source_codec_features {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF metadata sanitization changed codec/HDR/gain-map features for {}; source retained",
+            source.display()
+        )));
+    }
+    crate::metadata::verify_output_embedded_metadata(
+        source,
+        staged_path,
+        crate::metadata::MetadataOutputPolicy::Clear,
+    )
+    .map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF still violates Meme Mode metadata policy after container-only sanitization: {error}"
+        ))
+    })?;
+    let source_identity_after =
+        crate::common_utils::calculate_blake3_hash(source).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "existing AVIF post-sanitize source hash failed for {}: {error}",
+                source.display()
+            ))
+        })?;
+    if source_identity_after != source_identity {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF source changed during metadata sanitization: {}",
+            source.display()
+        )));
+    }
+    crate::common_utils::calculate_blake3_hash(staged_path).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF sanitized candidate hash failed for {}: {error}",
+            staged_path.display()
+        ))
+    })
 }
 
 /// Import tier-2 lossy modern static sources directly into Photos.
@@ -1411,7 +1629,7 @@ pub fn import_modern_lossy_static_tier(
                     candidate.rel_path, candidate.blake3
                 )));
             }
-            let source_image_data_hash = tier2_image_data_sha256(&candidate.path)?;
+            let source_image_data_hash = image_data_sha256(&candidate.path)?;
             let xmp_hash_before =
                 crate::common_utils::calculate_blake3_hash(&xmp_path).map_err(|error| {
                     ImgQualityError::AnalysisError(format!(
@@ -1460,7 +1678,7 @@ pub fn import_modern_lossy_static_tier(
                     candidate.rel_path
                 )));
             }
-            let staged_image_data_hash = tier2_image_data_sha256(&staged_path)?;
+            let staged_image_data_hash = image_data_sha256(&staged_path)?;
             if staged_image_data_hash != source_image_data_hash {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "tier-2 staging changed the admitted image payload for {}; source and sidecar retained",
@@ -1475,7 +1693,7 @@ pub fn import_modern_lossy_static_tier(
                         candidate.rel_path
                     ))
                 })?;
-            let merged_image_data_hash = tier2_image_data_sha256(&staged_path)?;
+            let merged_image_data_hash = image_data_sha256(&staged_path)?;
             if merged_image_data_hash != source_image_data_hash {
                 return Err(ImgQualityError::AnalysisError(format!(
                     "tier-2 XMP merge changed the image payload for {}; source and sidecar retained",
@@ -5447,6 +5665,44 @@ mod tests {
         assert!(parse_exiftool_image_data_sha256(b"abc\n").is_err());
         let duplicate = [hash.as_slice(), hash.as_slice()].concat();
         assert!(parse_exiftool_image_data_sha256(&duplicate).is_err());
+    }
+
+    #[test]
+    fn existing_avif_meme_candidate_never_reencodes_primary_image() -> anyhow::Result<()> {
+        use crate::ToolBuilder;
+
+        if !crate::ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        let temp = tempfile::tempdir()?;
+
+        let clean = temp.path().join("clean.avif");
+        let clean_source_hash = crate::common_utils::calculate_blake3_hash(&fixture)?;
+        let clean_candidate_hash = prepare_existing_avif_meme_candidate(&fixture, &clean)?;
+        assert_eq!(clean_candidate_hash, clean_source_hash);
+
+        let dirty = temp.path().join("dirty.avif");
+        std::fs::copy(&fixture, &dirty)?;
+        let status = crate::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Description=MFB synthetic test")
+            .overwrite_original()
+            .input(&dirty)
+            .build()
+            .status()?;
+        anyhow::ensure!(status.success(), "failed to create synthetic XMP fixture");
+        let source_image_data = image_data_sha256(&dirty)?;
+        let sanitized = temp.path().join("sanitized.avif");
+        prepare_existing_avif_meme_candidate(&dirty, &sanitized)?;
+
+        assert_eq!(image_data_sha256(&sanitized)?, source_image_data);
+        crate::metadata::verify_output_embedded_metadata(
+            &dirty,
+            &sanitized,
+            crate::metadata::MetadataOutputPolicy::Clear,
+        )?;
+        Ok(())
     }
 
     #[test]

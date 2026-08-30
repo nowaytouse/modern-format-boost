@@ -35,7 +35,8 @@ pub use delivery_policy::{
 };
 pub use exif::preserve_internal;
 pub use output_audit::{
-    MetadataOutputPolicy, OutputMetadataAudit, verify_output_embedded_metadata,
+    MetadataOutputPolicy, OutputMetadataAudit, embedded_metadata_is_clear,
+    verify_output_embedded_metadata,
 };
 
 /// Measure the file emitted by `ExifTool` after removing all embedded metadata.
