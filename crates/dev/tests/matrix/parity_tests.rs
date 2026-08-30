@@ -124,13 +124,14 @@ fn test_cjxl_flag_order_parity() {
         .get_args()
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
-    // Snapshotted order from commit 73edfa6: [in] [out] [flags]
+    // Archival JXL output requires an explicit container before codec flags.
     assert!(get_arg(&args, 0).contains("in.png"));
     assert!(get_arg(&args, 1).contains("out.jxl"));
-    assert_eq!(get_arg(&args, 2), "-d");
-    assert_eq!(get_arg(&args, 3), "0.5");
-    assert_eq!(get_arg(&args, 4), "-e");
-    assert_eq!(get_arg(&args, 5), "7");
+    assert_eq!(get_arg(&args, 2), "--container=1");
+    assert_eq!(get_arg(&args, 3), "-d");
+    assert_eq!(get_arg(&args, 4), "0.5");
+    assert_eq!(get_arg(&args, 5), "-e");
+    assert_eq!(get_arg(&args, 6), "7");
 }
 
 fn test_djxl_flag_order_parity() {

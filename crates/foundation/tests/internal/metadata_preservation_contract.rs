@@ -723,9 +723,21 @@ fn contract_commit_delivery_runs_exact_metadata_verification_after_timestamps() 
         verify_pos < embedded_pos,
         "CONTRACT: embedded identity audit must run after filesystem exact-copy verify"
     );
+    let policy_start = source
+        .find("fn metadata_output_policy_for_delivery(")
+        .expect("metadata delivery policy helper must exist");
+    let policy_end = source[policy_start..]
+        .find("fn commit_temp_to_output_with_metadata_inner(")
+        .map(|offset| policy_start + offset)
+        .expect("metadata delivery policy helper boundary must exist");
+    let policy_source = &source[policy_start..policy_end];
     assert!(
-        commit_source.contains("MetadataOutputPolicy::Preserve"),
-        "CONTRACT: commit path must enforce Preserve policy for embedded tags"
+        policy_source.contains("MetadataOutputPolicy::Preserve"),
+        "CONTRACT: same-format delivery must use Preserve policy"
+    );
+    assert!(
+        commit_source.contains("metadata_output_policy_for_delivery(src, output)?"),
+        "CONTRACT: commit path must apply the centralized embedded-metadata policy"
     );
 }
 

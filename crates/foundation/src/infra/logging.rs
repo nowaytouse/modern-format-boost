@@ -1398,26 +1398,53 @@ pub(crate) fn combined_tool_output(stdout: &str, stderr: &str) -> String {
     }
 }
 
+fn truncation_marker(total: u64) -> String {
+    format!("\n...[captured diagnostic truncated: {total} bytes total]...\n")
+}
+
+fn prefix_at_most(input: &str, max_bytes: usize) -> &str {
+    let mut end = input.len().min(max_bytes);
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    &input[..end]
+}
+
+fn suffix_at_most(input: &str, max_bytes: usize) -> &str {
+    let mut start = input.len().saturating_sub(max_bytes);
+    while start < input.len() && !input.is_char_boundary(start) {
+        start += 1;
+    }
+    &input[start..]
+}
+
+fn format_bounded_diagnostic(head: &str, tail: &str, total: u64) -> String {
+    let limit = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES;
+    let marker = truncation_marker(total);
+    if marker.len() >= limit {
+        return prefix_at_most(&marker, limit).to_owned();
+    }
+
+    let payload_limit = limit - marker.len();
+    let head_limit = payload_limit / 2;
+    let tail_limit = payload_limit - head_limit;
+    let head = prefix_at_most(head, head_limit);
+    let tail = suffix_at_most(tail, tail_limit);
+    let mut result = String::with_capacity(head.len() + marker.len() + tail.len());
+    result.push_str(head);
+    result.push_str(&marker);
+    result.push_str(tail);
+    debug_assert!(result.len() <= limit);
+    result
+}
+
 fn truncate_captured_tool_output(output: &str) -> String {
     if output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES {
         return output.to_owned();
     }
 
-    let half = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES / 2;
-    let mut head_end = half;
-    while head_end > 0 && !output.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-    let mut tail_start = output.len() - half;
-    while tail_start < output.len() && !output.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
-    format!(
-        "{}\n...[captured diagnostic truncated: {} bytes total]...\n{}",
-        &output[..head_end],
-        output.len(),
-        &output[tail_start..]
-    )
+    let total = u64::try_from(output.len()).unwrap_or(u64::MAX);
+    format_bounded_diagnostic(output, output, total)
 }
 
 /// Read a diagnostic file without loading an unbounded tool log into memory.
@@ -1434,23 +1461,29 @@ pub(crate) fn read_bounded_diagnostic_file(path: &Path) -> io::Result<String> {
         })?;
         let mut bytes = Vec::with_capacity(capacity);
         file.read_to_end(&mut bytes)?;
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        return if text.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES {
+            Ok(text)
+        } else {
+            Ok(format_bounded_diagnostic(&text, &text, total))
+        };
     }
 
-    let half = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES / 2;
-    let mut head = vec![0_u8; half];
+    let marker = truncation_marker(total);
+    let payload_limit = CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES.saturating_sub(marker.len());
+    let head_len = payload_limit / 2;
+    let tail_len = payload_limit - head_len;
+    let mut head = vec![0_u8; head_len];
     file.read_exact(&mut head)?;
     let tail_offset = total
-        .checked_sub(u64::try_from(half).map_err(io::Error::other)?)
+        .checked_sub(u64::try_from(tail_len).map_err(io::Error::other)?)
         .ok_or_else(|| io::Error::other("diagnostic tail offset underflow"))?;
     file.seek(SeekFrom::Start(tail_offset))?;
-    let mut tail = vec![0_u8; half];
+    let mut tail = vec![0_u8; tail_len];
     file.read_exact(&mut tail)?;
-    Ok(format!(
-        "{}\n...[captured diagnostic truncated: {total} bytes total]...\n{}",
-        String::from_utf8_lossy(&head),
-        String::from_utf8_lossy(&tail)
-    ))
+    let head = String::from_utf8_lossy(&head);
+    let tail = String::from_utf8_lossy(&tail);
+    Ok(format_bounded_diagnostic(&head, &tail, total))
 }
 
 #[derive(Debug)]
@@ -1649,6 +1682,7 @@ mod tests {
         assert!(output.starts_with("HEAD"));
         assert!(output.ends_with("TAIL"));
         assert!(output.contains("captured diagnostic truncated"));
+        assert!(output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES);
         assert!(output.len() < input.len());
     }
 
@@ -1664,7 +1698,19 @@ mod tests {
         assert!(output.starts_with("HEAD"));
         assert!(output.ends_with("TAIL"));
         assert!(output.contains("captured diagnostic truncated"));
+        assert!(output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES);
         assert!(output.len() < input.len());
+    }
+
+    #[test]
+    fn bounded_diagnostic_preserves_utf8_boundaries() {
+        let input = format!("头{}尾", "🙂".repeat(CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES));
+        let output = truncate_captured_tool_output(&input);
+
+        assert!(output.starts_with("头"));
+        assert!(output.ends_with("尾"));
+        assert!(output.contains("captured diagnostic truncated"));
+        assert!(output.len() <= CAPTURED_TOOL_OUTPUT_LOG_MAX_BYTES);
     }
 
     #[test]
