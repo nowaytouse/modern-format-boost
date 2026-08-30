@@ -2096,6 +2096,71 @@ mod tests {
 
     use tempfile::TempDir;
 
+    fn write_synthetic_hdr_gain_map_avif(root: &Path, output: &Path) -> Result<()> {
+        let base = root.join("gain-map-base.png");
+        let alternate = root.join("gain-map-hdr.png");
+        image::RgbImage::from_fn(32, 24, |x, y| {
+            image::Rgb([
+                (x * 5 + y * 3 + 24).to_le_bytes()[0],
+                (x * 3 + y * 7 + 32).to_le_bytes()[0],
+                (x * 7 + y * 5 + 40).to_le_bytes()[0],
+            ])
+        })
+        .save(&base)?;
+        image::RgbImage::from_fn(32, 24, |x, y| {
+            image::Rgb([
+                (x * 7 + y * 5 + 96).to_le_bytes()[0],
+                (x * 5 + y * 9 + 112).to_le_bytes()[0],
+                (x * 9 + y * 7 + 128).to_le_bytes()[0],
+            ])
+        })
+        .save(&alternate)?;
+
+        let tool = crate::common_utils::resolve_tool_path("avifgainmaputil")
+            .ok_or_else(|| anyhow::anyhow!("avifgainmaputil is unavailable"))?;
+        let result = std::process::Command::new(tool)
+            .arg("combine")
+            .arg(&base)
+            .arg(&alternate)
+            .arg(output)
+            .args([
+                "--qcolor",
+                "90",
+                "--qgain-map",
+                "90",
+                "--speed",
+                "8",
+                "--cicp-base",
+                "1/13/6",
+                "--cicp-alternate",
+                "9/16/9",
+                "--clli-alternate",
+                "1000,400",
+            ])
+            .output()?;
+        anyhow::ensure!(
+            result.status.success(),
+            "synthetic HDR gain-map AVIF failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Ok(())
+    }
+
+    fn gain_map_metadata(path: &Path) -> Result<String> {
+        let tool = crate::common_utils::resolve_tool_path("avifgainmaputil")
+            .ok_or_else(|| anyhow::anyhow!("avifgainmaputil is unavailable"))?;
+        let result = std::process::Command::new(tool)
+            .arg("printmetadata")
+            .arg(path)
+            .output()?;
+        anyhow::ensure!(
+            result.status.success(),
+            "gain-map metadata probe failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Ok(String::from_utf8(result.stdout)?)
+    }
+
     #[test]
     fn generic_xmp_rewrite_is_blocked_for_archival_modern_containers() {
         use crate::image::format_detect::FormatKind;
@@ -2163,6 +2228,128 @@ mod tests {
             crate::common_utils::calculate_blake3_hash(&media)?,
             "reapplying the same native XMP must be an idempotent no-op"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hdr_gain_map_survives_xmp_merge_and_meme_metadata_clear() -> Result<()> {
+        for tool in ["avifgainmaputil", "avifdec", "exiftool"] {
+            if crate::common_utils::resolve_tool_path(tool).is_none() {
+                eprintln!("Skipping AVIF HDR archive matrix: {tool} is unavailable");
+                return Ok(());
+            }
+        }
+
+        let temp = TempDir::new()?;
+        let media = temp.path().join("synthetic-hdr-gain-map.avif");
+        let sidecar = temp.path().join("synthetic-hdr-gain-map.xmp");
+        write_synthetic_hdr_gain_map_avif(temp.path(), &media)?;
+
+        let gain_map_before = gain_map_metadata(&media)?;
+        anyhow::ensure!(
+            gain_map_before.contains("Alternate headroom: 4"),
+            "fixture is not an HDR gain-map AVIF: {gain_map_before}"
+        );
+        let feature_hash_before = crate::image::fast_img::avif_codec_feature_hash(&media)?;
+        let image_hash_before = crate::image::fast_img::image_data_sha256(&media)?;
+
+        let initial_metadata = crate::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Title=MFB synthetic HDR original")
+            .arg("-EXIF:ImageDescription=MFB synthetic HDR EXIF")
+            .overwrite_original()
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(
+            initial_metadata.status.success(),
+            "failed to seed synthetic AVIF metadata: {}",
+            String::from_utf8_lossy(&initial_metadata.stderr)
+        );
+        assert_eq!(
+            crate::image::fast_img::image_data_sha256(&media)?,
+            image_hash_before,
+            "seeding description metadata changed the AV1 primary image"
+        );
+        assert_eq!(
+            crate::image::fast_img::avif_codec_feature_hash(&media)?,
+            feature_hash_before,
+            "seeding description metadata changed HDR/gain-map features"
+        );
+
+        fs::write(
+            &sidecar,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">MFB synthetic HDR sidecar</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        )?;
+        let before = XmpMerger::capture_modern_container_proof(
+            &media,
+            crate::image::format_detect::FormatKind::Avif,
+        )?;
+        XmpMerger::new(Config::default()).merge_xmp(&sidecar, &media)?;
+        let after = XmpMerger::capture_modern_container_proof(
+            &media,
+            crate::image::format_detect::FormatKind::Avif,
+        )?;
+
+        assert_eq!(after.image_data_hash, before.image_data_hash);
+        assert_eq!(after.codec_feature_hash, before.codec_feature_hash);
+        assert_eq!(after.stable_metadata_hash, before.stable_metadata_hash);
+        assert_eq!(gain_map_metadata(&media)?, gain_map_before);
+        assert!(
+            sidecar.is_file(),
+            "archive merge must retain the source sidecar"
+        );
+
+        let readback = crate::ExiftoolBuilder::new()
+            .arg("-s3")
+            .arg("-XMP-dc:Title")
+            .arg("-XMP-dc:Description")
+            .arg("-EXIF:ImageDescription")
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(
+            readback.status.success(),
+            "AVIF metadata readback failed: {}",
+            String::from_utf8_lossy(&readback.stderr)
+        );
+        let readback = String::from_utf8(readback.stdout)?;
+        for expected in [
+            "MFB synthetic HDR original",
+            "MFB synthetic HDR sidecar",
+            "MFB synthetic HDR EXIF",
+        ] {
+            assert!(
+                readback.contains(expected),
+                "AVIF archive merge lost {expected:?}: {readback}"
+            );
+        }
+
+        let source_hash = crate::common_utils::calculate_blake3_hash(&media)?;
+        let sanitized = temp.path().join("synthetic-hdr-sanitized.avif");
+        crate::image::fast_img::prepare_existing_avif_meme_candidate(&media, &sanitized)?;
+        assert_eq!(
+            crate::common_utils::calculate_blake3_hash(&media)?,
+            source_hash,
+            "Meme Mode staging changed the source AVIF"
+        );
+        assert_eq!(
+            crate::image::fast_img::image_data_sha256(&sanitized)?,
+            image_hash_before,
+            "Meme Mode metadata clear changed the AV1 primary image"
+        );
+        assert_eq!(
+            crate::image::fast_img::avif_codec_feature_hash(&sanitized)?,
+            after
+                .codec_feature_hash
+                .ok_or_else(|| anyhow::anyhow!("missing AVIF codec feature proof"))?,
+            "Meme Mode metadata clear changed HDR/gain-map features"
+        );
+        assert_eq!(gain_map_metadata(&sanitized)?, gain_map_before);
+        crate::metadata::verify_output_embedded_metadata(
+            &media,
+            &sanitized,
+            crate::metadata::MetadataOutputPolicy::Clear,
+        )?;
         Ok(())
     }
 

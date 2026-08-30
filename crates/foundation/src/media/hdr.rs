@@ -652,6 +652,44 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Result<Option<GainMapParams>> {
     parse_gainmap_from_xmp(&xmp_data)
 }
 
+fn gainmap_field_name(name: &str) -> Option<&'static str> {
+    let name = name.as_bytes();
+    if name.windows(10).any(|window| window == b"GainMapMax") {
+        Some("GainMapMax")
+    } else if name.windows(10).any(|window| window == b"GainMapMin") {
+        Some("GainMapMin")
+    } else if name.windows(5).any(|window| window == b"Gamma") {
+        Some("Gamma")
+    } else if name.windows(9).any(|window| window == b"OffsetSDR")
+        || name.windows(9).any(|window| window == b"OffsetSdr")
+    {
+        Some("OffsetSDR")
+    } else if name.windows(9).any(|window| window == b"OffsetHDR")
+        || name.windows(9).any(|window| window == b"OffsetHdr")
+    {
+        Some("OffsetHDR")
+    } else {
+        None
+    }
+}
+
+fn assign_gainmap_field(params: &mut GainMapParams, target: &str, value: f32) {
+    match target {
+        "GainMapMax" => params.gain_map_max = value,
+        "GainMapMin" => params.gain_map_min = value,
+        "Gamma" => params.gamma = value,
+        "OffsetSDR" => params.offset_sdr = value,
+        "OffsetHDR" => params.offset_hdr = value,
+        _ => unreachable!("gainmap field name enumerated above"),
+    }
+}
+
+fn parse_gainmap_value(target: &str, raw: &str) -> Result<f32> {
+    raw.trim()
+        .parse::<f32>()
+        .map_err(|error| anyhow!("Failed to parse gainmap {target} value {raw:?}: {error}"))
+}
+
 fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
     let mut params = GainMapParams::default();
     let mut reader = quick_xml::reader::Reader::from_reader(xmp_data);
@@ -660,35 +698,9 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e) | Event::Empty(e)) => {
+            Ok(Event::Start(e)) => {
                 for attr in e.attributes().flatten() {
-                    let local_name = attr.key.local_name();
-                    let name_bytes = local_name.as_ref();
-                    let target = if name_bytes
-                        .as_bytes()
-                        .windows(10)
-                        .any(|w| w == b"GainMapMax")
-                    {
-                        Some("GainMapMax")
-                    } else if name_bytes
-                        .as_bytes()
-                        .windows(10)
-                        .any(|w| w == b"GainMapMin")
-                    {
-                        Some("GainMapMin")
-                    } else if name_bytes.as_bytes().windows(5).any(|w| w == b"Gamma") {
-                        Some("Gamma")
-                    } else if name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetSDR")
-                        || name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetSdr")
-                    {
-                        Some("OffsetSDR")
-                    } else if name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetHDR")
-                        || name_bytes.as_bytes().windows(9).any(|w| w == b"OffsetHdr")
-                    {
-                        Some("OffsetHDR")
-                    } else {
-                        None
-                    };
+                    let target = gainmap_field_name(attr.key.local_name().as_ref());
                     let Some(target) = target else {
                         continue;
                     };
@@ -697,44 +709,31 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Result<Option<GainMapParams>> {
                         .map_err(|e| {
                             anyhow!("Failed to normalize gainmap XMP attr {target}: {e}")
                         })?;
-                    let f = unescaped.as_ref().parse::<f32>().map_err(|e| {
-                        anyhow!(
-                            "Failed to parse gainmap XMP attr {target} value {:?}: {e}",
-                            unescaped.as_ref()
-                        )
-                    })?;
-                    match target {
-                        "GainMapMax" => params.gain_map_max = f,
-                        "GainMapMin" => params.gain_map_min = f,
-                        "Gamma" => params.gamma = f,
-                        "OffsetSDR" => params.offset_sdr = f,
-                        "OffsetHDR" => params.offset_hdr = f,
-                        _ => unreachable!("target enumerated above"),
-                    }
+                    let value = parse_gainmap_value(target, unescaped.as_ref())?;
+                    assign_gainmap_field(&mut params, target, value);
                     found_any = true;
                 }
                 let name = e.name();
-                let name_ref = name.as_ref();
-                if name_ref.as_bytes().windows(10).any(|w| w == b"GainMapMax") {
+                if let Some(target) = gainmap_field_name(name.as_ref()) {
                     let val = reader.read_text(name)?;
                     let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
-                    params.gain_map_max = raw.parse::<f32>().map_err(|e| {
-                        anyhow!("Failed to parse GainMapMax text value {raw:?}: {e}")
-                    })?;
+                    let value = parse_gainmap_value(target, &raw)?;
+                    assign_gainmap_field(&mut params, target, value);
                     found_any = true;
-                } else if name_ref.as_bytes().windows(10).any(|w| w == b"GainMapMin") {
-                    let val = reader.read_text(name)?;
-                    let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
-                    params.gain_map_min = raw.parse::<f32>().map_err(|e| {
-                        anyhow!("Failed to parse GainMapMin text value {raw:?}: {e}")
-                    })?;
-                    found_any = true;
-                } else if name_ref.as_bytes().windows(5).any(|w| w == b"Gamma") {
-                    let val = reader.read_text(name)?;
-                    let raw = String::from_utf8_lossy(val.as_ref().as_bytes());
-                    params.gamma = raw
-                        .parse::<f32>()
-                        .map_err(|e| anyhow!("Failed to parse Gamma text value {raw:?}: {e}"))?;
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                for attr in e.attributes().flatten() {
+                    let Some(target) = gainmap_field_name(attr.key.local_name().as_ref()) else {
+                        continue;
+                    };
+                    let unescaped = attr
+                        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                        .map_err(|error| {
+                            anyhow!("Failed to normalize gainmap XMP attr {target}: {error}")
+                        })?;
+                    let value = parse_gainmap_value(target, unescaped.as_ref())?;
+                    assign_gainmap_field(&mut params, target, value);
                     found_any = true;
                 }
             }
@@ -1099,7 +1098,50 @@ pub fn decode_image_to_png16_preserving_precision(
     if !output.status.success() {
         anyhow::bail!("FFmpeg failed");
     }
+    // FFmpeg can carry a source TIFF IFD as PNG EXIF side data.  That IFD still
+    // contains offsets into the original TIFF and becomes invalid when cjxl
+    // embeds it in the JXL container; the later delivery pass copies metadata
+    // from the original source, so remove only EXIF from this pixel intermediate.
+    // ICC/XMP and the source colour signalling remain available to the encoder
+    // through the explicit source probes (`extract_icc_profile`/CICP).
+    strip_transcoded_exif_side_data(&temp_path)?;
     Ok((temp_path, temp_png))
+}
+
+/// Remove container-specific EXIF carried by a decoder-generated intermediate.
+///
+/// A decoder intermediate is not the archival source: preserving its EXIF can
+/// copy invalid TIFF offsets into a JXL container and make the final metadata
+/// audit fail.  This deliberately leaves ICC and XMP untouched; those are either
+/// explicit encoder inputs or are delivered from the original source later.
+fn strip_transcoded_exif_side_data(path: &Path) -> Result<()> {
+    if !crate::image_builders::ExiftoolBuilder::check_available() {
+        anyhow::bail!(
+            "ExifTool is required to remove decoder-carried EXIF from high-precision intermediate {}",
+            path.display()
+        );
+    }
+    let mut command = crate::image_builders::ExiftoolBuilder::new();
+    command.overwrite_original().arg("-EXIF:all=").input(path);
+    let command_line = crate::common_utils::format_command_for_audit(&command.build());
+    let output = command
+        .build()
+        .output()
+        .with_context(|| format!("failed to strip decoder EXIF from {}", path.display()))?;
+    crate::infra::logging::log_captured_process_output(
+        &command_line,
+        output.status,
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    if !output.status.success() {
+        anyhow::bail!(
+            "ExifTool failed to strip decoder EXIF from {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -1949,6 +1991,32 @@ mod tests {
             .expect_err("malformed gainmap numeric metadata must be an error");
 
         assert!(err.to_string().contains("not-a-number"));
+    }
+
+    #[test]
+    fn parse_gainmap_from_xmp_accepts_namespaced_attributes_and_text_fields() -> anyhow::Result<()>
+    {
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/"><rdf:Description hdrgm:GainMapMax="2.5" hdrgm:GainMapMin="-0.5" hdrgm:Gamma="1.25"><hdrgm:OffsetSDR>0.125</hdrgm:OffsetSDR><hdrgm:OffsetHDR>-0.25</hdrgm:OffsetHDR></rdf:Description></x:xmpmeta>"#;
+        let params = parse_gainmap_from_xmp(xmp)?.expect("gainmap fields should be detected");
+
+        assert!((params.gain_map_max - 2.5).abs() < f32::EPSILON);
+        assert!((params.gain_map_min + 0.5).abs() < f32::EPSILON);
+        assert!((params.gamma - 1.25).abs() < f32::EPSILON);
+        assert!((params.offset_sdr - 0.125).abs() < f32::EPSILON);
+        assert!((params.offset_hdr + 0.25).abs() < f32::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_gainmap_from_xmp_ignores_empty_or_irrelevant_metadata() -> anyhow::Result<()> {
+        assert!(parse_gainmap_from_xmp(b"<x:xmpmeta/>")?.is_none());
+        assert!(
+            parse_gainmap_from_xmp(
+                b"<x:xmpmeta><rdf:Description dc:Title=\"photo\"/></x:xmpmeta>"
+            )?
+            .is_none()
+        );
+        Ok(())
     }
 
     #[test]

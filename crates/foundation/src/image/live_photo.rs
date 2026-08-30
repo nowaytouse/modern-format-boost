@@ -1,17 +1,43 @@
 //! Live Photo Detection Module
 //!
-//! Detects Apple Live Photos by checking for companion MOV files
+//! Detects Apple Live Photos by checking for companion MOV files.
 
 use std::path::Path;
+
+const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg"];
 
 /// Check if a file is part of a Live Photo pair
 ///
 /// Live Photos consist of:
-/// - A HEIC/HEIF image file (e.g., `IMG_1234.HEIC`)
+/// - A HEIC/HEIF/HIF or JPEG image file (e.g., `IMG_1234.HEIC`)
 /// - A companion MOV video file (e.g., `IMG_1234.MOV`)
 ///
 /// This function checks if the given file has a companion file with the same
-/// stem but different extension (.mov/.MOV for images, .heic/.HEIC for videos)
+/// stem and the corresponding still/video extension, case-insensitively.
+fn has_regular_companion(parent: &Path, stem: &str, extensions: &[&str]) -> bool {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return false;
+    };
+    entries.filter_map(std::result::Result::ok).any(|entry| {
+        let path = entry.path();
+        let same_stem = path
+            .file_stem()
+            .is_some_and(|candidate| candidate == std::ffi::OsStr::new(stem));
+        let matching_extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| {
+                extensions
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            });
+        let regular_file =
+            std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file());
+        same_stem && matching_extension && regular_file
+    })
+}
+
+/// Check whether a path belongs to a same-stem Apple still/MOV pair.
 #[must_use]
 pub fn is_live(path: &Path) -> bool {
     let ext_lower = crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path);
@@ -27,32 +53,12 @@ pub fn is_live(path: &Path) -> bool {
         return false;
     }
 
-    // Check if this is a HEIC/HEIF file with a companion MOV
-    if matches!(ext_lower.as_str(), "heic" | "heif" | "hif") {
-        // Look for companion .mov or .MOV file
-        let mov_path = parent.join(format!("{stem}.mov"));
-        let mov_upper_path = parent.join(format!("{stem}.MOV"));
-
-        if mov_path.exists() || mov_upper_path.exists() {
-            return true;
-        }
+    if LIVE_STILL_EXTENSIONS.contains(&ext_lower.as_str()) {
+        return has_regular_companion(parent, &stem, &["mov"]);
     }
 
-    // Check if this is a MOV file with a companion HEIC/HEIF
     if ext_lower == "mov" {
-        // Look for companion HEIC/HEIF files
-        let heic_path = parent.join(format!("{stem}.heic"));
-        let heic_upper_path = parent.join(format!("{stem}.HEIC"));
-        let heif_path = parent.join(format!("{stem}.heif"));
-        let heif_upper_path = parent.join(format!("{stem}.HEIF"));
-
-        if heic_path.exists()
-            || heic_upper_path.exists()
-            || heif_path.exists()
-            || heif_upper_path.exists()
-        {
-            return true;
-        }
+        return has_regular_companion(parent, &stem, LIVE_STILL_EXTENSIONS);
     }
 
     false
@@ -121,5 +127,18 @@ mod tests {
 
         assert!(is_live(&heic_lower));
         assert!(is_live(&mov_upper));
+    }
+
+    #[test]
+    fn jpeg_and_mov_pair_is_a_live_photo() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let jpeg = temp_dir.path().join("IMG_0002.JPG");
+        let mov = temp_dir.path().join("IMG_0002.mov");
+        File::create(&jpeg)?;
+        File::create(&mov)?;
+
+        assert!(is_live(&jpeg));
+        assert!(is_live(&mov));
+        Ok(())
     }
 }

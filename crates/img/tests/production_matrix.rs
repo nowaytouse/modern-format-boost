@@ -513,6 +513,28 @@ fn decode_static_fixture_to_png(input: &Path, format: FormatKind, root: &Path) -
     Ok(output)
 }
 
+/// Decode an HDR AVIF through the same `FFmpeg` high-precision path used by the
+/// production JXL encoder.  `avifdec` and `FFmpeg` are both valid decoders, but
+/// their RGB16 rounding can differ by one 8-bit step after a 12-bit YUV round
+/// trip; comparing across decoders would turn a decoder disagreement into a
+/// false loss report.
+fn decode_hdr_avif_with_encoder_path(input: &Path, root: &Path) -> Result<PathBuf> {
+    let output = root.join("hdr-reference-decoded.png");
+    let mut command = Command::new(tool_path("ffmpeg")?);
+    command
+        .args(["-y", "-i"])
+        .arg(input)
+        .args(["-pix_fmt", "rgb48le", "-frames:v", "1"])
+        .arg(&output);
+    run_status(command, "FFmpeg HDR AVIF reference decode")?;
+    ensure!(
+        output.is_file(),
+        "FFmpeg did not create HDR reference {}",
+        output.display()
+    );
+    Ok(output)
+}
+
 fn detected_format_for_kind(kind: FormatKind) -> DetectedFormat {
     match kind {
         FormatKind::Jpeg => DetectedFormat::JPEG,
@@ -729,6 +751,37 @@ fn add_avif_lossless_fixture(
         run_status(command, "create lossless AVIF fixture")?;
         fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
         fixtures.push((source, FormatKind::Avif));
+
+        let hdr_png = fixture_root.join("pattern-hdr.png");
+        image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
+            image::Rgb([
+                u16::from(((x * 521 + y * 257) % 65_536).to_le_bytes()[0]) * 257,
+                u16::from(((x * 313 + y * 733) % 65_536).to_le_bytes()[0]) * 257,
+                u16::from(((x * 911 + y * 419) % 65_536).to_le_bytes()[0]) * 257,
+            ])
+        })
+        .save(&hdr_png)?;
+        let hdr_source = fixture_root.join("pattern-hdr.avif");
+        let mut command = Command::new(tool_path("avifenc")?);
+        command
+            .args([
+                "--lossless",
+                "--speed",
+                "8",
+                "--depth",
+                "12,4",
+                "--yuv",
+                "444",
+                "--cicp",
+                "9/16/0",
+                "--clli",
+                "1000,400",
+            ])
+            .arg(&hdr_png)
+            .arg(&hdr_source);
+        run_status(command, "create lossless HDR AVIF fixture")?;
+        fs::write(hdr_source.with_extension("xmp"), MATRIX_XMP)?;
+        fixtures.push((hdr_source, FormatKind::Avif));
     }
     Ok(())
 }
@@ -791,13 +844,34 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
     let output_decoded_root = output_root.join("output-decoded");
     fs::create_dir_all(&source_decoded_root)?;
     fs::create_dir_all(&output_decoded_root)?;
-    let source_decoded = decode_static_fixture_to_png(source, format, &source_decoded_root)?;
+    let is_hdr = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|stem| stem.ends_with("-hdr"));
+    let source_decoded = if is_hdr {
+        decode_hdr_avif_with_encoder_path(source, &source_decoded_root)?
+    } else {
+        decode_static_fixture_to_png(source, format, &source_decoded_root)?
+    };
     let output_decoded =
         decode_static_fixture_to_png(&output, FormatKind::Jxl, &output_decoded_root)?;
     let source_pixels =
         foundation::image_detection::open_image_with_limits(&source_decoded)?.to_rgba16();
     let output_pixels =
         foundation::image_detection::open_image_with_limits(&output_decoded)?.to_rgba16();
+    if is_hdr {
+        let source_image = foundation::image_detection::open_image_with_limits(&source_decoded)?;
+        let output_image = foundation::image_detection::open_image_with_limits(&output_decoded)?;
+        ensure!(
+            source_image.color().bits_per_pixel() >= 48
+                && output_image.color().bits_per_pixel() >= 48,
+            "HDR AVIF→JXL path reduced the 16-bit RGB precision"
+        );
+        ensure!(
+            source_pixels.as_raw().iter().any(|channel| *channel > 4096),
+            "HDR fixture did not contain meaningful high-range samples"
+        );
+    }
     ensure!(
         source_pixels.dimensions() == output_pixels.dimensions()
             && source_pixels.as_raw() == output_pixels.as_raw(),
@@ -819,12 +893,39 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         fs::read(source.with_extension("xmp"))? == MATRIX_XMP,
         "lossless {format:?} source XMP changed"
     );
+
+    if is_hdr {
+        let source_info = Command::new(tool_path("avifdec")?)
+            .arg("--info")
+            .arg(source)
+            .output()?;
+        ensure!(
+            source_info.status.success(),
+            "HDR AVIF fixture probe failed"
+        );
+        let source_info = String::from_utf8_lossy(&source_info.stdout);
+        ensure!(
+            source_info.contains("Color Primaries: 9")
+                && source_info.contains("Transfer Char. : 16")
+                && source_info.contains("CLLI           : 1000, 400"),
+            "HDR AVIF fixture lost its Rec.2100/PQ/CLLI contract: {source_info}"
+        );
+
+        let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
+        ensure!(output_info.status.success(), "HDR JXL feature probe failed");
+        let output_info = String::from_utf8_lossy(&output_info.stdout);
+        ensure!(
+            output_info.contains("Primaries: Rec.2100")
+                && output_info.contains("Transfer function: PQ"),
+            "lossless HDR AVIF→JXL lost Rec.2100/PQ signaling: {output_info}"
+        );
+    }
     Ok(())
 }
 
 #[test]
 fn lossless_static_to_jxl_matrix_is_pixel_exact_and_preserves_xmp() -> Result<()> {
-    if let Some(tool) = ["cjxl", "djxl", "jxlinfo", "exiftool", "magick"]
+    if let Some(tool) = ["cjxl", "djxl", "jxlinfo", "exiftool", "magick", "ffmpeg"]
         .into_iter()
         .find(|tool| !tool_available(tool))
     {
