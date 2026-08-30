@@ -1042,10 +1042,10 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let strip_orientation_pos = args
-            .iter()
-            .position(|arg| arg == "-Orientation=")
-            .expect("strip_residual_orientation_tag must strip Orientation");
+        assert!(
+            args.iter().any(|arg| arg == "-Orientation="),
+            "strip_residual_orientation_tag must strip Orientation"
+        );
 
         assert!(!args.iter().any(|arg| arg == "-m"));
         assert!(

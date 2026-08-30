@@ -914,7 +914,7 @@ mod tests {
             let policy = forensic_tool_for_format(format)
                 .unwrap_or_else(|| panic!("missing generic decoder policy for {format:?}"));
             assert_eq!(policy.tool, crate::constants::TOOL_IDENTIFY);
-            assert!(policy.args_before_path.is_empty());
+            assert_eq!(policy.args_before_path, &[] as &[&str]);
         }
 
         #[cfg(not(feature = "v1_21"))]
@@ -922,7 +922,7 @@ mod tests {
             let policy = forensic_tool_for_format(format)
                 .unwrap_or_else(|| panic!("missing HEIF fallback policy for {format:?}"));
             assert_eq!(policy.tool, crate::constants::TOOL_HEIF_INFO);
-            assert!(policy.args_before_path.is_empty());
+            assert_eq!(policy.args_before_path, &[] as &[&str]);
         }
     }
 
