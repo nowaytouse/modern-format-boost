@@ -4,7 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-08-30
 
-### Archive-value routing, AVIF Meme Mode, and shared CI repair
+### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
+
+- **Part A was an earlier audit objective, not the later CI task**: it traced
+  external-tool diagnostics and the complete JPEG -> JXL -> metadata update ->
+  JPEG reconstruction chain. The resulting policy keeps useful tool output in
+  bounded, rotated log files instead of suppressing it, rejects non-zero exits
+  and missing outputs, and protects reconstruction-owned JBRD/Exif/XMP/JUMBF
+  bytes from destructive metadata rewrites. The detailed delivered behavior is
+  recorded under "JXL reconstruction and metadata evidence" below.
+- **Part B was the completion summary for accumulated IMG work already in the
+  working tree**: subsequent, separately requested reviews added existing-AVIF
+  no-reencode handling, modern lossless-source routing, HEIF Tier 2 evidence,
+  the JXL-to-AVIF q75 pivot, workload-specific JXL effort, and the real lossless
+  raster matrix. These changes were committed as `077886e0`; they were not
+  introduced to make CI green.
+- **The later CI-only repair is deliberately separate**: run `33291990658`
+  reported one unused test binding and one Clippy `assert_is_empty` violation.
+  Commit `8f1e6ae9` changes only those test assertions. `fix-gate`, `check_all`,
+  and missing `lcov.info` were downstream annotations after Clippy stopped the
+  job, not additional media-pipeline defects. No codec, metadata, routing, or
+  search behavior changed for that CI repair.
+
+### Archive-value routing and AVIF Meme Mode (accumulated IMG work)
 
 - **Lossless modern sources return to the JXL archive route**: ordinary
   `img run` now converts positively proven lossless WebP, AVIF, HEIC/HEIF, and
@@ -37,11 +59,15 @@ All notable changes to this project will be documented in this file.
   as portable metadata, harmless chromaticity number formatting being compared
   as raw strings, and direct `cjxl` rejection of an AVIF that required the
   authoritative `avifdec` intermediate.
-- **Shared health root cause fixed**: removed the unused orientation-test
-  binding and converted the empty-slice assertion to the Clippy-required
-  form. The reported `check_all`, `fix-gate`, and missing `lcov.info`
-  annotations were downstream effects of those two lint failures rather than
-  independent coverage faults.
+
+### CI-only follow-up: shared health lint failures
+
+- **Shared health root cause fixed without changing runtime behavior**: removed
+  the unused orientation-test binding and converted the empty-slice assertion
+  to the Clippy-required form. Both shared-health and deep-audit jobs stopped at
+  these same two diagnostics. The reported `check_all`, `fix-gate`, and missing
+  `lcov.info` annotations were downstream effects rather than independent
+  coverage or media-processing faults.
 
 ### JXL reconstruction and metadata evidence
 
