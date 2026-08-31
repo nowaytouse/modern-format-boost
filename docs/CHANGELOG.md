@@ -17,10 +17,17 @@ All notable changes to this project will be documented in this file.
   continues to preserve a recognized depth map. An unrecognized auxiliary-image
   relationship aborts before conversion so Vision/portrait/private structures
   cannot be silently flattened while the source is later removed.
-- **Live Photo pairs remain indivisible**: Archive and both FastImg strategies
-  now retain same-stem still/MOV members. Directory and companion metadata read
-  failures are emitted as explicit audit events instead of being collapsed into
-  a false "not a Live Photo" result.
+- **Live Photo pairs now use identity evidence when available**: Archive and
+  both FastImg strategies first discover same-stem still/MOV candidates, then
+  compare the still-image and QuickTime Apple Content Identifiers. A proven
+  mismatch is processed as two independent files; missing, conflicting, or
+  unreadable identifiers retain the candidate pair conservatively and emit an
+  explicit audit event instead of risking separation after metadata loss.
+- **High-precision HEIF avoids the 8-bit platform decoder**: float, HDR, and
+  high-bit-depth HEIC/HEIF sources bypass `sips` and require the existing
+  precision-preserving OpenEXR/16-bit intermediate path. PQ, HLG, and Display
+  P3 signaling are locked at the shared `cjxl` command boundary, so this policy
+  is not limited to AVIF inputs.
 - **Existing AVIF Meme delivery uses the correct proof domain**: adopted or
   metadata-sanitized AVIF is checked by primary AV1 payload, decoder-visible
   codec/HDR/gain-map features and the clear-metadata policy; it is not passed

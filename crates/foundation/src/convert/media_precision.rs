@@ -433,6 +433,29 @@ mod tests {
     }
 
     #[test]
+    fn float32_display_p3_uses_exr_without_an_eight_bit_intermediate() {
+        let color_info = ColorInfo {
+            color_primaries: Some("display-p3".to_string()),
+            color_transfer: Some("srgb".to_string()),
+            bit_depth: Some(32),
+            is_float: true,
+            ..Default::default()
+        };
+        let profile =
+            ImagePrecisionProfile::from_media_context(Some("tiff"), &color_info, None);
+
+        assert!(profile.is_float());
+        assert!(profile.should_preserve_high_precision());
+        assert_eq!(profile.intermediate_depth_str(), "32");
+        assert_eq!(profile.intermediate_suffix(), ".exr");
+        assert!(!profile.should_use_high_precision_png16_decode());
+        assert_eq!(
+            crate::hdr::color_info_to_jxl_color_encoding(&color_info),
+            Some("DisplayP3")
+        );
+    }
+
+    #[test]
     fn image_precision_profile_preserves_unknown_tiff_container_without_png16_decode() {
         let profile =
             ImagePrecisionProfile::from_media_context(Some("tiff"), &ColorInfo::default(), None);

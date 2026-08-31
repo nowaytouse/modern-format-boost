@@ -5350,6 +5350,23 @@ fn preprocess_heic_for_cjxl(
     intermediate_suffix: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     use console::style;
+
+    if precision.should_preserve_high_precision() {
+        foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
+            "heic_high_precision_predecode",
+            input,
+            "high-precision HEIC/HEIF bypasses the 8-bit sips path; using a precision-preserving intermediate",
+        );
+        return preprocess_lossless_with_magick(
+            input,
+            precision,
+            intermediate_depth,
+            precision.intermediate_depth_str(),
+            intermediate_suffix,
+            "high-precision HEIC/HEIF",
+        );
+    }
+
     log_detail!(&format!(
         "{} {}",
         style("🔧 PRE-PROCESSING:").cyan().bold(),
@@ -5764,23 +5781,30 @@ mod tests {
     }
 
     #[test]
-    fn recovery_cjxl_command_keeps_rec2100_pq_signaling() {
-        let color_info = ColorInfo {
-            color_transfer: Some("smpte2084".to_string()),
-            color_primaries: Some("bt2020".to_string()),
-            ..ColorInfo::default()
-        };
-        let mut builder = foundation::CjxlBuilder::new();
-        builder.use_stdin(true).output(Path::new("out.jxl"));
-        apply_jxl_color_info(&mut builder, Some(&color_info));
+    fn recovery_cjxl_command_keeps_validated_hdr_and_wide_gamut_signaling() {
+        for (primaries, transfer, expected) in [
+            ("bt2020", "smpte2084", "color_space=Rec2100PQ"),
+            ("bt2020", "arib-std-b67", "color_space=Rec2100HLG"),
+            ("display-p3", "srgb", "color_space=DisplayP3"),
+        ] {
+            let color_info = ColorInfo {
+                color_transfer: Some(transfer.to_string()),
+                color_primaries: Some(primaries.to_string()),
+                ..ColorInfo::default()
+            };
+            let mut builder = foundation::CjxlBuilder::new();
+            builder.use_stdin(true).output(Path::new("out.jxl"));
+            apply_jxl_color_info(&mut builder, Some(&color_info));
 
-        let command = builder.build();
-        assert!(
-            command
-                .get_args()
-                .filter_map(std::ffi::OsStr::to_str)
-                .any(|arg| arg == "color_space=Rec2100PQ")
-        );
+            let command = builder.build();
+            assert!(
+                command
+                    .get_args()
+                    .filter_map(std::ffi::OsStr::to_str)
+                    .any(|arg| arg == expected),
+                "missing {expected} for {primaries}/{transfer}"
+            );
+        }
     }
 
     fn test_tool_available(tool: &str) -> bool {
