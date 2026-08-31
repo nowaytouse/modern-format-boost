@@ -1311,7 +1311,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[serial_test::serial]
     fn failed_multimedia_tool_is_retried_only_after_binary_changes() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1325,11 +1324,13 @@ mod tests {
         let mut permissions = fs::metadata(&tool)?.permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&tool, permissions.clone())?;
-        let _tool = EnvGuard::set("MFB_TOOL_FFPROBE", &tool.to_string_lossy());
         let _counter = EnvGuard::set("MFB_TEST_TOOL_COUNTER", &counter.to_string_lossy());
 
-        assert_eq!(resolve_tool_path("ffprobe"), None);
-        assert_eq!(resolve_tool_path("ffprobe"), None);
+        // Exercise the smoke-check seam directly.  Routing through
+        // `resolve_tool_path` would mutate process-wide PATH/override state and
+        // make this test race with unrelated resolver tests in the same binary.
+        assert!(!multimedia_tool_is_healthy(&tool));
+        assert!(!multimedia_tool_is_healthy(&tool));
         assert_eq!(fs::read_to_string(&counter)?, "x");
 
         fs::write(
@@ -1337,7 +1338,7 @@ mod tests {
             "#!/bin/sh\nprintf y >> \"$MFB_TEST_TOOL_COUNTER\"\nexit 0\n# replacement\n",
         )?;
         fs::set_permissions(&tool, permissions)?;
-        assert_eq!(resolve_tool_path("ffprobe"), Some(tool));
+        assert!(multimedia_tool_is_healthy(&tool));
         assert_eq!(fs::read_to_string(counter)?, "xy");
         Ok(())
     }

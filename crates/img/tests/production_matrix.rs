@@ -219,6 +219,8 @@ fn extract_jxl_xmp(jxl: &Path, destination: &Path) -> Result<Vec<u8>> {
 
 fn find_icc_profile() -> Option<PathBuf> {
     [
+        "/System/Library/ColorSync/Profiles/Display P3.icc",
+        "/System/Library/ColorSync/Profiles/DCI(P3) RGB.icc",
         "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
         "/System/Library/ColorSync/Profiles/Generic RGB Profile.icc",
         "/System/Library/ColorSync/Profiles/Generic Gray Gamma 2.2 Profile.icc",
@@ -227,6 +229,45 @@ fn find_icc_profile() -> Option<PathBuf> {
     .iter()
     .map(PathBuf::from)
     .find(|path| path.is_file())
+}
+
+fn extract_embedded_icc(path: &Path) -> Result<Vec<u8>> {
+    let output = Command::new(tool_path("exiftool")?)
+        .args(["-icc_profile", "-b"])
+        .arg(path)
+        .output()?;
+    ensure!(
+        output.status.success() && !output.stdout.is_empty(),
+        "{} has no readable embedded ICC profile",
+        path.display()
+    );
+    Ok(output.stdout)
+}
+
+fn pfm_sample_bits(path: &Path) -> Result<(String, String, Vec<u32>)> {
+    let bytes = fs::read(path)?;
+    let mut parts = bytes.splitn(4, |byte| *byte == b'\n');
+    let magic = std::str::from_utf8(parts.next().unwrap_or_default())?.to_string();
+    let dimensions = std::str::from_utf8(parts.next().unwrap_or_default())?.to_string();
+    let scale = std::str::from_utf8(parts.next().unwrap_or_default())?.parse::<f32>()?;
+    let payload = parts.next().unwrap_or_default();
+    ensure!(
+        matches!(magic.as_str(), "PF" | "Pf") && payload.len() % 4 == 0,
+        "invalid PFM payload in {}",
+        path.display()
+    );
+    let samples = payload
+        .chunks_exact(4)
+        .map(|bytes| {
+            let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            if scale.is_sign_negative() {
+                u32::from_le_bytes(bytes)
+            } else {
+                u32::from_be_bytes(bytes)
+            }
+        })
+        .collect();
+    Ok((magic, dimensions, samples))
 }
 
 fn convert_exact_jpeg_fixture(source: &Path, output_dir: &Path) -> Result<PathBuf> {
@@ -457,17 +498,167 @@ fn jpeg_metadata_matrix_preserves_xmp_and_icc_without_breaking_jbrd() -> Result<
         .arg(&source);
     run_status(command, "magick ICC JPEG fixture")?;
     let output = convert_exact_jpeg_fixture(&source, &output_root.join("with-icc"))?;
-    let exiftool = tool_path("exiftool")?;
-    let icc = Command::new(exiftool)
-        .args(["-icc_profile", "-b"])
-        .arg(&source)
-        .output()?;
+    let icc = extract_embedded_icc(&source)?;
+    let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
+    ensure!(output_info.status.success(), "ICC JXL feature probe failed");
+    let output_info = String::from_utf8_lossy(&output_info.stdout);
     ensure!(
-        icc.status.success() && !icc.stdout.is_empty(),
-        "ICC fixture lost its profile"
+        output_info.contains(&format!("{}-byte ICC profile", icc.len())),
+        "JXL did not advertise the source ICC profile length: {output_info}"
+    );
+
+    let reconstructed = output_root.join("with-icc-restored.jpg");
+    reconstructed_jpeg(&output, &reconstructed)?;
+    ensure!(
+        fs::read(&reconstructed)? == fs::read(&source)?,
+        "ICC JPEG was not reconstructed byte-for-byte"
+    );
+    let reconstructed_icc = extract_embedded_icc(&reconstructed)?;
+    ensure!(
+        reconstructed_icc == icc,
+        "reconstructed JPEG did not preserve the source ICC profile byte-for-byte"
     );
     ensure!(source.is_file(), "ICC source JPEG was unexpectedly removed");
     ensure!(output.is_file(), "ICC JXL output is missing");
+    Ok(())
+}
+
+#[test]
+fn float32_display_p3_tiff_to_jxl_preserves_samples_icc_and_xmp() -> Result<()> {
+    for tool in ["magick", "ffprobe", "cjxl", "djxl", "jxlinfo", "exiftool"] {
+        if !tool_available(tool) {
+            eprintln!("Skipping float32 Display P3 matrix: {tool} is unavailable");
+            return Ok(());
+        }
+    }
+    let Some(profile) = [
+        "/System/Library/ColorSync/Profiles/Display P3.icc",
+        "/System/Library/ColorSync/Profiles/DCI(P3) RGB.icc",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file()) else {
+        eprintln!("Skipping float32 Display P3 matrix: no P3 ICC profile is installed");
+        return Ok(());
+    };
+
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("float32-display-p3.tiff");
+    let sidecar = source.with_extension("xmp");
+    let output_root = root.path().join("output");
+    fs::create_dir_all(&output_root)?;
+
+    let mut command = Command::new(tool_path("magick")?);
+    command
+        .args([
+            "-size",
+            "96x64",
+            "plasma:fractal",
+            "-colorspace",
+            "RGB",
+            "-evaluate",
+            "multiply",
+            "0.123456789",
+            "-define",
+            "quantum:format=floating-point",
+            "-depth",
+            "32",
+            "-profile",
+        ])
+        .arg(&profile)
+        .arg(&source);
+    run_status(command, "create float32 Display P3 TIFF fixture")?;
+    fs::write(&sidecar, MATRIX_XMP)?;
+    let source_before = fs::read(&source)?;
+
+    let probe = Command::new(tool_path("ffprobe")?)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt",
+            "-of",
+            "default=nw=1:nk=1",
+        ])
+        .arg(&source)
+        .output()?;
+    ensure!(
+        probe.status.success() && String::from_utf8_lossy(&probe.stdout).contains("f32"),
+        "fixture is not a proven 32-bit float image"
+    );
+
+    let mut options = ConvertOptions {
+        output_dir: Some(output_root.clone()),
+        child_threads: 1,
+        ..ConvertOptions::default()
+    };
+    options.flags.set(ConvertFlags::FORCE, true);
+    options.flags.set(ConvertFlags::ULTIMATE, true);
+    let result = convert_to_jxl(&source, &options, 0.0, None)?;
+    ensure!(
+        result.success && !result.skipped,
+        "float32 Display P3 conversion failed: {}",
+        result.message
+    );
+    let output = PathBuf::from(
+        result
+            .output_path
+            .ok_or_else(|| anyhow!("float32 conversion omitted output path"))?,
+    );
+
+    let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
+    ensure!(
+        output_info.status.success()
+            && String::from_utf8_lossy(&output_info.stdout).contains("32-bit float"),
+        "float32 TIFF→JXL did not retain its float sample domain"
+    );
+
+    let source_pfm = root.path().join("source.pfm");
+    let decoded_pfm = root.path().join("decoded.pfm");
+    let decoded_icc = root.path().join("decoded.icc");
+    let mut command = Command::new(tool_path("magick")?);
+    command
+        .arg(&source)
+        .args(["-format", "pfm"])
+        .arg(&source_pfm);
+    run_status(command, "create float32 source PFM proof")?;
+    let mut command = Command::new(tool_path("djxl")?);
+    command
+        .arg(&output)
+        .arg(&decoded_pfm)
+        .arg(format!("--orig_icc_out={}", decoded_icc.display()));
+    run_status(command, "decode float32 JXL proof")?;
+
+    let source_samples = pfm_sample_bits(&source_pfm)?;
+    let decoded_samples = pfm_sample_bits(&decoded_pfm)?;
+    ensure!(
+        source_samples == decoded_samples,
+        "float32 TIFF→JXL changed one or more floating-point samples"
+    );
+    ensure!(
+        source_samples.2.iter().any(|bits| {
+            let sample = f32::from_bits(*bits);
+            sample.is_finite() && (sample * 65_535.0).fract().abs() > 0.000_1
+        }),
+        "float32 fixture was accidentally representable as 16-bit integer samples"
+    );
+    ensure!(
+        fs::read(&decoded_icc)? == extract_embedded_icc(&source)?,
+        "float32 Display P3 JXL did not preserve the source ICC profile byte-for-byte"
+    );
+    let extracted_xmp = extract_jxl_xmp(&output, &output_root.join("float32.xmp"))?;
+    ensure!(
+        extracted_xmp
+            .windows(b"production-matrix".len())
+            .any(|window| window == b"production-matrix"),
+        "float32 Display P3 JXL did not preserve its XMP overlay"
+    );
+    ensure!(
+        fs::read(&source)? == source_before && fs::read(&sidecar)? == MATRIX_XMP,
+        "float32 conversion changed its source or XMP sidecar"
+    );
     Ok(())
 }
 

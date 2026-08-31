@@ -136,7 +136,8 @@ fn content_identifiers_agree(left: Option<&str>, right: Option<&str>) -> Option<
 
 fn same_stem_pair_is_live(path: &Path, companion: &Path) -> bool {
     match (content_identifier(path), content_identifier(companion)) {
-        (Ok(left), Ok(right)) => match content_identifiers_agree(left.as_deref(), right.as_deref()) {
+        (Ok(left), Ok(right)) => match content_identifiers_agree(left.as_deref(), right.as_deref())
+        {
             Some(true) => true,
             Some(false) => {
                 crate::media_conversion_gate::probe_image_format_audit(
@@ -285,8 +286,7 @@ mod tests {
     #[test]
     fn content_identifier_parser_accepts_both_apple_groups_and_rejects_conflicts() {
         let apple = br#"[{"SourceFile":"still.heic","Apple:ContentIdentifier":" AABB-CCDD "}]"#;
-        let quicktime =
-            br#"[{"SourceFile":"motion.mov","Keys:ContentIdentifier":"aabb-ccdd"}]"#;
+        let quicktime = br#"[{"SourceFile":"motion.mov","Keys:ContentIdentifier":"aabb-ccdd"}]"#;
         assert_eq!(
             parse_content_identifier_json(apple).expect("Apple identifier JSON"),
             Some("AABB-CCDD".to_string())

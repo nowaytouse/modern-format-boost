@@ -5062,6 +5062,7 @@ fn log_image_precision_decision(
     options: &ConvertOptions,
     color_assessment: foundation::ffprobe_json::ColorInfoAssessment,
     precision: ImagePrecisionProfile,
+    intermediate_suffix: &str,
 ) {
     if precision.used_float_extension_hint() && options.verbose() {
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
@@ -5072,9 +5073,14 @@ fn log_image_precision_decision(
     }
 
     if precision.is_float() && options.verbose() {
+        let container = if intermediate_suffix == ".pfm" {
+            "PFM"
+        } else {
+            "OpenEXR"
+        };
         log_detail!(&format!(
-            "{} Source is 32-bit float | OpenEXR intermediate bitstream selected",
-            foundation::infra::static_logs::messages::LABEL_METADATA
+            "{} Source is 32-bit float | {container} intermediate bitstream selected",
+            foundation::infra::static_logs::messages::LABEL_METADATA,
         ));
     } else if precision.bit_depth().is_some_and(|depth| depth > 8)
         && precision.bit_depth_inferred_from_pix_fmt()
@@ -5113,6 +5119,26 @@ fn log_image_precision_decision(
             foundation::media_conversion_gate::path_extension_label(input)
         ));
     }
+}
+
+fn float_pfm_intermediate_supported(color_info: &ColorInfo) -> bool {
+    color_info.pix_fmt.as_deref().is_some_and(|pix_fmt| {
+        matches!(
+            pix_fmt.to_ascii_lowercase().as_str(),
+            "rgbf16le"
+                | "rgbf16be"
+                | "rgbf32le"
+                | "rgbf32be"
+                | "gbrpf16le"
+                | "gbrpf16be"
+                | "gbrpf32le"
+                | "gbrpf32be"
+                | "grayf16le"
+                | "grayf16be"
+                | "grayf32le"
+                | "grayf32be"
+        )
+    })
 }
 
 fn try_high_precision_decode(
@@ -5309,7 +5335,14 @@ fn preprocess_lossless_with_magick(
     format_label: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     let output_label = if precision.is_float() {
-        "32-bit float OpenEXR".to_string()
+        format!(
+            "32-bit float {}",
+            if intermediate_suffix == ".pfm" {
+                "PFM"
+            } else {
+                "OpenEXR"
+            }
+        )
     } else {
         format!("{depth_str}-bit PNG")
     };
@@ -5324,7 +5357,7 @@ fn preprocess_lossless_with_magick(
     let mut builder = foundation::MagickBuilder::new();
     builder.input(input).output(&temp_path);
     if precision.is_float() {
-        builder.format("exr");
+        builder.format(intermediate_suffix.trim_start_matches('.'));
     }
     if let Some(depth) = intermediate_depth {
         builder.depth(depth);
@@ -5409,7 +5442,7 @@ fn preprocess_heic_for_cjxl(
             builder.input(input).output(&temp_path);
 
             if precision.is_float() {
-                builder.format("exr");
+                builder.format(intermediate_suffix.trim_start_matches('.'));
             }
 
             if let Some(depth) = intermediate_depth {
@@ -5539,7 +5572,7 @@ fn preprocess_jpeg_for_cjxl(
         builder.input(input).output(&temp_path);
 
         if precision.is_float() {
-            builder.format("exr");
+            builder.format(intermediate_suffix.trim_start_matches('.'));
         }
 
         if let Some(depth) = intermediate_depth {
@@ -5601,9 +5634,20 @@ fn prepare_input_for_cjxl(
             ))
         })?)
     };
-    let intermediate_suffix = precision.intermediate_suffix();
+    let intermediate_suffix =
+        if precision.is_float() && float_pfm_intermediate_supported(color_info) {
+            ".pfm"
+        } else {
+            precision.intermediate_suffix()
+        };
 
-    log_image_precision_decision(input, options, color_assessment, precision);
+    log_image_precision_decision(
+        input,
+        options,
+        color_assessment,
+        precision,
+        intermediate_suffix,
+    );
 
     // Check if we need 16-bit decode for HDR or high-precision preservation.
     if precision.should_use_high_precision_png16_decode()
@@ -6775,6 +6819,23 @@ mod tests {
         let precision = ImagePrecisionProfile::inspect(std::path::Path::new("test.exr"), &hdr_info);
 
         assert!(!precision.should_use_high_precision_png16_decode());
+    }
+
+    #[test]
+    fn float_pfm_intermediate_requires_a_known_non_alpha_layout() {
+        for pix_fmt in ["rgbf32le", "gbrpf32be", "grayf16le"] {
+            assert!(float_pfm_intermediate_supported(&ColorInfo {
+                pix_fmt: Some(pix_fmt.to_string()),
+                ..Default::default()
+            }));
+        }
+        for pix_fmt in ["rgbaf32le", "gbrapf32le", "yuva444p16le"] {
+            assert!(!float_pfm_intermediate_supported(&ColorInfo {
+                pix_fmt: Some(pix_fmt.to_string()),
+                ..Default::default()
+            }));
+        }
+        assert!(!float_pfm_intermediate_supported(&ColorInfo::default()));
     }
 
     #[test]

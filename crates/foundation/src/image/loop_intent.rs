@@ -743,12 +743,12 @@ impl LoopMeta {
             // frame bytes in-memory to avoid repeated ffmpeg invocations later.
             match extract_frame_to_temp(path) {
                 Ok(Some(temp_frame)) => {
-                    match std::fs::read(&temp_frame) {
+                    match std::fs::read(temp_frame.path()) {
                         Ok(bytes) => {
                             // Remove the temporary file immediately; keep bytes in-memory only.
                             crate::media_conversion_gate::delivery_remove_file_or_audit(
                                 "loop_intent_temp_frame",
-                                &temp_frame,
+                                temp_frame.path(),
                             );
 
                             // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
@@ -782,7 +782,7 @@ impl LoopMeta {
                                         path,
                                         format!(
                                             "failed to decode extracted frame {}: {err}",
-                                            temp_frame.display()
+                                            temp_frame.path().display()
                                         ),
                                     );
                                 }
@@ -791,14 +791,14 @@ impl LoopMeta {
                         Err(err) => {
                             crate::media_conversion_gate::delivery_remove_file_or_audit(
                                 "loop_intent_temp_frame",
-                                &temp_frame,
+                                temp_frame.path(),
                             );
                             crate::media_conversion_gate::probe_image_format_audit(
                                 "loop_intent_temp_frame_read_failed",
                                 path,
                                 format!(
                                     "failed to read extracted frame {}: {err}",
-                                    temp_frame.display()
+                                    temp_frame.path().display()
                                 ),
                             );
                         }
@@ -839,23 +839,23 @@ impl LoopMeta {
                 path.display()
             )
         })?;
-        let bytes = std::fs::read(&temp_frame).map_err(|err| {
+        let bytes = std::fs::read(temp_frame.path()).map_err(|err| {
             anyhow::anyhow!(
                 "loop_stats_webp_ratio frame read failed for {} from {}: {err}",
                 path.display(),
-                temp_frame.display()
+                temp_frame.path().display()
             )
         });
         crate::media_conversion_gate::delivery_remove_file_or_audit(
             "loop_intent_temp_frame_strict_webp_ratio",
-            &temp_frame,
+            temp_frame.path(),
         );
         let bytes = bytes?;
         let img = image::load_from_memory(&bytes).map_err(|err| {
             anyhow::anyhow!(
                 "loop_stats_webp_ratio frame decode failed for {} from {}: {err}",
                 path.display(),
-                temp_frame.display()
+                temp_frame.path().display()
             )
         })?;
         let ratio = sampled_webp_compression_ratio_from_image(&img)?.ok_or_else(|| {
@@ -4706,11 +4706,11 @@ impl<'a> LoopAssessmentSession<'a> {
             }
         } else {
             match extract_frame_to_temp(path) {
-                Ok(Some(temp_frame)) => match std::fs::read(&temp_frame) {
+                Ok(Some(temp_frame)) => match std::fs::read(temp_frame.path()) {
                     Ok(bytes) => {
                         crate::media_conversion_gate::delivery_remove_file_or_audit(
                             "loop_intent_temp_frame_tier3",
-                            &temp_frame,
+                            temp_frame.path(),
                         );
                         match image::load_from_memory(&bytes) {
                             Ok(img) => img_opt = Some(img),
@@ -4720,7 +4720,7 @@ impl<'a> LoopAssessmentSession<'a> {
                                     path,
                                     format!(
                                         "failed to decode Tier 3 extracted frame {}: {err}",
-                                        temp_frame.display()
+                                        temp_frame.path().display()
                                     ),
                                 );
                             }
@@ -4729,14 +4729,14 @@ impl<'a> LoopAssessmentSession<'a> {
                     Err(err) => {
                         crate::media_conversion_gate::delivery_remove_file_or_audit(
                             "loop_intent_temp_frame_tier3",
-                            &temp_frame,
+                            temp_frame.path(),
                         );
                         crate::media_conversion_gate::probe_image_format_audit(
                             "loop_intent_tier3_frame_read_failed",
                             path,
                             format!(
                                 "failed to read Tier 3 extracted frame {}: {err}",
-                                temp_frame.display()
+                                temp_frame.path().display()
                             ),
                         );
                     }
@@ -5593,36 +5593,33 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
             .is_some_and(|ratio| ratio > crate::constants::LOOP_INTENT_LOCALIZED_MOTION_RATIO)
 }
 
+/// A decoded frame together with the directory that owns it.
+///
+/// Keeping the directory alive for the whole analysis prevents another test
+/// (or a concurrent worker changing `MFB_HOME_ROOT`) from removing the parent
+/// while FFmpeg or the consumer is still reading the frame.
+#[derive(Debug)]
+struct ExtractedFrame {
+    _temp_dir: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl ExtractedFrame {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Extract first frame from video to temporary `PNG` for analysis.
-fn extract_frame_to_temp(path: &Path) -> anyhow::Result<Option<std::path::PathBuf>> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    // Generate unique filename: timestamp + random seed
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| {
-            anyhow::anyhow!("system clock before UNIX_EPOCH for frame extraction: {err}")
-        })?
-        .as_nanos();
-    let timestamp_bytes = timestamp.to_le_bytes();
-    let rand_seed = std::process::id()
-        ^ u32::from_le_bytes([
-            timestamp_bytes[0],
-            timestamp_bytes[1],
-            timestamp_bytes[2],
-            timestamp_bytes[3],
-        ]);
-
-    let temp_dir = crate::media_conversion_gate::delivery_scratch_temp_dir_or_system_temp(
-        "loop_intent_frame_extract",
-    );
-    std::fs::create_dir_all(&temp_dir).map_err(|err| {
-        anyhow::anyhow!(
-            "failed to prepare frame extraction temp dir {}: {err}",
-            temp_dir.display()
-        )
-    })?;
-    let temp_path = temp_dir.join(format!("mfb_frame_{timestamp:x}_{rand_seed:x}.png"));
+fn extract_frame_to_temp(path: &Path) -> anyhow::Result<Option<ExtractedFrame>> {
+    // Use an owned system-temp directory rather than the mutable process-wide
+    // MFB scratch root.  The RAII owner keeps the parent available until all
+    // callers finish consuming the frame.
+    let temp_dir = tempfile::Builder::new()
+        .prefix("mfb-loop-frame-")
+        .tempdir()
+        .map_err(|err| anyhow::anyhow!("failed to prepare frame extraction temp dir: {err}"))?;
+    let temp_path = temp_dir.path().join("frame.png");
 
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
@@ -5659,7 +5656,10 @@ fn extract_frame_to_temp(path: &Path) -> anyhow::Result<Option<std::path::PathBu
             temp_path.display()
         ));
     }
-    Ok(Some(temp_path))
+    Ok(Some(ExtractedFrame {
+        _temp_dir: temp_dir,
+        path: temp_path,
+    }))
 }
 
 fn detect_heavy_letterboxing_from_image(img: &image::DynamicImage) -> bool {

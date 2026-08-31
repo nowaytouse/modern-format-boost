@@ -441,8 +441,7 @@ mod tests {
             is_float: true,
             ..Default::default()
         };
-        let profile =
-            ImagePrecisionProfile::from_media_context(Some("tiff"), &color_info, None);
+        let profile = ImagePrecisionProfile::from_media_context(Some("tiff"), &color_info, None);
 
         assert!(profile.is_float());
         assert!(profile.should_preserve_high_precision());

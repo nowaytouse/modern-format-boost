@@ -25,9 +25,17 @@ All notable changes to this project will be documented in this file.
   explicit audit event instead of risking separation after metadata loss.
 - **High-precision HEIF avoids the 8-bit platform decoder**: float, HDR, and
   high-bit-depth HEIC/HEIF sources bypass `sips` and require the existing
-  precision-preserving OpenEXR/16-bit intermediate path. PQ, HLG, and Display
+  precision-preserving float/16-bit intermediate path. PQ, HLG, and Display
   P3 signaling are locked at the shared `cjxl` command boundary, so this policy
-  is not limited to AVIF inputs.
+  is not limited to AVIF inputs. The production metadata matrix also prefers a
+  system Display P3 profile when available, requires JXL to advertise the
+  source profile length, and proves the reconstructed JPEG and ICC profile
+  remain byte-for-byte identical. Proven non-alpha float RGB/gray layouts now
+  use libjxl's native 32-bit PFM input instead of an ImageMagick OpenEXR that
+  `cjxl` could not read; alpha or unknown layouts are never flattened into PFM.
+  A real float32 Display P3 TIFF regression locks exact float samples, ICC and
+  XMP, while TIFF sample-range layout tags remain correctly outside the
+  cross-container descriptive-metadata contract.
 - **Existing AVIF Meme delivery uses the correct proof domain**: adopted or
   metadata-sanitized AVIF is checked by primary AV1 payload, decoder-visible
   codec/HDR/gain-map features and the clear-metadata policy; it is not passed
@@ -57,6 +65,11 @@ All notable changes to this project will be documented in this file.
   official libjxl 0.12 runner cannot override the explicit JXL color encoding,
   and the remaining inline fallback expression was replaced with equivalent
   explicit branches required by the repository contract.
+- **Probe lifetimes are now race-safe**: loop-intent frame extraction owns its
+  temporary directory until every consumer finishes reading the frame, rather
+  than relying on a process-wide scratch-root path that another worker or test
+  can replace. The failed-tool retry regression now exercises the smoke-check
+  boundary directly, without mutating global tool-override state.
 - **Recovery encodes retain the same HDR domain as the primary JXL path**:
   FFmpeg-to-cjxl fallback now applies the validated Rec.2100 PQ/HLG color
   mapping instead of silently producing an sRGB-labelled high-bit-depth JXL.
