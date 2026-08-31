@@ -2,7 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-30
+## [Unreleased] - 2026-08-31
+
+### Archive-value and CI corrective review
+
+- **HDR signal propagation is now caller-independent**: direct and probe-only
+  lossless JXL entrypoints carry the same ffprobe-derived bit depth, primaries,
+  transfer and matrix evidence used by the high-precision decoder into `cjxl`.
+  The production matrix now keeps Rec.2100/PQ signaling for lossless HDR
+  AVIF-to-JXL instead of producing an exact high-bit-depth image mislabeled as
+  sRGB.
+- **Known HEIC auxiliaries are delivered, unknown relationships are retained**:
+  gain-map synthesis now commits a decoded gain-map PNG beside the HDR JXL and
+  continues to preserve a recognized depth map. An unrecognized auxiliary-image
+  relationship aborts before conversion so Vision/portrait/private structures
+  cannot be silently flattened while the source is later removed.
+- **Live Photo pairs remain indivisible**: Archive and both FastImg strategies
+  now retain same-stem still/MOV members. Directory and companion metadata read
+  failures are emitted as explicit audit events instead of being collapsed into
+  a false "not a Live Photo" result.
+- **Existing AVIF Meme delivery uses the correct proof domain**: adopted or
+  metadata-sanitized AVIF is checked by primary AV1 payload, decoder-visible
+  codec/HDR/gain-map features and the clear-metadata policy; it is not passed
+  through a JPEG-to-AVIF pixel-diff verifier and is never re-encoded.
+- **CI failures fixed at their named roots**: the animated-image fallback test
+  now uses a distinct destination and verifies copied bytes, while the shared
+  copier rejects true path, symlink and hard-link aliases. This resolves the
+  Shared Health failure; its missing `lcov.info` annotation was a downstream
+  consequence. The Deep Audit silent-probe failure is covered by the explicit
+  Live Photo read diagnostics above.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

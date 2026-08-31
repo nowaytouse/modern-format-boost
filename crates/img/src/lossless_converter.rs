@@ -1193,8 +1193,17 @@ pub fn convert_to_jxl(
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    let color_info = color_context.and_then(ConversionColorContext::conversion_color_info);
-    let color_role = color_context.and_then(ConversionColorContext::role);
+    let provided_color_info = color_context.and_then(ConversionColorContext::conversion_color_info);
+    let mut probed_color_info = ColorInfo::default();
+    let color_info = foundation::media_conversion_gate::color_info_for_cjxl_prep(
+        input,
+        provided_color_info,
+        &mut probed_color_info,
+    );
+    let color_role = color_context
+        .and_then(ConversionColorContext::role)
+        .or_else(|| ConversionColorContext::classify(color_info.clone()).role());
+    let color_info = Some(color_info);
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, color_info)?;
 
@@ -1531,7 +1540,9 @@ pub fn convert_to_jxl_probe(
 
     let is_genuine_png = foundation::image::png_validation::is_true_png(input)?;
     let source_semantics = detect_jxl_source_semantics(input)?;
-    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, None)?;
+    let probed_color_info = foundation::ffprobe_json::extract_color_info(input);
+    let color_info = Some(&probed_color_info);
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, color_info)?;
     let icc_temp = foundation::jxl_utils::extract_icc_profile(input);
     let icc_path = icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
@@ -1563,7 +1574,7 @@ pub fn convert_to_jxl_probe(
         max_threads,
         options.apple_compat(),
         icc_path,
-        None,
+        color_info,
         &effort_plan,
     );
 

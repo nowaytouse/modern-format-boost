@@ -157,15 +157,30 @@ pub fn convert_heic_with_gainmap_to_jxl(
 
     let aux_images = handle.auxiliary_images(None);
     let mut gainmap_item_id: Option<libheif_rs::ItemId> = None;
+    let mut depth_item_id: Option<libheif_rs::ItemId> = None;
+    let mut unsupported_auxiliary_types = Vec::new();
 
     for aux in &aux_images {
-        let aux_type = aux.auxiliary_type().map_err(|e| {
-            anyhow!("Failed to read HEIC auxiliary image type for gainmap scan: {e}")
-        })?;
-        if classify_hdr_auxiliary_type(&aux_type) == HdrAuxiliaryRole::GainMap {
-            gainmap_item_id = Some(aux.item_id());
-            break;
+        let aux_type = aux
+            .auxiliary_type()
+            .map_err(|e| anyhow!("Failed to read HEIC auxiliary image type: {e}"))?;
+        match classify_hdr_auxiliary_type(&aux_type) {
+            HdrAuxiliaryRole::GainMap if gainmap_item_id.is_none() => {
+                gainmap_item_id = Some(aux.item_id());
+            }
+            HdrAuxiliaryRole::Depth if depth_item_id.is_none() => {
+                depth_item_id = Some(aux.item_id());
+            }
+            HdrAuxiliaryRole::Other => unsupported_auxiliary_types.push(aux_type),
+            HdrAuxiliaryRole::GainMap | HdrAuxiliaryRole::Depth => {}
         }
+    }
+
+    if !unsupported_auxiliary_types.is_empty() {
+        anyhow::bail!(
+            "HEIC contains unsupported auxiliary image relationships ({}); refusing to flatten them into JXL so the source remains intact",
+            unsupported_auxiliary_types.join(", ")
+        );
     }
 
     let gainmap_item =
@@ -174,17 +189,6 @@ pub fn convert_heic_with_gainmap_to_jxl(
     let gain_handle = ctx
         .image_handle(gainmap_item)
         .map_err(|e| anyhow!("Failed to get gainmap handle: {e}"))?;
-
-    let mut depth_item_id: Option<libheif_rs::ItemId> = None;
-    for aux in &aux_images {
-        let aux_type = aux
-            .auxiliary_type()
-            .map_err(|e| anyhow!("Failed to read HEIC auxiliary image type for depth scan: {e}"))?;
-        if classify_hdr_auxiliary_type(&aux_type) == HdrAuxiliaryRole::Depth {
-            depth_item_id = Some(aux.item_id());
-            break;
-        }
-    }
 
     let depth_handle: Option<ImageHandle> = if let Some(depth_id) = depth_item_id {
         Some(
@@ -294,6 +298,14 @@ pub fn convert_heic_with_gainmap_to_jxl(
     }
 
     let mut artifacts = HdrArtifacts::default();
+    let gainmap_png = encode_png_sidecar_bytes(&DynamicImage::ImageLuma16(gain.to_luma16()))
+        .context("Failed to encode gainmap sidecar PNG")?;
+    artifacts.push_raw_sidecar(
+        "gainmap",
+        "png",
+        gainmap_png,
+        "Decoded HEIC gainmap pixels PNG sidecar",
+    );
     if let Some(depth) = depth_image {
         let depth_png = encode_png_sidecar_bytes(&DynamicImage::ImageLuma16(depth.to_luma16()))
             .context("Failed to encode depth sidecar PNG")?;

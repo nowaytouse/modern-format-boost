@@ -1476,10 +1476,10 @@ fn auto_convert_single_file(
     let _log_guard = foundation::progress_mode::LogContextGuard;
 
     // Check for Live Photos first (before any analysis)
-    // Only skip in Apple compat mode to preserve the pair association.
-    // In normal mode, we treat the HEIC as a regular image to be upgraded.
-    if config.apple_compat() && foundation::live_photo::is_live(input) {
-        let reason = "Live Photo detected in Apple compat mode - skipping to preserve pair";
+    // Apple-compatible and archival paths must preserve the still/MOV pair.
+    if (config.apple_compat() || config.archive()) && foundation::live_photo::is_live(input) {
+        let reason =
+            "Live Photo detected in Apple-compatible/archive mode - skipping to preserve pair";
         foundation::progress_mode::image_skipped(input, reason);
         let file_size = foundation::io_utils::metadata_with_retry(input)
             .map_err(|e| {
@@ -2586,6 +2586,13 @@ fn scan_fast_img_sources(
         );
     }
     for (path, identity) in candidates.into_iter().zip(format_identities) {
+        if foundation::live_photo::is_live(&path) {
+            println!(
+                "[RETAIN  ] Live Photo pair member is not eligible for standalone fast-img processing: {}",
+                path.display()
+            );
+            continue;
+        }
         if identity.extension_mismatch {
             tracing::warn!(
                 target: "format_identity",
@@ -12005,6 +12012,21 @@ mod fast_img_hardening_tests {
         ] {
             assert!(fast_img_tier2_source_format("jxl", format));
         }
+    }
+
+    #[test]
+    fn fast_img_retains_live_photo_pair_members() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let still = root.path().join("IMG_0042.jpg");
+        let motion = root.path().join("IMG_0042.mov");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([1, 2, 3])).save(&still)?;
+        std::fs::write(&motion, b"live-photo-motion-placeholder")?;
+
+        let inventory = super::scan_fast_img_sources(vec![still, motion], root.path(), "jxl")?;
+
+        assert_eq!(inventory.source_files, Vec::<PathBuf>::new());
+        assert_eq!(inventory.planned_encode_count, 0);
+        Ok(())
     }
 
     #[test]

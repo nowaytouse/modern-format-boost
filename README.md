@@ -195,10 +195,10 @@ outcomes over silent quality damage:
   efficient batching and maximum throughput.
 - 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via
   extraction sidecars and x265 SEI injection.
-- 🌅 **HDR Gainmap Preservation**: default IMG retains an HEIC/HEIF gainmap
-  container byte-for-byte, preserving its HDR rendering and auxiliary
-  relationships. An explicitly requested derivative API may synthesize HDR JXL
-  while keeping non-embeddable auxiliary assets as sidecars. UltraHDR JPEG
+- 🌅 **HDR Gainmap Preservation**: IMG converts an HEIC/HEIF gain-map source
+  only when it can synthesize the HDR rendition and preserve the decoded gain
+  map and known depth data as verified sidecars. Unknown auxiliary-image
+  relationships fail closed and retain the native source. UltraHDR JPEG
   follows the exact JPEG-archive path by default, keeping its complete
   MPF/gainmap container byte-reconstructible.
 - **🔍 Vendor Metadata Awareness**: Intelligent scanning for Samsung/Google
@@ -380,7 +380,7 @@ flowchart TD
     K[content identity] --> L{strategy}
     L -->|jxl| M[true JPEG → reversible JXL]
     L -->|jxl Tier 2| N[proven lossy modern static → Photos custody]
-    L -->|avif Meme Mode| O[every static source, including AVIF → clean AVIF]
+    L -->|avif Meme Mode| O[non-AVIF search; existing AVIF adopt or sanitize]
   end
   subgraph vid_run ["vid run — video + animated"]
     F[detect] --> G[loop_intent → GIF?]
@@ -395,7 +395,8 @@ flowchart TD
 | ---------------------------------------------- | ------------------------------------------------------------ |
 | Static JPEG (including UltraHDR)            | Byte-reconstructible JXL archive followed by delivery checks |
 | PNG / TIFF / BMP / ordinary lossless raster   | Pixel-lossless JXL conversion and delivery checks              |
-| Existing WebP/AVIF/HEIC/HEIF/JP2/JXL container | Retain byte-for-byte, preserving gain maps and relationships   |
+| Proven-lossless WebP/AVIF/HEIC/HEIF/JP2 | Pixel-lossless JXL with metadata and feature proof |
+| Lossy/unknown modern container or existing JXL | Retain byte-for-byte to avoid unproved archival damage |
 | Animated or unverified animatable container   | Ignore on `img`; run `vid` separately if wanted              |
 
 `img run` enables content exploration, quality matching, compression, metadata
@@ -573,7 +574,7 @@ best-effort fallback applies.
 | HDR Type          | Detection                                | Preservation Strategy                                                                                                                                      |
 | :---------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                                                                            |
-| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized to 32-bit linear HDR -> JXL (True HDR)                                                                                                         |
+| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized HDR JXL plus verified decoded gain-map/depth sidecars; unknown auxiliary relationships retain the native source                                 |
 | **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:)            | Exact JPEG→JXL archive by default; the full MPF/gainmap JPEG reconstructs byte-for-byte. Explicit pixel synthesis is non-archival and non-destructive only |
 | **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                                                                            |
 | **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                                                                |
@@ -912,13 +913,14 @@ JXL strategy Tier 2 supports WebP, JP2, JXL, AVIF and codec-constrained HEIC
 only when container/bitstream evidence proves a supported modern format,
 confirmed-static content, and `CompressionType::Lossy`. Lossless,
 JPEG-reconstruction JXL, animated, unknown/inconclusive, generic HEIF and failed
-probes are retained. AVIF Meme Mode is not a custody tier: every confirmed
-static AVIF is decoded and re-encoded with embedded Exif/XMP/ICC stripped. A
-validated matching XMP sidecar is not merged into the clean AVIF; it is removed
-only after final delivery proof, and remains when any gate fails. Gain-map or
-other auxiliary AVIFs are retained when the selected encoder cannot prove that
-the feature survives. JXL Tier 2 alone uses the staged, metadata-preserving
-XMP path and live Photos custody checks.
+probes are retained. AVIF Meme Mode is not a custody tier: non-AVIF static
+inputs use the bounded encoder search, while an existing AVIF is never
+re-encoded. A clean existing AVIF is adopted byte-for-byte; a dirty one receives
+only staged container metadata cleanup and must keep its primary AV1 payload
+plus decoder-visible codec/HDR/gain-map feature proof unchanged. A validated
+matching XMP sidecar is not merged into the clean AVIF; it is removed only after
+final delivery proof, and remains when any gate fails. JXL Tier 2 alone uses the
+staged, metadata-preserving XMP path and live Photos custody checks.
 
 **3. When does FastImg delete an original?**
 

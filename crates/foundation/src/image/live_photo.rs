@@ -15,10 +15,30 @@ const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg"];
 /// This function checks if the given file has a companion file with the same
 /// stem and the corresponding still/video extension, case-insensitively.
 fn has_regular_companion(parent: &Path, stem: &str, extensions: &[&str]) -> bool {
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return false;
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            crate::media_conversion_gate::probe_image_format_audit(
+                "live_photo_parent_read_failed",
+                parent,
+                format!("failed to inspect Live Photo companion directory: {error}"),
+            );
+            return false;
+        }
     };
-    entries.filter_map(std::result::Result::ok).any(|entry| {
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                crate::media_conversion_gate::probe_image_format_audit(
+                    "live_photo_directory_entry_failed",
+                    parent,
+                    format!("failed to read a Live Photo companion directory entry: {error}"),
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         let same_stem = path
             .file_stem()
@@ -31,10 +51,20 @@ fn has_regular_companion(parent: &Path, stem: &str, extensions: &[&str]) -> bool
                     .iter()
                     .any(|candidate| extension.eq_ignore_ascii_case(candidate))
             });
-        let regular_file =
-            std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_file());
-        same_stem && matching_extension && regular_file
-    })
+        if !same_stem || !matching_extension {
+            continue;
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => return true,
+            Ok(_) => {}
+            Err(error) => crate::media_conversion_gate::probe_image_format_audit(
+                "live_photo_companion_metadata_failed",
+                &path,
+                format!("failed to inspect a matching Live Photo companion: {error}"),
+            ),
+        }
+    }
+    false
 }
 
 /// Check whether a path belongs to a same-stem Apple still/MOV pair.

@@ -146,6 +146,13 @@ pub fn smart_copy_with_structure(
         output_dir.join(file_name)
     };
 
+    if paths_alias(source, &dest)? {
+        return Err(anyhow::anyhow!(
+            "Refusing to copy source onto itself: {}",
+            source.display()
+        ));
+    }
+
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
@@ -202,6 +209,61 @@ pub fn smart_copy_with_structure(
     })?;
 
     Ok(dest)
+}
+
+/// Return whether two existing paths identify the same filesystem object.
+///
+/// A fallback copy must never target the source itself (including a hard link
+/// or symlink alias), because the metadata/XMP preservation pass would then
+/// mutate the only source copy. Missing destinations are not aliases.
+fn paths_alias(source: &Path, destination: &Path) -> Result<bool> {
+    if source == destination {
+        return Ok(true);
+    }
+
+    let source_metadata = fs::metadata(source)
+        .with_context(|| format!("Failed to inspect copy source: {}", source.display()))?;
+    let destination_metadata = match fs::metadata(destination) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to inspect copy destination: {}",
+                    destination.display()
+                )
+            });
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(source_metadata.dev() == destination_metadata.dev()
+            && source_metadata.ino() == destination_metadata.ino())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        Ok(
+            source_metadata.volume_serial_number() == destination_metadata.volume_serial_number()
+                && source_metadata.file_index() == destination_metadata.file_index(),
+        )
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let source_canonical = fs::canonicalize(source)
+            .with_context(|| format!("Failed to resolve copy source: {}", source.display()))?;
+        let destination_canonical = fs::canonicalize(destination).with_context(|| {
+            format!(
+                "Failed to resolve copy destination: {}",
+                destination.display()
+            )
+        })?;
+        Ok(source_canonical == destination_canonical)
+    }
 }
 
 /// Copy the source file if conversion was skipped or failed.
@@ -285,6 +347,18 @@ mod tests {
         let result = copy_on_skip_or_fail(&source, None, None, false)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_smart_copy_rejects_source_alias() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = temp.path().join("test.txt");
+        fs::write(&source, "test").unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let error = smart_copy_with_structure(&source, temp.path(), None, false)
+            .expect_err("fallback copy must refuse a source/destination alias");
+        assert!(error.to_string().contains("source onto itself"));
+        assert_eq!(fs::read_to_string(&source).unwrap(), "test");
     }
 
     /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to

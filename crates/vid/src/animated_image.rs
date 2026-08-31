@@ -3712,9 +3712,10 @@ mod tests {
         input_file
             .write_all(test_data)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let options = ConvertOptions {
-            output_dir: input_file.path().parent().map(std::path::Path::to_path_buf),
+            output_dir: Some(output_dir.path().to_path_buf()),
             ..ConvertOptions::default()
         };
 
@@ -3730,6 +3731,15 @@ mod tests {
                 assert_eq!(task.outcome(), foundation::conversion::Outcome::Failed);
                 assert!(!task.message.contains("original copy failed"));
                 assert!(task.message.contains("Test fallback message"));
+                let copied = output_dir
+                    .path()
+                    .join(input_file.path().file_name().unwrap());
+                let copied_display = copied.display().to_string();
+                let input_display = input_file.path().display().to_string();
+                assert_eq!(task.output_path.as_deref(), Some(copied_display.as_str()));
+                assert_ne!(task.output_path.as_deref(), Some(input_display.as_str()));
+                assert_eq!(std::fs::read(&copied).unwrap(), test_data);
+                assert_eq!(std::fs::read(input_file.path()).unwrap(), test_data);
             }
             PrepareAnimatedRasterOutcome::Ready(_) => {
                 panic!("prepare_early_fallback should return Early outcome, not Ready");

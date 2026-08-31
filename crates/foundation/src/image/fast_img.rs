@@ -269,7 +269,119 @@ pub fn verify_final_avif_delivery_integrity(
     avif_output: &Path,
 ) -> Result<IntegrityResult> {
     use crate::image::format_detect::FormatKind;
+
+    if crate::image::format_detect::detect_true_format(source_jpeg)? == FormatKind::Avif {
+        return verify_existing_avif_meme_delivery_integrity(source_jpeg, avif_output);
+    }
     verify_final_delivery_integrity(source_jpeg, avif_output, FormatKind::Avif)
+}
+
+/// Verify an existing AVIF adopted by `FastImg` Meme Mode without comparing it
+/// against a decoder-generated pixel file.
+///
+/// An existing AVIF is not a JPEG-derived encode: its source and delivered
+/// output already share the AV1 primary image. The correct proof is therefore
+/// container-aware custody (primary image-data hash and codec/HDR/gain-map
+/// feature report) plus the Meme Mode clear-metadata policy. This avoids
+/// making an AVIF→AVIF byte-preserving adoption depend on the source image
+/// decoder or on platform-specific `avifdec` output-file behavior.
+///
+/// # Errors
+/// Returns an error if either path is not AVIF, either file is empty, the
+/// encoded image data or feature report changed, or removable metadata remains.
+pub fn verify_existing_avif_meme_delivery_integrity(
+    source_avif: &Path,
+    avif_output: &Path,
+) -> Result<IntegrityResult> {
+    use crate::common_utils::calculate_blake3_hash;
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+
+    if detect_true_format(source_avif)? != FormatKind::Avif {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF integrity proof received a non-AVIF source: {}",
+            source_avif.display()
+        )));
+    }
+    if detect_true_format(avif_output)? != FormatKind::Avif {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF integrity proof received a non-AVIF output: {}",
+            avif_output.display()
+        )));
+    }
+
+    let output_size = std::fs::metadata(avif_output)
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "existing AVIF integrity proof cannot stat output {}: {error}",
+                avif_output.display()
+            ))
+        })?
+        .len();
+    if output_size == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF integrity proof found an empty output: {}",
+            avif_output.display()
+        )));
+    }
+
+    let source_image_data = image_data_sha256(source_avif)?;
+    let output_image_data = image_data_sha256(avif_output)?;
+    if source_image_data != output_image_data {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF primary-image data changed during adoption: source={} output={}",
+            source_avif.display(),
+            avif_output.display()
+        )));
+    }
+
+    let source_features = avif_codec_feature_hash(source_avif)?;
+    let output_features = avif_codec_feature_hash(avif_output)?;
+    if source_features != output_features {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "existing AVIF codec/HDR/gain-map features changed during adoption: source={} output={}",
+            source_avif.display(),
+            avif_output.display()
+        )));
+    }
+
+    crate::metadata::verify_output_embedded_metadata(
+        source_avif,
+        avif_output,
+        crate::metadata::MetadataOutputPolicy::Clear,
+    )
+    .map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF Meme Mode metadata policy failed for {}: {error}",
+            avif_output.display()
+        ))
+    })?;
+
+    let source_hash = calculate_blake3_hash(source_avif).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF source BLAKE3 failed for {}: {error}",
+            source_avif.display()
+        ))
+    })?;
+    let output_hash = calculate_blake3_hash(avif_output).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "existing AVIF output BLAKE3 failed for {}: {error}",
+            avif_output.display()
+        ))
+    })?;
+
+    tracing::info!(
+        target: "fast_img_integrity",
+        source = %source_avif.display(),
+        output = %avif_output.display(),
+        %source_hash,
+        %output_hash,
+        "existing AVIF adoption integrity check"
+    );
+
+    Ok(IntegrityResult::FinalModernDelivery {
+        source_hash,
+        output_hash,
+    })
 }
 
 /// Verify a final delivered modern format output is safe to use as the sole
@@ -5682,6 +5794,10 @@ mod tests {
         let clean_source_hash = crate::common_utils::calculate_blake3_hash(&fixture)?;
         let clean_candidate_hash = prepare_existing_avif_meme_candidate(&fixture, &clean)?;
         assert_eq!(clean_candidate_hash, clean_source_hash);
+        assert!(matches!(
+            verify_existing_avif_meme_delivery_integrity(&fixture, &clean)?,
+            IntegrityResult::FinalModernDelivery { .. }
+        ));
 
         let dirty = temp.path().join("dirty.avif");
         std::fs::copy(&fixture, &dirty)?;
@@ -5702,6 +5818,10 @@ mod tests {
             &sanitized,
             crate::metadata::MetadataOutputPolicy::Clear,
         )?;
+        assert!(matches!(
+            verify_existing_avif_meme_delivery_integrity(&dirty, &sanitized)?,
+            IntegrityResult::FinalModernDelivery { .. }
+        ));
         Ok(())
     }
 
