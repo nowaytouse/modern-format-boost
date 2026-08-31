@@ -55,7 +55,9 @@ All notable changes to this project will be documented in this file.
   mapping instead of silently producing an sRGB-labelled high-bit-depth JXL.
   AAE adjustment sidecars are also copied beside every finalized output before
   any source deletion and are never deleted merely because Apple-compatible
-  encoding was disabled.
+  encoding was disabled. The lossless production matrix now includes genuine
+  non-8-bit 16-bit PNG/TIFF samples; its HDR generator no longer uses only
+  8-bit-representable channel values inside a nominal 16-bit container.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

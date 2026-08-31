@@ -736,6 +736,11 @@ fn add_magick_lossless_fixtures(
     Ok(())
 }
 
+const fn low_u16(value: u32) -> u16 {
+    let bytes = value.to_le_bytes();
+    u16::from_le_bytes([bytes[0], bytes[1]])
+}
+
 fn add_avif_lossless_fixture(
     fixture_root: &Path,
     png: &Path,
@@ -754,11 +759,10 @@ fn add_avif_lossless_fixture(
 
         let hdr_png = fixture_root.join("pattern-hdr.png");
         image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
-            image::Rgb([
-                u16::from(((x * 521 + y * 257) % 65_536).to_le_bytes()[0]) * 257,
-                u16::from(((x * 313 + y * 733) % 65_536).to_le_bytes()[0]) * 257,
-                u16::from(((x * 911 + y * 419) % 65_536).to_le_bytes()[0]) * 257,
-            ])
+            let red = (x * 521 + y * 257) % 65_536;
+            let green = (x * 313 + y * 733 + 17) % 65_536;
+            let blue = (x * 911 + y * 419 + 31) % 65_536;
+            image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
         })
         .save(&hdr_png)?;
         let hdr_source = fixture_root.join("pattern-hdr.avif");
@@ -801,6 +805,23 @@ fn create_lossless_raster_fixtures(root: &Path) -> Result<Vec<(PathBuf, FormatKi
     fs::write(png.with_extension("xmp"), MATRIX_XMP)?;
 
     let mut fixtures = vec![(png.clone(), FormatKind::Png)];
+    let high_bit_depth =
+        image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
+            let red = (x * 1021 + y * 4093 + 3) % 65_536;
+            let green = (x * 2053 + y * 8191 + 5) % 65_536;
+            let blue = (x * 4099 + y * 12289 + 7) % 65_536;
+            image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
+        });
+    let high_bit_png = fixture_root.join("pattern-16.png");
+    high_bit_depth.save(&high_bit_png)?;
+    fs::write(high_bit_png.with_extension("xmp"), MATRIX_XMP)?;
+    fixtures.push((high_bit_png, FormatKind::Png));
+    if magick_supports_format("TIFF") {
+        let high_bit_tiff = fixture_root.join("pattern-16.tiff");
+        high_bit_depth.save(&high_bit_tiff)?;
+        fs::write(high_bit_tiff.with_extension("xmp"), MATRIX_XMP)?;
+        fixtures.push((high_bit_tiff, FormatKind::Tiff));
+    }
     add_magick_lossless_fixtures(&fixture_root, &png, &mut fixtures)?;
     add_avif_lossless_fixture(&fixture_root, &png, &mut fixtures)?;
     Ok(fixtures)
@@ -848,6 +869,10 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         .file_stem()
         .and_then(|value| value.to_str())
         .is_some_and(|stem| stem.ends_with("-hdr"));
+    let is_high_bit_depth = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|stem| stem.ends_with("-16"));
     let source_decoded = if is_hdr {
         decode_hdr_avif_with_encoder_path(source, &source_decoded_root)?
     } else {
@@ -870,6 +895,22 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         ensure!(
             source_pixels.as_raw().iter().any(|channel| *channel > 4096),
             "HDR fixture did not contain meaningful high-range samples"
+        );
+    }
+    if is_high_bit_depth {
+        let source_image = foundation::image_detection::open_image_with_limits(&source_decoded)?;
+        let output_image = foundation::image_detection::open_image_with_limits(&output_decoded)?;
+        ensure!(
+            source_image.color().bits_per_pixel() >= 48
+                && output_image.color().bits_per_pixel() >= 48,
+            "high-bit-depth {format:?}→JXL path reduced 16-bit RGB precision"
+        );
+        ensure!(
+            source_pixels
+                .as_raw()
+                .iter()
+                .any(|channel| *channel % 257 != 0),
+            "high-bit-depth fixture was accidentally representable as 8-bit RGB"
         );
     }
     ensure!(
