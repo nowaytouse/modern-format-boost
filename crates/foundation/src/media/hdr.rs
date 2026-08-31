@@ -255,8 +255,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
         .distance(actual_distance)
         .effort(actual_effort)
         .apple_compat(apple_compat)
-        .arg("-x")
-        .arg("color_space=RGB_D65_SRG_Rel_PeQ");
+        .color_space("Rec2100PQ");
 
     if let Some(target_f32) =
         crate::numeric_cast::f64_to_f32_strict(intensity_target, "intensity_target_raw")
@@ -427,8 +426,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         .distance(actual_distance)
         .effort(actual_effort)
         .apple_compat(apple_compat)
-        .arg("-x")
-        .arg("color_space=RGB_D65_SRG_Rel_PeQ");
+        .color_space("Rec2100PQ");
 
     if let Some(target_f32) =
         crate::numeric_cast::f64_to_f32_strict(intensity_target, "intensity_target_raw")
@@ -1183,6 +1181,25 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
     Some(format!("{primaries}-{transfer}-{matrix}"))
 }
 
+/// Maps positively identified source color metadata to a `cjxl` color encoding.
+///
+/// `cjxl -x color_space=` accepts libjxl color-encoding names, not numeric CICP
+/// triplets. Unknown or incomplete combinations stay unset so libjxl can adopt
+/// the decoded source profile instead of silently relabelling it.
+#[must_use]
+pub fn color_info_to_jxl_color_encoding(info: &ColorInfo) -> Option<&'static str> {
+    match (
+        info.color_primaries.as_deref(),
+        info.color_transfer.as_deref(),
+    ) {
+        (Some("bt2020"), Some("smpte2084")) => Some("Rec2100PQ"),
+        (Some("bt2020"), Some("arib-std-b67")) => Some("Rec2100HLG"),
+        (Some("smpte432" | "display-p3"), Some("iec61966-2-1" | "srgb")) => Some("DisplayP3"),
+        (Some("bt709"), Some("iec61966-2-1" | "srgb")) => Some("sRGB"),
+        _ => None,
+    }
+}
+
 /// # Errors
 /// Returns an error if the HEVC bitstream extraction fails due to invalid input
 /// or processing errors.
@@ -1680,6 +1697,22 @@ mod tests {
     fn test_cicp_no_metadata() {
         let info = ColorInfo::default();
         assert_eq!(color_info_to_cicp(&info), None);
+    }
+
+    #[test]
+    fn cjxl_color_encoding_uses_named_profiles_and_rejects_ambiguous_metadata() {
+        let mut info = ColorInfo {
+            color_primaries: Some("bt2020".to_string()),
+            color_transfer: Some("smpte2084".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(color_info_to_jxl_color_encoding(&info), Some("Rec2100PQ"));
+
+        info.color_transfer = Some("arib-std-b67".to_string());
+        assert_eq!(color_info_to_jxl_color_encoding(&info), Some("Rec2100HLG"));
+
+        info.color_primaries = None;
+        assert_eq!(color_info_to_jxl_color_encoding(&info), None);
     }
 
     #[test]

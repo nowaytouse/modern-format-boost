@@ -1268,7 +1268,8 @@ pub fn convert_to_jxl(
         )
     };
 
-    // Add conversion color metadata via CICP if available.
+    // Report the source color evidence; the encoder below applies a validated
+    // named `cjxl` color-space mapping when one is unambiguous.
     if let Some(info) = color_info
         && let Some(cicp) = foundation::color_info_to_cicp(info)
         && options.verbose()
@@ -1276,7 +1277,7 @@ pub fn convert_to_jxl(
         foundation::log_stat!(
             foundation::infra::static_logs::messages::LABEL_COLOR_SPACE,
             format!(
-                "Color metadata synthesis: Injecting CICP {cicp} ({})",
+                "Color metadata synthesis: resolved CICP {cicp}; cjxl color-space mapping is applied from validated source evidence ({})",
                 match color_role {
                     Some(ConversionColorRole::TrueHdrMetadata) => "true HDR metadata",
                     Some(ConversionColorRole::PrecisionOrWideGamutHint) => {
@@ -4412,9 +4413,9 @@ fn run_direct_jxl_encode_with_effort(
         .apple_compat(apple_compat);
 
     if let Some(info) = color_info
-        && let Some(cicp) = foundation::color_info_to_cicp(info)
+        && let Some(color_space) = foundation::color_info_to_jxl_color_encoding(info)
     {
-        builder.cicp(cicp);
+        builder.color_space(color_space);
     }
 
     if let Some(icc) = icc_path {
@@ -6126,8 +6127,8 @@ mod tests {
             "JPEG lossless transcode must not synthesize CICP over JPEG-native color"
         );
         assert!(
-            !body.contains(".cicp("),
-            "JPEG lossless transcode must not force a CICP override"
+            !body.contains(".color_space("),
+            "JPEG lossless transcode must not force a color-space override"
         );
     }
 

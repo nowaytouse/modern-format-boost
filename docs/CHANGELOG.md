@@ -31,6 +31,15 @@ All notable changes to this project will be documented in this file.
   Shared Health failure; its missing `lcov.info` annotation was a downstream
   consequence. The Deep Audit silent-probe failure is covered by the explicit
   Live Photo read diagnostics above.
+- **Workspace audit tests are deterministic**: `check_all` now runs every
+  workspace test binary with one test thread. Several IMG contracts invoke
+  external codecs and temporarily change process-wide `MFB_*` state; keeping
+  them serial prevents a healthy reconstruction probe from being reported as
+  a false failure under the Deep Production Audit profile.
+- **Native-container archive proofs are format-aware**: HEIF/HEIC codec and
+  auxiliary-image boxes, every non-XMP WebP chunk, and every non-XMP JP2 box
+  are fingerprinted independently of mutable XMP. A changed structural
+  feature fails closed instead of being accepted as a metadata-only rewrite.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

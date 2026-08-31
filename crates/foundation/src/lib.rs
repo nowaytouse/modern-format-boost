@@ -352,7 +352,8 @@ pub use scenario_quality_lookup::{
 pub use hdr::{
     GainMapParams, IntermediateFormat, append_x265_hdr10_params,
     build_yuv_output_ffmpeg_color_args, color_info_to_cicp, color_info_to_ffmpeg_args,
-    color_info_to_x265_hdr_params, convert_heic_with_gainmap_to_jxl, convert_ultrahdr_jpeg_to_jxl,
+    color_info_to_jxl_color_encoding, color_info_to_x265_hdr_params,
+    convert_heic_with_gainmap_to_jxl, convert_ultrahdr_jpeg_to_jxl,
     convert_ultrahdr_jpeg_to_jxl_migration, decode_image_to_png16_preserving_precision,
     dv_x265_profile_string, extract_dv_rpu, extract_hevc_bitstream, is_dovi_tool_available,
     should_emit_x265_hdr10_metadata, should_enable_x265_hdr10_opt,

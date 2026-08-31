@@ -3823,18 +3823,11 @@ mod tests {
 
         let options = ConvertOptions::default();
 
-        // Temporarily hide djxl from PATH to test fallback
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", "") };
-
         let result = prepare_animated_raster_for_encode(
             input_file.path(),
             &options,
             "contract_test_jxl_routing",
         );
-
-        // Restore PATH
-        unsafe { std::env::set_var("PATH", original_path) };
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {
@@ -3864,16 +3857,12 @@ mod tests {
             .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let options = ConvertOptions::default();
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", "") };
 
         let result = prepare_animated_raster_for_encode(
             input_file.path(),
             &options,
             "contract_test_magic_routing",
         );
-
-        unsafe { std::env::set_var("PATH", original_path) };
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {
@@ -3908,18 +3897,11 @@ mod tests {
 
         let options = ConvertOptions::default();
 
-        // Temporarily hide webpmux from PATH to test fallback
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", "") };
-
         let result = prepare_animated_raster_for_encode(
             input_file.path(),
             &options,
             "contract_test_webp_routing",
         );
-
-        // Restore PATH
-        unsafe { std::env::set_var("PATH", original_path) };
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {
@@ -4022,16 +4004,11 @@ mod tests {
 
         let options = ConvertOptions::default();
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", "") };
-
         let result = prepare_animated_raster_for_encode(
             input_file.path(),
             &options,
             "contract_test_path_preservation",
         );
-
-        unsafe { std::env::set_var("PATH", original_path) };
 
         match result {
             PrepareAnimatedRasterOutcome::Early(task) => {

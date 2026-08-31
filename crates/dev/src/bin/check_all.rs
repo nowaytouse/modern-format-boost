@@ -688,12 +688,12 @@ fn cargo_test_args(package: PackageScope) -> Vec<String> {
     args.push("--all-targets".to_string());
     if package == PackageScope::Workspace {
         args.push("--all-features".to_string());
-    } else {
-        // Package-scoped media tests invoke external codecs and use audited
-        // process-wide test environment guards. Keep this focused signal
-        // deterministic; the workspace profile retains its existing runner.
-        args.extend(["--".to_string(), "--test-threads=1".to_string()]);
     }
+    // Media tests invoke external codecs and several contract tests use
+    // process-wide environment guards.  Keep every check_all profile
+    // deterministic; parallel test binaries can otherwise race on PATH and
+    // MFB_* state and turn a healthy probe into a false failure.
+    args.extend(["--".to_string(), "--test-threads=1".to_string()]);
     args
 }
 
@@ -1795,6 +1795,14 @@ mod tests {
             assert!(!test.contains("--all-features"));
             assert!(test.contains("--test-threads=1"));
         }
+    }
+
+    #[test]
+    fn workspace_tests_are_serialized_for_process_global_media_guards() {
+        let test = cargo_test_args(PackageScope::Workspace).join(" ");
+        assert!(test.contains("--workspace"));
+        assert!(test.contains("--all-features"));
+        assert!(test.contains("--test-threads=1"));
     }
 
     #[test]

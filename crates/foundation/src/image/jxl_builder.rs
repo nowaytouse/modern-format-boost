@@ -16,7 +16,7 @@ pub struct CjxlBuilder {
     lossless_jpeg: bool,
     allow_jpeg_recon: Option<bool>,
     allow_expert_options: bool,
-    cicp: Option<String>,
+    color_space: Option<String>,
     icc_profile: Option<PathBuf>,
     apple_compat: bool,
     use_stdin: bool,
@@ -67,8 +67,8 @@ impl CjxlBuilder {
         self
     }
 
-    pub fn cicp<S: AsRef<str>>(&mut self, cicp: S) -> &mut Self {
-        self.cicp = Some(cicp.as_ref().to_string());
+    pub fn color_space<S: AsRef<str>>(&mut self, color_space: S) -> &mut Self {
+        self.color_space = Some(color_space.as_ref().to_string());
         self
     }
 
@@ -159,9 +159,12 @@ impl ToolBuilder for CjxlBuilder {
             ));
         }
 
-        if let Some(cicp) = &self.cicp {
-            cmd.arg("-x")
-                .arg(format!("{}={}", constants::JXL_ARG_COLOR_SPACE, cicp));
+        if let Some(color_space) = &self.color_space {
+            cmd.arg("-x").arg(format!(
+                "{}={}",
+                constants::JXL_ARG_COLOR_SPACE,
+                color_space
+            ));
         }
 
         if let Some(icc) = &self.icc_profile {
@@ -242,7 +245,7 @@ mod tests {
             .threads(4)
             .lossless_jpeg(true)
             .allow_jpeg_reconstruction(false)
-            .cicp("1")
+            .color_space("Rec2100PQ")
             .apple_compat(true)
             .intensity_target(250.0);
 
@@ -272,7 +275,7 @@ mod tests {
         assert!(args.contains(&"--allow_jpeg_reconstruction=0"));
 
         assert!(args.contains(&"-x"));
-        assert!(args.contains(&"color_space=1"));
+        assert!(args.contains(&"color_space=Rec2100PQ"));
 
         assert!(args.contains(&"--compress_boxes=0"));
         assert!(args.contains(&"--intensity_target"));

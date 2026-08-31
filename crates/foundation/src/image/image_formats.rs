@@ -494,6 +494,44 @@ pub mod webp {
         Ok(is_animated_from_bytes(&b))
     }
 
+    pub(super) fn archival_feature_hash_from_bytes(data: &[u8]) -> Result<String> {
+        let end = validated_webp_end(data)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut pos = 12;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "archival proof")?;
+            // ExifTool may add VP8X solely to advertise a new XMP chunk. Its
+            // dimensions and feature flags are independently covered by the
+            // outer proof and by the referenced ICCP/ALPH/EXIF/ANIM chunks.
+            if !matches!(&chunk.id, b"XMP " | b"VP8X") {
+                hasher.update(&chunk.id);
+                let payload_len = u64::try_from(chunk.payload.len()).map_err(|_| {
+                    ImgQualityError::NumericError(
+                        "WebP archival chunk length does not fit u64".to_string(),
+                    )
+                })?;
+                hasher.update(&payload_len.to_le_bytes());
+                hasher.update(chunk.payload);
+            }
+            pos = next;
+        }
+        // Bytes outside the declared RIFF extent are not metadata and must not
+        // disappear during an XMP-only rewrite.
+        hasher.update(&data[end..]);
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+
+    /// Fingerprint every WebP chunk except mutable XMP and its VP8X directory.
+    ///
+    /// Codec, ICC, alpha, EXIF, animation and unknown chunks remain byte-covered;
+    /// the outer proof covers dimensions, frame count and decoded image data.
+    ///
+    /// # Errors
+    /// Returns an error for malformed RIFF structure or unreadable input.
+    pub fn archival_feature_hash(path: &Path) -> Result<String> {
+        archival_feature_hash_from_bytes(&fs::read(path)?)
+    }
+
     /// Minimal animated WebP with two ANMF frames (100 ms + 200 ms) for unit
     /// tests only.
     #[cfg(test)]
@@ -1176,6 +1214,52 @@ mod tests {
         assert!(
             !webp::is_lossless(file.path()).expect("VP8 lossy probe should parse"),
             "VP8 chunk should be detected as lossy"
+        );
+    }
+
+    #[test]
+    fn webp_archival_hash_allows_xmp_overlay_but_covers_unknown_chunks() {
+        fn webp(chunks: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+            let mut body = Vec::new();
+            for (kind, payload) in chunks {
+                body.extend_from_slice(*kind);
+                body.extend_from_slice(
+                    &u32::try_from(payload.len())
+                        .expect("test WebP payload fits u32")
+                        .to_le_bytes(),
+                );
+                body.extend_from_slice(payload);
+                if !payload.len().is_multiple_of(2) {
+                    body.push(0);
+                }
+            }
+            let mut bytes = b"RIFF".to_vec();
+            bytes.extend_from_slice(
+                &u32::try_from(body.len() + 4)
+                    .expect("test WebP body fits u32")
+                    .to_le_bytes(),
+            );
+            bytes.extend_from_slice(b"WEBP");
+            bytes.extend(body);
+            bytes
+        }
+
+        let before = webp(&[(b"VP8L", b"codec"), (b"UNKN", b"archive")]);
+        let after = webp(&[
+            (b"VP8X", &[0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            (b"VP8L", b"codec"),
+            (b"UNKN", b"archive"),
+            (b"XMP ", b"sidecar"),
+        ]);
+        assert_eq!(
+            webp::archival_feature_hash_from_bytes(&before).unwrap(),
+            webp::archival_feature_hash_from_bytes(&after).unwrap()
+        );
+
+        let changed = webp(&[(b"VP8L", b"codec"), (b"UNKN", b"changed")]);
+        assert_ne!(
+            webp::archival_feature_hash_from_bytes(&before).unwrap(),
+            webp::archival_feature_hash_from_bytes(&changed).unwrap()
         );
     }
 

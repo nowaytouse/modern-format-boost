@@ -9784,6 +9784,16 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    fn write_real_ppm(path: &std::path::Path, rgb: [u8; 3]) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut bytes = b"P6\n1 1\n255\n".to_vec();
+        bytes.extend_from_slice(&rgb);
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
     fn write_real_reconstructible_jxl(path: &Path) -> anyhow::Result<bool> {
         if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL) {
             return Ok(false);
@@ -9994,12 +10004,13 @@ mod fast_img_hardening_tests {
         let reconstructible = input_root.join("healthy.JXL");
         let non_reconstructible = input_root.join("pixels-only.JXL");
         assert!(write_real_reconstructible_jxl(&reconstructible)?);
-        let pixels_source = input_root.join("pixels-only.jpg");
-        write_real_jpeg(&pixels_source, [40, 50, 60])?;
+        // Use a non-JPEG source so this fixture cannot accidentally acquire
+        // JPEG reconstruction data when a newer cjxl changes JPEG defaults.
+        let pixels_source = input_root.join("pixels-only.ppm");
+        write_real_ppm(&pixels_source, [40, 50, 60])?;
         let encoded = std::process::Command::new(foundation::constants::TOOL_CJXL)
             .arg(&pixels_source)
             .arg(&non_reconstructible)
-            .arg("--lossless_jpeg=0")
             .arg("--distance=0")
             .output()?;
         std::fs::remove_file(&pixels_source)?;

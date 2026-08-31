@@ -452,6 +452,122 @@ fn canonical_proof_value(value: &Value) -> String {
     }
 }
 
+fn canonical_modern_proof_value(key: &str, value: &Value) -> Option<String> {
+    let normalized = key.to_ascii_lowercase();
+    if normalized == "file:filetype"
+        && let Some(text) = proof_value_text(value)
+        && let Some(webp_type) = text
+            .strip_prefix("Extended WEBP")
+            .map(|suffix| format!("WEBP{suffix}"))
+            .or_else(|| text.starts_with("WEBP").then_some(text))
+    {
+        return Some(webp_type);
+    }
+    if normalized == "riff:webp_flags"
+        && let Some(text) = proof_value_text(value)
+    {
+        let mut flags = text
+            .split(',')
+            .map(str::trim)
+            .filter(|flag| !flag.eq_ignore_ascii_case("XMP") && !flag.is_empty())
+            .collect::<Vec<_>>();
+        flags.sort_unstable();
+        return (!flags.is_empty()).then(|| flags.join(","));
+    }
+    Some(canonical_proof_value(value))
+}
+
+fn heif_archival_feature_hash_from_bytes(data: &[u8]) -> Result<String> {
+    const CODEC_BOXES: [[u8; 4]; 3] = [*b"hvcC", *b"av1C", *b"vvcC"];
+    const FEATURE_BOXES: [[u8; 4]; 15] = [
+        *b"hvcC", *b"av1C", *b"vvcC", *b"colr", *b"pixi", *b"auxC", *b"dvcC", *b"dvvC", *b"mdcv",
+        *b"clli", *b"clap", *b"pasp", *b"irot", *b"imir", *b"jumb",
+    ];
+
+    let mut hasher = blake3::Hasher::new();
+    let mut has_codec = false;
+    for box_type in FEATURE_BOXES {
+        let payloads = crate::common_utils::find_all_box_data_recursive(data, box_type);
+        has_codec |= CODEC_BOXES.contains(&box_type) && !payloads.is_empty();
+        hasher.update(&box_type);
+        hasher.update(
+            &u64::try_from(payloads.len())
+                .context("HEIF feature-box count does not fit u64")?
+                .to_be_bytes(),
+        );
+        for payload in payloads {
+            hasher.update(
+                &u64::try_from(payload.len())
+                    .context("HEIF feature-box length does not fit u64")?
+                    .to_be_bytes(),
+            );
+            hasher.update(payload);
+        }
+    }
+    anyhow::ensure!(
+        has_codec,
+        "HEIF archival proof found no supported codec configuration box"
+    );
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn heif_archival_feature_hash(path: &Path) -> Result<String> {
+    let data = std::fs::read(path)
+        .with_context(|| format!("failed to read HEIF archival proof {}", path.display()))?;
+    heif_archival_feature_hash_from_bytes(&data)
+}
+
+const JP2_XMP_UUID: [u8; 16] = [
+    0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, 0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
+];
+
+fn jp2_archival_feature_hash_from_bytes(data: &[u8]) -> Result<String> {
+    let mut hasher = blake3::Hasher::new();
+    let mut pos = 0_usize;
+    let mut saw_signature = false;
+    let mut saw_codestream = false;
+    while pos < data.len() {
+        anyhow::ensure!(data.len() - pos >= 8, "truncated JP2 box header");
+        let size32 = u32::from_be_bytes(data[pos..pos + 4].try_into()?);
+        let box_type: [u8; 4] = data[pos + 4..pos + 8].try_into()?;
+        let (header_size, box_size) = match size32 {
+            0 => (8_usize, data.len() - pos),
+            1 => {
+                anyhow::ensure!(data.len() - pos >= 16, "truncated JP2 extended box header");
+                let size = usize::try_from(u64::from_be_bytes(data[pos + 8..pos + 16].try_into()?))
+                    .context("JP2 extended box size does not fit usize")?;
+                (16, size)
+            }
+            size => (
+                8,
+                usize::try_from(size).context("JP2 box size does not fit usize")?,
+            ),
+        };
+        anyhow::ensure!(box_size >= header_size, "invalid JP2 box size");
+        let next = pos
+            .checked_add(box_size)
+            .context("JP2 box boundary overflow")?;
+        anyhow::ensure!(next <= data.len(), "JP2 box exceeds file boundary");
+        let payload = &data[pos + header_size..next];
+        let is_xmp = box_type == *b"uuid" && payload.starts_with(&JP2_XMP_UUID);
+        if !is_xmp {
+            hasher.update(&data[pos..next]);
+        }
+        saw_signature |= box_type == *b"jP  ";
+        saw_codestream |= box_type == *b"jp2c";
+        pos = next;
+    }
+    anyhow::ensure!(saw_signature, "JP2 archival proof found no signature box");
+    anyhow::ensure!(saw_codestream, "JP2 archival proof found no codestream box");
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn jp2_archival_feature_hash(path: &Path) -> Result<String> {
+    let data = std::fs::read(path)
+        .with_context(|| format!("failed to read JP2 archival proof {}", path.display()))?;
+    jp2_archival_feature_hash_from_bytes(&data)
+}
+
 impl XmpMerger {
     #[must_use]
     pub const fn new(config: Config) -> Self {
@@ -1260,8 +1376,10 @@ impl XmpMerger {
         let has_xmp = proof_has_xmp(record);
         let mut stable = Vec::new();
         for (key, value) in record {
-            if !modern_proof_key_ignored(key) {
-                stable.push((key.as_str(), canonical_proof_value(value)));
+            if !modern_proof_key_ignored(key)
+                && let Some(value) = canonical_modern_proof_value(key, value)
+            {
+                stable.push((key.as_str(), value));
             }
         }
         stable.sort_by(|left, right| left.0.cmp(right.0));
@@ -1278,6 +1396,14 @@ impl XmpMerger {
                 crate::image::fast_img::avif_codec_feature_hash(path)
                     .map_err(|error| anyhow::anyhow!(error.to_string()))?,
             ),
+            crate::image::format_detect::FormatKind::Heic
+            | crate::image::format_detect::FormatKind::Heif => {
+                Some(heif_archival_feature_hash(path)?)
+            }
+            crate::image::format_detect::FormatKind::WebP => {
+                Some(crate::image_formats::webp::archival_feature_hash(path)?)
+            }
+            crate::image::format_detect::FormatKind::Jp2 => Some(jp2_archival_feature_hash(path)?),
             _ => None,
         };
         // ISOBMFF stores XMP as an item in `mdat`; its aggregate mdat size must grow.
@@ -2182,6 +2308,55 @@ mod tests {
     }
 
     #[test]
+    fn modern_container_feature_hashes_cover_heif_auxiliary_and_jp2_non_xmp_boxes() {
+        fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = u32::try_from(payload.len() + 8)
+                .expect("test box size fits u32")
+                .to_be_bytes()
+                .to_vec();
+            bytes.extend_from_slice(&kind);
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+
+        let mut heif = boxed(*b"hvcC", b"codec-config");
+        heif.extend(boxed(*b"colr", b"nclx\0\t\0\x10\0\t"));
+        heif.extend(boxed(*b"auxC", b"urn:com:apple:photo:2020:aux:hdrgainmap"));
+        let heif_hash = heif_archival_feature_hash_from_bytes(&heif).unwrap();
+        heif.extend(boxed(*b"xml ", b"mutable XMP overlay"));
+        assert_eq!(
+            heif_archival_feature_hash_from_bytes(&heif).unwrap(),
+            heif_hash,
+            "XMP metadata must not alter the HEIF codec/auxiliary feature proof"
+        );
+        let mut changed_heif = boxed(*b"hvcC", b"codec-config");
+        changed_heif.extend(boxed(*b"colr", b"nclx\0\t\0\x10\0\t"));
+        changed_heif.extend(boxed(*b"auxC", b"changed-auxiliary-role"));
+        assert_ne!(
+            heif_archival_feature_hash_from_bytes(&changed_heif).unwrap(),
+            heif_hash
+        );
+
+        let mut jp2 = boxed(*b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]);
+        jp2.extend(boxed(*b"jp2c", b"codestream"));
+        let jp2_hash = jp2_archival_feature_hash_from_bytes(&jp2).unwrap();
+        let mut xmp_payload = JP2_XMP_UUID.to_vec();
+        xmp_payload.extend_from_slice(b"sidecar XMP");
+        jp2.extend(boxed(*b"uuid", &xmp_payload));
+        assert_eq!(
+            jp2_archival_feature_hash_from_bytes(&jp2).unwrap(),
+            jp2_hash,
+            "JP2 XMP UUID boxes are mutable overlays"
+        );
+        let mut changed_jp2 = boxed(*b"jP  ", &[0x0d, 0x0a, 0x87, 0x0a]);
+        changed_jp2.extend(boxed(*b"jp2c", b"changed-codestream"));
+        assert_ne!(
+            jp2_archival_feature_hash_from_bytes(&changed_jp2).unwrap(),
+            jp2_hash
+        );
+    }
+
+    #[test]
     fn modern_avif_xmp_merge_uses_native_writer_and_proof() -> Result<()> {
         if !ExiftoolBuilder::check_available() {
             return Ok(());
@@ -2227,6 +2402,37 @@ mod tests {
             idempotent_hash,
             crate::common_utils::calculate_blake3_hash(&media)?,
             "reapplying the same native XMP must be an idempotent no-op"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn modern_webp_xmp_merge_preserves_archival_chunks() -> Result<()> {
+        if !ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let media = temp_dir.path().join("fixture.webp");
+        let xmp = temp_dir.path().join("fixture.xmp");
+        image::RgbImage::from_fn(24, 16, |x, y| {
+            image::Rgb([
+                (x * 7 + y * 3).to_le_bytes()[0],
+                (x * 5 + y * 11).to_le_bytes()[0],
+                (x * 13 + y * 2).to_le_bytes()[0],
+            ])
+        })
+        .save(&media)?;
+        fs::write(
+            &xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">WebP archive proof</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        )?;
+
+        let before = crate::image_formats::webp::archival_feature_hash(&media)?;
+        XmpMerger::new(Config::default()).merge_xmp(&xmp, &media)?;
+        assert_eq!(
+            crate::image_formats::webp::archival_feature_hash(&media)?,
+            before,
+            "native WebP XMP merge changed a non-XMP archival chunk"
         );
         Ok(())
     }
