@@ -459,7 +459,7 @@ vid strategy --codec hevc /path/to/video.mp4
 
 - `--ultimate`：存档级 **0.01 精度** 搜索，并使用生产 JXL effort 10（高质量，高时间成本）。
 - `--archive`：直接像素编码仍以 effort 10 为生产上限；JPEG 比特流转码属于不同负载，默认使用专用 effort 11，若编码器不支持或该次尝试失败则回退 effort 10，最终仍必须通过逐字节重建证明。
-- `--apple-compat`：启用苹果生态系统兼容性（实况照片/AAE）。CLI 默认为开启；`--no-apple-compat` 可禁用。
+- `--apple-compat`：启用苹果生态系统编码兼容性，CLI 默认为开启；`--no-apple-compat` 可关闭这些编码选择，但 AAE 编辑侧车仍作为归档数据保留。
 - `--in-place`：替换原始文件。**警告：不可逆。**
 - `-o /dir`：安全输出目录。（推荐）
 - `--verbose`：显示详细的处理日志。

@@ -776,7 +776,8 @@ working copy. State handling is explicit:
   an unsupported expert switch or failed attempt falls back to effort 10, and
   exact JPEG reconstruction still decides delivery.
 - `img run --apple-compat`: enabled by default; selects Apple-safe JXL box
-  handling and Apple-aware metadata policy. `--no-apple-compat` disables it.
+  handling and Apple-aware metadata policy. `--no-apple-compat` disables those
+  encoding choices; AAE edit sidecars remain preserved as archive data.
 - `img fast-img --shortest-path`: for both JXL and AVIF strategies, runs local
   verification, verified Photos import, UUID/hash custody Gates 2/3, and only
   then permits source/output cleanup. No second import flag is required.

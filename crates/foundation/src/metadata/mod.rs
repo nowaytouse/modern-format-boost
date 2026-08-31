@@ -71,9 +71,6 @@ pub enum AaeSidecarAction {
         source: PathBuf,
         destination: PathBuf,
     },
-    /// Source sidecar was removed because Apple compatibility was not
-    /// requested.
-    Deleted { source: PathBuf },
 }
 
 /// CONTRACT: xattrs never copied (security / APFS-specific / iCloud import
@@ -1983,20 +1980,16 @@ pub fn aae_sidecar_destination(aae: &Path, output: &Path) -> io::Result<PathBuf>
     Ok(output.with_extension(ext))
 }
 
-/// Copy or delete an Apple AAE sidecar for a converted asset.
+/// Copy an Apple AAE sidecar beside a converted asset.
 ///
 /// # Errors
-/// Returns an error when sidecar discovery, copy, metadata reapplication, or
-/// deletion fails.
-pub fn handle_aae_sidecar(
-    input: &Path,
-    output: &Path,
-    apple_compat: bool,
-) -> io::Result<AaeSidecarAction> {
+/// Returns an error when sidecar discovery, copy, or metadata reapplication
+/// fails.
+pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarAction> {
     let Some(aae) = find_aae_sidecar(input)? else {
         return Ok(AaeSidecarAction::Missing);
     };
-    if apple_compat {
+    {
         let destination = aae_sidecar_destination(&aae, output)?;
         if destination == aae {
             return Ok(AaeSidecarAction::AlreadyAdjacent {
@@ -2064,18 +2057,6 @@ pub fn handle_aae_sidecar(
             source: aae,
             destination,
         })
-    } else {
-        std::fs::remove_file(&aae).map_err(|e| {
-            crate::media_conversion_gate::delivery_cleanup_audit(&aae, "orphaned_aae_delete", &e);
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "failed to delete orphaned AAE sidecar {}: {e}",
-                    aae.display()
-                ),
-            )
-        })?;
-        Ok(AaeSidecarAction::Deleted { source: aae })
     }
 }
 

@@ -50,6 +50,12 @@ All notable changes to this project will be documented in this file.
   official libjxl 0.12 runner cannot override the explicit JXL color encoding,
   and the remaining inline fallback expression was replaced with equivalent
   explicit branches required by the repository contract.
+- **Recovery encodes retain the same HDR domain as the primary JXL path**:
+  FFmpeg-to-cjxl fallback now applies the validated Rec.2100 PQ/HLG color
+  mapping instead of silently producing an sRGB-labelled high-bit-depth JXL.
+  AAE adjustment sidecars are also copied beside every finalized output before
+  any source deletion and are never deleted merely because Apple-compatible
+  encoding was disabled.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

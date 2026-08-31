@@ -276,7 +276,7 @@ fn contract_handle_aae_copy_reports_action_and_preserves_source() {
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"aae-payload").expect("write sidecar");
 
-    let action = handle_aae_sidecar(&src, &dst, true).expect("copy AAE");
+    let action = handle_aae_sidecar(&src, &dst).expect("copy AAE");
     assert_eq!(
         action,
         AaeSidecarAction::Copied {

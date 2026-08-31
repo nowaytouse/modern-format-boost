@@ -638,6 +638,14 @@ struct JxlRecoveryFallbackContext<'a> {
     original_result: std::result::Result<std::process::Output, JxlDirectEncodeError>,
 }
 
+fn apply_jxl_color_info(builder: &mut foundation::CjxlBuilder, color_info: Option<&ColorInfo>) {
+    if let Some(info) = color_info
+        && let Some(color_space) = foundation::color_info_to_jxl_color_encoding(info)
+    {
+        builder.color_space(color_space);
+    }
+}
+
 fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> FallbackResult {
     use std::process::Stdio;
 
@@ -802,6 +810,7 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
                     .effort(actual_eff)
                     .threads(max_threads)
                     .apple_compat(options.apple_compat());
+                apply_jxl_color_info(&mut cjxl_builder, Some(color_for_precision));
 
                 let cjxl_result = cjxl_builder
                     .build()
@@ -4412,11 +4421,7 @@ fn run_direct_jxl_encode_with_effort(
         .threads(max_threads)
         .apple_compat(apple_compat);
 
-    if let Some(info) = color_info
-        && let Some(color_space) = foundation::color_info_to_jxl_color_encoding(info)
-    {
-        builder.color_space(color_space);
-    }
+    apply_jxl_color_info(&mut builder, color_info);
 
     if let Some(icc) = icc_path {
         builder.icc_profile(icc);
@@ -5756,6 +5761,26 @@ mod tests {
     fn pixel_audit_only_skips_delivery_audit_after_explicit_proof() {
         assert!(!PixelAudit::RequiredAtCommit.already_verified());
         assert!(PixelAudit::VerifiedByCaller.already_verified());
+    }
+
+    #[test]
+    fn recovery_cjxl_command_keeps_rec2100_pq_signaling() {
+        let color_info = ColorInfo {
+            color_transfer: Some("smpte2084".to_string()),
+            color_primaries: Some("bt2020".to_string()),
+            ..ColorInfo::default()
+        };
+        let mut builder = foundation::CjxlBuilder::new();
+        builder.use_stdin(true).output(Path::new("out.jxl"));
+        apply_jxl_color_info(&mut builder, Some(&color_info));
+
+        let command = builder.build();
+        assert!(
+            command
+                .get_args()
+                .filter_map(std::ffi::OsStr::to_str)
+                .any(|arg| arg == "color_space=Rec2100PQ")
+        );
     }
 
     fn test_tool_available(tool: &str) -> bool {

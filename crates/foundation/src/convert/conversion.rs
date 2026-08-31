@@ -1505,6 +1505,7 @@ pub fn finalize_task(
 
     // Metadata already preserved by commit_temp_to_output_with_metadata
     // (includes EXIF, XMP, xattrs, permissions, and timestamps)
+    crate::metadata::handle_aae_sidecar(input, output)?;
 
     mark_as_processed(input);
 
@@ -1537,6 +1538,7 @@ pub fn post_conversion_actions(
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
     preserve(input, output)?;
+    crate::metadata::handle_aae_sidecar(input, output)?;
 
     mark_as_processed(input);
 
@@ -3429,8 +3431,8 @@ fn ensure_output_parent_resolves(path: &Path) -> Result<(), String> {
 /// AAE files store photo editing metadata from iPhone/Photos.app.
 /// When the source image is converted, the AAE becomes orphaned.
 ///
-/// - In `apple_compat` mode: migrate AAE beside the output stem
-/// - Otherwise: delete orphaned AAE file
+/// AAE is part of the asset's edit history, so it is always migrated beside
+/// the output stem and never deleted as a conversion side effect.
 ///
 /// # Errors
 /// Returns an error when sidecar discovery, migration, metadata reapplication,
@@ -3438,9 +3440,8 @@ fn ensure_output_parent_resolves(path: &Path) -> Result<(), String> {
 pub fn handle_aae_file(
     input: &Path,
     output: &Path,
-    apple_compat: bool,
 ) -> std::io::Result<crate::metadata::AaeSidecarAction> {
-    crate::metadata::handle_aae_sidecar(input, output, apple_compat)
+    crate::metadata::handle_aae_sidecar(input, output)
 }
 #[cfg(test)]
 mod tests {
@@ -4490,6 +4491,26 @@ mod tests {
         assert!(!opts.should_delete_original());
         assert!(opts.use_gpu());
         assert!(!opts.allow_size_tolerance());
+    }
+
+    #[test]
+    fn finalize_task_preserves_aae_beside_output() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let input = temp.path().join("IMG_0001.HEIC");
+        let source_aae = temp.path().join("IMG_0001.AAE");
+        let output = temp.path().join("IMG_0001.JXL");
+        fs::write(&input, b"heic").expect("write input");
+        fs::write(&source_aae, b"adjustments").expect("write AAE");
+        fs::write(&output, b"jxl").expect("write output");
+
+        finalize_task(&input, &output, 4, "JXL", None, &ConvertOptions::default())
+            .expect("finalize task");
+
+        assert_eq!(
+            fs::read(output.with_extension("AAE")).expect("read migrated AAE"),
+            b"adjustments"
+        );
+        assert!(source_aae.is_file(), "finalization must retain source AAE");
     }
 
     #[test]
