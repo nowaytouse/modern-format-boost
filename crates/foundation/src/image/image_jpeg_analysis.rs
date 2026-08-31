@@ -1432,7 +1432,7 @@ fn recover_gainmap_candidate(
 
 /// Find the MPF segment in JPEG data.
 /// Returns the TIFF payload after the `MPF\0` or `XMPF` APP2 identifier.
-fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut pos = 2;
 
     while pos + 1 < data.len() {

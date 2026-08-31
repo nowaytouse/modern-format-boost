@@ -136,9 +136,10 @@ fn is_jxl_container(path: &Path) -> Result<bool> {
 /// Formats whose archival structure cannot be proved intact after a generic
 /// metadata writer rewrites the container.
 ///
-/// JXL has its dedicated append-only overlay path. The other formats retain the
-/// media and sidecar until a native writer can prove auxiliary images, HDR
-/// relationships, provenance data, unknown properties/chunks, and codec bytes.
+/// JXL has its dedicated append-only overlay path. JPEG and the other formats
+/// use a staged native writer only when payload and archival-feature proofs can
+/// establish that auxiliary images, HDR relationships, provenance data,
+/// unknown properties/chunks, and codec bytes survived unchanged.
 #[must_use]
 pub(crate) const fn xmp_rewrite_requires_immutable_container(
     format: crate::image::format_detect::FormatKind,
@@ -146,7 +147,8 @@ pub(crate) const fn xmp_rewrite_requires_immutable_container(
     use crate::image::format_detect::FormatKind;
     matches!(
         format,
-        FormatKind::Jxl
+        FormatKind::Jpeg
+            | FormatKind::Jxl
             | FormatKind::Avif
             | FormatKind::Heic
             | FormatKind::Heif
@@ -456,12 +458,13 @@ fn canonical_modern_proof_value(key: &str, value: &Value) -> Option<String> {
     let normalized = key.to_ascii_lowercase();
     if normalized == "file:filetype"
         && let Some(text) = proof_value_text(value)
-        && let Some(webp_type) = text
-            .strip_prefix("Extended WEBP")
-            .map(|suffix| format!("WEBP{suffix}"))
-            .or_else(|| text.starts_with("WEBP").then_some(text))
     {
-        return Some(webp_type);
+        if let Some(suffix) = text.strip_prefix("Extended WEBP") {
+            return Some(format!("WEBP{suffix}"));
+        }
+        if text.starts_with("WEBP") {
+            return Some(text);
+        }
     }
     if normalized == "riff:webp_flags"
         && let Some(text) = proof_value_text(value)
@@ -515,6 +518,49 @@ fn heif_archival_feature_hash(path: &Path) -> Result<String> {
     let data = std::fs::read(path)
         .with_context(|| format!("failed to read HEIF archival proof {}", path.display()))?;
     heif_archival_feature_hash_from_bytes(&data)
+}
+
+fn jpeg_archival_feature_hash_from_bytes(data: &[u8]) -> Result<Option<String>> {
+    let is_ultrahdr = crate::image_jpeg_analysis::is_ultra_hdr_jpeg(data);
+    let has_mpf = crate::image_jpeg_analysis::find_mpf_segment(data).is_ok();
+    if !is_ultrahdr {
+        anyhow::ensure!(
+            !has_mpf,
+            "JPEG contains an MPF-linked secondary image that is not a proven UltraHDR gain map"
+        );
+        return Ok(None);
+    }
+
+    let payload = crate::image_jpeg_analysis::extract_ultrahdr_jpeg_payload(data)
+        .map_err(anyhow::Error::msg)?;
+    let params = crate::hdr::parse_gainmap_params_from_jpeg_xmp(data)?
+        .ok_or_else(|| anyhow::anyhow!("UltraHDR JPEG has no readable gain-map parameters"))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&payload.base_image.width().to_be_bytes());
+    hasher.update(&payload.base_image.height().to_be_bytes());
+    hasher.update(&payload.gainmap_image.width().to_be_bytes());
+    hasher.update(&payload.gainmap_image.height().to_be_bytes());
+    hasher.update(&payload.gainmap_jpeg);
+    for value in [
+        params.gain_map_max,
+        params.gain_map_min,
+        params.gamma,
+        params.offset_sdr,
+        params.offset_hdr,
+    ] {
+        hasher.update(&value.to_bits().to_be_bytes());
+    }
+    hasher.update(&[
+        u8::from(params.use_base_color_space),
+        u8::from(params.base_rendition_is_hdr),
+    ]);
+    Ok(Some(hasher.finalize().to_hex().to_string()))
+}
+
+fn jpeg_archival_feature_hash(path: &Path) -> Result<Option<String>> {
+    let data = std::fs::read(path)
+        .with_context(|| format!("failed to read JPEG archival proof {}", path.display()))?;
+    jpeg_archival_feature_hash_from_bytes(&data)
 }
 
 const JP2_XMP_UUID: [u8; 16] = [
@@ -1392,6 +1438,7 @@ impl XmpMerger {
         }
         let stable_metadata_hash = blake3::hash(&stable_bytes).to_hex().to_string();
         let codec_feature_hash = match format {
+            crate::image::format_detect::FormatKind::Jpeg => jpeg_archival_feature_hash(path)?,
             crate::image::format_detect::FormatKind::Avif => Some(
                 crate::image::fast_img::avif_codec_feature_hash(path)
                     .map_err(|error| anyhow::anyhow!(error.to_string()))?,
@@ -1574,9 +1621,16 @@ impl XmpMerger {
                 media_path.display()
             )
         })?;
+        if let Some(reason) = protected_container_reason(media_path, format)? {
+            bail!(
+                "refusing destructive XMP rewrite for {} because it contains a protected {reason}; media and sidecar retained so protected container structure is not invalidated or discarded",
+                media_path.display()
+            );
+        }
         if matches!(
             format,
-            crate::image::format_detect::FormatKind::Avif
+            crate::image::format_detect::FormatKind::Jpeg
+                | crate::image::format_detect::FormatKind::Avif
                 | crate::image::format_detect::FormatKind::Heic
                 | crate::image::format_detect::FormatKind::Heif
                 | crate::image::format_detect::FormatKind::WebP
@@ -1587,12 +1641,6 @@ impl XmpMerger {
         if xmp_rewrite_requires_immutable_container(format) {
             bail!(
                 "refusing destructive XMP rewrite for {format:?} {}; media and sidecar retained because a generic metadata writer cannot prove preservation of HDR/auxiliary relationships, provenance data, unknown container structures, and codec bytes",
-                media_path.display()
-            );
-        }
-        if let Some(reason) = protected_container_reason(media_path, format)? {
-            bail!(
-                "refusing destructive XMP rewrite for {} because it contains a protected {reason}; media and sidecar retained so protected container structure is not invalidated or discarded",
                 media_path.display()
             );
         }
@@ -2292,6 +2340,7 @@ mod tests {
         use crate::image::format_detect::FormatKind;
 
         for format in [
+            FormatKind::Jpeg,
             FormatKind::Jxl,
             FormatKind::Avif,
             FormatKind::Heic,
@@ -2302,9 +2351,52 @@ mod tests {
         ] {
             assert!(xmp_rewrite_requires_immutable_container(format));
         }
-        for format in [FormatKind::Jpeg, FormatKind::Png, FormatKind::Tiff] {
+        for format in [FormatKind::Png, FormatKind::Tiff] {
             assert!(!xmp_rewrite_requires_immutable_container(format));
         }
+    }
+
+    #[test]
+    fn jpeg_xmp_merge_preserves_primary_payload_and_rejects_unproven_mpf() -> Result<()> {
+        let unproven_mpf = [
+            0xff, 0xd8, 0xff, 0xe2, 0x00, 0x06, b'M', b'P', b'F', 0x00, 0xff, 0xd9,
+        ];
+        let error = jpeg_archival_feature_hash_from_bytes(&unproven_mpf)
+            .expect_err("unclassified MPF JPEG must be retained rather than rewritten");
+        assert!(error.to_string().contains("not a proven UltraHDR gain map"));
+
+        if !ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let temp = TempDir::new()?;
+        let media = temp.path().join("archive.jpg");
+        let sidecar = temp.path().join("archive.xmp");
+        image::RgbImage::from_fn(24, 16, |x, y| {
+            image::Rgb([
+                (x * 7 + y * 3).to_le_bytes()[0],
+                (x * 5 + y * 11).to_le_bytes()[0],
+                (x * 13 + y * 2).to_le_bytes()[0],
+            ])
+        })
+        .save(&media)?;
+        fs::write(
+            &sidecar,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">JPEG archive proof</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        )?;
+        let before = XmpMerger::capture_modern_container_proof(
+            &media,
+            crate::image::format_detect::FormatKind::Jpeg,
+        )?;
+        XmpMerger::new(Config::default()).merge_xmp(&sidecar, &media)?;
+        let after = XmpMerger::capture_modern_container_proof(
+            &media,
+            crate::image::format_detect::FormatKind::Jpeg,
+        )?;
+        assert_eq!(after.image_data_hash, before.image_data_hash);
+        assert_eq!(after.payload_size, before.payload_size);
+        assert_eq!(after.codec_feature_hash, before.codec_feature_hash);
+        assert!(after.has_xmp);
+        Ok(())
     }
 
     #[test]

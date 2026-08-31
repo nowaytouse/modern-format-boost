@@ -40,6 +40,16 @@ All notable changes to this project will be documented in this file.
   auxiliary-image boxes, every non-XMP WebP chunk, and every non-XMP JP2 box
   are fingerprinted independently of mutable XMP. A changed structural
   feature fails closed instead of being accepted as a metadata-only rewrite.
+- **JPEG HDR metadata writes are now transactional and feature-aware**: normal
+  JPEG XMP merges commit only after the primary image payload remains exact;
+  UltraHDR also fingerprints the embedded gain-map JPEG and its rendering
+  parameters. Unknown MPF relationships and APP11/JUMBF-capable payloads retain
+  the original media and sidecar instead of accepting an unproved rewrite.
+- **The latest IMG and Shared Health failures are fixed at their named roots**:
+  Rec.2100 PQ/HLG lossless intermediates use metadata-free 16-bit PPM so the
+  official libjxl 0.12 runner cannot override the explicit JXL color encoding,
+  and the remaining inline fallback expression was replaced with equivalent
+  explicit branches required by the repository contract.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

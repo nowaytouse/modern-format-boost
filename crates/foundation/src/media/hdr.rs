@@ -1062,7 +1062,7 @@ pub fn persist_hdr_artifacts(output: &Path, artifacts: &HdrArtifacts) -> Result<
     Ok(written_paths)
 }
 
-fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Result<Option<GainMapParams>> {
+pub(crate) fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Result<Option<GainMapParams>> {
     let Some(xmp_blocks) = crate::image_jpeg_analysis::extract_xmp_from_jpeg_data(data) else {
         return Ok(None);
     };
@@ -1075,8 +1075,8 @@ fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Result<Option<GainMapParam
 }
 
 /// # Errors
-/// Returns an error if the input does not require high-precision `PNG16`
-/// `preservation` or if `FFmpeg` processing fails.
+/// Returns an error if the input does not require a high-precision integer
+/// intermediate or if `FFmpeg` processing fails.
 pub fn decode_image_to_png16_preserving_precision(
     input: &Path,
     color_info: &ColorInfo,
@@ -1090,10 +1090,19 @@ pub fn decode_image_to_png16_preserving_precision(
     if !precision.should_use_high_precision_png16_decode() {
         anyhow::bail!("Input does not require high-precision PNG16 decode");
     }
+    // libjxl v0.12 can mislabel lossless HDR PNG input carrying CICP/ICC as
+    // sRGB even when `color_space=Rec2100PQ` is supplied. A raw 16-bit PPM has
+    // no competing embedded colour metadata, so cjxl must use the explicit
+    // source-derived colour-space hint. SDR/high-bit-depth inputs retain PNG.
+    let raw_hdr_intermediate = matches!(
+        color_info_to_jxl_color_encoding(color_info),
+        Some("Rec2100PQ" | "Rec2100HLG")
+    );
+    let suffix = if raw_hdr_intermediate { ".ppm" } else { ".png" };
     let temp_png = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "hdr_png16_decode",
         None,
-        Some(".png"),
+        Some(suffix),
     )?;
     let temp_path = temp_png.path().to_path_buf();
     let pix_fmt = crate::media_conversion_gate::precision_png16_decode_rgb_pix_fmt(&precision);
@@ -1108,13 +1117,13 @@ pub fn decode_image_to_png16_preserving_precision(
     if !output.status.success() {
         anyhow::bail!("FFmpeg failed");
     }
-    // FFmpeg can carry a source TIFF IFD as PNG EXIF side data.  That IFD still
-    // contains offsets into the original TIFF and becomes invalid when cjxl
-    // embeds it in the JXL container; the later delivery pass copies metadata
-    // from the original source, so remove only EXIF from this pixel intermediate.
-    // ICC/XMP and the source colour signalling remain available to the encoder
-    // through the explicit source probes (`extract_icc_profile`/CICP).
-    strip_transcoded_exif_side_data(&temp_path)?;
+    if !raw_hdr_intermediate {
+        // FFmpeg can carry a source TIFF IFD as PNG EXIF side data. That IFD
+        // still contains offsets into the original TIFF and becomes invalid
+        // when cjxl embeds it in the JXL container; the later delivery pass
+        // copies metadata from the original source, so remove it here.
+        strip_transcoded_exif_side_data(&temp_path)?;
+    }
     Ok((temp_path, temp_png))
 }
 
