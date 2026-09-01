@@ -4435,9 +4435,10 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 ///   0=NONE, 1=RLE, 2=ZIPS, 3=ZIP, 4=PIZ → lossless
 ///   5=PXR24, 6=B44, 7=B44A, 8=DWAA, 9=DWAB → lossy
 ///
-/// EXR 2.0 multi-part: version bit 9 = 1. Each part has independent header with
-/// its own compression. Parts separated by empty name; all parts end with two
-/// consecutive empty names. Any lossy part → Lossy overall.
+/// EXR 2.0 multi-part: version bit 12 = 1. (Bit 9 denotes tiled data.) Each
+/// part has an independent header with its own compression. Parts are separated
+/// by an empty name; all parts end with two consecutive empty names. Any lossy
+/// part → Lossy overall.
 // Rationale: This function handles complex, sequential initialization or
 // business logic where further fragmentation would hinder readability and
 // maintainability.
@@ -4457,11 +4458,11 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         )));
     }
 
-    // Check version field for multi-part flag (bit 9)
+    // OpenEXR version flags: bit 12 = multipart; bit 9 = tiled.
     let version = data
         .get_u32_le_strict(4, "EXR version")
         .ok_or_else(|| anyhow::anyhow!("Truncated EXR version field"))?;
-    let is_multipart = (version & (1 << 9_i32)) != 0;
+    let is_multipart = (version & (1 << 12_i32)) != 0;
 
     let mut pos = 8; // skip magic + version
     let mut found_any_compression = false;

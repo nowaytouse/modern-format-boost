@@ -4,6 +4,7 @@
 use crate::builder_base::ToolBuilder;
 use crate::media_precision::{BitDepthMetadata, MediaPrecision};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -215,6 +216,124 @@ pub struct ColorInfo {
     pub is_dolby_vision: bool,
     pub is_hdr10_plus: bool,
     pub is_float: bool,
+}
+
+// Keep the fallback bounded: ffprobe remains authoritative for large media,
+// while small ISO-BMFF headers still get a deterministic CICP probe when an
+// older ffprobe cannot expose `colr`.
+const MAX_ISOBMFF_COLOR_PROBE_BYTES: u64 = 128 * 1024 * 1024;
+
+fn cicp_primaries_label(value: u16) -> Option<&'static str> {
+    match value {
+        1 => Some("bt709"),
+        9 => Some("bt2020"),
+        12 => Some("display-p3"),
+        _ => None,
+    }
+}
+
+fn cicp_transfer_label(value: u16) -> Option<&'static str> {
+    match value {
+        1 => Some("bt709"),
+        13 => Some("srgb"),
+        16 => Some("smpte2084"),
+        18 => Some("arib-std-b67"),
+        _ => None,
+    }
+}
+
+fn cicp_matrix_label(value: u16) -> Option<&'static str> {
+    match value {
+        0 => Some("rgb"),
+        1 => Some("bt709"),
+        9 => Some("bt2020nc"),
+        10 => Some("bt2020c"),
+        _ => None,
+    }
+}
+
+fn color_info_from_isobmff_bytes(data: &[u8]) -> Option<ColorInfo> {
+    let colr = crate::common_utils::find_box_data_recursive(data, *b"colr")?;
+    if colr.len() < 11 || &colr[..4] != b"nclx" {
+        return None;
+    }
+
+    let primaries = u16::from_be_bytes([colr[4], colr[5]]);
+    let transfer = u16::from_be_bytes([colr[6], colr[7]]);
+    let matrix = u16::from_be_bytes([colr[8], colr[9]]);
+    let color_primaries = cicp_primaries_label(primaries).map(str::to_owned);
+    let color_transfer = cicp_transfer_label(transfer).map(str::to_owned);
+    let color_space = cicp_matrix_label(matrix).map(str::to_owned);
+
+    (color_primaries.is_some() || color_transfer.is_some() || color_space.is_some()).then_some(
+        ColorInfo {
+            color_space,
+            color_transfer,
+            color_primaries,
+            color_range: Some(if colr[10] & 0x80 != 0 {
+                "pc".to_string()
+            } else {
+                "tv".to_string()
+            }),
+            ..ColorInfo::default()
+        },
+    )
+}
+
+fn color_info_from_isobmff_file(input: &Path) -> Option<ColorInfo> {
+    let metadata = std::fs::metadata(input).ok()?;
+    if metadata.len() > MAX_ISOBMFF_COLOR_PROBE_BYTES {
+        return None;
+    }
+
+    let mut file = std::fs::File::open(input).ok()?;
+    let mut header = [0_u8; 8];
+    file.read_exact(&mut header).ok()?;
+    if &header[4..8] != b"ftyp" {
+        return None;
+    }
+
+    color_info_from_isobmff_bytes(&std::fs::read(input).ok()?)
+}
+
+fn merge_color_info_from_isobmff(info: &mut ColorInfo, fallback: ColorInfo) -> bool {
+    let authoritative_hdr = matches!(
+        fallback.color_transfer.as_deref(),
+        Some("smpte2084" | "arib-std-b67")
+    );
+    let mut merged = false;
+    if (authoritative_hdr || info.color_space.is_none()) && fallback.color_space.is_some() {
+        info.color_space = fallback.color_space;
+        merged = true;
+    }
+    if (authoritative_hdr || info.color_transfer.is_none()) && fallback.color_transfer.is_some() {
+        info.color_transfer = fallback.color_transfer;
+        merged = true;
+    }
+    if (authoritative_hdr || info.color_primaries.is_none()) && fallback.color_primaries.is_some() {
+        info.color_primaries = fallback.color_primaries;
+        merged = true;
+    }
+    if (authoritative_hdr || info.color_range.is_none()) && fallback.color_range.is_some() {
+        info.color_range = fallback.color_range;
+        merged = true;
+    }
+
+    merged
+}
+
+fn merge_isobmff_color_info(input: &Path, info: &mut ColorInfo) {
+    let Some(fallback) = color_info_from_isobmff_file(input) else {
+        return;
+    };
+
+    if merge_color_info_from_isobmff(info, fallback) {
+        crate::media_conversion_gate::probe_ffprobe_input_audit(
+            "isobmff_nclx_color_fallback",
+            &input.to_string_lossy(),
+            "ffprobe omitted or contradicted CICP fields; recovered the authoritative colr/nclx signal",
+        );
+    }
 }
 
 #[must_use]
@@ -478,7 +597,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                                 retry_stderr.trim()
                             ),
                         );
-                        return ColorInfo::default();
+                        return color_info_from_isobmff_file(input).unwrap_or_default();
                     }
                     Err(err) => {
                         crate::media_conversion_gate::probe_ffprobe_input_audit(
@@ -491,7 +610,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                             "Pattern_type fallback also failed for: {}",
                             input_str
                         );
-                        return ColorInfo::default();
+                        return color_info_from_isobmff_file(input).unwrap_or_default();
                     }
                 }
             } else {
@@ -509,7 +628,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                         format!("ffprobe execution failed: {}", stderr.trim()),
                     );
                 }
-                return ColorInfo::default();
+                return color_info_from_isobmff_file(input).unwrap_or_default();
             }
         }
         Err(e) => {
@@ -518,7 +637,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("failed to launch ffprobe subprocess: {e}"),
             );
-            return ColorInfo::default();
+            return color_info_from_isobmff_file(input).unwrap_or_default();
         }
     };
 
@@ -530,7 +649,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("ffprobe stdout invalid UTF-8: {e}"),
             );
-            return ColorInfo::default();
+            return color_info_from_isobmff_file(input).unwrap_or_default();
         }
     };
 
@@ -542,7 +661,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("ffprobe JSON parse failed: {e}"),
             );
-            return ColorInfo::default();
+            return color_info_from_isobmff_file(input).unwrap_or_default();
         }
     };
 
@@ -552,7 +671,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             &input_str,
             "no valid video streams in ffprobe output",
         );
-        return ColorInfo::default();
+        return color_info_from_isobmff_file(input).unwrap_or_default();
     };
 
     let (bit_depth, bit_depth_inferred_from_pix_fmt) = parse_stream_bit_depth(stream);
@@ -599,7 +718,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
 
     let is_float = pix_fmt_indicates_float(stream.pix_fmt.as_deref());
 
-    ColorInfo {
+    let mut color_info = ColorInfo {
         color_space,
         color_transfer,
         color_primaries,
@@ -612,7 +731,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         is_dolby_vision,
         is_hdr10_plus,
         is_float,
-    }
+    };
+    merge_isobmff_color_info(input, &mut color_info);
+    color_info
 }
 
 #[cfg(test)]
@@ -656,6 +777,68 @@ mod tests {
             parsed.streams.first().and_then(|s| s.pix_fmt.clone()),
             Some("yuv420p10le".to_string())
         );
+    }
+
+    fn make_isobmff_box(box_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let size = u32::try_from(payload.len() + 8).unwrap_or_else(|_| panic!("box too large"));
+        let mut data = Vec::with_capacity(payload.len() + 8);
+        data.extend_from_slice(&size.to_be_bytes());
+        data.extend_from_slice(box_type);
+        data.extend_from_slice(payload);
+        data
+    }
+
+    #[test]
+    fn test_isobmff_nclx_fallback_rec2100_pq_from_nested_colr() {
+        let mut nclx = Vec::from(*b"nclx");
+        nclx.extend_from_slice(&9_u16.to_be_bytes());
+        nclx.extend_from_slice(&16_u16.to_be_bytes());
+        nclx.extend_from_slice(&9_u16.to_be_bytes());
+        nclx.push(0x80);
+
+        let colr = make_isobmff_box(b"colr", &nclx);
+        let ipco = make_isobmff_box(b"ipco", &colr);
+        let iprp = make_isobmff_box(b"iprp", &ipco);
+        let mut meta_payload = vec![0_u8; 4];
+        meta_payload.extend_from_slice(&iprp);
+
+        let mut data = make_isobmff_box(b"ftyp", b"avif\0\0\0\0");
+        data.extend_from_slice(&make_isobmff_box(b"meta", &meta_payload));
+
+        let info = color_info_from_isobmff_bytes(&data).expect("nested CICP should be detected");
+        assert_eq!(info.color_primaries.as_deref(), Some("bt2020"));
+        assert_eq!(info.color_transfer.as_deref(), Some("smpte2084"));
+        assert_eq!(info.color_space.as_deref(), Some("bt2020nc"));
+        assert_eq!(info.color_range.as_deref(), Some("pc"));
+        assert!(info.is_hdr());
+        assert_eq!(
+            crate::hdr::color_info_to_jxl_color_encoding(&info),
+            Some("Rec2100PQ")
+        );
+    }
+
+    #[test]
+    fn test_isobmff_hdr_signal_overrides_conflicting_ffprobe_fields() {
+        let mut probed = ColorInfo {
+            color_space: Some("rgb".to_string()),
+            color_transfer: Some("srgb".to_string()),
+            color_primaries: Some("bt709".to_string()),
+            color_range: Some("tv".to_string()),
+            ..Default::default()
+        };
+        let container = ColorInfo {
+            color_space: Some("bt2020nc".to_string()),
+            color_transfer: Some("smpte2084".to_string()),
+            color_primaries: Some("bt2020".to_string()),
+            color_range: Some("pc".to_string()),
+            ..Default::default()
+        };
+
+        assert!(merge_color_info_from_isobmff(&mut probed, container));
+        assert_eq!(probed.color_space.as_deref(), Some("bt2020nc"));
+        assert_eq!(probed.color_transfer.as_deref(), Some("smpte2084"));
+        assert_eq!(probed.color_primaries.as_deref(), Some("bt2020"));
+        assert_eq!(probed.color_range.as_deref(), Some("pc"));
     }
 
     #[test]

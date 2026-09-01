@@ -845,6 +845,35 @@ fn avif_compression_fails_closed_without_av1c() {
     );
 }
 
+fn synthetic_exr_part(compression: u8) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(b"compression\0");
+    data.extend_from_slice(b"compression\0");
+    data.extend_from_slice(&1_u32.to_le_bytes());
+    data.push(compression);
+    data.push(0);
+    data
+}
+
+#[test]
+fn exr_multipart_flag_scans_every_part_for_lossy_compression() {
+    let mut data = vec![0x76, 0x2f, 0x31, 0x01];
+    // Version 2 + bit 12 (multipart); bit 9 is tiled, not multipart.
+    data.extend_from_slice(&(2_u32 | (1_u32 << 12)).to_le_bytes());
+    data.extend_from_slice(&synthetic_exr_part(0));
+    data.extend_from_slice(&synthetic_exr_part(5));
+    data.push(0);
+
+    let mut file = NamedTempFile::new().expect("temp EXR");
+    file.write_all(&data).expect("write multipart EXR");
+
+    assert_eq!(
+        detect_compression(&DetectedFormat::EXR, file.path()).expect("multipart EXR"),
+        CompressionType::Lossy,
+        "a lossy multipart part must not be hidden by a lossless first part"
+    );
+}
+
 #[test]
 fn jxlinfo_only_promotes_explicit_lossy_summary() {
     assert_eq!(
