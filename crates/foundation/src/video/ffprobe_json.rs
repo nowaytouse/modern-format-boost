@@ -223,7 +223,7 @@ pub struct ColorInfo {
 // older ffprobe cannot expose `colr`.
 const MAX_ISOBMFF_COLOR_PROBE_BYTES: u64 = 128 * 1024 * 1024;
 
-fn cicp_primaries_label(value: u16) -> Option<&'static str> {
+const fn cicp_primaries_label(value: u16) -> Option<&'static str> {
     match value {
         1 => Some("bt709"),
         9 => Some("bt2020"),
@@ -232,7 +232,7 @@ fn cicp_primaries_label(value: u16) -> Option<&'static str> {
     }
 }
 
-fn cicp_transfer_label(value: u16) -> Option<&'static str> {
+const fn cicp_transfer_label(value: u16) -> Option<&'static str> {
     match value {
         1 => Some("bt709"),
         13 => Some("srgb"),
@@ -242,7 +242,7 @@ fn cicp_transfer_label(value: u16) -> Option<&'static str> {
     }
 }
 
-fn cicp_matrix_label(value: u16) -> Option<&'static str> {
+const fn cicp_matrix_label(value: u16) -> Option<&'static str> {
     match value {
         0 => Some("rgb"),
         1 => Some("bt709"),
@@ -301,25 +301,29 @@ fn merge_color_info_from_isobmff(info: &mut ColorInfo, fallback: ColorInfo) -> b
         fallback.color_transfer.as_deref(),
         Some("smpte2084" | "arib-std-b67")
     );
-    let mut merged = false;
-    if (authoritative_hdr || info.color_space.is_none()) && fallback.color_space.is_some() {
+    let merge_color_space =
+        (authoritative_hdr || info.color_space.is_none()) && fallback.color_space.is_some();
+    let merge_color_transfer =
+        (authoritative_hdr || info.color_transfer.is_none()) && fallback.color_transfer.is_some();
+    let merge_color_primaries =
+        (authoritative_hdr || info.color_primaries.is_none()) && fallback.color_primaries.is_some();
+    let merge_color_range =
+        (authoritative_hdr || info.color_range.is_none()) && fallback.color_range.is_some();
+
+    if merge_color_space {
         info.color_space = fallback.color_space;
-        merged = true;
     }
-    if (authoritative_hdr || info.color_transfer.is_none()) && fallback.color_transfer.is_some() {
+    if merge_color_transfer {
         info.color_transfer = fallback.color_transfer;
-        merged = true;
     }
-    if (authoritative_hdr || info.color_primaries.is_none()) && fallback.color_primaries.is_some() {
+    if merge_color_primaries {
         info.color_primaries = fallback.color_primaries;
-        merged = true;
     }
-    if (authoritative_hdr || info.color_range.is_none()) && fallback.color_range.is_some() {
+    if merge_color_range {
         info.color_range = fallback.color_range;
-        merged = true;
     }
 
-    merged
+    merge_color_space || merge_color_transfer || merge_color_primaries || merge_color_range
 }
 
 fn merge_isobmff_color_info(input: &Path, info: &mut ColorInfo) {
