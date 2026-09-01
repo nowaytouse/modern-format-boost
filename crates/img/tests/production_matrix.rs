@@ -251,19 +251,19 @@ fn pfm_sample_bits(path: &Path) -> Result<(String, String, Vec<u32>)> {
     let dimensions = std::str::from_utf8(parts.next().unwrap_or_default())?.to_string();
     let scale = std::str::from_utf8(parts.next().unwrap_or_default())?.parse::<f32>()?;
     let payload = parts.next().unwrap_or_default();
+    let (sample_bytes, remainder) = payload.as_chunks::<4>();
     ensure!(
-        matches!(magic.as_str(), "PF" | "Pf") && payload.len() % 4 == 0,
+        matches!(magic.as_str(), "PF" | "Pf") && remainder.is_empty(),
         "invalid PFM payload in {}",
         path.display()
     );
-    let samples = payload
-        .chunks_exact(4)
+    let samples = sample_bytes
+        .iter()
         .map(|bytes| {
-            let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
             if scale.is_sign_negative() {
-                u32::from_le_bytes(bytes)
+                u32::from_le_bytes(*bytes)
             } else {
-                u32::from_be_bytes(bytes)
+                u32::from_be_bytes(*bytes)
             }
         })
         .collect();

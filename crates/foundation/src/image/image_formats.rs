@@ -138,6 +138,22 @@ pub mod webp {
         Ok(end)
     }
 
+    /// Return whether a validated WebP RIFF contains the requested top-level
+    /// chunk. C2PA manifests use this to prevent metadata edits from
+    /// invalidating an existing provenance signature.
+    pub(crate) fn contains_top_level_chunk(data: &[u8], wanted: [u8; 4]) -> Result<bool> {
+        let end = validated_webp_end(data)?;
+        let mut pos = 12;
+        while pos < end {
+            let (chunk, next) = parse_chunk(data, pos, end, "RIFF")?;
+            if chunk.id == wanted {
+                return Ok(true);
+            }
+            pos = next;
+        }
+        Ok(false)
+    }
+
     fn frame_codec(payload: &[u8]) -> Result<FrameCodec> {
         if payload.len() < 16 {
             return Err(ImgQualityError::AnalysisError(format!(
@@ -572,9 +588,24 @@ pub mod webp {
 }
 
 pub mod gif {
-    use crate::unified_error::ImgQualityError;
+    use crate::unified_error::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
+
+    const C2PA_EXTENSION: &[u8] = b"\x21\xFF\x0BC2PA_GIF\x01\x00\x00";
+
+    /// Return whether a GIF carries the C2PA application extension defined by
+    /// the C2PA asset-format specification.
+    pub(crate) fn has_c2pa_application_extension(data: &[u8]) -> Result<bool> {
+        if !matches!(data.get(..6), Some(b"GIF87a" | b"GIF89a")) {
+            return Err(ImgQualityError::AnalysisError(
+                "GIF: invalid or truncated signature while probing C2PA".to_string(),
+            ));
+        }
+        Ok(data
+            .windows(C2PA_EXTENSION.len())
+            .any(|window| window == C2PA_EXTENSION))
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct GifTimingStats {
@@ -941,6 +972,152 @@ pub mod tiff_family {
     use std::io::{Read, Seek, SeekFrom};
     use std::path::Path;
     use std::process::Command;
+
+    const fn tiff_u16(bytes: [u8; 2], little_endian: bool) -> u16 {
+        if little_endian {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        }
+    }
+
+    const fn tiff_u32(bytes: [u8; 4], little_endian: bool) -> u32 {
+        if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    }
+
+    const fn tiff_u64(bytes: [u8; 8], little_endian: bool) -> u64 {
+        if little_endian {
+            u64::from_le_bytes(bytes)
+        } else {
+            u64::from_be_bytes(bytes)
+        }
+    }
+
+    fn read_tiff_u16(file: &mut std::fs::File, little_endian: bool) -> Result<u16> {
+        let mut bytes = [0_u8; 2];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u16(bytes, little_endian))
+    }
+
+    fn read_tiff_u32(file: &mut std::fs::File, little_endian: bool) -> Result<u32> {
+        let mut bytes = [0_u8; 4];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u32(bytes, little_endian))
+    }
+
+    fn read_tiff_u64(file: &mut std::fs::File, little_endian: bool) -> Result<u64> {
+        let mut bytes = [0_u8; 8];
+        file.read_exact(&mut bytes)?;
+        Ok(tiff_u64(bytes, little_endian))
+    }
+
+    /// Traverse the classic TIFF or `BigTIFF` main-IFD chain and report whether
+    /// it contains `wanted_tag`.
+    pub(crate) fn contains_ifd_tag(path: &Path, wanted_tag: u16) -> Result<bool> {
+        let mut file = std::fs::File::open(path)?;
+        let file_len = file.metadata()?.len();
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let little_endian = match &header[..2] {
+            b"II" => true,
+            b"MM" => false,
+            _ => {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: invalid byte order while probing protected provenance".to_string(),
+                ));
+            }
+        };
+        let magic = tiff_u16([header[2], header[3]], little_endian);
+        let (big_tiff, mut ifd_offset) = match magic {
+            42 => (
+                false,
+                u64::from(tiff_u32(
+                    [header[4], header[5], header[6], header[7]],
+                    little_endian,
+                )),
+            ),
+            43 => {
+                if tiff_u16([header[4], header[5]], little_endian) != 8
+                    || tiff_u16([header[6], header[7]], little_endian) != 0
+                {
+                    return Err(ImgQualityError::AnalysisError(
+                        "BigTIFF: invalid offset-size header while probing protected provenance"
+                            .to_string(),
+                    ));
+                }
+                (true, read_tiff_u64(&mut file, little_endian)?)
+            }
+            _ => {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: invalid magic while probing protected provenance".to_string(),
+                ));
+            }
+        };
+
+        let (count_size, entry_size, next_size) = if big_tiff {
+            (8_u64, 20_u64, 8_u64)
+        } else {
+            (2_u64, 12_u64, 4_u64)
+        };
+        let mut visited = std::collections::HashSet::new();
+        while ifd_offset != 0 {
+            if !visited.insert(ifd_offset) || visited.len() > 4096 {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: cyclic or excessive IFD chain while probing protected provenance"
+                        .to_string(),
+                ));
+            }
+            if ifd_offset >= file_len {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: IFD offset is outside the file while probing protected provenance"
+                        .to_string(),
+                ));
+            }
+            file.seek(SeekFrom::Start(ifd_offset))?;
+            let entry_count = if big_tiff {
+                read_tiff_u64(&mut file, little_endian)?
+            } else {
+                u64::from(read_tiff_u16(&mut file, little_endian)?)
+            };
+            let table_size = entry_count
+                .checked_mul(entry_size)
+                .and_then(|size| size.checked_add(count_size))
+                .and_then(|size| size.checked_add(next_size))
+                .ok_or_else(|| {
+                    ImgQualityError::NumericError(
+                        "TIFF: IFD table size overflow while probing protected provenance"
+                            .to_string(),
+                    )
+                })?;
+            if ifd_offset
+                .checked_add(table_size)
+                .is_none_or(|end| end > file_len)
+            {
+                return Err(ImgQualityError::AnalysisError(
+                    "TIFF: truncated IFD while probing protected provenance".to_string(),
+                ));
+            }
+            for index in 0..entry_count {
+                let entry_offset = ifd_offset + count_size + index * entry_size;
+                file.seek(SeekFrom::Start(entry_offset))?;
+                if read_tiff_u16(&mut file, little_endian)? == wanted_tag {
+                    return Ok(true);
+                }
+            }
+            let next_offset = ifd_offset + count_size + entry_count * entry_size;
+            file.seek(SeekFrom::Start(next_offset))?;
+            ifd_offset = if big_tiff {
+                read_tiff_u64(&mut file, little_endian)?
+            } else {
+                u64::from(read_tiff_u32(&mut file, little_endian)?)
+            };
+        }
+        Ok(false)
+    }
 
     /// Helper to parse array values or space-separated strings as the first u64
     fn parse_first_u64(val: &Value) -> Result<u64> {

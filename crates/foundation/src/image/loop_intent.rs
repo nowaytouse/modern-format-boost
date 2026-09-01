@@ -5597,7 +5597,7 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
 ///
 /// Keeping the directory alive for the whole analysis prevents another test
 /// (or a concurrent worker changing `MFB_HOME_ROOT`) from removing the parent
-/// while FFmpeg or the consumer is still reading the frame.
+/// while `FFmpeg` or the consumer is still reading the frame.
 #[derive(Debug)]
 struct ExtractedFrame {
     _temp_dir: tempfile::TempDir,

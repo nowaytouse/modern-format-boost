@@ -241,6 +241,66 @@ fn png_has_c2pa_chunk(path: &Path) -> Result<bool> {
     }
 }
 
+const C2PA_BMFF_UUID: [u8; 16] = [
+    0xD8, 0xFE, 0xC3, 0xD6, 0x1B, 0x0E, 0x48, 0x3C, 0x92, 0x97, 0x58, 0x28, 0x87, 0x7E, 0xC4, 0x81,
+];
+
+fn isobmff_has_top_level_marker(
+    path: &Path,
+    wanted_type: [u8; 4],
+    wanted_uuid: Option<[u8; 16]>,
+) -> Result<bool> {
+    let total_len = std::fs::metadata(path)?.len();
+    let mut file = std::fs::File::open(path)?;
+    let mut pos = 0_u64;
+    while pos < total_len {
+        let remaining = total_len - pos;
+        if remaining < 8 {
+            bail!("truncated ISO BMFF box header while probing protected provenance");
+        }
+        file.seek(SeekFrom::Start(pos))?;
+        let mut header = [0_u8; 8];
+        file.read_exact(&mut header)?;
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        let box_type = [header[4], header[5], header[6], header[7]];
+        let mut header_len = 8_u64;
+        let box_len = match size32 {
+            0 => remaining,
+            1 => {
+                let mut extended = [0_u8; 8];
+                file.read_exact(&mut extended)?;
+                header_len = 16;
+                u64::from_be_bytes(extended)
+            }
+            size => u64::from(size),
+        };
+        let user_type = if box_type == *b"uuid" {
+            header_len = header_len.checked_add(16).ok_or_else(|| {
+                anyhow::anyhow!("ISO BMFF UUID header overflow while probing provenance")
+            })?;
+            let mut uuid = [0_u8; 16];
+            file.read_exact(&mut uuid)?;
+            Some(uuid)
+        } else {
+            None
+        };
+        if box_len < header_len {
+            bail!("invalid ISO BMFF box size while probing protected provenance");
+        }
+        let next = pos
+            .checked_add(box_len)
+            .filter(|next| *next <= total_len)
+            .ok_or_else(|| {
+                anyhow::anyhow!("truncated ISO BMFF box while probing protected provenance")
+            })?;
+        if box_type == wanted_type && wanted_uuid.is_none_or(|uuid| user_type == Some(uuid)) {
+            return Ok(true);
+        }
+        pos = next;
+    }
+    Ok(false)
+}
+
 fn protected_container_reason(
     path: &Path,
     format: crate::image::format_detect::FormatKind,
@@ -251,6 +311,34 @@ fn protected_container_reason(
             Ok(Some("JPEG APP11 (JPEG XT/JUMBF-capable) segment"))
         }
         FormatKind::Png if png_has_c2pa_chunk(path)? => Ok(Some("PNG caBX provenance chunk")),
+        FormatKind::Jxl
+            if is_jxl_container(path)? && isobmff_has_top_level_marker(path, *b"jumb", None)? =>
+        {
+            Ok(Some("JPEG XL JUMBF provenance-capable box"))
+        }
+        FormatKind::Avif | FormatKind::Heic | FormatKind::Heif
+            if isobmff_has_top_level_marker(path, *b"uuid", Some(C2PA_BMFF_UUID))? =>
+        {
+            Ok(Some("C2PA ISO BMFF provenance UUID box"))
+        }
+        FormatKind::WebP
+            if crate::image_formats::webp::contains_top_level_chunk(
+                &std::fs::read(path)?,
+                *b"C2PA",
+            )? =>
+        {
+            Ok(Some("WebP C2PA provenance chunk"))
+        }
+        FormatKind::Tiff if crate::image_formats::tiff_family::contains_ifd_tag(path, 0xCD41)? => {
+            Ok(Some("TIFF C2PA provenance tag"))
+        }
+        FormatKind::Gif
+            if crate::image_formats::gif::has_c2pa_application_extension(&std::fs::read(
+                path,
+            )?)? =>
+        {
+            Ok(Some("GIF C2PA provenance extension"))
+        }
         _ => Ok(None),
     }
 }
@@ -1612,9 +1700,6 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if merging fails.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
-        if Self::merge_jxl_xmp_overlay(xmp_path, media_path)? {
-            return Ok(());
-        }
         let format = crate::image::format_detect::detect_true_format(media_path).map_err(|error| {
             anyhow::anyhow!(
                 "refusing XMP merge because destination format cannot be proved for {}: {error}",
@@ -1626,6 +1711,9 @@ impl XmpMerger {
                 "refusing destructive XMP rewrite for {} because it contains a protected {reason}; media and sidecar retained so protected container structure is not invalidated or discarded",
                 media_path.display()
             );
+        }
+        if Self::merge_jxl_xmp_overlay(xmp_path, media_path)? {
+            return Ok(());
         }
         if matches!(
             format,
@@ -2653,9 +2741,17 @@ mod tests {
 
     #[test]
     fn protected_container_markers_block_generic_metadata_rewrite() {
+        use crate::image::format_detect::FormatKind;
+
         let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let jpeg = temp_dir.path().join("signed.jpg");
         let png = temp_dir.path().join("signed.png");
+        let jxl = temp_dir.path().join("signed.jxl");
+        let avif = temp_dir.path().join("signed.avif");
+        let webp = temp_dir.path().join("signed.webp");
+        let tiff = temp_dir.path().join("signed.tiff");
+        let big_tiff = temp_dir.path().join("signed-bigtiff.tiff");
+        let gif = temp_dir.path().join("signed.gif");
         fs::write(&jpeg, [0xFF, 0xD8, 0xFF, 0xEB, 0x00, 0x02, 0xFF, 0xD9])
             .unwrap_or_else(|error| panic!("JPEG fixture: {error}"));
         let mut png_bytes = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -2664,8 +2760,61 @@ mod tests {
         png_bytes.extend_from_slice(&0_u32.to_be_bytes());
         fs::write(&png, png_bytes).unwrap_or_else(|error| panic!("PNG fixture: {error}"));
 
+        let mut jxl_bytes = crate::constants::JXL_CONTAINER_MAGIC.to_vec();
+        jxl_bytes.extend_from_slice(&8_u32.to_be_bytes());
+        jxl_bytes.extend_from_slice(b"jumb");
+        fs::write(&jxl, jxl_bytes).unwrap_or_else(|error| panic!("JXL fixture: {error}"));
+
+        let mut avif_bytes = 20_u32.to_be_bytes().to_vec();
+        avif_bytes.extend_from_slice(b"ftypavif\0\0\0\0avif");
+        avif_bytes.extend_from_slice(&24_u32.to_be_bytes());
+        avif_bytes.extend_from_slice(b"uuid");
+        avif_bytes.extend_from_slice(&C2PA_BMFF_UUID);
+        fs::write(&avif, avif_bytes).unwrap_or_else(|error| panic!("AVIF fixture: {error}"));
+
+        let mut webp_bytes = b"RIFF".to_vec();
+        webp_bytes.extend_from_slice(&12_u32.to_le_bytes());
+        webp_bytes.extend_from_slice(b"WEBPC2PA\0\0\0\0");
+        fs::write(&webp, webp_bytes).unwrap_or_else(|error| panic!("WebP fixture: {error}"));
+
+        let mut tiff_bytes = b"II*\0\x08\0\0\0\x01\0".to_vec();
+        tiff_bytes.extend_from_slice(&0xCD41_u16.to_le_bytes());
+        tiff_bytes.extend_from_slice(&7_u16.to_le_bytes());
+        tiff_bytes.extend_from_slice(&0_u32.to_le_bytes());
+        tiff_bytes.extend_from_slice(&0_u32.to_le_bytes());
+        tiff_bytes.extend_from_slice(&0_u32.to_le_bytes());
+        fs::write(&tiff, tiff_bytes).unwrap_or_else(|error| panic!("TIFF fixture: {error}"));
+
+        let mut big_tiff_bytes = b"II+\0\x08\0\0\0\x10\0\0\0\0\0\0\0".to_vec();
+        big_tiff_bytes.extend_from_slice(&1_u64.to_le_bytes());
+        big_tiff_bytes.extend_from_slice(&0xCD41_u16.to_le_bytes());
+        big_tiff_bytes.extend_from_slice(&7_u16.to_le_bytes());
+        big_tiff_bytes.extend_from_slice(&0_u64.to_le_bytes());
+        big_tiff_bytes.extend_from_slice(&0_u64.to_le_bytes());
+        big_tiff_bytes.extend_from_slice(&0_u64.to_le_bytes());
+        fs::write(&big_tiff, big_tiff_bytes)
+            .unwrap_or_else(|error| panic!("BigTIFF fixture: {error}"));
+
+        fs::write(&gif, b"GIF89a\x21\xFF\x0BC2PA_GIF\x01\x00\x00")
+            .unwrap_or_else(|error| panic!("GIF fixture: {error}"));
+
         assert!(jpeg_has_protected_app11(&jpeg).unwrap_or(false));
         assert!(png_has_c2pa_chunk(&png).unwrap_or(false));
+        for (path, format) in [
+            (&jxl, FormatKind::Jxl),
+            (&avif, FormatKind::Avif),
+            (&webp, FormatKind::WebP),
+            (&tiff, FormatKind::Tiff),
+            (&big_tiff, FormatKind::Tiff),
+            (&gif, FormatKind::Gif),
+        ] {
+            assert!(
+                protected_container_reason(path, format)
+                    .unwrap_or_else(|error| panic!("protected marker probe: {error}"))
+                    .is_some(),
+                "{format:?} C2PA/JUMBF marker must block metadata rewriting"
+            );
+        }
     }
 
     #[test]

@@ -140,8 +140,12 @@ proof retains both source and sidecar. AVIF Meme Mode is deliberately outside
 this metadata-preserving writer: it strips embedded metadata and does not merge
 the sidecar into the output. JXL uses the append-only overlay contract above.
 Any JPEG APP11 segment blocks generic XMP rewrites because APP11 can carry JPEG
-XT, JUMBF, provenance, or other protected structure; a PNG `caBX` chunk blocks
-rewrites because it carries C2PA data.
+XT, JUMBF, provenance, or other protected structure. Existing C2PA manifests
+also block XMP mutation at every supported image embedding point: PNG `caBX`,
+JPEG XL `jumb`, the C2PA UUID box in AVIF/HEIF, a WebP `C2PA` RIFF chunk, TIFF
+tag 52545 (classic TIFF or BigTIFF), and the GIF `C2PA_GIF` application
+extension. Primary-image equality cannot prove that a wider cryptographic
+binding remains valid, so both media and sidecar are retained unchanged.
 
 ## `restore-jpeg` input-driven behavior
 

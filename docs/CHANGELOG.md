@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-31
+## [Unreleased] - 2026-09-01
 
 ### Archive-value and CI corrective review
 
@@ -55,6 +55,11 @@ All notable changes to this project will be documented in this file.
   auxiliary-image boxes, every non-XMP WebP chunk, and every non-XMP JP2 box
   are fingerprinted independently of mutable XMP. A changed structural
   feature fails closed instead of being accepted as a metadata-only rewrite.
+- **Embedded authenticity manifests are immutable archive data**: sidecar XMP
+  merging now detects the C2PA/JUMBF locations defined for JPEG, PNG, JPEG XL,
+  AVIF/HEIF, WebP, classic TIFF/BigTIFF, and GIF. A signed container and its
+  sidecar are retained together rather than accepting a primary-payload hash
+  as proof while silently invalidating the wider provenance signature.
 - **JPEG HDR metadata writes are now transactional and feature-aware**: normal
   JPEG XMP merges commit only after the primary image payload remains exact;
   UltraHDR also fingerprints the embedded gain-map JPEG and its rendering
@@ -94,6 +99,12 @@ All notable changes to this project will be documented in this file.
   the JXL-to-AVIF q75 pivot, workload-specific JXL effort, and the real lossless
   raster matrix. These changes were committed as `077886e0`; they were not
   introduced to make CI green.
+- **Run `33442649595` stopped at one shared Clippy root**: the IMG, VID, Shared
+  Health, and Deep Audit jobs all reached the same missing-backticks diagnostic
+  in the shared loop-intent documentation; the later `fix-gate`, `check_all`,
+  and coverage annotations were downstream. The documentation is corrected,
+  and the current local Clippy additionally modernized one fixed-width PFM test
+  iterator without changing production media behavior.
 - **The later CI-only repair is deliberately separate**: run `33291990658`
   reported one unused test binding and one Clippy `assert_is_empty` violation.
   Commit `8f1e6ae9` changes only those test assertions. `fix-gate`, `check_all`,

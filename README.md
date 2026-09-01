@@ -85,8 +85,10 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   re-encoded. If a gain map, auxiliary item, signature, unknown
   property/chunk, or codec payload cannot be preserved by the selected route,
   the original bytes and sidecar remain explicitly retained for review rather
-  than being silently discarded. JPEG APP11-bearing and PNG `caBX` inputs
-  likewise require their protected-structure proof.
+  than being silently discarded. Existing C2PA/JUMBF manifests in JPEG, PNG,
+  JPEG XL, AVIF/HEIF, WebP, TIFF/BigTIFF, and GIF are treated as immutable:
+  metadata merging retains the signed media and its sidecar instead of
+  invalidating the wider authenticity signature.
 - This is not a magic size reducer. Container metadata can make the complete
   file larger even when the media payload passes, and a high-quality candidate
   may provide no storage saving at all.
