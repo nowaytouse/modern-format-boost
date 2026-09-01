@@ -783,11 +783,11 @@ mod tests {
         );
     }
 
-    fn make_isobmff_box(box_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    fn make_isobmff_box(box_type: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let size = u32::try_from(payload.len() + 8).unwrap_or_else(|_| panic!("box too large"));
         let mut data = Vec::with_capacity(payload.len() + 8);
         data.extend_from_slice(&size.to_be_bytes());
-        data.extend_from_slice(box_type);
+        data.extend_from_slice(&box_type);
         data.extend_from_slice(payload);
         data
     }
@@ -800,14 +800,14 @@ mod tests {
         nclx.extend_from_slice(&9_u16.to_be_bytes());
         nclx.push(0x80);
 
-        let colr = make_isobmff_box(b"colr", &nclx);
-        let ipco = make_isobmff_box(b"ipco", &colr);
-        let iprp = make_isobmff_box(b"iprp", &ipco);
+        let colr = make_isobmff_box(*b"colr", &nclx);
+        let ipco = make_isobmff_box(*b"ipco", &colr);
+        let iprp = make_isobmff_box(*b"iprp", &ipco);
         let mut meta_payload = vec![0_u8; 4];
         meta_payload.extend_from_slice(&iprp);
 
-        let mut data = make_isobmff_box(b"ftyp", b"avif\0\0\0\0");
-        data.extend_from_slice(&make_isobmff_box(b"meta", &meta_payload));
+        let mut data = make_isobmff_box(*b"ftyp", b"avif\0\0\0\0");
+        data.extend_from_slice(&make_isobmff_box(*b"meta", &meta_payload));
 
         let info = color_info_from_isobmff_bytes(&data).expect("nested CICP should be detected");
         assert_eq!(info.color_primaries.as_deref(), Some("bt2020"));
