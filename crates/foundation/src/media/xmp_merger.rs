@@ -1576,6 +1576,12 @@ impl XmpMerger {
         format: crate::image::format_detect::FormatKind,
     ) -> Result<()> {
         Self::check_exiftool()?;
+        crate::metadata::validate_xmp_sidecar(xmp_path).with_context(|| {
+            format!(
+                "refusing native modern-container XMP merge with an invalid sidecar: {}",
+                xmp_path.display()
+            )
+        })?;
         let source_identity = source_file_identity(media_path)?;
         let source_hash = crate::common_utils::calculate_blake3_hash(media_path)
             .context("failed to hash modern container before XMP merge")?;
@@ -1654,6 +1660,17 @@ impl XmpMerger {
                 "native modern-container XMP merge failed archival proof; original media and sidecar retained; before={before:?}; after={after:?}"
             );
         }
+        crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+            media_path,
+            xmp_path,
+            &staged_path,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "native modern-container XMP merge failed metadata preservation proof for {}: {error}; original media and sidecar retained",
+                media_path.display()
+            )
+        })?;
         let current_hash = crate::common_utils::calculate_blake3_hash(media_path)
             .context("failed to re-hash modern container before commit")?;
         let current_identity = source_file_identity(media_path)?;
@@ -2543,13 +2560,27 @@ mod tests {
         }
         let temp_dir = TempDir::new().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let media = temp_dir.path().join("fixture.avif");
-        let xmp = temp_dir.path().join("fixture.xmp");
+        let sidecar_dir = temp_dir.path().join("sidecars");
+        fs::create_dir(&sidecar_dir)
+            .unwrap_or_else(|error| panic!("create sidecar directory: {error}"));
+        let xmp = sidecar_dir.join("fixture.xmp");
         fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/metadata_clear_baseline.avif.fixture"),
             &media,
         )
         .unwrap_or_else(|error| panic!("copy AVIF fixture: {error}"));
+        let seeded = crate::ExiftoolBuilder::new()
+            .arg("-XMP-dc:Title=existing embedded")
+            .overwrite_original()
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(
+            seeded.status.success(),
+            "failed to seed existing AVIF XMP: {}",
+            String::from_utf8_lossy(&seeded.stderr)
+        );
         fs::write(
             &xmp,
             br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">native proof</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
@@ -2574,6 +2605,19 @@ mod tests {
         assert!(
             readback.contains("native proof"),
             "native XMP value was not readable: {readback}"
+        );
+        let mut title_builder = ExiftoolBuilder::new();
+        title_builder.arg("-s3").arg("-XMP-dc:Title").input(&media);
+        let title = title_builder.build().output()?;
+        anyhow::ensure!(
+            title.status.success(),
+            "ExifTool title readback failed: {}",
+            String::from_utf8_lossy(&title.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(title.stdout)?.trim(),
+            "existing embedded",
+            "existing embedded XMP value was not preserved"
         );
 
         let idempotent_hash = crate::common_utils::calculate_blake3_hash(&media)?;

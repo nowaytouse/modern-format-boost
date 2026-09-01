@@ -34,6 +34,13 @@ pub use delivery_policy::{
     preserve_filesystem_for_delivery, preserve_for_delivery,
 };
 pub use exif::preserve_internal;
+pub(crate) fn verify_output_embedded_metadata_with_explicit_xmp(
+    src: &Path,
+    xmp: &Path,
+    dst: &Path,
+) -> io::Result<()> {
+    output_audit::verify_output_embedded_metadata_with_explicit_xmp(src, xmp, dst)
+}
 pub use output_audit::{
     MetadataOutputPolicy, OutputMetadataAudit, embedded_metadata_is_clear,
     verify_output_embedded_metadata,

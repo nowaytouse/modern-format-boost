@@ -299,6 +299,68 @@ fn preservable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
     Ok(map)
 }
 
+/// Verify a native container merge against an explicitly supplied XMP sidecar.
+///
+/// `verify_output_embedded_metadata` can discover only a sidecar adjacent to
+/// `src`; native merge callers may receive a sidecar from another controlled
+/// path. Keep that path explicit so a successful merge cannot be reported when
+/// the writer silently ignored the requested sidecar.
+///
+/// # Errors
+/// Returns an error when `ExifTool` cannot read the source, sidecar, or output, or
+/// when any source/sidecar metadata value is absent or changed in the output.
+pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
+    src: &Path,
+    xmp: &Path,
+    dst: &Path,
+) -> io::Result<()> {
+    if !crate::ExiftoolBuilder::check_available() {
+        return Err(io::Error::other(
+            "exiftool was not found or failed its runtime health check; explicit XMP audit cannot proceed",
+        ));
+    }
+
+    let mut expected = preservable_tag_map(src)?;
+    for (key, value) in preservable_tag_map(xmp)? {
+        // The native merge applies the explicit sidecar after embedded source
+        // metadata, so sidecar values are authoritative for duplicate tags.
+        expected.insert(key, value);
+    }
+    let actual = preservable_tag_map(dst)?;
+    let mismatches = preserve_source_mismatches(&expected, &actual);
+    if mismatches.is_empty() {
+        let detail = format!(
+            "Metadata Audit: explicit XMP sidecar preserved in native container merge {} + {} -> {}",
+            src.display(),
+            xmp.display(),
+            dst.display()
+        );
+        tracing::info!(
+            target: "mfb.metadata",
+            src = %src.display(),
+            xmp = %xmp.display(),
+            dst = %dst.display(),
+            "{detail}"
+        );
+        crate::log_info!(crate::infra::static_logs::messages::LABEL_METADATA, detail);
+        return Ok(());
+    }
+
+    let detail = format!(
+        "Metadata Audit: explicit XMP sidecar was not preserved in native container merge {} + {} -> {}: {}",
+        src.display(),
+        xmp.display(),
+        dst.display(),
+        mismatches.join("; ")
+    );
+    crate::media_conversion_gate::delivery_metadata_path_audit(
+        "delivery_metadata_explicit_xmp_audit",
+        dst,
+        detail.clone(),
+    );
+    Err(io::Error::other(detail))
+}
+
 fn clearable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
     metadata_tag_map(path, CLEARABLE_TAG_ARGS, "clearable")
 }
