@@ -1,6 +1,7 @@
 //! Modern Format Boost - Workspace Auditor in Rust.
 //! Checks code formatting, Cargo.toml validity, changelog versions, and runs
-//! tests. `--fix` is a local, formatter-only mode and exits before audits.
+//! tests. `--fix` is a local, formatter-only mode and exits before audits;
+//! `--ci` and `--collect-all` retain independent failures and report them once.
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
@@ -8,8 +9,12 @@ use dev::infra::hardening::read_text_file;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
+static COLLECT_FAILURES: AtomicBool = AtomicBool::new(false);
+static RECORDED_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum PackageScope {
@@ -84,8 +89,49 @@ struct Args {
     #[arg(long = "verbose", short = 'v', help = "Show tool install hints")]
     verbose: bool,
 
-    #[arg(long = "ci", help = "GitHub Actions health-check profile")]
+    #[arg(
+        long = "ci",
+        help = "GitHub Actions health-check profile; records all reachable failures before exiting"
+    )]
     ci: bool,
+
+    #[arg(
+        long = "collect-all",
+        help = "Record failures, continue with independent checks, then fail once with a summary"
+    )]
+    collect_all: bool,
+}
+
+fn recorded_failures() -> MutexGuard<'static, Vec<String>> {
+    match RECORDED_FAILURES.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn record_failure(message: impl Into<String>) {
+    let message = message.into();
+    eprintln!("FAIL: {message}");
+    if COLLECT_FAILURES.load(Ordering::Relaxed) {
+        recorded_failures().push(message);
+    } else {
+        std::process::exit(1);
+    }
+}
+
+fn finish_recorded_failures() -> Result<()> {
+    let failures = recorded_failures();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    eprintln!("\nCHECK SUMMARY: {} failure(s)", failures.len());
+    for (index, failure) in failures.iter().enumerate() {
+        eprintln!("  {}. {failure}", index + 1);
+    }
+    bail!(
+        "{} check(s) failed; complete diagnostics are available above",
+        failures.len()
+    )
 }
 
 fn default_branch() -> String {
@@ -425,12 +471,19 @@ fn run_required_vec_env(
     for (key, value) in env_vars {
         command.env(key, value);
     }
-    let status = command
-        .status()
-        .with_context(|| format!("run {program} {}", args.join(" ")))?;
+    let status = match command.status() {
+        Ok(status) => status,
+        Err(error) => {
+            record_failure(format!(
+                "{label} could not start {program} {}: {error}",
+                args.join(" ")
+            ));
+            return Ok(());
+        }
+    };
     if !status.success() {
-        eprintln!("FAIL: {label} failed with status {status}");
-        std::process::exit(1);
+        record_failure(format!("{label} failed with status {status}"));
+        return Ok(());
     }
     println!("  OK: {label}");
     Ok(())
@@ -462,16 +515,30 @@ fn run_optional_vec_env(
     for (key, value) in env_vars {
         command.env(key, value);
     }
-    let status = command
-        .status()
-        .with_context(|| format!("run {program} {}", args.join(" ")))?;
+    let status = match command.status() {
+        Ok(status) => status,
+        Err(error) => {
+            if hard_fail {
+                record_failure(format!(
+                    "{label} could not start {program} {}: {error}",
+                    args.join(" ")
+                ));
+            } else {
+                println!(
+                    "  Warning: {label} could not start {program} {}: {error}",
+                    args.join(" ")
+                );
+            }
+            return Ok(());
+        }
+    };
     if status.success() {
         println!("  OK: {label}");
         return Ok(());
     }
     if hard_fail {
-        eprintln!("FAIL: {label} failed with status {status}");
-        std::process::exit(1);
+        record_failure(format!("{label} failed with status {status}"));
+        return Ok(());
     }
     println!("  Warning: {label} failed with status {status}");
     Ok(())
@@ -619,11 +686,12 @@ fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Re
             println!("  OK: Info.plist and app wrapper matching");
             return Ok(());
         }
-        for error in &errors {
-            eprintln!("FAIL: {error}");
-        }
         if hard_fail {
-            std::process::exit(1);
+            record_failure(format!("macOS App bundle metadata: {}", errors.join("; ")));
+        } else {
+            for error in &errors {
+                println!("  Warning: {error}");
+            }
         }
         Ok(())
     }
@@ -689,6 +757,7 @@ fn cargo_test_args(package: PackageScope) -> Vec<String> {
     if package == PackageScope::Workspace {
         args.push("--all-features".to_string());
     }
+    args.push("--no-fail-fast".to_string());
     // Media tests invoke external codecs and several contract tests use
     // process-wide environment guards.  Keep every check_all profile
     // deterministic; parallel test binaries can otherwise race on PATH and
@@ -854,6 +923,9 @@ fn run_ci_health_rust_tests(repo_root: &Path) -> Result<()> {
 fn main() -> Result<()> {
     bootstrap_macos_path();
     let args = Args::parse();
+    let hard_fail = args.ci || args.collect_all;
+    COLLECT_FAILURES.store(hard_fail, Ordering::Relaxed);
+    recorded_failures().clear();
     if args.ci && args.package != PackageScope::Workspace {
         bail!("--package is a local profile and cannot be combined with --ci");
     }
@@ -973,12 +1045,10 @@ fn main() -> Result<()> {
         Ok(out) => {
             let current_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !args.allow_non_nightly && current_branch != args.branch {
-                eprintln!(
-                    "Fatal: required branch '{}', current is '{}'. Use --allow-non-nightly or \
-                     --branch <n>.",
+                record_failure(format!(
+                    "required branch '{}', current is '{}'. Use --allow-non-nightly or --branch <n>",
                     args.branch, current_branch
-                );
-                std::process::exit(2);
+                ));
             }
         }
         Err(err) => {
@@ -993,14 +1063,14 @@ fn main() -> Result<()> {
         .status()
         .context("run cargo fmt")?;
     if !fmt_status.success() {
-        eprintln!(
-            "FAIL: cargo fmt check failed.\n\
+        record_failure(
+            "cargo fmt check failed.\n\
              Hint: To format all workspace languages (Rust, Python, Shell, JS/TS, SQL, TOML, JSON, YAML, Markdown, Plist), run:\n\
-             cargo run --locked -p dev --bin check_all -- --fix"
+             cargo run --locked -p dev --bin check_all -- --fix",
         );
-        std::process::exit(1);
+    } else {
+        println!("  OK: formatting matches");
     }
-    println!("  OK: formatting matches");
 
     if !args.required_only {
         if let Some(cmd) = taplo_fmt_command(&toml_files, &["--check"]) {
@@ -1011,15 +1081,15 @@ fn main() -> Result<()> {
                     .status()
                     .context("run taplo fmt --check")?;
                 if !taplo_status.success() {
-                    eprintln!(
-                        "FAIL: taplo fmt check failed.\n\
+                    record_failure(
+                        "taplo fmt check failed.\n\
                          Hint: To format all workspace languages, run:\n\
-                         cargo run --locked -p dev --bin check_all -- --fix"
+                         cargo run --locked -p dev --bin check_all -- --fix",
                     );
-                    std::process::exit(1);
+                } else {
+                    println!("  OK: TOML formatting matches");
                 }
             }
-            println!("  OK: TOML formatting matches");
         } else if args.verbose {
             println!("  Skipped: neither 'cargo taplo' nor 'taplo' found");
         }
@@ -1033,19 +1103,15 @@ fn main() -> Result<()> {
         .status()
         .context("run cargo check")?;
     if !check_status.success() {
-        eprintln!("FAIL: cargo check failed.");
-        std::process::exit(1);
+        record_failure("cargo check failed");
+    } else {
+        println!("  OK: compiles cleanly");
     }
-    println!("  OK: compiles cleanly");
 
     // 5. CHANGELOG version sync
     println!("Checking CHANGELOG version synchronization...");
     let cargo_toml_path = repo_root.join("Cargo.toml");
     let changelog_path = repo_root.join("docs").join("CHANGELOG.md");
-    if !changelog_path.is_file() {
-        eprintln!("FAIL: docs/CHANGELOG.md missing");
-        std::process::exit(1);
-    }
     let cargo_content = fs::read_to_string(&cargo_toml_path).context("read Cargo.toml")?;
     let version_line = cargo_content
         .lines()
@@ -1063,6 +1129,8 @@ fn main() -> Result<()> {
     };
     if version.is_empty() {
         println!("  Skipped: could not find workspace version in Cargo.toml");
+    } else if !changelog_path.is_file() {
+        record_failure("docs/CHANGELOG.md missing");
     } else {
         let changelog_content = fs::read_to_string(&changelog_path).context("read CHANGELOG.md")?;
         let expected_header = format!("[v{version}]");
@@ -1072,8 +1140,9 @@ fn main() -> Result<()> {
         {
             println!("  OK: version {version} is documented in CHANGELOG");
         } else {
-            eprintln!("FAIL: version '{version}' not found as a header in docs/CHANGELOG.md");
-            std::process::exit(1);
+            record_failure(format!(
+                "version '{version}' not found as a header in docs/CHANGELOG.md"
+            ));
         }
     }
 
@@ -1123,10 +1192,10 @@ fn main() -> Result<()> {
             .status()
             .context("run cargo test")?;
         if !test_status.success() {
-            eprintln!("FAIL: cargo test failed.");
-            std::process::exit(1);
+            record_failure("cargo test failed");
+        } else {
+            println!("  OK: all tests passed");
         }
-        println!("  OK: all tests passed");
     }
 
     // 8b. DB sentinel backfill SSOT check retained from the Python auditor.
@@ -1143,7 +1212,7 @@ fn main() -> Result<()> {
                 "cargo fmt --check (unstable options)",
                 "cargo",
                 &["fmt", "--all", "--check"],
-                args.ci,
+                hard_fail,
             )?;
         } else {
             println!("  Skipped: nightly rustfmt (unstable options)");
@@ -1175,7 +1244,7 @@ fn main() -> Result<()> {
         if !py_files.is_empty() && command_exists("ruff") {
             let mut ruff_check = vec!["check".to_string()];
             ruff_check.extend(py_files.iter().cloned());
-            run_optional_vec(&repo_root, "ruff linter", "ruff", &ruff_check, args.ci)?;
+            run_optional_vec(&repo_root, "ruff linter", "ruff", &ruff_check, hard_fail)?;
             let mut ruff_format = vec!["format".to_string(), "--check".to_string()];
             ruff_format.extend(py_files.iter().cloned());
             run_optional_vec(
@@ -1183,7 +1252,7 @@ fn main() -> Result<()> {
                 "ruff format check",
                 "ruff",
                 &ruff_format,
-                args.ci,
+                hard_fail,
             )?;
         } else if py_files.is_empty() {
             println!("  Skipped: python quality (no scripts)");
@@ -1194,16 +1263,22 @@ fn main() -> Result<()> {
             if command_exists("shellcheck") {
                 let mut shellcheck = vec!["--severity=error".to_string()];
                 shellcheck.extend(shell_files.iter().cloned());
-                run_optional_vec(&repo_root, "shellcheck", "shellcheck", &shellcheck, args.ci)?;
+                run_optional_vec(
+                    &repo_root,
+                    "shellcheck",
+                    "shellcheck",
+                    &shellcheck,
+                    hard_fail,
+                )?;
             }
             if command_exists("shfmt") {
                 let mut shfmt = vec!["-d".to_string(), "-i".to_string(), "4".to_string()];
                 shfmt.extend(shell_files.iter().cloned());
-                run_optional_vec(&repo_root, "shfmt layout check", "shfmt", &shfmt, args.ci)?;
+                run_optional_vec(&repo_root, "shfmt layout check", "shfmt", &shfmt, hard_fail)?;
             }
         }
 
-        check_bundle_metadata(&repo_root, &version, args.ci)?;
+        check_bundle_metadata(&repo_root, &version, hard_fail)?;
 
         if !md_files.is_empty() && command_exists("markdownlint-cli2") {
             let config_path = repo_root
@@ -1217,7 +1292,7 @@ fn main() -> Result<()> {
                 "markdownlint",
                 "markdownlint-cli2",
                 &markdownlint,
-                args.ci,
+                hard_fail,
             )?;
         }
 
@@ -1227,11 +1302,17 @@ fn main() -> Result<()> {
         if !prettier_targets.is_empty() && command_exists("prettier") {
             let mut prettier = vec!["--check".to_string()];
             prettier.extend(prettier_targets);
-            run_optional_vec(&repo_root, "prettier check", "prettier", &prettier, args.ci)?;
+            run_optional_vec(
+                &repo_root,
+                "prettier check",
+                "prettier",
+                &prettier,
+                hard_fail,
+            )?;
         }
 
         if let Some(cmd) = taplo_fmt_command(&toml_files, &["--check"]) {
-            run_argv_optional(&repo_root, "taplo fmt check", &cmd, args.ci)?;
+            run_argv_optional(&repo_root, "taplo fmt check", &cmd, hard_fail)?;
         }
 
         if !args.ci {
@@ -1292,7 +1373,7 @@ fn main() -> Result<()> {
             ),
         ] {
             if cargo_subcommand_exists(sub) {
-                run_optional_vec(&repo_root, label, "cargo", &args_list, args.ci)?;
+                run_optional_vec(&repo_root, label, "cargo", &args_list, hard_fail)?;
             }
         }
 
@@ -1319,7 +1400,7 @@ fn main() -> Result<()> {
                 &format!("cargo bench --no-run (compile check, {bench_files} bench file(s))"),
                 "cargo",
                 &bench_args.iter().map(String::as_str).collect::<Vec<_>>(),
-                args.ci,
+                hard_fail,
             )?;
         } else {
             println!("  Skipped: bench compile check (no bench targets found)");
@@ -1332,7 +1413,7 @@ fn main() -> Result<()> {
                     "cargo bloat",
                     "cargo",
                     &["bloat", "--release", "--crates", "-n", "10"],
-                    args.ci,
+                    hard_fail,
                 )?;
             }
             if cargo_subcommand_exists("hack") {
@@ -1352,7 +1433,7 @@ fn main() -> Result<()> {
                     "cargo hack feature matrix",
                     "cargo",
                     &hack_args.iter().map(String::as_str).collect::<Vec<_>>(),
-                    args.ci,
+                    hard_fail,
                 )?;
             }
         }
@@ -1375,7 +1456,7 @@ fn main() -> Result<()> {
                         "--print",
                         "Check codebase for unneeded comments and AI smells.",
                     ],
-                    args.ci,
+                    hard_fail,
                 )?;
             } else {
                 println!("  Skipped: neither 'claude' nor 'gemini' CLI found");
@@ -1412,10 +1493,10 @@ fn main() -> Result<()> {
                 .status()
                 .context("run cargo miri")?;
             if !status.success() {
-                eprintln!("FAIL: Miri tests failed.");
-                std::process::exit(1);
+                record_failure("Miri tests failed");
+            } else {
+                println!("  OK: Miri tests passed");
             }
-            println!("  OK: Miri tests passed");
         }
     }
 
@@ -1463,10 +1544,10 @@ fn main() -> Result<()> {
                 .status()
                 .context("run AddressSanitizer")?;
             if !status.success() {
-                eprintln!("FAIL: AddressSanitizer tests failed.");
-                std::process::exit(1);
+                record_failure("AddressSanitizer tests failed");
+            } else {
+                println!("  OK: AddressSanitizer passed");
             }
-            println!("  OK: AddressSanitizer passed");
         }
     }
 
@@ -1488,10 +1569,10 @@ fn main() -> Result<()> {
                 .status()
                 .context("run cargo mutants")?;
             if !status.success() {
-                eprintln!("FAIL: Mutants test failed.");
-                std::process::exit(1);
+                record_failure("Mutants test failed");
+            } else {
+                println!("  OK: cargo-mutants passed");
             }
-            println!("  OK: cargo-mutants passed");
         } else {
             println!("  Skipped: cargo-mutants not installed");
         }
@@ -1518,14 +1599,15 @@ fn main() -> Result<()> {
                     "crates/dev/fuzz".to_string(),
                 ])
                 .output()?;
-            if !out.status.success() {
-                eprintln!("FAIL: cargo fuzz list failed.");
-                std::process::exit(1);
+            let fuzz_list_ok = out.status.success();
+            if !fuzz_list_ok {
+                record_failure("cargo fuzz list failed");
             }
             print!("{}", String::from_utf8_lossy(&out.stdout));
             if args.fuzz_smoke {
                 println!("Running fuzz smoke tests...");
                 let targets = String::from_utf8_lossy(&out.stdout);
+                let mut fuzz_smoke_ok = fuzz_list_ok;
                 for target in targets.lines() {
                     let target = target.trim();
                     if target.is_empty() {
@@ -1545,32 +1627,34 @@ fn main() -> Result<()> {
                         ])
                         .status()?;
                     if !st.success() {
-                        eprintln!("FAIL: fuzz target {target} failed.");
-                        std::process::exit(1);
+                        record_failure(format!("fuzz target {target} failed"));
+                        fuzz_smoke_ok = false;
                     }
                 }
-                println!("  OK: Fuzz smoke tests passed");
-            } else {
+                if fuzz_smoke_ok {
+                    println!("  OK: Fuzz smoke tests passed");
+                }
+            } else if fuzz_list_ok {
                 println!("  OK: fuzz target discovery passed");
             }
         } else {
             if args.ci {
-                eprintln!(
-                    "FAIL: cargo fuzz availability missing: {}",
+                record_failure(format!(
+                    "cargo fuzz availability missing: {}",
                     missing.join(", ")
-                );
-                std::process::exit(1);
+                ));
+            } else {
+                println!("  Skipped: cargo fuzz (missing: {})", missing.join(", "));
             }
-            println!("  Skipped: cargo fuzz (missing: {})", missing.join(", "));
         }
     }
 
     // 13. CI Health Coverage
     if args.ci && !args.no_expensive {
         println!("Running CI Health Coverage (cargo llvm-cov)...");
-        if !cargo_subcommand_exists("llvm-cov") {
-            eprintln!("FAIL: cargo-llvm-cov is required for --ci");
-            std::process::exit(1);
+        let llvm_cov_available = cargo_subcommand_exists("llvm-cov");
+        if !llvm_cov_available {
+            record_failure("cargo-llvm-cov is required for --ci");
         }
         if !nc.llvm_tools {
             let channel = rust_toolchain_channel_for_probe(&repo_root);
@@ -1585,53 +1669,54 @@ fn main() -> Result<()> {
                 .status()
                 .context("run rustup component add llvm-tools")?;
             if !status.success() {
-                eprintln!("FAIL: rustup component add llvm-tools failed.");
-                std::process::exit(1);
+                record_failure("rustup component add llvm-tools failed");
             }
         }
-        let status = Command::new("cargo")
-            .args([
-                "llvm-cov",
-                "-p",
-                "foundation",
-                "--lib",
-                "--all-features",
-                "--features",
-                "foundation/ci-static-build",
-                "--no-fail-fast",
-                "--summary-only",
-            ])
-            .status()
-            .context("run cargo llvm-cov summary")?;
-        if !status.success() {
-            eprintln!("FAIL: cargo llvm-cov summary failed.");
-            std::process::exit(1);
+        if llvm_cov_available {
+            let summary_status = Command::new("cargo")
+                .args([
+                    "llvm-cov",
+                    "-p",
+                    "foundation",
+                    "--lib",
+                    "--all-features",
+                    "--features",
+                    "foundation/ci-static-build",
+                    "--no-fail-fast",
+                    "--summary-only",
+                ])
+                .status()
+                .context("run cargo llvm-cov summary")?;
+            if !summary_status.success() {
+                record_failure("cargo llvm-cov summary failed");
+            }
+            let lcov_status = Command::new("cargo")
+                .args([
+                    "llvm-cov",
+                    "-p",
+                    "foundation",
+                    "--lib",
+                    "--all-features",
+                    "--features",
+                    "foundation/ci-static-build",
+                    "--no-fail-fast",
+                    "--lcov",
+                    "--output-path",
+                    "lcov.info",
+                ])
+                .status()
+                .context("run cargo llvm-cov")?;
+            if !lcov_status.success() {
+                record_failure("cargo llvm-cov failed");
+            }
+            let lcov_exists = repo_root.join("lcov.info").is_file();
+            if !lcov_exists {
+                record_failure("lcov.info artifact missing after run");
+            }
+            if summary_status.success() && lcov_status.success() && lcov_exists {
+                println!("  OK: coverage passed and lcov.info generated");
+            }
         }
-        let status = Command::new("cargo")
-            .args([
-                "llvm-cov",
-                "-p",
-                "foundation",
-                "--lib",
-                "--all-features",
-                "--features",
-                "foundation/ci-static-build",
-                "--no-fail-fast",
-                "--lcov",
-                "--output-path",
-                "lcov.info",
-            ])
-            .status()
-            .context("run cargo llvm-cov")?;
-        if !status.success() {
-            eprintln!("FAIL: cargo llvm-cov failed.");
-            std::process::exit(1);
-        }
-        if !repo_root.join("lcov.info").exists() {
-            eprintln!("FAIL: lcov.info artifact missing after run.");
-            std::process::exit(1);
-        }
-        println!("  OK: coverage passed and lcov.info generated");
 
         println!("Running CI Rustdoc Health Check...");
         let doc_status = Command::new("cargo")
@@ -1640,12 +1725,13 @@ fn main() -> Result<()> {
             .status()
             .context("run cargo doc")?;
         if !doc_status.success() {
-            eprintln!("FAIL: cargo doc check failed.");
-            std::process::exit(1);
+            record_failure("cargo doc check failed");
+        } else {
+            println!("  OK: rustdoc check passed");
         }
-        println!("  OK: rustdoc check passed");
     }
 
+    finish_recorded_failures()?;
     println!("\nALL AUDITS PASSED SUCCESSFULLY");
     Ok(())
 }
@@ -1653,6 +1739,27 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_mode_records_every_failure_before_reporting() {
+        COLLECT_FAILURES.store(true, Ordering::Relaxed);
+        recorded_failures().clear();
+
+        record_failure("first independent check");
+        record_failure("second independent check");
+
+        let failures = recorded_failures();
+        assert_eq!(
+            failures.as_slice(),
+            ["first independent check", "second independent check"]
+        );
+        drop(failures);
+        let error = finish_recorded_failures().expect_err("collected failures must fail the gate");
+        assert!(error.to_string().contains("2 check(s) failed"));
+
+        recorded_failures().clear();
+        COLLECT_FAILURES.store(false, Ordering::Relaxed);
+    }
 
     #[test]
     fn test_parse_plist_string_key() {
@@ -1793,6 +1900,7 @@ mod tests {
             assert!(test.contains(&format!("-p {name}")));
             assert!(!test.contains("--workspace"));
             assert!(!test.contains("--all-features"));
+            assert!(test.contains("--no-fail-fast"));
             assert!(test.contains("--test-threads=1"));
         }
     }
@@ -1802,6 +1910,7 @@ mod tests {
         let test = cargo_test_args(PackageScope::Workspace).join(" ");
         assert!(test.contains("--workspace"));
         assert!(test.contains("--all-features"));
+        assert!(test.contains("--no-fail-fast"));
         assert!(test.contains("--test-threads=1"));
     }
 

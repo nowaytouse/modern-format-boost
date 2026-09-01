@@ -27,7 +27,8 @@ env:
   HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
 
 jobs:
-  # ── Blocking pipeline: each job needs the previous; first failure stops the chain ──
+  # Prerequisites fail closed; independent quality checks collect every reachable
+  # failure and report one aggregate result at the end of their job.
 
   validation:
     name: "1 · Configuration & Workflow Validation"
@@ -370,13 +371,37 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.package }}-
 
       - name: Check ${{ matrix.package }} compilation
+        id: package_check
+        continue-on-error: true
         run: cargo check --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build
 
       - name: Check ${{ matrix.package }} clippy
+        id: package_clippy
+        continue-on-error: true
         run: cargo clippy --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build -- -D warnings
 
       - name: Test ${{ matrix.package }}
-        run: cargo test --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build -- --test-threads=1
+        id: package_test
+        continue-on-error: true
+        run: cargo test --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build --no-fail-fast -- --test-threads=1
+
+      - name: Check ${{ matrix.package }} quality outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.package_check.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} cargo check failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.package_clippy.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} clippy failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.package_test.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} tests failed"
+            exit_code=1
+          fi
+          exit $exit_code
 
   health-check:
     name: "2c · Shared Repository Health Check"
@@ -504,14 +529,16 @@ jobs:
       - name: Install check_all CI tools (llvm-cov, hack, bloat, fuzz)
         run: cargo install cargo-llvm-cov cargo-hack cargo-bloat cargo-fuzz --locked
 
-      - name: Repository health (check_all --ci, fail-fast)
+      - name: Repository health (check_all --ci, collect all)
         id: check_all
         continue-on-error: true
         run: |
           # SSOT: fmt, clippy_strict, check, CI tests, contract registry,
           # rustdoc -D warnings, llvm-cov LCOV, cargo fuzz smoke, cargo hack
           # feature matrix, cargo bloat — see check_all --ci
-          # Exits on first required/optional failure (--ci sets Tracker.fail_fast).
+          # Records every reachable required/optional failure, then exits once
+          # with a numbered summary. Coverage and rustdoc still run after an
+          # earlier independent failure.
           cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke
 
       - name: Verify LCOV artifact (fail-closed)
@@ -540,7 +567,7 @@ jobs:
             exit_code=1
           fi
           if [ "${{ steps.check_all.outcome }}" = "failure" ]; then
-              echo "::error::check_all failed"
+            echo "::error::check_all failed"
             exit_code=1
           fi
           if [ "${{ steps.verify_lcov.outcome }}" = "failure" ]; then
@@ -664,4 +691,4 @@ jobs:
           # --build: 验证 Release 编译
           # --fuzz-smoke: 验证并短跑所有 Fuzz 目标
           # (不传 --no-expensive 默认开启 cargo hack feature matrix)
-          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --build --fuzz-smoke
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --collect-all --build --fuzz-smoke
