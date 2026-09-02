@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "blake3"
 version = "1.8.7"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#f3149ec5bb5449af877ba20377a11008ff499fa2"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#5a1edfd7abb5c3ce65070a851dff4f276a619cae"
 dependencies = [
  "arrayvec",
  "cc",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
+source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
+source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.4"
-source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
+source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#6982fb1c98c7247e38a6d4f04191b94e30497e7b"
+source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
 
 [[package]]
 name = "cmake"
@@ -1321,7 +1321,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "jpegxl-rs"
 version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
+source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
 dependencies = [
  "bon",
  "byteorder",
@@ -1333,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
+source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
 dependencies = [
  "cmake",
 ]
@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#dac57e1f4bab6dae4a91a0d82ba66e46bd62731b"
+source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -1605,9 +1605,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.21"
+version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7955dfc218a8afb29dfeffd540e3a6e96baeb94fe7138228dd7cc6937fbbf96"
+checksum = "8d8f1ea3f21fd3405dcaf6c9b5c1630af9afc422d9073ea39c5f6d6c772e08ed"
 dependencies = [
  "libc",
 ]
@@ -2702,9 +2702,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "socket2"
@@ -3349,7 +3349,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "which"
 version = "8.0.6"
-source = "git+https://github.com/harryfei/which-rs#17fde4abb85f24d39954b012067c14f9f809ed27"
+source = "git+https://github.com/harryfei/which-rs#8e84cb67761b6e19d2cfa512c5d55cbe5fd9e8bc"
 dependencies = [
  "libc",
 ]
@@ -3624,7 +3624,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#eb56b4a0f19d17d11bdf88198dcb75e9f40419ed"
+source = "git+https://github.com/google/zerocopy#6249aa769b0157ec2af0390fcdc49b8d8fb33e10"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3632,7 +3632,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#eb56b4a0f19d17d11bdf88198dcb75e9f40419ed"
+source = "git+https://github.com/google/zerocopy#6249aa769b0157ec2af0390fcdc49b8d8fb33e10"
 dependencies = [
  "proc-macro2",
  "quote",
