@@ -562,7 +562,7 @@ impl AnalysisCache {
                 )?;
             }
             Some(existing) if existing != CACHE_SCHEMA_VERSION => {
-                Self::reset_cache_for_schema_cutover(client, existing)?;
+                Self::reset_cache_for_schema_cutover(client, existing, schema_sql)?;
             }
             Some(_) => {}
         }
@@ -574,6 +574,7 @@ impl AnalysisCache {
     fn reset_cache_for_schema_cutover(
         client: &mut Client,
         previous_schema_version: i32,
+        schema_sql: &str,
     ) -> Result<()> {
         crate::media_conversion_gate::analysis_cache_lifecycle_batch_audit(
             "analysis_cache_schema_cutover_purge",
@@ -584,9 +585,13 @@ impl AnalysisCache {
         );
         client
             .batch_execute(
-                "TRUNCATE TABLE path_index, analysis_records, quality_records, video_records",
+                "DROP TABLE IF EXISTS path_index, analysis_records, quality_records, \
+                 video_records CASCADE",
             )
-            .context("Failed to clear old cache tables during schema cutover")?;
+            .context("Failed to drop old cache tables during schema cutover")?;
+        client
+            .batch_execute(schema_sql)
+            .context("Failed to recreate cache tables during schema cutover")?;
         client.execute(
             "UPDATE cache_metadata SET value = $1 WHERE key = 'schema_version'",
             &[&CACHE_SCHEMA_VERSION],
@@ -708,9 +713,7 @@ impl AnalysisCache {
                 let data: Vec<u8> = row.get(0);
                 // Honest validation: If checksum is missing or invalid, treat as cache miss
                 // (None)
-                let stored_checksum_opt = row.get::<_, Option<i64>>(2);
-                let valid_checksum = stored_checksum_opt
-                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "cache_checksum"));
+                let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(2));
 
                 let Some(checksum) = valid_checksum else {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -728,7 +731,7 @@ impl AnalysisCache {
                     return Ok(None);
                 };
 
-                if calculate_checksum(&data) != checksum {
+                if calculate_checksum(&data).as_bytes() != &checksum {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
                         "analysis_cache_checksum_mismatch",
                         path,
@@ -808,9 +811,7 @@ impl AnalysisCache {
                 return Ok(None);
             }
             let data: Vec<u8> = row.get(0);
-            let stored_checksum_opt = row.get::<_, Option<i64>>(2);
-            let valid_checksum = stored_checksum_opt
-                .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "cache_checksum"));
+            let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(2));
 
             let Some(checksum) = valid_checksum else {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -828,7 +829,7 @@ impl AnalysisCache {
                 return Ok(None);
             };
 
-            if calculate_checksum(&data) != checksum {
+            if calculate_checksum(&data).as_bytes() != &checksum {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
                     "analysis_cache_checksum_mismatch",
                     path,
@@ -962,9 +963,7 @@ impl AnalysisCache {
                 }
 
                 let data: Vec<u8> = row.get(0);
-                let stored_checksum_opt = row.get::<_, Option<i64>>(1);
-                let valid_checksum = stored_checksum_opt
-                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "quality_checksum"));
+                let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(1));
 
                 let Some(checksum) = valid_checksum else {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -982,7 +981,7 @@ impl AnalysisCache {
                     return Ok(None);
                 };
 
-                if calculate_checksum(&data) != checksum {
+                if calculate_checksum(&data).as_bytes() != &checksum {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
                         "analysis_cache_checksum_mismatch",
                         path,
@@ -1065,9 +1064,7 @@ impl AnalysisCache {
                 return Ok(None);
             }
             let data: Vec<u8> = row.get(0);
-            let stored_checksum_opt = row.get::<_, Option<i64>>(1);
-            let valid_checksum = stored_checksum_opt
-                .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "quality_checksum"));
+            let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(1));
 
             let Some(checksum) = valid_checksum else {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -1085,7 +1082,7 @@ impl AnalysisCache {
                 return Ok(None);
             };
 
-            if calculate_checksum(&data) != checksum {
+            if calculate_checksum(&data).as_bytes() != &checksum {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
                     "analysis_cache_checksum_mismatch",
                     path,
@@ -1198,7 +1195,7 @@ impl AnalysisCache {
                 &now,
                 &cache_algorithm(),
                 &content_fingerprint.as_slice(),
-                &(i64::from(checksum)),
+                &checksum.as_bytes().as_slice(),
             ],
         )?;
         tx.execute(
@@ -1266,7 +1263,7 @@ impl AnalysisCache {
                 &now,
                 &cache_algorithm(),
                 &content_fingerprint.as_slice(),
-                &(i64::from(checksum)),
+                &checksum.as_bytes().as_slice(),
             ],
         )?;
         tx.execute(
@@ -1354,9 +1351,7 @@ impl AnalysisCache {
                 }
 
                 let data: Vec<u8> = row.get(0);
-                let stored_checksum_opt = row.get::<_, Option<i64>>(1);
-                let valid_checksum = stored_checksum_opt
-                    .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "video_checksum"));
+                let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(1));
 
                 let Some(checksum) = valid_checksum else {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -1374,7 +1369,7 @@ impl AnalysisCache {
                     return Ok(None);
                 };
 
-                if calculate_checksum(&data) != checksum {
+                if calculate_checksum(&data).as_bytes() != &checksum {
                     crate::media_conversion_gate::analysis_cache_invalidate_audit(
                         "analysis_cache_checksum_mismatch",
                         path,
@@ -1450,9 +1445,7 @@ impl AnalysisCache {
                 return Ok(None);
             }
             let data: Vec<u8> = row.get(0);
-            let stored_checksum_opt = row.get::<_, Option<i64>>(1);
-            let valid_checksum = stored_checksum_opt
-                .and_then(|cs| crate::numeric_cast::i64_to_u32_strict(cs, "video_checksum"));
+            let valid_checksum = parse_stored_checksum(row.get::<_, Option<Vec<u8>>>(1));
 
             let Some(checksum) = valid_checksum else {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
@@ -1470,7 +1463,7 @@ impl AnalysisCache {
                 return Ok(None);
             };
 
-            if calculate_checksum(&data) != checksum {
+            if calculate_checksum(&data).as_bytes() != &checksum {
                 crate::media_conversion_gate::analysis_cache_invalidate_audit(
                     "analysis_cache_checksum_mismatch",
                     path,
@@ -1576,7 +1569,7 @@ impl AnalysisCache {
                 &now,
                 &cache_algorithm(),
                 &content_fingerprint.as_slice(),
-                &(i64::from(checksum)),
+                &checksum.as_bytes().as_slice(),
             ],
         )?;
         tx.execute(
@@ -1749,11 +1742,13 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     Ok(*hasher.finalize().as_bytes())
 }
 
-/// Calculates a CRC32 checksum for data integrity verification.
-fn calculate_checksum(data: &[u8]) -> u32 {
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(data);
-    hasher.finalize()
+fn parse_stored_checksum(checksum: Option<Vec<u8>>) -> Option<[u8; blake3::OUT_LEN]> {
+    checksum?.try_into().ok()
+}
+
+/// Calculates the full BLAKE3 digest for cached payload integrity.
+fn calculate_checksum(data: &[u8]) -> blake3::Hash {
+    blake3::hash(data)
 }
 
 #[cfg(test)]
@@ -1803,6 +1798,11 @@ mod tests {
         let c2 = calculate_checksum(data);
         assert_eq!(c1, c2);
         assert_ne!(c1, calculate_checksum(b"hello world!"));
+        assert_eq!(
+            parse_stored_checksum(Some(c1.as_bytes().to_vec())),
+            Some(*c1.as_bytes())
+        );
+        assert!(parse_stored_checksum(Some(vec![0; 31])).is_none());
     }
 
     #[test]

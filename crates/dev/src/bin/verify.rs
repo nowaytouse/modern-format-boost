@@ -75,7 +75,7 @@ struct Args {
     strategy: String,
 }
 
-fn file_content_hash(path: &Path, chunk_size: usize) -> (Option<String>, Option<String>) {
+fn file_content_blake3(path: &Path, chunk_size: usize) -> (Option<String>, Option<String>) {
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => return (None, Some(e.to_string())),
@@ -86,12 +86,7 @@ fn file_content_hash(path: &Path, chunk_size: usize) -> (Option<String>, Option<
         Err(e) => return (None, Some(e.to_string())),
     };
     buf.truncate(n);
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&buf);
-    let hash_result = hasher.finalize();
-    let hex: String = hash_result.iter().map(|b| format!("{b:02x}")).collect();
-    (Some(hex), None)
+    (Some(blake3::hash(&buf).to_hex().to_string()), None)
 }
 
 fn collect_media_files(
@@ -1853,7 +1848,7 @@ fn run_integrity_check(
         for (key, paths) in &src_collisions {
             let mut hash_results = Vec::new();
             for p in paths {
-                hash_results.push(file_content_hash(p, 65536));
+                hash_results.push(file_content_blake3(p, 65536));
             }
             let unique_hashes: HashSet<String> =
                 hash_results.iter().filter_map(|(h, _)| h.clone()).collect();
@@ -1869,7 +1864,7 @@ fn run_integrity_check(
             for (p, (digest, err)) in paths.iter().zip(hash_results.iter()) {
                 if let Some(d) = digest {
                     report.push_str(&format!(
-                        "    - {}  [sha256:{d}]\n",
+                        "    - {}  [blake3:{d}]\n",
                         p.strip_prefix(source_dir)?.display()
                     ));
                 } else if let Some(e) = err {
@@ -1888,7 +1883,7 @@ fn run_integrity_check(
         for (key, paths) in &opt_collisions {
             let mut hash_results = Vec::new();
             for p in paths {
-                hash_results.push(file_content_hash(p, 65536));
+                hash_results.push(file_content_blake3(p, 65536));
             }
             let unique_hashes: HashSet<String> =
                 hash_results.iter().filter_map(|(h, _)| h.clone()).collect();
@@ -1904,7 +1899,7 @@ fn run_integrity_check(
             for (p, (digest, err)) in paths.iter().zip(hash_results.iter()) {
                 if let Some(d) = digest {
                     report.push_str(&format!(
-                        "    - {}  [sha256:{d}]\n",
+                        "    - {}  [blake3:{d}]\n",
                         p.strip_prefix(optimized_dir)?.display()
                     ));
                 } else if let Some(e) = err {
@@ -2747,6 +2742,15 @@ mod tests {
         assert_eq!(format_size(1024), "1.0 KB");
         assert_eq!(format_size(1024 * 1024), "1.0 MB");
         assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn duplicate_fingerprint_uses_blake3_over_the_requested_prefix() {
+        let temp = tempfile::NamedTempFile::new().expect("temp file");
+        fs::write(temp.path(), b"abcdef").expect("write test payload");
+        let (digest, error) = file_content_blake3(temp.path(), 3);
+        assert_eq!(digest, Some(blake3::hash(b"abc").to_hex().to_string()));
+        assert!(error.is_none());
     }
 
     #[test]

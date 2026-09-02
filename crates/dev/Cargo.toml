@@ -35,7 +35,6 @@ walkdir = { workspace = true }
 proptest = { workspace = true }
 insta = { workspace = true }
 serial_test = ">= 3.0"
-sha2 = ">= 0.10"
 rayon = { workspace = true }
 jxl-oxide = { git = "https://github.com/tirr-c/jxl-oxide.git", version = ">= 0.12" }
 

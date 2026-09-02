@@ -234,11 +234,14 @@ impl CheckpointHeader {
     }
 
     fn is_compatible_with(&self, expected: &Self) -> bool {
+        // Cache v5 changes database integrity tags only; v4 checkpoint entries
+        // retain the same format and validation semantics.
         self.format_version == expected.format_version
             && self.target_dir == expected.target_dir
             && self.output_root == expected.output_root
             && self.cache_algorithm_version == expected.cache_algorithm_version
-            && self.cache_schema_version == expected.cache_schema_version
+            && (self.cache_schema_version == expected.cache_schema_version
+                || (self.cache_schema_version == 4 && expected.cache_schema_version == 5))
     }
 }
 
@@ -608,7 +611,7 @@ impl Manager {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let checkpoint_key = Self::hash_path(&canonical_target);
         let header = CheckpointHeader::new(&canonical_target, output_root)?;
-        let loaded = Self::load_progress(&checkpoint_key)?;
+        let (loaded, _) = Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
         let (valid, _, _) = Self::validate_loaded_state(&loaded, &header, output_root);
         Ok(valid.len())
     }
@@ -616,7 +619,12 @@ impl Manager {
     /// Explicitly discard the saved checkpoint for a user-requested fresh run.
     pub fn discard_saved_progress(target_dir: &Path) -> io::Result<()> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
-        Self::discard_progress_for_fresh_run(&Self::hash_path(&canonical_target))?;
+        let checkpoint_key = Self::hash_path(&canonical_target);
+        Self::discard_progress_for_fresh_run(&checkpoint_key)?;
+        let legacy_key = Self::legacy_hash_path(&canonical_target);
+        if legacy_key != checkpoint_key {
+            Self::discard_progress_for_fresh_run(&legacy_key)?;
+        }
         crate::conversion::clear_processed_list();
         Ok(())
     }
@@ -632,6 +640,7 @@ impl Manager {
     ) -> io::Result<Self> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let dir_hash = Self::hash_path(&canonical_target);
+        let legacy_key = Self::legacy_hash_path(&canonical_target);
         let header = CheckpointHeader::new(&canonical_target, output_root)?;
 
         let central_dir = get_central_progress_dir()?;
@@ -640,13 +649,19 @@ impl Manager {
         let checkpoint_key = dir_hash;
         let lock_file = central_dir.join(format!("{checkpoint_key}.lock"));
 
-        let (completed_set, resume_mode, reset_reason) = if resume_enabled {
-            let loaded = Self::load_progress(&checkpoint_key)?;
-            Self::validate_loaded_state(&loaded, &header, output_root)
+        let (completed_set, resume_mode, reset_reason, loaded_legacy_key) = if resume_enabled {
+            let (loaded, loaded_legacy_key) =
+                Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
+            let (completed_set, resume_mode, reset_reason) =
+                Self::validate_loaded_state(&loaded, &header, output_root);
+            (completed_set, resume_mode, reset_reason, loaded_legacy_key)
         } else {
             Self::discard_progress_for_fresh_run(&checkpoint_key)?;
+            if legacy_key != checkpoint_key {
+                Self::discard_progress_for_fresh_run(&legacy_key)?;
+            }
             crate::conversion::clear_processed_list();
-            (HashMap::new(), false, None)
+            (HashMap::new(), false, None, None)
         };
 
         if let Some(reason) = reset_reason.as_deref() {
@@ -654,14 +669,15 @@ impl Manager {
                 "checkpoint_fallback",
                 reason,
             );
+            let stale_key = loaded_legacy_key.as_deref().unwrap_or(&checkpoint_key);
             if let Err(err) = crate::mfb_sqlite_store::blob_delete(
                 crate::mfb_sqlite_store::NS_CHECKPOINT,
-                &checkpoint_key,
+                stale_key,
             ) {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     format!(
-                        "Failed to remove invalidated checkpoint blob for key {checkpoint_key}: \
+                        "Failed to remove invalidated checkpoint blob for key {stale_key}: \
                          {err}"
                     ),
                 );
@@ -677,13 +693,31 @@ impl Manager {
             resume_mode: AtomicBool::new(resume_mode),
         };
 
-        if manager.resume_mode.load(Ordering::Relaxed)
-            && let Err(err) = manager.persist_progress()
-        {
-            crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                "checkpoint_progress",
-                format!("Failed to compact validated checkpoint state: {err}"),
-            );
+        if manager.resume_mode.load(Ordering::Relaxed) {
+            match manager.persist_progress() {
+                Ok(()) => {
+                    if let Some(legacy_key) = loaded_legacy_key
+                        && let Err(err) = crate::mfb_sqlite_store::blob_delete(
+                            crate::mfb_sqlite_store::NS_CHECKPOINT,
+                            &legacy_key,
+                        )
+                    {
+                        crate::media_conversion_gate::delivery_checkpoint_batch_audit(
+                            "checkpoint_progress",
+                            format!(
+                                "Migrated checkpoint to BLAKE3 key but failed to remove legacy key \
+                                 {legacy_key}: {err}"
+                            ),
+                        );
+                    }
+                }
+                Err(err) => {
+                    crate::media_conversion_gate::delivery_checkpoint_batch_audit(
+                        "checkpoint_progress",
+                        format!("Failed to compact validated checkpoint state: {err}"),
+                    );
+                }
+            }
         }
 
         Ok(manager)
@@ -1162,6 +1196,13 @@ impl Manager {
     }
 
     fn hash_path(path: &Path) -> String {
+        blake3::hash(path.to_string_lossy().as_bytes())
+            .to_hex()
+            .to_string()
+    }
+
+    /// Read-only compatibility key for checkpoints written before BLAKE3 keys.
+    fn legacy_hash_path(path: &Path) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
@@ -1170,25 +1211,31 @@ impl Manager {
         format!("{:x}", hasher.finish())[..8].to_string()
     }
 
+    fn load_progress_for_path(
+        path: &Path,
+        checkpoint_key: &str,
+    ) -> io::Result<(LoadedCheckpointState, Option<String>)> {
+        if let Some(loaded) = load_progress_from_sqlite(checkpoint_key)? {
+            return Ok((loaded, None));
+        }
+        let legacy_key = Self::legacy_hash_path(path);
+        if let Some(loaded) = load_progress_from_sqlite(&legacy_key)? {
+            return Ok((loaded, Some(legacy_key)));
+        }
+        Ok((
+            LoadedCheckpointState {
+                header: None,
+                entries: HashMap::new(),
+            },
+            None,
+        ))
+    }
+
     fn normalize_path(path: &Path) -> String {
         match Self::normalize_path_to_buf(path).to_str() {
             Some(s) => s.to_string(),
             None => path.display().to_string(),
         }
-    }
-
-    // Rationale: This function handles complex, sequential initialization or
-    // business logic where further fragmentation would hinder readability and
-    // maintainability.
-    fn load_progress(checkpoint_key: &str) -> io::Result<LoadedCheckpointState> {
-        let loaded = load_progress_from_sqlite(checkpoint_key)?;
-        Ok(match loaded {
-            Some(state) => state,
-            None => LoadedCheckpointState {
-                header: None,
-                entries: HashMap::new(),
-            },
-        })
     }
 
     fn validate_loaded_state(
@@ -1655,6 +1702,36 @@ mod tests {
             assert!(checkpoint.is_completed(&target.join("file2.mp4")));
             assert!(!checkpoint.is_completed(&target.join("file3.mp4")));
         }
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_checkpoint_key_is_migrated_to_blake3() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
+        let target = temp.path();
+        let input = target.join("legacy.mp4");
+        create_test_file(&input)?;
+
+        let canonical_target = Manager::normalize_path_to_buf(target);
+        let checkpoint_key = Manager::hash_path(&canonical_target);
+        let legacy_key = Manager::legacy_hash_path(&canonical_target);
+        assert_eq!(checkpoint_key.len(), 64);
+        assert_ne!(checkpoint_key, legacy_key);
+
+        let mut header = CheckpointHeader::new(&canonical_target, None)?;
+        header.cache_schema_version = 4;
+        let entry = CheckpointEntry::from_path(&input)?;
+        let entries = HashMap::from([(entry.path.clone(), entry)]);
+        save_progress_to_sqlite(&legacy_key, &header, &entries)?;
+
+        let checkpoint = Manager::new_resuming(target)?;
+        assert!(checkpoint.is_completed(&input));
+        assert!(load_progress_from_sqlite(&checkpoint_key)?.is_some());
+        assert!(load_progress_from_sqlite(&legacy_key)?.is_none());
+        drop(checkpoint);
+
+        Manager::discard_saved_progress(target)?;
         teardown_test_env(guard);
         Ok(())
     }

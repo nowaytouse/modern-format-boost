@@ -8,12 +8,32 @@ use foundation::image_jpeg_analysis::is_jpeg_complete;
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
     for source in [
         include_str!("../../../../.github/workflows/ci-quality.yml"),
-        include_str!("../../../../.github/workflows/cd-nightly.yml"),
-        include_str!("../../../../.github/workflows/cd-stable.yml"),
         include_str!("../../src/bin/install_media_dependencies.rs"),
     ] {
         assert!(source.contains("libheif-1.23.1"));
         assert!(!source.contains("libheif-1.21.0"));
+    }
+}
+
+#[test]
+fn product_release_workflows_publish_only_macos_arm64() {
+    for source in [
+        include_str!("../../../../.github/workflows/cd-nightly.yml"),
+        include_str!("../../../../.github/workflows/cd-stable.yml"),
+    ] {
+        assert!(source.contains("aarch64-apple-darwin"));
+        assert!(source.contains("libheif"));
+        assert!(source.contains("libmpc"));
+        for forbidden in [
+            "x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "product release workflow still contains {forbidden}"
+            );
+        }
     }
 }
 

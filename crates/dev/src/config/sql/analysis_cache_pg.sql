@@ -1,5 +1,5 @@
 -- Modern Format Boost — PostgreSQL Analysis Cache Schema
--- v4.0: Strict payload cutover (table layout unchanged from v3)
+-- v5.0: Full BLAKE3 payload digests replace truncated CRC integrity tags
 -- Core analysis records for images
 CREATE TABLE IF NOT EXISTS analysis_records (
   content_hash BYTEA PRIMARY KEY,
@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS analysis_records (
   created_at BIGINT NOT NULL,
   algorithm_version INT DEFAULT 1,
   content_fingerprint_hash BYTEA,
-  data_checksum BIGINT
+  data_checksum BYTEA
 );
 
 -- Quality analysis records for images
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS quality_records (
   created_at BIGINT NOT NULL,
   algorithm_version INT DEFAULT 1,
   content_fingerprint_hash BYTEA,
-  data_checksum BIGINT
+  data_checksum BYTEA
 );
 
 -- Analysis records for videos
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS video_records (
   created_at BIGINT NOT NULL,
   algorithm_version INT DEFAULT 1,
   content_fingerprint_hash BYTEA,
-  data_checksum BIGINT
+  data_checksum BYTEA
 );
 
 -- Path-based index for fast lookup (path, mtime, size)

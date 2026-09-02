@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 const NIGHTLY_COMPONENTS: [&str; 5] = ["clippy", "rustfmt", "miri", "rust-src", "llvm-tools"];
+const FUZZ_SMOKE_ENGINE_ARGS: [&str; 3] = ["-runs=1", "-max_total_time=5", "-timeout=5"];
 static COLLECT_FAILURES: AtomicBool = AtomicBool::new(false);
 static RECORDED_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -1614,7 +1615,8 @@ fn main() -> Result<()> {
                         continue;
                     }
                     println!("  Smoke testing fuzz target: {target} (max 5s)");
-                    let st = Command::new("cargo")
+                    let mut command = Command::new("cargo");
+                    command
                         .args([
                             format!("+{channel}"),
                             "fuzz".to_string(),
@@ -1623,9 +1625,9 @@ fn main() -> Result<()> {
                             "--fuzz-dir".to_string(),
                             "crates/dev/fuzz".to_string(),
                             "--".to_string(),
-                            "-runs=1".to_string(),
                         ])
-                        .status()?;
+                        .args(FUZZ_SMOKE_ENGINE_ARGS);
+                    let st = command.status()?;
                     if !st.success() {
                         record_failure(format!("fuzz target {target} failed"));
                         fuzz_smoke_ok = false;
@@ -1912,6 +1914,14 @@ mod tests {
         assert!(test.contains("--all-features"));
         assert!(test.contains("--no-fail-fast"));
         assert!(test.contains("--test-threads=1"));
+    }
+
+    #[test]
+    fn fuzz_smoke_bounds_total_and_per_input_runtime() {
+        assert_eq!(
+            FUZZ_SMOKE_ENGINE_ARGS,
+            ["-runs=1", "-max_total_time=5", "-timeout=5"]
+        );
     }
 
     #[test]

@@ -1459,6 +1459,8 @@ impl XmpMerger {
             .arg("-U")
             .arg("-api")
             .arg("RequestAll=3")
+            .arg("-api")
+            .arg("ImageHashType=SHA256")
             .arg("-all")
             .arg("-ImageDataHash")
             .arg("-ImageWidth")
@@ -1504,6 +1506,12 @@ impl XmpMerger {
             .and_then(proof_value_text)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("ExifTool proof did not report ImageDataHash"))?;
+        anyhow::ensure!(
+            image_data_hash.len() == 64
+                && image_data_hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "ExifTool proof returned an invalid SHA-256 ImageDataHash: {image_data_hash:?}"
+        );
+        let image_data_hash = image_data_hash.to_ascii_lowercase();
         let width = proof_tag(record, "imagewidth").and_then(proof_value_text);
         let height = proof_tag(record, "imageheight").and_then(proof_value_text);
         let frame_count = proof_tag(record, "framecount").and_then(proof_value_text);

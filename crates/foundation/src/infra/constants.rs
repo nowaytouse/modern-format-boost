@@ -2605,7 +2605,7 @@ pub const CRF_PRECISION: f32 = 0.25;
 
 // --- UI & Versioning (Wave 11) ---
 pub const UI_BAR_WIDTH: usize = 35;
-pub const CACHE_SCHEMA_VERSION: i32 = 4;
+pub const CACHE_SCHEMA_VERSION: i32 = 5;
 
 // --- CRF Cache & Precision (Wave 12) ---
 pub const CRF_CACHE_KEY_MULTIPLIER: f64 = 100.0;

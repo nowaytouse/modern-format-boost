@@ -4852,35 +4852,27 @@ fn media_conversion_ci_mpc_mirror_download_m241() {
         script.contains("ftpmirror.gnu.org") && script.contains("ftp.gnu.org"),
         "MPC download script must list GNU mirror fallbacks"
     );
-    for workflow in [
-        ".github/workflows/ci-quality.yml",
-        ".github/workflows/cd-stable.yml",
-        ".github/workflows/cd-nightly.yml",
-    ] {
-        let content =
-            fs::read_to_string(root.join(workflow)).unwrap_or_else(|e| panic!("{workflow}: {e}")); // audited: contract test assertion path; panic/expect is test-only failure signal
-        assert!(
-            content.contains("--bin download_gnu_mpc"),
-            "{workflow} must use mirror-aware Rust MPC download bin (M241)"
-        );
-        assert!(
-            !content
-                .contains("download_with_retry \"https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz\""),
-            "{workflow} must not use single-host MPC download without mirrors"
-        );
-        if workflow == ".github/workflows/ci-quality.yml" {
-            let bootstrap_pos = content
-                .find("Install MPC downloader bootstrap dependencies")
-                .expect("ci-quality must install Meson/Ninja before the MPC downloader");
-            let downloader_pos = content
-                .find("--bin download_gnu_mpc")
-                .expect("ci-quality must invoke the MPC downloader");
-            assert!(
-                bootstrap_pos < downloader_pos,
-                "ci-quality must install Meson/Ninja before compiling the MPC downloader"
-            );
-        }
-    }
+    let workflow = ".github/workflows/ci-quality.yml";
+    let content =
+        fs::read_to_string(root.join(workflow)).unwrap_or_else(|e| panic!("{workflow}: {e}")); // audited: contract test assertion path; panic/expect is test-only failure signal
+    assert!(
+        content.contains("--bin download_gnu_mpc"),
+        "{workflow} must use mirror-aware Rust MPC download bin (M241)"
+    );
+    assert!(
+        !content.contains("download_with_retry \"https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz\""),
+        "{workflow} must not use single-host MPC download without mirrors"
+    );
+    let bootstrap_pos = content
+        .find("Install MPC downloader bootstrap dependencies")
+        .expect("ci-quality must install Meson/Ninja before the MPC downloader");
+    let downloader_pos = content
+        .find("--bin download_gnu_mpc")
+        .expect("ci-quality must invoke the MPC downloader");
+    assert!(
+        bootstrap_pos < downloader_pos,
+        "ci-quality must install Meson/Ninja before compiling the MPC downloader"
+    );
 }
 
 #[test]
@@ -9170,8 +9162,10 @@ fn media_conversion_m214_sqlite_store_ssot() {
     ))
     .expect("mfb_sqlite_store.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        store.contains("blob_store") && store.contains("payload_crc32"),
-        "mfb_sqlite_store must use CRC-protected blob_store (M214)"
+        store.contains("blob_store")
+            && store.contains("payload_blake3")
+            && store.contains("migrate_v1_crc32_to_blake3"),
+        "mfb_sqlite_store must use full BLAKE3 payload proofs and migrate v1 rows (M214)"
     );
 
     let checkpoint = fs::read_to_string(join_legacy_aware(

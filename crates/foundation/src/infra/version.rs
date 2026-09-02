@@ -78,7 +78,7 @@ static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
 
 /// 🔢 Cache Schema Version - Increment ONLY when database structure changes
 ///
-/// **Current**: v4 (strict cache cutover after `ImageAnalysis` payload changes)
+/// **Current**: v5 (full BLAKE3 payload integrity digests)
 ///
 /// **Update Policy**: Increment manually ONLY when:
 /// - Adding/removing database columns
@@ -96,6 +96,7 @@ static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
 ///   for integrity verification
 /// - v4: Forced destructive cache cutover for strict `ImageAnalysis` payload
 ///   changes
+/// - v5: Replaced CRC32 payload tags with full BLAKE3 digests
 pub const CACHE_SCHEMA_VERSION: i32 = crate::constants::CACHE_SCHEMA_VERSION;
 
 /// 📊 Get cache algorithm version

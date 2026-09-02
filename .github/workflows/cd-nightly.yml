@@ -12,23 +12,15 @@ env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+  RELEASE_TARGET: aarch64-apple-darwin
+  RELEASE_ARCHIVE: modern-format-boost-aarch64-apple-darwin.tar.gz
   MIGRATED_RUST_BINS: "backfill_directory_scores cache_cleaner check_all collect_optimized create_live_photo database_manager generate_test_media icloud_import install_deps mfb_rust_toolchain normalize_stale_embed_measurement_slots post_training_closure run_training sandbox_validate session_audit setup_private_db start_training_four training_pipeline delivery_heatmap corpus_thresholds smart_build"
 
 jobs:
   build-macos:
-    name: Build (macOS ${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
+    name: Build (macOS arm64)
+    runs-on: macos-14
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-apple-darwin
-            os: macos-14
-          - arch: x86_64
-            target: x86_64-apple-darwin
-            os: macos-15-intel
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -37,26 +29,16 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: nightly-2026-07-16
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Install dependencies (Homebrew)
         shell: bash
         run: |
-          # Force remove problematic taps that break brew on macOS runners
+          set -euo pipefail
           rm -rf /usr/local/Homebrew/Library/Taps/hashicorp \
                  /usr/local/Homebrew/Library/Taps/aws \
                  /opt/homebrew/Library/Taps/hashicorp \
                  /opt/homebrew/Library/Taps/aws
-
-          if [[ "${{ matrix.target }}" == "x86_64-apple-darwin" ]]; then
-            BREW_BIN="/usr/local/bin/brew"
-            if [[ ! -x "${BREW_BIN}" ]]; then
-              echo "Intel Homebrew is missing from the GitHub runner image." >&2
-              exit 1
-            fi
-          else
-            BREW_BIN="brew"
-          fi
 
           BREW_FORMULAS=(
             ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
@@ -64,18 +46,18 @@ jobs:
           )
           MISSING=()
           for formula in "${BREW_FORMULAS[@]}"; do
-            if ! "${BREW_BIN}" list --formula "${formula}" &>/dev/null; then
+            if ! brew list --formula "${formula}" &>/dev/null; then
               MISSING+=("${formula}")
             fi
           done
           if ((${#MISSING[@]} > 0)); then
-            "${BREW_BIN}" update
-            "${BREW_BIN}" install "${MISSING[@]}"
+            brew update
+            brew install "${MISSING[@]}"
           else
             echo "All required Homebrew formulas already installed."
           fi
 
-          BREW_PREFIX=$("${BREW_BIN}" --prefix)
+          BREW_PREFIX=$(brew --prefix)
           BREW_LIBS="${BREW_PREFIX}/lib"
           for pkg in x264 vvdec vvenc; do
             if [ -d "${BREW_PREFIX}/opt/${pkg}/lib" ]; then
@@ -91,170 +73,51 @@ jobs:
       - name: Workaround for stdc++ on macOS
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p target/.tmp_lib
           SDK_PATH=$(xcrun --show-sdk-path)
           ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" target/.tmp_lib/libstdc++.tbd
           ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" target/.tmp_lib/libstdc++.dylib
-          {
-            echo "LIBRARY_PATH=$(pwd)/target/.tmp_lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-          } >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$(pwd)/target/.tmp_lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Build release binaries
-        shell: bash
-        run: |
-          cargo build --locked --release --target ${{ matrix.target }} -p img -p vid \
-            --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
-          DEV_BIN_ARGS=()
-          for bin in ${MIGRATED_RUST_BINS}; do
-            DEV_BIN_ARGS+=(--bin "${bin}")
-          done
-          cargo build --locked --release --target ${{ matrix.target }} -p dev "${DEV_BIN_ARGS[@]}"
-
-      - name: Package binaries
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/img" dist/
-          cp "target/${{ matrix.target }}/release/vid" dist/
-          for bin in ${MIGRATED_RUST_BINS}; do
-            cp "target/${{ matrix.target }}/release/${bin}" dist/
-          done
-          mkdir -p dist/crates/dev/scripts
-          cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
-            dist/crates/dev/scripts/
-          cp LICENSE README.md docs/CHANGELOG.md dist/
-          cd dist
-          tar czf "../modern-format-boost-${{ matrix.target }}.tar.gz" ./*
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: modern-format-boost-${{ matrix.target }}
-          path: modern-format-boost-${{ matrix.target }}.tar.gz
-          if-no-files-found: error
-
-  build-linux:
-    name: Build (Linux x86_64)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: nightly-2026-07-16
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-
-          download_with_retry() {
-            local url=$1
-            local output=$2
-            local attempt
-
-            for attempt in 1 2 3; do
-              if curl -fsSL "$url" -o "$output"; then
-                return 0
-              fi
-
-              if [[ "$attempt" == "3" ]]; then
-                echo "Failed to download ${url} after 3 attempts" >&2
-                return 1
-              fi
-
-              sleep 10
-            done
-          }
-
-          sudo apt-get update -qq
-          sudo apt-get install -y libssl-dev pkg-config clang cmake nasm ninja-build meson \
-            libde265-dev libx265-dev libaom-dev \
-            libturbojpeg0-dev libpng-dev jpeginfo pngcheck exiv2 jhead libjpeg-turbo-progs libavif-bin \
-            libgmp-dev libmpfr-dev libjxl-dev libjxl-tools libnuma-dev \
-            curl build-essential autoconf automake libtool m4
-
-          cd /tmp
-
-          download_with_retry "https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz" dav1d.tar.gz
-          tar xzf dav1d.tar.gz
-          cd dav1d-1.5.1
-          meson setup build --buildtype=release --prefix=/usr/local -Denable_tools=false -Denable_tests=false
-          ninja -C build
-          sudo ninja -C build install
-          sudo ldconfig
-
-          cd /tmp
-          download_with_retry "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz" libheif.tar.gz
-          tar xzf libheif.tar.gz
-          cd libheif-1.23.1
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DWITH_EXAMPLES=OFF \
-            -DBUILD_TESTING=OFF \
-            -DWITH_OPENH264=OFF
-          cmake --build build --parallel
-          sudo cmake --install build
-          sudo ldconfig
-
-          cd /tmp
-          cargo run --locked --manifest-path "${{ github.workspace }}/Cargo.toml" -p dev --bin download_gnu_mpc -- mpc.tar.xz
-          tar xf mpc.tar.xz
-          cd mpc-1.4.1
-          ./configure --prefix=/usr/local --with-gmp=/usr --with-mpfr=/usr
-          make -j"$(nproc)"
-          sudo make install
-          sudo ldconfig
-
-          {
-            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-            echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          } >> "$GITHUB_ENV"
-
-      - name: Build release binaries
-        shell: bash
-        run: |
-          cargo build --locked --release --target x86_64-unknown-linux-gnu -p img -p vid \
+          cargo build --locked --release --target "$RELEASE_TARGET" -p img -p vid \
             --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
           DEV_BIN_ARGS=()
           for bin in ${MIGRATED_RUST_BINS}; do
             DEV_BIN_ARGS+=(--bin "${bin}")
           done
-          cargo build --locked --release --target x86_64-unknown-linux-gnu -p dev "${DEV_BIN_ARGS[@]}"
+          cargo build --locked --release --target "$RELEASE_TARGET" -p dev "${DEV_BIN_ARGS[@]}"
 
       - name: Package binaries
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp target/x86_64-unknown-linux-gnu/release/img dist/
-          cp target/x86_64-unknown-linux-gnu/release/vid dist/
+          cp "target/${RELEASE_TARGET}/release/img" dist/
+          cp "target/${RELEASE_TARGET}/release/vid" dist/
           for bin in ${MIGRATED_RUST_BINS}; do
-            cp "target/x86_64-unknown-linux-gnu/release/${bin}" dist/
+            cp "target/${RELEASE_TARGET}/release/${bin}" dist/
           done
           mkdir -p dist/crates/dev/scripts
           cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
             dist/crates/dev/scripts/
           cp LICENSE README.md docs/CHANGELOG.md dist/
-          cd dist
-          tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz ./*
+          tar -C dist -czf "$RELEASE_ARCHIVE" .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: modern-format-boost-linux-x64
-          path: modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
+          name: modern-format-boost-aarch64-apple-darwin
+          path: modern-format-boost-aarch64-apple-darwin.tar.gz
           if-no-files-found: error
 
   publish:
     name: Publish Nightly Release
-    needs:
-      - build-macos
-      - build-linux
+    needs: build-macos
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -281,7 +144,7 @@ jobs:
         shell: bash
         run: |
           printf '%s\n' \
-            "Automated nightly build for \`${GITHUB_SHA}\`." \
+            "Automated Apple Silicon nightly build for \`${GITHUB_SHA}\`." \
             "" \
             "Source branch: \`${GITHUB_REF_NAME}\`" \
             "Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`" \

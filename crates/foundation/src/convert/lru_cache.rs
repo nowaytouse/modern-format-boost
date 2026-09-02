@@ -308,14 +308,14 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
 
     fn simple_rng(seed: u64, index: usize) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        seed.hash(&mut hasher);
-        index.hash(&mut hasher);
-        hasher.finish()
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&seed.to_le_bytes());
+        hasher.update(&index.to_le_bytes());
+        let mut output = [0_u8; 8];
+        output.copy_from_slice(&hasher.finalize().as_bytes()[..8]);
+        u64::from_le_bytes(output)
     }
 
     #[test]

@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Archive-value and CI corrective review
 
+- **Product releases are Apple Silicon only**: nightly and tagged release
+  workflows now build and publish only `aarch64-apple-darwin`. Intel macOS,
+  Linux x86_64, and Windows x86_64 product artifacts were removed; portable
+  quality checks remain separate from the product-distribution contract.
+- **Deep fuzz smoke runs are bounded**: every `check_all` fuzz target now has a
+  five-second total budget and a five-second per-input timeout in addition to
+  the one-run smoke limit, preventing one target from occupying the complete
+  three-hour Deep Production Audit window.
+- **Internal integrity identities use BLAKE3**: duplicate fingerprints,
+  PostgreSQL analysis payloads, local SQLite blobs, test PRNG derivation, and
+  checkpoint keys now share full BLAKE3 digests. SQLite v1 CRC32 rows and legacy
+  checkpoint keys migrate without discarding valid resume state. Format-defined
+  PNG chunk CRCs, upstream artifact checksums, and ExifTool's explicit SHA-256
+  primary-image proof remain in their required external domains.
 - **HDR signal propagation is now caller-independent**: direct and probe-only
   lossless JXL entrypoints carry the same ffprobe-derived bit depth, primaries,
   transfer and matrix evidence used by the high-precision decoder into `cjxl`.
