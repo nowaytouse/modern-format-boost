@@ -280,20 +280,38 @@ fn color_info_from_isobmff_bytes(data: &[u8]) -> Option<ColorInfo> {
     )
 }
 
-fn color_info_from_isobmff_file(input: &Path) -> Option<ColorInfo> {
-    let metadata = std::fs::metadata(input).ok()?;
+fn color_info_from_isobmff_file(input: &Path) -> std::io::Result<Option<ColorInfo>> {
+    let metadata = std::fs::metadata(input)?;
     if metadata.len() > MAX_ISOBMFF_COLOR_PROBE_BYTES {
-        return None;
+        return Ok(None);
     }
 
-    let mut file = std::fs::File::open(input).ok()?;
-    let mut header = [0_u8; 8];
-    file.read_exact(&mut header).ok()?;
-    if &header[4..8] != b"ftyp" {
-        return None;
+    let file = std::fs::File::open(input)?;
+    let mut data = Vec::new();
+    let mut limited = file.take(MAX_ISOBMFF_COLOR_PROBE_BYTES + 1);
+    limited.read_to_end(&mut data)?;
+    let read_len = u64::try_from(data.len())
+        .map_err(|err| std::io::Error::other(format!("ISOBMFF probe size overflow: {err}")))?;
+    if read_len > MAX_ISOBMFF_COLOR_PROBE_BYTES || data.len() < 8 || &data[4..8] != b"ftyp" {
+        return Ok(None);
     }
 
-    color_info_from_isobmff_bytes(&std::fs::read(input).ok()?)
+    Ok(color_info_from_isobmff_bytes(&data))
+}
+
+fn color_info_from_isobmff_or_audited_default(input: &Path) -> ColorInfo {
+    match color_info_from_isobmff_file(input) {
+        Ok(Some(info)) => info,
+        Ok(None) => ColorInfo::default(),
+        Err(err) => {
+            crate::media_conversion_gate::probe_ffprobe_input_audit(
+                "isobmff_nclx_color_probe_failed",
+                &input.to_string_lossy(),
+                format!("failed to read ISOBMFF color metadata: {err}"),
+            );
+            ColorInfo::default()
+        }
+    }
 }
 
 fn merge_color_info_from_isobmff(info: &mut ColorInfo, fallback: ColorInfo) -> bool {
@@ -327,8 +345,17 @@ fn merge_color_info_from_isobmff(info: &mut ColorInfo, fallback: ColorInfo) -> b
 }
 
 fn merge_isobmff_color_info(input: &Path, info: &mut ColorInfo) {
-    let Some(fallback) = color_info_from_isobmff_file(input) else {
-        return;
+    let fallback = match color_info_from_isobmff_file(input) {
+        Ok(Some(fallback)) => fallback,
+        Ok(None) => return,
+        Err(err) => {
+            crate::media_conversion_gate::probe_ffprobe_input_audit(
+                "isobmff_nclx_color_merge_probe_failed",
+                &input.to_string_lossy(),
+                format!("failed to read ISOBMFF color metadata: {err}"),
+            );
+            return;
+        }
     };
 
     if merge_color_info_from_isobmff(info, fallback) {
@@ -601,7 +628,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                                 retry_stderr.trim()
                             ),
                         );
-                        return color_info_from_isobmff_file(input).unwrap_or_default();
+                        return color_info_from_isobmff_or_audited_default(input);
                     }
                     Err(err) => {
                         crate::media_conversion_gate::probe_ffprobe_input_audit(
@@ -614,7 +641,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                             "Pattern_type fallback also failed for: {}",
                             input_str
                         );
-                        return color_info_from_isobmff_file(input).unwrap_or_default();
+                        return color_info_from_isobmff_or_audited_default(input);
                     }
                 }
             } else {
@@ -632,7 +659,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                         format!("ffprobe execution failed: {}", stderr.trim()),
                     );
                 }
-                return color_info_from_isobmff_file(input).unwrap_or_default();
+                return color_info_from_isobmff_or_audited_default(input);
             }
         }
         Err(e) => {
@@ -641,7 +668,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("failed to launch ffprobe subprocess: {e}"),
             );
-            return color_info_from_isobmff_file(input).unwrap_or_default();
+            return color_info_from_isobmff_or_audited_default(input);
         }
     };
 
@@ -653,7 +680,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("ffprobe stdout invalid UTF-8: {e}"),
             );
-            return color_info_from_isobmff_file(input).unwrap_or_default();
+            return color_info_from_isobmff_or_audited_default(input);
         }
     };
 
@@ -665,7 +692,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 &input_str,
                 format!("ffprobe JSON parse failed: {e}"),
             );
-            return color_info_from_isobmff_file(input).unwrap_or_default();
+            return color_info_from_isobmff_or_audited_default(input);
         }
     };
 
@@ -675,7 +702,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             &input_str,
             "no valid video streams in ffprobe output",
         );
-        return color_info_from_isobmff_file(input).unwrap_or_default();
+        return color_info_from_isobmff_or_audited_default(input);
     };
 
     let (bit_depth, bit_depth_inferred_from_pix_fmt) = parse_stream_bit_depth(stream);
@@ -819,6 +846,17 @@ mod tests {
             crate::hdr::color_info_to_jxl_color_encoding(&info),
             Some("Rec2100PQ")
         );
+    }
+
+    #[test]
+    fn test_isobmff_file_probe_preserves_io_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.avif");
+
+        let error = color_info_from_isobmff_file(&missing)
+            .expect_err("missing ISOBMFF input must preserve its I/O error");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

@@ -5612,12 +5612,15 @@ impl ExtractedFrame {
 
 /// Extract first frame from video to temporary `PNG` for analysis.
 fn extract_frame_to_temp(path: &Path) -> anyhow::Result<Option<ExtractedFrame>> {
-    // Use an owned system-temp directory rather than the mutable process-wide
-    // MFB scratch root.  The RAII owner keeps the parent available until all
-    // callers finish consuming the frame.
+    // Resolve the scratch base once through the delivery gate. The owned child
+    // directory then remains alive until every caller finishes consuming the
+    // extracted frame.
+    let scratch_dir = crate::media_conversion_gate::delivery_scratch_temp_dir_or_system_temp(
+        "loop_intent frame extraction",
+    );
     let temp_dir = tempfile::Builder::new()
         .prefix("mfb-loop-frame-")
-        .tempdir()
+        .tempdir_in(&scratch_dir)
         .map_err(|err| anyhow::anyhow!("failed to prepare frame extraction temp dir: {err}"))?;
     let temp_path = temp_dir.path().join("frame.png");
 
