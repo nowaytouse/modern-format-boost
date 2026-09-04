@@ -31,7 +31,7 @@ const QUICKTIME_CONTAINER_DATE_TAGS: &[&str] = &[
 ];
 
 fn is_exiftool_available() -> bool {
-    *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
+    *EXIFTOOL_AVAILABLE.get_or_init(crate::ExiftoolBuilder::check_available)
 }
 
 fn audit_exiftool_output(context: &str, output: &Output) {

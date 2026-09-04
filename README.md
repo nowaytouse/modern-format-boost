@@ -483,18 +483,34 @@ a duration no longer than two seconds. That payload is normalized to a
 pixel-equivalent JXL still; it is not claimed to reconstruct the original video
 container. Missing or contradictory evidence leaves the file in `vid` scope.
 
-Direct pixel-to-JXL output explicitly disables extra progressive DC passes,
-does not request progressive AC, and disables synthetic replacement noise.
-Lossless `d=0` therefore keeps the real source pixels—including real sensor
-noise—while lossy paths may smooth noise but never substitute generated noise.
+Direct pixel-to-JXL output does not leave progressive or generated-noise policy
+to the encoder's auto mode. It passes `--progressive_dc=0`, `--responsive=0`,
+`--noise=0`, and `--photon_noise_iso=0`, and never requests `-p`, progressive
+AC, or quantized progressive AC. These switches disable generated noise; they
+are not a destructive pre-encode denoiser. Lossless `d=0` therefore keeps the
+real source pixels—including real sensor noise—while lossy paths may smooth
+texture but never replace it with synthetic noise. The immutable JPEG
+bitstream-transcode path receives no pixel-policy overrides because the source
+JPEG and its JBRD reconstruction proof remain authoritative.
+
+The size effect is measured, not assumed to be a universal percentage. With
+local `cjxl` v0.13, `-p` increased two deterministic 512×512 `d=1/e7` samples by
+20.4% and 2.83%, while peak memory increased by about 23% and 32%; adaptive
+noise changed a textured `d=3` sample from 19,052 to 18,686 bytes (-1.92%).
+Different images and encoder versions can produce different deltas, so IMG
+locks the intended policy rather than promising the often-quoted 13%/39%.
+
 Normal work uses effort 7. Ultimate/archive pixel encoding uses effort 10,
 whose global analysis disables chunked encoding and can require substantially
-more memory; effort 11 is reserved for the separate JPEG bitstream-transcode
-path. Progressive delivery cannot be toggled later in place: doing so requires
-a new encode and a new full archive proof. IMG never forces every source to
-sRGB: validated ICC/CICP, wide-gamut, HDR and high-bit-depth evidence is carried
-into the encoder, and 16-bit alpha uses an alpha-capable intermediate rather
-than being flattened.
+more memory; effort 11 remains reserved for the separate, fast JPEG
+bitstream-transcode workload. A measured global `--buffering=1` override did not
+reduce peak memory and changed e7 output behavior, so IMG retains libjxl's
+workload-aware default. Progressive delivery cannot be toggled in place:
+decode-and-re-encode can preserve pixels at `d=0`, but changes JXL bytes and
+requires a new metadata/archive proof; it cannot preserve a JBRD JPEG identity
+as a simple toggle. IMG does not force every source to sRGB: validated ICC/CICP,
+wide-gamut, HDR and high-bit-depth evidence is carried into the encoder, and the
+production matrix now proves 16-bit alpha and TIFF print-resolution retention.
 
 ### `vid run` + `--codec hevc` (default)
 

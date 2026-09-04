@@ -1011,11 +1011,12 @@ fn create_lossless_raster_fixtures(root: &Path) -> Result<Vec<(PathBuf, FormatKi
 
     let mut fixtures = vec![(png.clone(), FormatKind::Png)];
     let high_bit_depth =
-        image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
+        image::ImageBuffer::<image::Rgba<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
             let red = (x * 1021 + y * 4093 + 3) % 65_536;
             let green = (x * 2053 + y * 8191 + 5) % 65_536;
             let blue = (x * 4099 + y * 12289 + 7) % 65_536;
-            image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
+            let alpha = (x * 631 + y * 997 + 12_345) % 65_535 + 1;
+            image::Rgba([low_u16(red), low_u16(green), low_u16(blue), low_u16(alpha)])
         });
     let high_bit_png = fixture_root.join("pattern-16.png");
     high_bit_depth.save(&high_bit_png)?;
@@ -1023,7 +1024,22 @@ fn create_lossless_raster_fixtures(root: &Path) -> Result<Vec<(PathBuf, FormatKi
     fixtures.push((high_bit_png, FormatKind::Png));
     if magick_supports_format("TIFF") {
         let high_bit_tiff = fixture_root.join("pattern-16.tiff");
-        high_bit_depth.save(&high_bit_tiff)?;
+        let mut command = Command::new(tool_path("magick")?);
+        command
+            .arg(fixture_root.join("pattern-16.png"))
+            .args(["-depth", "16", "-define", "tiff:alpha=unassociated"])
+            .arg(&high_bit_tiff);
+        run_status(command, "create standards-valid 16-bit RGBA TIFF fixture")?;
+        let mut command = Command::new(tool_path("exiftool")?);
+        command
+            .args([
+                "-overwrite_original",
+                "-XResolution=300",
+                "-YResolution=150",
+                "-ResolutionUnit#=2",
+            ])
+            .arg(&high_bit_tiff);
+        run_status(command, "set TIFF print-resolution fixture metadata")?;
         fs::write(high_bit_tiff.with_extension("xmp"), MATRIX_XMP)?;
         fixtures.push((high_bit_tiff, FormatKind::Tiff));
     }
@@ -1106,9 +1122,9 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         let source_image = foundation::image_detection::open_image_with_limits(&source_decoded)?;
         let output_image = foundation::image_detection::open_image_with_limits(&output_decoded)?;
         ensure!(
-            source_image.color().bits_per_pixel() >= 48
-                && output_image.color().bits_per_pixel() >= 48,
-            "high-bit-depth {format:?}→JXL path reduced 16-bit RGB precision"
+            source_image.color().bits_per_pixel() >= 64
+                && output_image.color().bits_per_pixel() >= 64,
+            "high-bit-depth {format:?}→JXL path reduced 16-bit RGBA precision"
         );
         ensure!(
             source_pixels
@@ -1116,6 +1132,12 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
                 .iter()
                 .any(|channel| *channel % 257 != 0),
             "high-bit-depth fixture was accidentally representable as 8-bit RGB"
+        );
+        ensure!(
+            source_pixels
+                .enumerate_pixels()
+                .any(|(_, _, pixel)| !matches!(pixel.0[3], 0 | u16::MAX)),
+            "high-bit-depth fixture did not exercise nontrivial alpha"
         );
     }
     ensure!(
@@ -1139,6 +1161,17 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         fs::read(source.with_extension("xmp"))? == MATRIX_XMP,
         "lossless {format:?} source XMP changed"
     );
+
+    if is_high_bit_depth && matches!(format, FormatKind::Tiff) {
+        ensure!(
+            read_numeric_print_resolution(source)? == (300.0, 150.0, 2),
+            "TIFF fixture did not retain its 300x150 dpi source contract"
+        );
+        ensure!(
+            read_numeric_print_resolution(&output)? == (300.0, 150.0, 2),
+            "TIFF→JXL did not preserve print resolution and unit"
+        );
+    }
 
     if is_hdr {
         let source_info = Command::new(tool_path("avifdec")?)
@@ -1167,6 +1200,40 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         );
     }
     Ok(())
+}
+
+fn read_numeric_print_resolution(path: &Path) -> Result<(f64, f64, u64)> {
+    let output = Command::new(tool_path("exiftool")?)
+        .args([
+            "-s3",
+            "-n",
+            "-XResolution",
+            "-YResolution",
+            "-ResolutionUnit",
+        ])
+        .arg(path)
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "ExifTool print-resolution probe failed for {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::str::from_utf8(&output.stdout)?;
+    let mut values = text.lines();
+    let x = values
+        .next()
+        .ok_or_else(|| anyhow!("XResolution is unavailable"))?
+        .parse::<f64>()?;
+    let y = values
+        .next()
+        .ok_or_else(|| anyhow!("YResolution is unavailable"))?
+        .parse::<f64>()?;
+    let unit = values
+        .next()
+        .ok_or_else(|| anyhow!("ResolutionUnit is unavailable"))?
+        .parse::<u64>()?;
+    Ok((x, y, unit))
 }
 
 #[test]

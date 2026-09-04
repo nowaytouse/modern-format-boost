@@ -121,12 +121,16 @@ impl ToolBuilder for CjxlBuilder {
         cmd.arg(constants::JXL_ARG_CONTAINER);
 
         // Pixel encodes are archival/local outputs, not progressive web
-        // derivatives. Keep the encoder's auto mode from adding a progressive
-        // DC frame and explicitly disable synthetic replacement noise. JPEG
-        // reconstruction remains its own immutable bitstream-transcode path.
+        // derivatives. Disable every cjxl auto policy that can add progressive
+        // previews/responsive transforms or generated noise. Progressive AC is
+        // opt-in and remains disabled by deliberately omitting `-p`,
+        // `--progressive_ac`, and `--qprogressive_ac`. JPEG reconstruction stays
+        // on its immutable bitstream-transcode path without these overrides.
         if !self.lossless_jpeg {
             cmd.arg(constants::JXL_ARG_PROGRESSIVE_DC_DISABLED);
-            cmd.arg(constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED);
+            cmd.arg(constants::JXL_ARG_RESPONSIVE_DISABLED);
+            cmd.arg(constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED);
+            cmd.arg(constants::JXL_ARG_PHOTON_NOISE_DISABLED);
         }
 
         if let Some(d) = self.distance
@@ -334,8 +338,20 @@ mod tests {
         );
         assert!(
             args.iter()
-                .any(|arg| arg == constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED)
+                .any(|arg| arg == constants::JXL_ARG_RESPONSIVE_DISABLED)
         );
+        assert!(
+            args.iter()
+                .any(|arg| arg == constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED)
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == constants::JXL_ARG_PHOTON_NOISE_DISABLED)
+        );
+        assert!(!args.iter().any(|arg| matches!(
+            arg.as_ref(),
+            "-p" | "--progressive" | "--progressive_ac" | "--qprogressive_ac"
+        )));
     }
 
     #[test]
@@ -352,7 +368,9 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(!args.contains(&constants::JXL_ARG_PROGRESSIVE_DC_DISABLED.to_string()));
-        assert!(!args.contains(&constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED.to_string()));
+        assert!(!args.contains(&constants::JXL_ARG_RESPONSIVE_DISABLED.to_string()));
+        assert!(!args.contains(&constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED.to_string()));
+        assert!(!args.contains(&constants::JXL_ARG_PHOTON_NOISE_DISABLED.to_string()));
     }
 
     #[test]

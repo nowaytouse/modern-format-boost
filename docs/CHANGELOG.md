@@ -126,8 +126,10 @@ All notable changes to this project will be documented in this file.
   longer becomes a false ExifTool failure while adjacent XMP remains audited.
   Extension fallback only selects a decoder when magic has no answer; the
   decoder must still validate the structure. A single-frame image container is
-  supported, but a video container remains outside IMG regardless of frame
-  count. The production matrix performs real conversions and exact-pixel,
+  supported; MP4/M4V, MOV, MKV and WebM enter IMG only when complete probing
+  proves exactly one video frame, no audio or other streams, no chapters or
+  programs, a valid canvas, and a duration no longer than two seconds. The
+  production matrix performs real conversions and exact-pixel,
   source-immutability, and XMP checks for the added routes.
 - **Vector and camera originals are no longer accidental raster inputs**:
   SVG/SVGZ and enumerated camera RAW files are copied byte-for-byte rather than
@@ -136,10 +138,24 @@ All notable changes to this project will be documented in this file.
   RAW protection even behind a misleading raster extension. Recognized
   PSD/DDS/EXR/QOI/FLIF payloads are also rejected at the common IMG preflight
   instead of falling through to a generic decoder when their suffix is forged.
-  Direct pixel-to-JXL output explicitly disables progressive DC and synthetic
-  replacement noise; effort 7 remains normal, effort 10 remains the bounded
-  ultimate/archive level, and effort 11 remains confined to reversible JPEG
-  bitstream transcode with the existing exact-reconstruction gate.
+  Direct pixel-to-JXL output now explicitly disables progressive DC,
+  responsive/Squeeze transforms, adaptive synthetic noise, and photon noise;
+  progressive AC flags remain absent. Local v0.13 measurements record the
+  sample-dependent size/memory effect instead of treating 13%/39% as a fixed
+  rule. Effort 7 remains normal, effort 10 remains the bounded ultimate/archive
+  level, and effort 11 remains confined to reversible JPEG bitstream transcode
+  with the existing exact-reconstruction gate. The production matrix now uses
+  standards-valid 16-bit RGBA PNG/TIFF fixtures and proves alpha plus TIFF
+  X/Y print resolution and unit survive lossless JXL delivery.
+- **Run `33862856926` exposed eight tests but three source defects**: the shared
+  contract gate found two missing width/height values represented as numeric
+  zero, one eligible IMG still duration displayed through a zero default, and
+  one inline ffprobe duration fallback. Required values now fail closed, format
+  then stream duration selection is explicit, and the display consumes the
+  already-proven duration. The same review found metadata availability checking
+  bypassing the project's bundled-tool resolver; ExifTool discovery now uses
+  the canonical resolver, allowing TIFF print-resolution metadata to reach JXL
+  instead of being skipped and rejected by the final audit.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

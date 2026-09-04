@@ -1251,6 +1251,12 @@ fn fast_static_skip_or_ignore(
                 Ok(Some(conversion_output_ignored(input, reason, file_size)))
             }
             foundation::SingleFrameVideoStillProbe::Eligible(probe) => {
+                let duration = probe.duration.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "exact single-frame IMG admission returned no proven duration for {}",
+                        input.display()
+                    )
+                })?;
                 let color_info = foundation::ffprobe_json::ColorInfo {
                     color_space: probe.color_space.clone(),
                     color_transfer: probe.color_transfer.clone(),
@@ -1278,7 +1284,7 @@ fn fast_static_skip_or_ignore(
                     foundation::infra::static_logs::messages::LABEL_PROBE,
                     &format!(
                         "IMG accepted exact single-frame, no-audio {:.3}s {} container: {}",
-                        probe.duration.unwrap_or_default(),
+                        duration,
                         detected_format.as_str(),
                         input.display()
                     )

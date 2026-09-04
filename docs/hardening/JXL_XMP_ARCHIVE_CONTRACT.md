@@ -50,9 +50,12 @@ metadata:
   semantics or RAW sensor/CFA/maker-note data, so decoder availability is not
   treated as permission to flatten them;
 - a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains an IMG still. An
-  animated instance is handed to VID, while MP4/MOV/MKV/WebM stays outside IMG
-  even with one frame because video-container timeline, track, transform and
-  color semantics do not become still-image semantics.
+  animated instance is handed to VID. MP4/MOV/MKV/WebM enters IMG only when
+  decoded-frame inventory proves exactly one video frame, no audio or other
+  streams, no chapters/programs, a valid canvas, and a duration no longer than
+  two seconds; uncertain or genuinely temporal containers remain in VID. The
+  resulting JXL is a pixel-equivalent still derivative and is never described
+  as a reconstruction of the original video container.
 
 All `cjxl` outputs explicitly request the JXL container so append-only metadata
 boxes remain available. Direct pixel encoding uses effort 7 normally and effort
@@ -61,12 +64,59 @@ therefore require whole-image working memory; effort 11 runs multiple expert
 lossless configurations and is not used for general pixel encoding. JPEG
 bitstream transcode is a distinct, fast workload and uses effort 11 by default;
 an encoder that rejects expert options is retried at effort 10. Direct pixel
-encoding also explicitly sets `--progressive_dc=0` and
-`--photon_noise_iso=0`: IMG neither adds a progressive DC preview nor replaces
-source texture with synthetic noise. The immutable JPEG-transcode path receives
-neither override. Changing progressive behavior later requires a new encode and
-a new archive proof; it is not an in-place lossless metadata toggle. No path may
-bypass its pixel or exact-reconstruction proof.
+encoding explicitly sets `--progressive_dc=0`, `--responsive=0`, `--noise=0`,
+and `--photon_noise_iso=0`. Progressive AC remains disabled by the absence of
+`-p`, `--progressive_ac`, and `--qprogressive_ac`. IMG therefore neither adds a
+progressive preview/responsive transform nor substitutes generated adaptive or
+photon noise. These controls do not pre-filter real source noise: `d=0` keeps
+the decoded samples exactly, while a lossy encode may naturally smooth them.
+The immutable JPEG-transcode path receives none of these pixel-policy
+overrides. Changing progressive behavior later requires a new encode and a new
+archive proof; it is not an in-place lossless metadata toggle. No path may
+bypass its pixel or exact-reconstruction proof. The controls are available in
+the CI-pinned libjxl v0.12 as well as the production v0.13 toolchain; see the
+official [cjxl option definitions](https://github.com/libjxl/libjxl/blob/v0.12.0/tools/cjxl_main.cc).
+
+## Measured encoder-policy evidence
+
+The policy is based on controlled, privacy-safe synthetic measurements, not a
+fixed web-derived percentage. The 2026-09-05 baseline used local `cjxl` v0.13,
+512×512 deterministic inputs, and identical settings except for the named
+feature:
+
+| Input / comparison | Explicit off | Alternative | Observed change |
+| --- | ---: | ---: | ---: |
+| Clean gradient, `d=1/e7`, file size | 730 B | `-p`: 879 B | +20.4% |
+| Deterministic noisy image, `d=1/e7`, file size | 146,339 B | `-p`: 150,481 B | +2.83% |
+| Clean gradient, peak RSS | 44.7 MB | `-p`: 55.0 MB | about +23% |
+| Deterministic noisy image, peak RSS | 46.4 MB | `-p`: 61.3 MB | about +32% |
+| Textured image, `d=3/e7`, file size | `--noise=0`: 19,052 B | `--noise=1`: 18,686 B | -1.92% |
+
+The encoder's auto policy happened to equal explicit-off output on the first
+two samples, but that is not a cross-version contract. The measured range also
+shows why “progressive always costs 13% size and 39% memory” is not a valid
+project invariant.
+
+Effort measurements explain the production split:
+
+| 512×512 lossless workload | Size | Time | Peak RSS |
+| --- | ---: | ---: | ---: |
+| Pixel encode e7 | 1,757 B | 0.06 s | 20.9 MB |
+| Pixel encode e10 | 1,261 B | 0.31 s | 29.4 MB |
+| Pixel encode e11 | 952 B | 3.58 s | 511.1 MB |
+| JPEG bitstream transcode e7 | 3,140 B | 0.01 s | 17.8 MB |
+| JPEG bitstream transcode e10 | 2,785 B | 0.02 s | 19.7 MB |
+| JPEG bitstream transcode e11 | 2,785 B | 0.02 s | 19.3 MB |
+
+This supports e7 for normal pixel work, e10 only for explicit ultimate/archive
+pixel work, and e11 for JPEG bitstream transcode. It also agrees with libjxl's
+official [effort description](https://github.com/libjxl/libjxl/blob/main/doc/encode_effort.md):
+e10 disables chunked encoding for global analysis and e11 tries multiple
+lossless configurations. On a 2048×2048 lossless probe, forcing
+`--buffering=1` increased peak RSS at e7 (224.4 MB to 262.8 MB), changed output
+size, and did not improve e10; consequently there is no global buffering
+override. Measurements are regression evidence for the policy, not promises
+that every image will have the same size or memory ratio.
 
 ## Durable overlay commit
 

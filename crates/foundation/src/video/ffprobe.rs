@@ -435,17 +435,15 @@ fn exact_single_frame_video_duration(json: &serde_json::Value) -> Result<f64, St
     if stream.get("codec_type").and_then(serde_json::Value::as_str) != Some("video") {
         return Err("the only stream is not a video stream".to_string());
     }
-    if stream
+    let width = stream
         .get("width")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-        == 0
-        || stream
-            .get("height")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            == 0
-    {
+        .ok_or_else(|| "video stream width is unavailable; refusing to guess".to_string())?;
+    let height = stream
+        .get("height")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "video stream height is unavailable; refusing to guess".to_string())?;
+    if width == 0 || height == 0 {
         return Err("video stream has no valid image canvas".to_string());
     }
 
@@ -476,11 +474,14 @@ fn exact_single_frame_video_duration(json: &serde_json::Value) -> Result<f64, St
         }
     }
 
-    let duration = json
+    let format_duration = json
         .get("format")
-        .and_then(|format| parse_f64_string_field(&format["duration"]))
-        .or_else(|| parse_f64_string_field(&stream["duration"]))
-        .ok_or_else(|| "duration is unavailable; refusing to infer a still image".to_string())?;
+        .and_then(|format| parse_f64_string_field(&format["duration"]));
+    let duration = match format_duration {
+        Some(duration) => Some(duration),
+        None => parse_f64_string_field(&stream["duration"]),
+    }
+    .ok_or_else(|| "duration is unavailable; refusing to infer a still image".to_string())?;
     if !duration.is_finite() || duration < 0.0 {
         return Err(format!("duration {duration} is invalid"));
     }
@@ -1844,6 +1845,37 @@ mod single_frame_video_still_tests {
                 .expect_err("unknown frame count must fail closed")
                 .contains("refusing to guess")
         );
+
+        let stream_duration_only = json!({
+            "format": {},
+            "streams": [{
+                "codec_type": "video",
+                "width": 640,
+                "height": 480,
+                "duration": "0.040",
+                "nb_frames": "1",
+                "nb_read_frames": "1"
+            }],
+            "chapters": [],
+            "programs": []
+        });
+        assert_eq!(
+            exact_single_frame_video_duration(&stream_duration_only),
+            Ok(0.04)
+        );
+
+        for missing_dimension in ["width", "height"] {
+            let mut incomplete = stream_duration_only.clone();
+            incomplete["streams"][0]
+                .as_object_mut()
+                .expect("video stream object")
+                .remove(missing_dimension);
+            assert!(
+                exact_single_frame_video_duration(&incomplete)
+                    .expect_err("missing canvas dimension must fail closed")
+                    .contains("refusing to guess")
+            );
+        }
     }
 }
 
