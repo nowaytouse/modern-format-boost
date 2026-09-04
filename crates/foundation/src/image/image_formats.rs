@@ -1119,6 +1119,16 @@ pub mod tiff_family {
         Ok(false)
     }
 
+    /// Return whether a TIFF-family payload identifies itself as Digital Negative (DNG).
+    ///
+    /// DNG is a camera-RAW archive even when its filename carries an ordinary raster
+    /// extension, so callers must route it by the mandatory `DNGVersion` tag rather
+    /// than trusting the suffix.
+    pub fn is_dng_container(path: &Path) -> Result<bool> {
+        const DNG_VERSION_TAG: u16 = 0xC612;
+        contains_ifd_tag(path, DNG_VERSION_TAG)
+    }
+
     /// Helper to parse array values or space-separated strings as the first u64
     fn parse_first_u64(val: &Value) -> Result<u64> {
         if let Some(n) = val.as_u64() {

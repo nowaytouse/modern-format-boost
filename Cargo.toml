@@ -144,10 +144,14 @@ chrono = { git = "https://github.com/chronotope/chrono", features = [
 
 # Image processing
 image = { git = "https://github.com/image-rs/image", default-features = false, features = [
+  "bmp",
   "png",
   "jpeg",
   "webp",
   "gif",
+  "ico",
+  "pnm",
+  "tga",
   "tiff",
   "avif",
 ] }

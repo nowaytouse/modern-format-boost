@@ -5711,6 +5711,15 @@ fn prepare_input_for_cjxl(
             "BMP",
         ),
 
+        "tga" | "ico" | "cur" => preprocess_lossless_with_magick(
+            input,
+            precision,
+            intermediate_depth,
+            depth_str,
+            intermediate_suffix,
+            &ext.to_ascii_uppercase(),
+        ),
+
         "jp2" | "j2k" => preprocess_lossless_with_magick(
             input,
             precision,

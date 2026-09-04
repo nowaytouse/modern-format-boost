@@ -1743,7 +1743,14 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
 }
 
 fn parse_stored_checksum(checksum: Option<Vec<u8>>) -> Option<[u8; blake3::OUT_LEN]> {
-    checksum?.try_into().ok()
+    let checksum = checksum?;
+    if checksum.len() != blake3::OUT_LEN {
+        return None;
+    }
+
+    let mut digest = [0; blake3::OUT_LEN];
+    digest.copy_from_slice(&checksum);
+    Some(digest)
 }
 
 /// Calculates the full BLAKE3 digest for cached payload integrity.

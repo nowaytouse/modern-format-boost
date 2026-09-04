@@ -97,6 +97,36 @@ All notable changes to this project will be documented in this file.
   encoding was disabled. The lossless production matrix now includes genuine
   non-8-bit 16-bit PNG/TIFF samples; its HDR generator no longer uses only
   8-bit-representable channel values inside a nominal 16-bit container.
+- **The latest Shared Health failure is fixed at both reported roots**: the M150
+  PostgreSQL migration contract now expects typed CRC32-to-BLAKE3 tables to be
+  dropped and recreated instead of truncated in place, and analysis-cache
+  BLAKE3 rows reject every non-32-byte digest explicitly instead of hiding a
+  failed slice conversion. The missing coverage artifact was downstream of
+  these two complete contract-test failures, not a third root cause.
+- **Legacy static raster support now matches the advertised IMG scope**: the
+  compiled decoder set and precision-preserving preprocessing cover TGA,
+  ICO/CUR, and NetPBM/PAM alongside PNG/BMP/TIFF and confirmed single-frame
+  GIF. TIFF is enabled by default; a measured 16-bit depth now controls the
+  intermediate even when FFprobe has no color record. TGA headers that resemble
+  CUR no longer enter the ICO decoder unless the ICONDIR entry count is valid,
+  and NetPBM's explicit lack of a portable embedded EXIF/XMP/ICC channel no
+  longer becomes a false ExifTool failure while adjacent XMP remains audited.
+  Extension fallback only selects a decoder when magic has no answer; the
+  decoder must still validate the structure. A single-frame image container is
+  supported, but a video container remains outside IMG regardless of frame
+  count. The production matrix performs real conversions and exact-pixel,
+  source-immutability, and XMP checks for the added routes.
+- **Vector and camera originals are no longer accidental raster inputs**:
+  SVG/SVGZ and enumerated camera RAW files are copied byte-for-byte rather than
+  flattened into JXL, preserving vector and sensor/CFA/maker-note archive value.
+  TIFF-family payloads carrying the mandatory DNGVersion tag receive the same
+  RAW protection even behind a misleading raster extension. Recognized
+  PSD/DDS/EXR/QOI/FLIF payloads are also rejected at the common IMG preflight
+  instead of falling through to a generic decoder when their suffix is forged.
+  Direct pixel-to-JXL output explicitly disables progressive DC and synthetic
+  replacement noise; effort 7 remains normal, effort 10 remains the bounded
+  ultimate/archive level, and effort 11 remains confined to reversible JPEG
+  bitstream transcode with the existing exact-reconstruction gate.
 
 ### Workstream boundary: earlier IMG hardening vs. the later CI-only repair
 

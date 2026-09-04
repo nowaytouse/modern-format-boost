@@ -1238,6 +1238,30 @@ fn fast_static_skip_or_ignore(
             )
         })?;
 
+    if detected_format_is_video(&detected_format) {
+        let reason = format!(
+            "{} is a video container; IMG accepts image containers only, regardless of frame count",
+            detected_format.as_str()
+        );
+        let file_size = foundation::io_utils::metadata_with_retry(input)
+            .map_err(|error| anyhow::anyhow!("Failed to inspect {}: {error}", input.display()))?
+            .len();
+        foundation::progress_mode::image_ignored(input, &reason, None);
+        return Ok(Some(conversion_output_ignored(input, reason, file_size)));
+    }
+
+    if detected_format_is_outside_img_raster_scope(&detected_format) {
+        let reason = format!(
+            "{} is outside the IMG raster-conversion contract; source/project payload retained unchanged",
+            detected_format.as_str()
+        );
+        let file_size = foundation::io_utils::metadata_with_retry(input)
+            .map_err(|error| anyhow::anyhow!("Failed to inspect {}: {error}", input.display()))?
+            .len();
+        foundation::progress_mode::image_ignored(input, &reason, None);
+        return Ok(Some(conversion_output_ignored(input, reason, file_size)));
+    }
+
     if !fast_static_uses_modern_compression_preflight(&detected_format) {
         return Ok(None);
     }
@@ -1385,6 +1409,65 @@ fn image_batch_should_abort(mode: foundation::BatchErrorMode, error: &anyhow::Er
     mode.should_abort_error(error)
 }
 
+const ARCHIVAL_RAW_EXTENSIONS: &[&str] = &[
+    "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "raf", "rw2", "pef", "srw", "kdc", "mrw",
+    "erf", "mef", "mos", "crw", "x3f",
+];
+
+const RAW_ARCHIVE_REASON: &str = "Camera RAW source retained byte-for-byte: pixel JXL cannot preserve sensor, CFA, or maker-note archive data";
+
+fn archival_original_only_reason(input: &Path) -> anyhow::Result<Option<&'static str>> {
+    let extension =
+        foundation::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(input);
+    let reason = if matches!(extension.as_str(), "svg" | "svgz") {
+        "Vector source retained byte-for-byte: raster JXL cannot preserve scalable vector semantics"
+    } else if ARCHIVAL_RAW_EXTENSIONS.contains(&extension.as_str()) {
+        RAW_ARCHIVE_REASON
+    } else {
+        let detected = foundation::image::format_detect::detect_true_format(input)?;
+        return if matches!(detected, foundation::image::format_detect::FormatKind::Tiff)
+            && foundation::image_formats::tiff_family::is_dng_container(input)?
+        {
+            Ok(Some(RAW_ARCHIVE_REASON))
+        } else {
+            Ok(None)
+        };
+    };
+
+    // An archival-looking extension must not hide an ordinary raster or video
+    // payload. Only unknown/TIFF-based content receives the original-only RAW
+    // or vector policy; positively identified other media follows its real type.
+    let detected = foundation::image::format_detect::detect_true_format(input)?;
+    if detected.is_known_media()
+        && !matches!(detected, foundation::image::format_detect::FormatKind::Tiff)
+    {
+        return Ok(None);
+    }
+    Ok(Some(reason))
+}
+
+const fn detected_format_is_video(format: &foundation::image_detection::DetectedFormat) -> bool {
+    use foundation::image_detection::DetectedFormat;
+    matches!(
+        format,
+        DetectedFormat::MP4 | DetectedFormat::MOV | DetectedFormat::MKV | DetectedFormat::WEBM
+    )
+}
+
+const fn detected_format_is_outside_img_raster_scope(
+    format: &foundation::image_detection::DetectedFormat,
+) -> bool {
+    use foundation::image_detection::DetectedFormat;
+    matches!(
+        format,
+        DetectedFormat::PSD
+            | DetectedFormat::DDS
+            | DetectedFormat::EXR
+            | DetectedFormat::QOI
+            | DetectedFormat::FLIF
+    )
+}
+
 #[cfg(test)]
 mod conversion_result_adapter_tests {
     #![allow(
@@ -1393,7 +1476,11 @@ mod conversion_result_adapter_tests {
         clippy::expect_fun_call,
         clippy::panic
     )]
-    use super::{convert_result_to_output, image_batch_should_abort};
+    use super::{
+        AutoConvertConfig, ConfigFlags, archival_original_only_reason, convert_result_to_output,
+        detected_format_is_outside_img_raster_scope, detected_format_is_video,
+        fast_static_skip_or_ignore, image_batch_should_abort,
+    };
 
     #[test]
     fn failed_task_result_is_not_promoted_to_conversion_success() -> anyhow::Result<()> {
@@ -1431,6 +1518,136 @@ mod conversion_result_adapter_tests {
             &unknown
         ));
     }
+
+    #[test]
+    fn raw_and_vector_inputs_are_preserved_without_hiding_real_rasters() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for extension in [
+            "svg", "svgz", "cr2", "cr3", "nef", "arw", "dng", "raf", "rw2",
+        ] {
+            let input = temp.path().join(format!("archive.{extension}"));
+            let bytes: &[u8] = if extension == "dng" {
+                &[0x49, 0x49, 0x2A, 0x00, 0, 0, 0, 0]
+            } else {
+                b"archival-source"
+            };
+            std::fs::write(&input, bytes)?;
+            assert!(
+                archival_original_only_reason(&input)?.is_some(),
+                "{extension} must stay byte-for-byte original"
+            );
+        }
+
+        let raster_with_vector_suffix = temp.path().join("ordinary-image.svg");
+        std::fs::write(
+            &raster_with_vector_suffix,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )?;
+        assert!(archival_original_only_reason(&raster_with_vector_suffix)?.is_none());
+
+        let raw_with_raster_suffix = temp.path().join("camera-original.jpg");
+        std::fs::write(
+            &raw_with_raster_suffix,
+            [
+                b'I', b'I', 42, 0, 8, 0, 0, 0, // classic TIFF header + IFD offset
+                1, 0, // one IFD entry
+                0x12, 0xC6, // DNGVersion (0xC612)
+                1, 0, // BYTE
+                4, 0, 0, 0, // four components
+                1, 4, 0, 0, // DNG 1.4.0.0
+                0, 0, 0, 0, // no next IFD
+            ],
+        )?;
+        assert!(
+            archival_original_only_reason(&raw_with_raster_suffix)?.is_some(),
+            "DNGVersion must protect a camera RAW even behind a raster extension"
+        );
+
+        let ordinary_tiff = temp.path().join("ordinary.tiff");
+        std::fs::write(
+            &ordinary_tiff,
+            [
+                b'I', b'I', 42, 0, 8, 0, 0, 0, // classic TIFF header + IFD offset
+                1, 0, // one IFD entry
+                0, 1, // ImageWidth (0x0100), not DNGVersion
+                4, 0, // LONG
+                1, 0, 0, 0, // one value
+                1, 0, 0, 0, // width = 1
+                0, 0, 0, 0, // no next IFD
+            ],
+        )?;
+        assert!(
+            archival_original_only_reason(&ordinary_tiff)?.is_none(),
+            "an ordinary TIFF must remain an IMG conversion input"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn video_containers_are_never_img_static_inputs_regardless_of_frame_count() {
+        use foundation::image_detection::DetectedFormat;
+        for format in [
+            DetectedFormat::MP4,
+            DetectedFormat::MOV,
+            DetectedFormat::MKV,
+            DetectedFormat::WEBM,
+        ] {
+            assert!(detected_format_is_video(&format));
+        }
+        assert!(!detected_format_is_video(&DetectedFormat::PNG));
+    }
+
+    #[test]
+    fn recognized_non_target_payloads_never_enter_img_raster_conversion() {
+        use foundation::image_detection::DetectedFormat;
+        for format in [
+            DetectedFormat::PSD,
+            DetectedFormat::DDS,
+            DetectedFormat::EXR,
+            DetectedFormat::QOI,
+            DetectedFormat::FLIF,
+        ] {
+            assert!(detected_format_is_outside_img_raster_scope(&format));
+        }
+        for format in [
+            DetectedFormat::JPEG,
+            DetectedFormat::PNG,
+            DetectedFormat::WebP,
+            DetectedFormat::AVIF,
+            DetectedFormat::HEIC,
+            DetectedFormat::HEIF,
+            DetectedFormat::TIFF,
+            DetectedFormat::BMP,
+            DetectedFormat::TGA,
+            DetectedFormat::ICO,
+            DetectedFormat::PNM,
+        ] {
+            assert!(!detected_format_is_outside_img_raster_scope(&format));
+        }
+    }
+
+    #[test]
+    fn disguised_project_payload_is_ignored_without_mutation() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("disguised-project.jpg");
+        let payload = b"8BPS\x00\x01";
+        std::fs::write(&input, payload)?;
+        let config = AutoConvertConfig {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::empty(),
+            child_threads: 1,
+            cache: None,
+            error_mode: foundation::BatchErrorMode::FailFast,
+        };
+
+        let outcome = fast_static_skip_or_ignore(&input, &config)?
+            .expect("recognized PSD payload must be handled by the IMG scope preflight");
+        assert!(outcome.ignored);
+        assert!(!outcome.skipped);
+        assert_eq!(std::fs::read(&input)?, payload);
+        Ok(())
+    }
 }
 
 fn auto_convert_single_file(
@@ -1459,6 +1676,25 @@ fn auto_convert_single_file(
             &e
         );
         std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+    }
+
+    if let Some(reason) = archival_original_only_reason(input)? {
+        let file_size = foundation::io_utils::metadata_with_retry(input)
+            .map_err(|error| anyhow::anyhow!("Failed to inspect {}: {error}", input.display()))?
+            .len();
+        foundation::progress_mode::image_skipped(input, reason);
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            ignored: false,
+            message: reason.to_string(),
+            original_size: file_size,
+            output_size: None,
+            size_reduction: None,
+            blake3: None,
+        });
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).

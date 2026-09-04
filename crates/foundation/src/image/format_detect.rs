@@ -91,7 +91,7 @@ impl FormatKind {
             Self::Exr => &["exr"],
             Self::Flif => &["flif"],
             Self::Psd => &["psd"],
-            Self::Pnm => &["pnm", "pbm", "pgm", "ppm"],
+            Self::Pnm => &["pnm", "pbm", "pgm", "ppm", "pam"],
             Self::Dds => &["dds"],
             Self::Mp4 => &["mp4", "m4v", "m4a", "m4b", "m4p", "m4r", "3gp", "3g2"],
             Self::Mov => &["mov", "qt"],
@@ -233,7 +233,10 @@ pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
         return Ok(FormatKind::Jp2);
     }
 
-    if b.starts_with(&[0x00, 0x00, 0x01, 0x00]) || b.starts_with(&[0x00, 0x00, 0x02, 0x00]) {
+    if n >= 6
+        && (b.starts_with(&[0x00, 0x00, 0x01, 0x00]) || b.starts_with(&[0x00, 0x00, 0x02, 0x00]))
+        && u16::from_le_bytes([b[4], b[5]]) > 0
+    {
         return Ok(FormatKind::Ico);
     }
 
@@ -251,7 +254,7 @@ pub fn detect_true_format(path: &Path) -> Result<FormatKind> {
 
     if n >= 2
         && b[0] == b'P'
-        && (b'1'..=b'6').contains(&b[1])
+        && (b'1'..=b'7').contains(&b[1])
         && (n < 3 || b[2].is_ascii_whitespace())
     {
         return Ok(FormatKind::Pnm);
@@ -1128,6 +1131,7 @@ mod tests {
             (".jpg", b"FLIF\x00\x00", FormatKind::Flif),
             (".jpg", b"8BPS\x00\x01", FormatKind::Psd),
             (".jpg", b"P6\n1 1\n255\n", FormatKind::Pnm),
+            (".jpg", b"P7\nWIDTH 1\nHEIGHT 1\nENDHDR\n", FormatKind::Pnm),
             (".jpg", b"DDS \x00\x00", FormatKind::Dds),
             (
                 ".jpg",
@@ -1151,6 +1155,15 @@ mod tests {
                 "spoofed extension unexpectedly accepted for {expected:?}"
             );
         }
+    }
+
+    #[test]
+    fn ico_signature_requires_a_nonzero_directory_entry_count() {
+        let tga_like = write_tmp(&[0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            detect_true_format(tga_like.path()).unwrap(),
+            FormatKind::Unknown
+        );
     }
 
     #[test]

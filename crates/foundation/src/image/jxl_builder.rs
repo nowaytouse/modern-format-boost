@@ -120,6 +120,15 @@ impl ToolBuilder for CjxlBuilder {
         // overlays require the JXL container even when cjxl would omit it.
         cmd.arg(constants::JXL_ARG_CONTAINER);
 
+        // Pixel encodes are archival/local outputs, not progressive web
+        // derivatives. Keep the encoder's auto mode from adding a progressive
+        // DC frame and explicitly disable synthetic replacement noise. JPEG
+        // reconstruction remains its own immutable bitstream-transcode path.
+        if !self.lossless_jpeg {
+            cmd.arg(constants::JXL_ARG_PROGRESSIVE_DC_DISABLED);
+            cmd.arg(constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED);
+        }
+
         if let Some(d) = self.distance
             && !self.lossless_jpeg
         {
@@ -319,6 +328,31 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(args.iter().any(|arg| arg == "10"));
         assert!(!args.iter().any(|arg| arg == "--allow_expert_options"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == constants::JXL_ARG_PROGRESSIVE_DC_DISABLED)
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED)
+        );
+    }
+
+    #[test]
+    fn jpeg_reconstruction_does_not_rewrite_progressive_or_noise_policy() {
+        let mut builder = CjxlBuilder::new();
+        builder
+            .input(Path::new("in.jpg"))
+            .output(Path::new("out.jxl"))
+            .lossless_jpeg(true);
+
+        let args = builder
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&constants::JXL_ARG_PROGRESSIVE_DC_DISABLED.to_string()));
+        assert!(!args.contains(&constants::JXL_ARG_SYNTHETIC_NOISE_DISABLED.to_string()));
     }
 
     #[test]

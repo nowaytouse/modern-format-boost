@@ -268,12 +268,14 @@ fn build_image_precision_profile(
             .effective_bit_depth()
             .is_some();
 
+    let measured_high_bit_depth = bit_depth.is_some_and(|depth| depth > 8);
     let preserve_unknown_container_with_16bit =
         !is_float && bit_depth.is_none() && matches!(ext_lower, Some("tif" | "tiff" | "dng"));
     let metadata_requires_high_precision_decode =
-        !is_float && assessment.should_preserve_high_bit_depth();
+        !is_float && (assessment.should_preserve_high_bit_depth() || measured_high_bit_depth);
     let preserve_high_precision = is_float
         || assessment.should_preserve_high_bit_depth()
+        || measured_high_bit_depth
         || preserve_unknown_container_with_16bit;
 
     ImagePrecisionProfile {
@@ -464,5 +466,20 @@ mod tests {
         assert!(profile.should_preserve_high_precision());
         assert_eq!(profile.intermediate_depth_str(), "16");
         assert!(!profile.should_use_high_precision_png16_decode());
+    }
+
+    #[test]
+    fn image_precision_profile_uses_measured_tiff_depth_when_ffprobe_has_no_color_info() {
+        let profile = ImagePrecisionProfile::from_media_context(
+            Some("tiff"),
+            &ColorInfo::default(),
+            Some(16),
+        );
+
+        assert_eq!(profile.bit_depth(), Some(16));
+        assert!(!profile.preserve_unknown_container_with_16bit());
+        assert!(profile.should_preserve_high_precision());
+        assert_eq!(profile.intermediate_depth_str(), "16");
+        assert!(profile.should_use_high_precision_png16_decode());
     }
 }

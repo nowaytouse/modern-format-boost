@@ -75,14 +75,37 @@ pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 =
 fn open_image_reader_with_magic_bytes(
     path: &Path,
 ) -> std::io::Result<image::ImageReaderOptions<std::io::BufReader<std::fs::File>>> {
-    image::ImageReaderOptions::open(path)?.with_guessed_format()
+    let mut reader = image::ImageReaderOptions::open(path)?.with_guessed_format()?;
+    let extension_format = extension_selected_decoder_format(path);
+    let ico_guess_is_tga_header_collision = reader.format() == Some(ImageFormat::Ico)
+        && extension_format == Some(ImageFormat::Tga)
+        && crate::image::format_detect::detect_true_format(path)
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            != crate::image::format_detect::FormatKind::Ico;
+    if let Some(format) = extension_format
+        && (reader.format().is_none() || ico_guess_is_tga_header_collision)
+    {
+        // TGA has no mandatory magic signature, and CUR/NetPBM variants are
+        // not uniformly guessed. A true ICO/CUR header still wins over a .tga
+        // extension; otherwise the extension selects only a decoder and a
+        // malformed file still has to pass that decoder.
+        reader.set_format(format);
+    }
+    Ok(reader)
+}
+
+fn extension_selected_decoder_format(path: &Path) -> Option<ImageFormat> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "tga" => Some(ImageFormat::Tga),
+        "ico" | "cur" => Some(ImageFormat::Ico),
+        "pnm" | "ppm" | "pgm" | "pbm" | "pam" => Some(ImageFormat::Pnm),
+        _ => None,
+    }
 }
 
 fn image_dimensions_with_magic_bytes(path: &Path) -> std::result::Result<(u32, u32), String> {
-    let reader = image::ImageReaderOptions::open(path).map_err(|err| err.to_string())?;
-    let reader = reader
-        .with_guessed_format()
-        .map_err(|err| err.to_string())?;
+    let reader = open_image_reader_with_magic_bytes(path).map_err(|err| err.to_string())?;
     reader.into_dimensions().map_err(|err| err.to_string())
 }
 
@@ -559,6 +582,16 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
                 ext_str == crate::constants::EXT_AVIF,
                 crate::constants::EXT_AVIF,
             ),
+            ImageFormat::Bmp => (
+                ext_str == crate::constants::EXT_BMP,
+                crate::constants::EXT_BMP,
+            ),
+            ImageFormat::Ico => (matches!(ext_str.as_str(), "ico" | "cur"), "ico"),
+            ImageFormat::Pnm => (
+                matches!(ext_str.as_str(), "pnm" | "ppm" | "pgm" | "pbm" | "pam"),
+                "pnm",
+            ),
+            ImageFormat::Tga => (ext_str == "tga", "tga"),
             _ => (true, ""),
         };
 
@@ -3198,6 +3231,58 @@ mod tests {
         assert_eq!((analysis.width, analysis.height), (3, 2));
         assert!(analysis.jpeg_analysis.is_some());
         assert!(analysis.precision.quality_estimate.is_some());
+    }
+
+    #[test]
+    fn decoder_fallback_is_limited_to_structurally_decoded_legacy_stills() {
+        for (name, expected) in [
+            ("still.tga", ImageFormat::Tga),
+            ("icon.ico", ImageFormat::Ico),
+            ("cursor.cur", ImageFormat::Ico),
+            ("portable.pnm", ImageFormat::Pnm),
+            ("portable.pam", ImageFormat::Pnm),
+        ] {
+            assert_eq!(
+                extension_selected_decoder_format(Path::new(name)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            extension_selected_decoder_format(Path::new("vector.svg")),
+            None
+        );
+        assert_eq!(
+            extension_selected_decoder_format(Path::new("camera.dng")),
+            None
+        );
+    }
+
+    #[test]
+    fn tga_ico_prefix_collision_keeps_the_structurally_valid_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([24, 96, 192, 255]));
+
+        let tga = dir.path().join("still.tga");
+        image
+            .save_with_format(&tga, ImageFormat::Tga)
+            .expect("write TGA fixture");
+        assert_eq!(
+            open_image_reader_with_magic_bytes(&tga)
+                .expect("open TGA")
+                .format(),
+            Some(ImageFormat::Tga)
+        );
+
+        let disguised_ico = dir.path().join("icon.tga");
+        image
+            .save_with_format(&disguised_ico, ImageFormat::Ico)
+            .expect("write ICO fixture with TGA extension");
+        assert_eq!(
+            open_image_reader_with_magic_bytes(&disguised_ico)
+                .expect("open disguised ICO")
+                .format(),
+            Some(ImageFormat::Ico)
+        );
     }
 
     #[test]

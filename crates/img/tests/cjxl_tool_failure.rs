@@ -37,6 +37,32 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         p
     };
 
+    // Keep this test scoped to cjxl. A broken host ffmpeg installation must
+    // not make the CLI fail during the required-tool preflight before the
+    // deliberately failing encoder is reached.
+    #[cfg(unix)]
+    let ffmpeg_path = {
+        let p = bin_dir.join("ffmpeg");
+        fs::write(
+            &p,
+            "#!/bin/sh\ncase \"$1\" in --version|-version|--help|-h) echo 'ffmpeg version 9.0.1'; exit 0;; esac\necho 'unexpected ffmpeg invocation in cjxl failure test' >&2\nexit 1\n",
+        )?;
+        let mut perms = fs::metadata(&p)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&p, perms)?;
+        p
+    };
+
+    #[cfg(windows)]
+    let ffmpeg_path = {
+        let p = bin_dir.join("ffmpeg.bat");
+        fs::write(
+            &p,
+            "@if \"%1\"==\"--version\" (echo ffmpeg version 9.0.1 & exit /b 0)\n@if \"%1\"==\"-version\" (echo ffmpeg version 9.0.1 & exit /b 0)\n@echo unexpected ffmpeg invocation in cjxl failure test 1>&2\n@exit /b 1\n",
+        )?;
+        p
+    };
+
     let src_dir = td.path().join("src");
     let output_dir = td.path().join("output");
     fs::create_dir_all(&src_dir)?;
@@ -52,6 +78,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         .arg(&output_dir)
         .arg("--force")
         .env("MFB_TOOL_CJXL", &cjxl_path)
+        .env("MFB_TOOL_FFMPEG", &ffmpeg_path)
         .env("MFB_INVOKER", "test-harness")
         .output()?;
     let diagnostics = format!(

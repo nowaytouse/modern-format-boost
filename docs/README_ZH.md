@@ -48,7 +48,7 @@ IMG 回归套件直接覆盖公开的检测、转换与交付边界；仅编译�
 - foundation 图像分析测试覆盖 UltraHDR/MPF JPEG 检测、增益图元数据边界，以及 HDR
   合成失败关闭与保留原件路径；
 - 真实 PNG/TIFF/WebP/GIF/AVIF/JXL/HEIC 夹具、静图/动图分类、权威解码器、尺寸和非空像素检查；
-- 合成 PNG/BMP/TIFF → 容器化 JXL 的真实编码，RGBA16 逐像素一致、源文件不变及 XMP overlay 提取核验；以及
+- 合成 PNG/BMP/TIFF/TGA/ICO/CUR/NetPBM → 容器化 JXL 的真实编码，RGBA16 逐像素一致、源文件不变及 XMP overlay 提取核验；以及
 - foundation 与 IMG 套件中已有的损坏/截断输入、元数据 overlay、输出计数和空目录清理契约。
 
 `cargo test --locked -p img --all-targets -- --list` 是当前检出 revision 的可复现
@@ -78,6 +78,17 @@ cargo run --locked -p dev --bin check_all -- \
 视频失败不会混淆 IMG 的结果。
 
 依赖外部工具的测试会明确报告编码器/解码器不可用，绝不会把未执行的分支宣称为已验证。这是充分的本地生产候选证据，但不等同于所有第三方编解码器或真实 Photos/iCloud 事务在所有机器上都绝无缺陷。
+
+### 实际静态图像范围
+
+| 范围 | 格式 / 行为 |
+| :--- | :--- |
+| 内容签名识别 | JPEG/JFIF、PNG/APNG、WebP、GIF、TIFF/BigTIFF、BMP、HEIC/HEIF/HIF、AVIF、JXL、JP2/J2K、ICO/CUR、QOI、EXR、FLIF、PSD、PNM 和 DDS；能识别不等于承诺转换 |
+| 已核验转换核心 | 已确认静态的 JPEG，以及已证明无损的 PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/单帧 GIF/WebP/AVIF/HEIC/HEIF/JP2；使用格式专用的像素、元数据和结构证明 |
+| 仅原件归档 | SVG/SVGZ 与相机 RAW（`CR2`、`CR3`、`NEF`、`ARW`、`DNG`、`RAF`、`RW2` 及项目已枚举的扩展列表）可被发现，但只逐字节保留；改名后的 DNG 仍按 TIFF `DNGVersion` 标签识别；栅格化会丢失矢量语义或传感器/CFA/厂商私有数据 |
+| 不进入普通栅格转换 | 视频/动图、PSD/PSB/KRA/CLIP/Procreate/笔刷、AI/EPS/PDF、2D/3D/模型/工程源文件、DDS、HDR/EXR、QOI/FLIF 及未知/私有格式会被保留、跳过或忽略，不靠扩展名猜测 |
+
+IMG 不会静默压平动图、多帧或视频容器：已证明只有一帧的 GIF/WebP/AVIF/HEIC/HEIF 仍是 IMG 静图；动态实例交给 `vid`。MP4/MOV/MKV/WebM 即使只有一帧也仍是视频容器，因为帧数不会消除时间轴、轨道、变换与色彩语义。直接像素→JXL 明确关闭渐进 DC 和合成噪声；普通任务使用 effort 7，ultimate/归档任务使用 effort 10，effort 11 仅用于独立且快速的 JPEG 比特流可逆转码。已生成的 JXL 无法原地无损切换渐进特性；改变它必须重新编码并重跑完整归档证明。
 
 ### 谁适合使用？
 
@@ -129,7 +140,7 @@ cargo run --locked -p dev --bin check_all -- \
 每个文件都会经过多阶段决策流水线：
 
 - **阶段 1 — 精确检测**：通过文件头、容器结构与权威工具证据识别 JPEG、WebP、AVIF、HEIC、JP2 等格式；无法证明有损/无损或静态/动画语义时失败关闭。
-- **阶段 2 — 路由与编码**：JPEG 只接受能逐字节重建的 JXL 转码；PNG/TIFF/BMP 以及被正面证明为无损的 WebP/AVIF/HEIC/HEIF/JP2 进入像素精确 JXL；已有 JXL 与有损/语义不明的现代容器保留原编码。
+- **阶段 2 — 路由与编码**：JPEG 只接受能逐字节重建的 JXL 转码；PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/单帧 GIF 以及被正面证明为无损的 WebP/AVIF/HEIC/HEIF/JP2 进入像素精确 JXL；SVG/SVGZ 和相机 RAW 逐字节保留；已有 JXL 与有损/语义不明的现代容器保留原编码。
 - **阶段 3 — 异常媒体路径**：普通 IMG 可对非 JPEG 的解码器敌对格式使用受控预处理；JPEG 不以像素相等或重新编码冒充可逆转码，FastImg JXL 也不使用破坏性兜底。
 - **阶段 4 — HDR 增益图处理**：带增益图的 HEIC/HEIF 进入专用 HDR JXL 合成链，并把增益图、深度图等不能内嵌的辅助资产作为逐项核验的 sidecar；AVIF 在解码前由 `avifdec --info` 实时核查增益图，当前无法无损表达时保留原件而不扁平化。UltraHDR JPEG 通过 JBRD 归档，包含 MPF 增益图与私有元数据的原 JPEG 必须逐字节重建。
 - **阶段 5 — img 仅静图**：`img run` 对**已验证动图** **ignore**（`IMG_ANIMATED_HANDOFF`）；**真单帧** GIF/WebP 等可走 JXL；其余动图与所有视频请用 **`vid run`**。

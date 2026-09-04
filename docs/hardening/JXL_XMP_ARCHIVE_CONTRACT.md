@@ -34,8 +34,9 @@ metadata:
 
 - true JPEG, including UltraHDR/MPF JPEG, enters reversible JXL only when the
   original JPEG bytes can be reconstructed exactly;
-- ordinary lossless raster sources such as PNG, BMP, and TIFF, plus modern
-  WebP, AVIF, HEIC/HEIF, and JP2 sources with positive lossless evidence, enter
+- ordinary lossless raster sources such as PNG, BMP, TIFF, TGA, ICO/CUR,
+  NetPBM/PAM, and confirmed single-frame GIF, plus modern WebP, AVIF,
+  HEIC/HEIF, and JP2 sources with positive lossless evidence, enter
   pixel-lossless JXL with decoded RGBA16 equality and metadata audit;
 - AVIF is decoded through the authoritative `avifdec` path only after an
   explicit gain-map probe. A present or unprovable gain map retains the native
@@ -43,14 +44,29 @@ metadata:
   JXL path with verified auxiliary sidecars;
 - an existing JXL and every lossy or semantically unknown modern container
   remains byte-for-byte unchanged. Unknown archive structure is never inferred
-  to be disposable from primary-pixel equality alone.
+  to be disposable from primary-pixel equality alone;
+- SVG/SVGZ and enumerated camera RAW inputs are accepted as archival originals
+  but remain byte-for-byte. Raster JXL cannot prove preservation of vector
+  semantics or RAW sensor/CFA/maker-note data, so decoder availability is not
+  treated as permission to flatten them;
+- a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains an IMG still. An
+  animated instance is handed to VID, while MP4/MOV/MKV/WebM stays outside IMG
+  even with one frame because video-container timeline, track, transform and
+  color semantics do not become still-image semantics.
 
 All `cjxl` outputs explicitly request the JXL container so append-only metadata
 boxes remain available. Direct pixel encoding uses effort 7 normally and effort
-10 for ultimate/archive work because effort 11 can become impractically slow in
-that workload. JPEG bitstream transcode is a distinct, fast workload and uses
-effort 11 by default; an encoder that rejects expert options is retried at effort
-10. Neither path may bypass its pixel or exact-reconstruction proof.
+10 for ultimate/archive work. Effort 10 disables libjxl chunked encoding and can
+therefore require whole-image working memory; effort 11 runs multiple expert
+lossless configurations and is not used for general pixel encoding. JPEG
+bitstream transcode is a distinct, fast workload and uses effort 11 by default;
+an encoder that rejects expert options is retried at effort 10. Direct pixel
+encoding also explicitly sets `--progressive_dc=0` and
+`--photon_noise_iso=0`: IMG neither adds a progressive DC preview nor replaces
+source texture with synthetic noise. The immutable JPEG-transcode path receives
+neither override. Changing progressive behavior later requires a new encode and
+a new archive proof; it is not an in-place lossless metadata toggle. No path may
+bypass its pixel or exact-reconstruction proof.
 
 ## Durable overlay commit
 

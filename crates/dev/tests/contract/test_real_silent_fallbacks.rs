@@ -11484,8 +11484,9 @@ fn media_conversion_analysis_cache_schema_cutover_m150() {
         "schema cutover must batch-audit (M150)"
     );
     assert!(
-        cutover.contains("TRUNCATE TABLE path_index"),
-        "schema cutover must truncate cache tables (M150)"
+        cutover.contains("DROP TABLE IF EXISTS path_index, analysis_records, quality_records")
+            && cutover.contains("video_records CASCADE"),
+        "schema cutover must drop and recreate every typed cache table (M150)"
     );
 }
 

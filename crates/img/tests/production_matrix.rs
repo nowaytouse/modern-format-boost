@@ -710,6 +710,12 @@ fn decode_static_fixture_to_png(input: &Path, format: FormatKind, root: &Path) -
 /// trip; comparing across decoders would turn a decoder disagreement into a
 /// false loss report.
 fn decode_hdr_avif_with_encoder_path(input: &Path, root: &Path) -> Result<PathBuf> {
+    if !tool_available("ffmpeg") {
+        eprintln!(
+            "HDR AVIF reference uses avifdec because FFmpeg is unavailable; this matches the production decoder fallback"
+        );
+        return decode_static_fixture_to_png(input, FormatKind::Avif, root);
+    }
     let output = root.join("hdr-reference-decoded.png");
     let mut command = Command::new(tool_path("ffmpeg")?);
     command
@@ -901,7 +907,15 @@ fn add_magick_lossless_fixtures(
     png: &Path,
     fixtures: &mut Vec<(PathBuf, FormatKind)>,
 ) -> Result<()> {
-    for (extension, format) in [("bmp", FormatKind::Bmp), ("tiff", FormatKind::Tiff)] {
+    for (extension, format) in [
+        ("bmp", FormatKind::Bmp),
+        ("tiff", FormatKind::Tiff),
+        ("tga", FormatKind::Unknown),
+        ("ico", FormatKind::Ico),
+        ("cur", FormatKind::Ico),
+        ("pnm", FormatKind::Pnm),
+        ("pam", FormatKind::Pnm),
+    ] {
         if !magick_supports_format(&extension.to_ascii_uppercase()) {
             eprintln!("{extension} lossless JXL branch not executed: delegate unavailable");
             continue;
@@ -1157,7 +1171,7 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
 
 #[test]
 fn lossless_static_to_jxl_matrix_is_pixel_exact_and_preserves_xmp() -> Result<()> {
-    if let Some(tool) = ["cjxl", "djxl", "jxlinfo", "exiftool", "magick", "ffmpeg"]
+    if let Some(tool) = ["cjxl", "djxl", "jxlinfo", "exiftool", "magick"]
         .into_iter()
         .find(|tool| !tool_available(tool))
     {

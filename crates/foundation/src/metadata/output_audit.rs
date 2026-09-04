@@ -299,6 +299,12 @@ fn preservable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
     Ok(map)
 }
 
+fn has_no_portable_embedded_metadata_channel(path: &Path) -> io::Result<bool> {
+    crate::image::format_detect::detect_true_format(path)
+        .map(|format| matches!(format, crate::image::format_detect::FormatKind::Pnm))
+        .map_err(|error| io::Error::other(error.to_string()))
+}
+
 /// Verify a native container merge against an explicitly supplied XMP sidecar.
 ///
 /// `verify_output_embedded_metadata` can discover only a sidecar adjacent to
@@ -370,6 +376,14 @@ fn metadata_tag_map(
     tag_args: &[&str],
     label: &str,
 ) -> io::Result<BTreeMap<String, String>> {
+    if has_no_portable_embedded_metadata_channel(path)? {
+        tracing::debug!(
+            target: "mfb.metadata",
+            path = %path.display(),
+            "NetPBM/PAM has no portable EXIF/XMP/ICC channel; adjacent XMP is audited separately"
+        );
+        return Ok(BTreeMap::new());
+    }
     let mut builder = crate::ExiftoolBuilder::new();
     builder
         .arg("-n")
@@ -446,6 +460,9 @@ fn removable_payload_bytes(path: &Path) -> io::Result<u64> {
 }
 
 fn reclaimable_embedded_metadata_bytes(path: &Path) -> io::Result<u64> {
+    if has_no_portable_embedded_metadata_channel(path)? {
+        return Ok(0);
+    }
     let original_bytes = std::fs::metadata(path)?.len();
     let stripped_bytes = stripped_embedded_metadata_size(path)?;
     Ok(original_bytes.saturating_sub(stripped_bytes))
@@ -781,6 +798,27 @@ mod tests {
         }
         assert!(CLEARABLE_TAG_ARGS.contains(&"-ICC_Profile:all"));
         assert!(!PRESERVABLE_TAG_ARGS.contains(&"-ICC_Profile:all"));
+    }
+
+    #[test]
+    fn netpbm_has_no_embedded_tag_channel_but_keeps_sidecar_audit_separate() {
+        let temp = TempDir::new().expect("tempdir");
+        let source = temp.path().join("source.pam");
+        std::fs::write(
+            &source,
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\x01\x02\x03",
+        )
+        .expect("write PAM fixture");
+
+        assert!(
+            preservable_tag_map(&source)
+                .expect("PAM metadata capability")
+                .is_empty()
+        );
+        assert_eq!(
+            reclaimable_embedded_metadata_bytes(&source).expect("PAM embedded metadata size"),
+            0
+        );
     }
 
     #[test]

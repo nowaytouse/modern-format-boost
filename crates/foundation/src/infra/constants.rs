@@ -1077,6 +1077,8 @@ pub const JXL_ARG_EFFORT: &str = "-e";
 pub const JXL_ARG_THREADS: &str = "--num_threads";
 pub const JXL_ARG_LOSSLESS_JPEG: &str = "--lossless_jpeg=1";
 pub const JXL_ARG_CONTAINER: &str = "--container=1";
+pub const JXL_ARG_PROGRESSIVE_DC_DISABLED: &str = "--progressive_dc=0";
+pub const JXL_ARG_SYNTHETIC_NOISE_DISABLED: &str = "--photon_noise_iso=0";
 pub const JXL_ARG_ALLOW_EXPERT_OPTIONS: &str = "--allow_expert_options";
 pub const JXL_ARG_COLOR_SPACE: &str = "color_space";
 pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
@@ -3129,14 +3131,12 @@ pub const TOOL_ATTRIB: &str = "attrib";
 // --- Supported Media Extensions (Wave 20) ---
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "hif",
-    "avif", "bmp", "ico", "svg", "jp2", "j2k", "jxl", "raw", "cr2", "cr3", "nef", "arw", "dng",
-    "orf", "raf", "rw2", "pef", "srw", "kdc", "mrw", "erf", "mef", "mos", "crw", "x3f", "wbmp",
-    "cur",
+    "avif", "bmp", "tga", "ico", "cur", "pnm", "ppm", "pgm", "pbm", "pam", "svg", "svgz", "jp2",
+    "j2k", "jxl", "raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "raf", "rw2", "pef", "srw",
+    "kdc", "mrw", "erf", "mef", "mos", "crw", "x3f", "wbmp",
 ];
-pub const EXCLUDED_DESIGN_EXTENSIONS: &[&str] = &[
-    "psd", "psb", "ai", "eps", "pdf", "tga", "dds", "hdr", "exr", "pnm", "pgm", "ppm", "pbm",
-    "pam", "pfm",
-];
+pub const EXCLUDED_DESIGN_EXTENSIONS: &[&str] =
+    &["psd", "psb", "ai", "eps", "pdf", "dds", "hdr", "exr", "pfm"];
 pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts", "m2ts",
     "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic", "heif", "hif", "apng",

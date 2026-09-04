@@ -2509,18 +2509,6 @@ pub fn is_size_guard_active(codec_str: &str, apple_compat: bool) -> bool {
 }
 
 #[must_use]
-pub fn tiff_enabled() -> bool {
-    match std::env::var("MFB_ENABLE_TIFF") {
-        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
-        Err(std::env::VarError::NotPresent) => false,
-        Err(e) => {
-            tracing::warn!("Failed to read MFB_ENABLE_TIFF env var: {e}");
-            false
-        }
-    }
-}
-
-#[must_use]
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
     let normalized = format_str.trim().to_ascii_lowercase();
@@ -2535,12 +2523,9 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
                 codec,
                 SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic
             ));
-    let is_tiff_disabled = matches!(codec, SourceCodec::Tiff) && !tiff_enabled();
-    let should_skip = is_jxl || is_modern_lossy_container || is_tiff_disabled;
+    let should_skip = is_jxl || is_modern_lossy_container;
 
-    let reason = if is_tiff_disabled {
-        "TIFF/DNG (disabled by default; set MFB_ENABLE_TIFF=1 to enable)".to_string()
-    } else if is_jxl {
+    let reason = if is_jxl {
         crate::infra::static_logs::messages::MSG_QUALITY_SKIP_REASON_IMAGE
             .replace("{}", "JPEG XL archival target")
     } else if is_modern_lossy_container {
@@ -3142,17 +3127,7 @@ mod tests {
         assert!(!should_skip_image_format("jpeg", false).should_skip);
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
-        unsafe {
-            std::env::remove_var("MFB_ENABLE_TIFF");
-        }
-        assert!(should_skip_image_format("tiff", true).should_skip);
-        unsafe {
-            std::env::set_var("MFB_ENABLE_TIFF", "1");
-        }
         assert!(!should_skip_image_format("tiff", true).should_skip);
-        unsafe {
-            std::env::remove_var("MFB_ENABLE_TIFF");
-        }
         assert!(!should_skip_image_format("heif", true).should_skip);
         assert!(should_skip_image_format("heif", false).should_skip);
     }
