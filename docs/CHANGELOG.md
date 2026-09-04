@@ -50,6 +50,19 @@ All notable changes to this project will be documented in this file.
   A real float32 Display P3 TIFF regression locks exact float samples, ICC and
   XMP, while TIFF sample-range layout tags remain correctly outside the
   cross-container descriptive-metadata contract.
+- **IMG now admits exact still-image video shells without guessing**:
+  MP4/M4V, MOV, MKV and WebM are routed to lossless JXL only when ffprobe's
+  decoded-frame inventory proves one video stream, one frame, no other stream
+  types, no chapters/programs and a duration at or below two seconds. The
+  decoded still and JXL must pass pixel equivalence before commit; all uncertain
+  or genuinely temporal files remain in VID. Directory discovery includes the
+  same containers, and high-bit-depth alpha now uses PAM/PNG with an alpha-safe
+  pixel format instead of silently flattening to RGB.
+- **The full-featured macOS FFmpeg recipe now verifies runtime linkage**:
+  `libflite` is part of the documented tap build, and the setup guide requires
+  `brew linkage --test ffmpeg` plus a same-options rebuild after optional-library
+  ABI changes such as OpenVINO. Fake compatibility symlinks, dependency
+  downgrades and core/tap link switching are explicitly rejected.
 - **Existing AVIF Meme delivery uses the correct proof domain**: adopted or
   metadata-sanitized AVIF is checked by primary AV1 payload, decoder-visible
   codec/HDR/gain-map features and the clear-metadata policy; it is not passed

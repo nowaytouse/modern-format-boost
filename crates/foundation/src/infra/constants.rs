@@ -2766,6 +2766,7 @@ pub const PIX_FMT_YUV422P10LE: &str = "yuv422p10le";
 pub const PIX_FMT_YUV444P: &str = "yuv444p";
 pub const PIX_FMT_YUV444P10LE: &str = "yuv444p10le";
 pub const PIX_FMT_RGBA: &str = "rgba";
+pub const PIX_FMT_RGBA64BE: &str = "rgba64be";
 pub const PIX_FMT_RGB24: &str = "rgb24";
 pub const PIX_FMT_RGB48LE: &str = "rgb48le";
 pub const PIX_FMT_GRAY: &str = "gray";

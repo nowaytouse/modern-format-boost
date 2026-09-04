@@ -156,6 +156,14 @@ pub struct FFprobeResult {
     pub pkt_sizes: Vec<u64>,
 }
 
+/// Result of the strict IMG admission probe for a video container that carries
+/// exactly one still frame and no other media streams.
+#[derive(Debug)]
+pub enum SingleFrameVideoStillProbe {
+    Eligible(Box<FFprobeResult>),
+    Ineligible(String),
+}
+
 impl FFprobeResult {
     #[must_use]
     pub const fn has_b_frames(&self) -> bool {
@@ -409,6 +417,127 @@ fn run_ffprobe_json(path: &Path) -> Result<serde_json::Value, FFprobeError> {
     }
 
     serde_json::from_str(&output.stdout).map_err(|e| FFprobeError::ParseError(e.to_string()))
+}
+
+fn exact_single_frame_video_duration(json: &serde_json::Value) -> Result<f64, String> {
+    let streams = json
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "ffprobe did not return a stream inventory".to_string())?;
+    if streams.len() != 1 {
+        return Err(format!(
+            "container has {} streams; IMG requires exactly one video stream and no audio, subtitle, data, or attachment streams",
+            streams.len()
+        ));
+    }
+
+    let stream = &streams[0];
+    if stream.get("codec_type").and_then(serde_json::Value::as_str) != Some("video") {
+        return Err("the only stream is not a video stream".to_string());
+    }
+    if stream
+        .get("width")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        == 0
+        || stream
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err("video stream has no valid image canvas".to_string());
+    }
+
+    let decoded_frames = parse_u64_string_field(&stream["nb_read_frames"])
+        .ok_or_else(|| "decoded frame count is unavailable; refusing to guess".to_string())?;
+    if decoded_frames != 1 {
+        return Err(format!(
+            "decoded frame count is {decoded_frames}; IMG requires exactly one frame"
+        ));
+    }
+    if let Some(declared_frames) = parse_u64_string_field(&stream["nb_frames"])
+        && declared_frames != 1
+    {
+        return Err(format!(
+            "declared frame count is {declared_frames}; IMG requires exactly one frame"
+        ));
+    }
+
+    for section in ["chapters", "programs"] {
+        if json
+            .get(section)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|entries| !entries.is_empty())
+        {
+            return Err(format!(
+                "container has {section}; JXL cannot preserve that timeline structure"
+            ));
+        }
+    }
+
+    let duration = json
+        .get("format")
+        .and_then(|format| parse_f64_string_field(&format["duration"]))
+        .or_else(|| parse_f64_string_field(&stream["duration"]))
+        .ok_or_else(|| "duration is unavailable; refusing to infer a still image".to_string())?;
+    if !duration.is_finite() || duration < 0.0 {
+        return Err(format!("duration {duration} is invalid"));
+    }
+    if duration > crate::constants::MICRO_CLIP_CEILING_SECS {
+        return Err(format!(
+            "duration {duration:.3}s exceeds the IMG still-container ceiling of {:.3}s",
+            crate::constants::MICRO_CLIP_CEILING_SECS
+        ));
+    }
+    Ok(duration)
+}
+
+/// Prove that a video container is semantically a still image before IMG is
+/// allowed to decode it. Unknown frame counts or extra streams fail closed.
+///
+/// # Errors
+/// Returns `FFprobeError` when the exact inventory cannot be obtained.
+pub fn probe_single_frame_video_still(
+    path: &Path,
+) -> Result<SingleFrameVideoStillProbe, FFprobeError> {
+    if !is_ffprobe_available() {
+        return Err(FFprobeError::ToolNotFound(
+            crate::infra::static_logs::messages::MSG_PROBE_TOOL_MISSING.to_string(),
+        ));
+    }
+    validate_probe_target(path)?;
+
+    let mut command = crate::ffmpeg_builder::FfprobeBuilder::new();
+    command
+        .input(path)
+        .loglevel("error")
+        .print_format("json")
+        .show_format()
+        .show_streams()
+        .count_frames()
+        .arg("-show_chapters")
+        .arg("-show_programs");
+    let mut process = command.build();
+    let output = run_ffprobe_command(&mut process, path, "exact single-frame inventory")?;
+    if !output.status.success() {
+        return Err(FFprobeError::ExecutionFailed(contextual_ffprobe_error(
+            path,
+            "exact single-frame inventory",
+            output.stderr.trim(),
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&output.stdout)
+        .map_err(|error| FFprobeError::ParseError(error.to_string()))?;
+    let duration = match exact_single_frame_video_duration(&json) {
+        Ok(duration) => duration,
+        Err(reason) => return Ok(SingleFrameVideoStillProbe::Ineligible(reason)),
+    };
+
+    let mut probe = probe_video(path)?;
+    probe.duration = Some(duration);
+    probe.frame_count = Some(1);
+    Ok(SingleFrameVideoStillProbe::Eligible(Box::new(probe)))
 }
 
 /// Parses a string field from JSON as u64.
@@ -1665,6 +1794,56 @@ mod cover_stream_tests {
         assert!(isobmff_cover_stream_ambiguous_from_counts(&[0, 10]));
         assert!(!isobmff_cover_stream_ambiguous_from_counts(&[1]));
         assert!(!isobmff_cover_stream_ambiguous_from_counts(&[12, 24]));
+    }
+}
+
+#[cfg(test)]
+mod single_frame_video_still_tests {
+    use super::exact_single_frame_video_duration;
+    use serde_json::json;
+
+    #[test]
+    fn img_admission_requires_one_decoded_frame_and_no_extra_streams() {
+        let eligible = json!({
+            "format": { "duration": "0.040" },
+            "streams": [{
+                "codec_type": "video",
+                "width": 640,
+                "height": 480,
+                "nb_frames": "1",
+                "nb_read_frames": "1"
+            }],
+            "chapters": [],
+            "programs": []
+        });
+        assert_eq!(exact_single_frame_video_duration(&eligible), Ok(0.04));
+
+        let mut with_audio = eligible.clone();
+        with_audio["streams"]
+            .as_array_mut()
+            .expect("stream array")
+            .push(json!({ "codec_type": "audio" }));
+        assert!(
+            exact_single_frame_video_duration(&with_audio)
+                .expect_err("audio stream must stay in VID")
+                .contains("exactly one video stream")
+        );
+
+        let mut two_frames = eligible.clone();
+        two_frames["streams"][0]["nb_read_frames"] = json!("2");
+        assert!(
+            exact_single_frame_video_duration(&two_frames)
+                .expect_err("two frames must stay in VID")
+                .contains("exactly one frame")
+        );
+
+        let mut unknown_frames = eligible;
+        unknown_frames["streams"][0]["nb_read_frames"] = json!("N/A");
+        assert!(
+            exact_single_frame_video_duration(&unknown_frames)
+                .expect_err("unknown frame count must fail closed")
+                .contains("refusing to guess")
+        );
     }
 }
 

@@ -371,8 +371,9 @@ pub use date_analysis::{
     AnalysisConfig, AnalysisResult, DateSource, FileDateInfo, analyze_directory, print_analysis,
 };
 pub use ffprobe::{
-    FFprobeError, FFprobeResult, detect_bit_depth, get_duration, get_frame_count,
-    is_ffprobe_available, parse_frame_rate, probe_video,
+    FFprobeError, FFprobeResult, SingleFrameVideoStillProbe, detect_bit_depth, get_duration,
+    get_frame_count, is_ffprobe_available, parse_frame_rate, probe_single_frame_video_still,
+    probe_video,
 };
 pub use metadata::{
     MetadataCopyCheck, MetadataDeliveryReport, MetadataLayerOutcome, MetadataOutputPolicy,

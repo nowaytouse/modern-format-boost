@@ -919,7 +919,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                         Ok(probe) => (
                             probe.width,
                             probe.height,
-                            pix_fmt_has_alpha(&probe.pix_fmt),
+                            crate::ffprobe_json::pix_fmt_has_alpha(Some(&probe.pix_fmt)),
                             probe.confirmed_bit_depth(),
                         ),
                         Err(err) => {
@@ -1557,14 +1557,6 @@ fn has_alpha_channel(img: &DynamicImage) -> bool {
             | image::ColorType::La8
             | image::ColorType::La16
     )
-}
-
-fn pix_fmt_has_alpha(pix_fmt: &str) -> bool {
-    let pix_fmt = pix_fmt.to_lowercase();
-    pix_fmt.contains("yuva")
-        || pix_fmt.contains("rgba")
-        || pix_fmt.contains("gbrap")
-        || pix_fmt.starts_with("p4")
 }
 
 fn is_animated_format(path: &Path, format: ImageFormat) -> Result<bool> {
@@ -2534,7 +2526,7 @@ fn resolve_jxl_canvas_from_ffprobe(path: &Path) -> Result<JxlCanvas> {
     Ok((
         probe.width,
         probe.height,
-        pix_fmt_has_alpha(&probe.pix_fmt),
+        crate::ffprobe_json::pix_fmt_has_alpha(Some(&probe.pix_fmt)),
         probe.confirmed_bit_depth(),
     ))
 }

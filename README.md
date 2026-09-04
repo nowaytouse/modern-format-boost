@@ -472,19 +472,29 @@ positive evidence—not every historical image or private camera format:
 | FastImg JXL                                 | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF, HEIC and HEIF                                        |
 | FastImg AVIF                                | Non-AVIF static inputs use Meme Mode search; existing AVIF is adopted or metadata-sanitized without re-encoding, with encoded image/HDR/gain-map features proved unchanged |
 | Archive-original inputs                     | SVG/SVGZ and camera RAW (`CR2`, `CR3`, `NEF`, `ARW`, `DNG`, `RAF`, `RW2`, plus the documented extended list) are accepted but retained byte-for-byte; DNG is also recognized by its TIFF `DNGVersion` tag when renamed; rasterizing them would discard vector or sensor/CFA/maker-note archive value |
-| Explicitly outside normal raster conversion | Video/animation, PSD/PSB/KRA/CLIP/Procreate/brush, AI/EPS/PDF, 2D/3D/model/project sources, DDS, HDR/EXR, QOI/FLIF and unknown/private formats are retained, skipped or ignored rather than guessed |
+| Explicitly outside normal raster conversion | Multi-frame animation and true video, PSD/PSB/KRA/CLIP/Procreate/brush, AI/EPS/PDF, 2D/3D/model/project sources, DDS, HDR/EXR, QOI/FLIF and unknown/private formats are retained, skipped or ignored rather than guessed |
 
 Animated or multi-page content is not silently flattened by `img`. A proven
 single-frame GIF, WebP, AVIF, HEIC or HEIF remains a still-image input; an
-animated instance belongs to `vid`. MP4, MOV, MKV and WebM remain video inputs
-even if a probe reports only one frame, because frame count does not erase the
-container's timeline, track, transform and color semantics.
+animated instance belongs to `vid`. MP4/M4V, MOV, MKV and WebM have one narrow
+IMG exception: an exact decode-count probe must prove one video stream, exactly
+one frame, no audio/subtitle/data/attachment streams, no chapters/programs and
+a duration no longer than two seconds. That payload is normalized to a
+pixel-equivalent JXL still; it is not claimed to reconstruct the original video
+container. Missing or contradictory evidence leaves the file in `vid` scope.
 
-Direct pixel-to-JXL output explicitly disables progressive DC and synthetic
-replacement noise. Normal work uses effort 7 and ultimate/archive work uses
-effort 10; effort 11 is reserved for the separate, fast JPEG bitstream
-transcode path. Progressive delivery cannot be toggled later in place: doing so
-requires a new encode and therefore a new full archive proof.
+Direct pixel-to-JXL output explicitly disables extra progressive DC passes,
+does not request progressive AC, and disables synthetic replacement noise.
+Lossless `d=0` therefore keeps the real source pixels—including real sensor
+noise—while lossy paths may smooth noise but never substitute generated noise.
+Normal work uses effort 7. Ultimate/archive pixel encoding uses effort 10,
+whose global analysis disables chunked encoding and can require substantially
+more memory; effort 11 is reserved for the separate JPEG bitstream-transcode
+path. Progressive delivery cannot be toggled later in place: doing so requires
+a new encode and a new full archive proof. IMG never forces every source to
+sRGB: validated ICC/CICP, wide-gamut, HDR and high-bit-depth evidence is carried
+into the encoder, and 16-bit alpha uses an alpha-capable intermediate rather
+than being flattened.
 
 ### `vid run` + `--codec hevc` (default)
 

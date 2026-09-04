@@ -123,11 +123,35 @@ impl PixelAudit {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CommitSource<'a> {
+    original: &'a Path,
+    payload: &'a Path,
+    complete_size: u64,
+}
+
+impl<'a> CommitSource<'a> {
+    const fn new(original: &'a Path, complete_size: u64) -> Self {
+        Self {
+            original,
+            payload: original,
+            complete_size,
+        }
+    }
+
+    const fn with_payload(original: &'a Path, payload: &'a Path, complete_size: u64) -> Self {
+        Self {
+            original,
+            payload,
+            complete_size,
+        }
+    }
+}
+
 fn commit_with_size_check(
-    input: &Path,
+    source: CommitSource<'_>,
     temp_output: &Path,
     output: &Path,
-    input_size: u64,
     output_size: u64,
     options: &ConvertOptions,
     format_label: &str,
@@ -135,6 +159,8 @@ fn commit_with_size_check(
     pixel_audit: PixelAudit,
     preserve_codec_embedded_metadata: bool,
 ) -> Result<CommitOutcome> {
+    let input = source.original;
+    let input_size = source.complete_size;
     let input_label = foundation::media_conversion_gate::path_file_name_for_log(input);
 
     log_detail!(&format!(
@@ -176,7 +202,7 @@ fn commit_with_size_check(
     }
     if options.compress() || options.require_output_delivery() {
         let payload_sizes =
-            foundation::image::static_payload::measure(input).and_then(|input_payload| {
+            foundation::image::static_payload::measure(source.payload).and_then(|input_payload| {
                 foundation::image::static_payload::measure(output)
                     .map(|output_payload| (input_payload, output_payload))
             });
@@ -238,10 +264,9 @@ fn finalize_with_size_check(
     extra_info: Option<&str>,
 ) -> Result<TaskResult> {
     match commit_with_size_check(
-        input,
+        CommitSource::new(input, input_size),
         temp_output,
         output,
-        input_size,
         output_size,
         options,
         format_label,
@@ -269,10 +294,9 @@ fn finalize_with_verified_pixels_and_size_check(
     preserve_codec_embedded_metadata: bool,
 ) -> Result<TaskResult> {
     match commit_with_size_check(
-        input,
+        CommitSource::new(input, input_size),
         temp_output,
         output,
-        input_size,
         output_size,
         options,
         format_label,
@@ -288,6 +312,39 @@ fn finalize_with_verified_pixels_and_size_check(
     }
 }
 
+fn finalize_single_frame_video_with_size_check(
+    input: &Path,
+    decoded_still: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+) -> Result<TaskResult> {
+    match commit_with_size_check(
+        CommitSource::with_payload(input, decoded_still, input_size),
+        temp_output,
+        output,
+        output_size,
+        options,
+        LABEL_JXL,
+        Some("single-frame video container normalized as a verified still"),
+        PixelAudit::VerifiedByCaller,
+        false,
+    )? {
+        CommitOutcome::Skipped(task) => Ok(task),
+        CommitOutcome::Ready => finalize_task(
+            input,
+            output,
+            input_size,
+            LABEL_JXL,
+            Some("single-frame video container normalized as a verified still"),
+            options,
+        )
+        .map_err(ImgQualityError::IoError),
+    }
+}
+
 fn finalize_with_exact_metadata_and_size_check(
     input: &Path,
     temp_output: &Path,
@@ -299,10 +356,9 @@ fn finalize_with_exact_metadata_and_size_check(
     extra_info: Option<&str>,
 ) -> Result<TaskResult> {
     match commit_with_size_check(
-        input,
+        CommitSource::new(input, input_size),
         temp_output,
         output,
-        input_size,
         output_size,
         options,
         format_label,
@@ -340,10 +396,9 @@ fn finalize_with_sidecars_and_size_check(
     artifacts: &foundation::hdr::HdrArtifacts,
 ) -> Result<TaskResult> {
     match commit_with_size_check(
-        input,
+        CommitSource::new(input, input_size),
         temp_output,
         output,
-        input_size,
         output_size,
         options,
         format_label,
@@ -1063,6 +1118,7 @@ enum JxlSourceSemantics {
     ConfirmedLossless,
     ModernLossy,
     ConfirmedLossy,
+    SingleFrameVideo,
     Unknown,
 }
 
@@ -1109,6 +1165,23 @@ fn detect_jxl_source_semantics(input: &Path) -> Result<JxlSourceSemantics> {
     use foundation::image_detection::DetectedFormat;
 
     let format = foundation::image_detection::detect_format_from_bytes(input)?;
+    if matches!(
+        format,
+        DetectedFormat::MP4 | DetectedFormat::MOV | DetectedFormat::MKV | DetectedFormat::WEBM
+    ) {
+        return match foundation::probe_single_frame_video_still(input)
+            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?
+        {
+            foundation::SingleFrameVideoStillProbe::Eligible(_) => {
+                Ok(JxlSourceSemantics::SingleFrameVideo)
+            }
+            foundation::SingleFrameVideoStillProbe::Ineligible(reason) => {
+                Err(ImgQualityError::ConversionError(format!(
+                    "Video container is outside the IMG still contract: {reason}"
+                )))
+            }
+        };
+    }
     let compression = match &format {
         DetectedFormat::JPEG
         | DetectedFormat::PNG
@@ -1377,6 +1450,17 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
+            if matches!(source_semantics, JxlSourceSemantics::SingleFrameVideo)
+                && let Err(error) =
+                    foundation::image::fast_img::verify_jxl_pixel_equivalence_integrity(
+                        &actual_input,
+                        &temp_output,
+                    )
+            {
+                cleanup_temp_output(&temp_output, input);
+                return Err(error);
+            }
+
             let mut d0_missed_active_size_policy = false;
             let explore_result = if is_extreme_explore {
                 let input_payload_size = foundation::image::static_payload::measure(input)
@@ -1491,16 +1575,28 @@ pub fn convert_to_jxl(
                 },
             );
 
-            let task = finalize_with_size_check(
-                input,
-                &temp_output,
-                &output,
-                input_size,
-                final_output_size,
-                options,
-                LABEL_JXL,
-                extra_info.as_deref(),
-            )?;
+            let task = if matches!(source_semantics, JxlSourceSemantics::SingleFrameVideo) {
+                finalize_single_frame_video_with_size_check(
+                    input,
+                    &actual_input,
+                    &temp_output,
+                    &output,
+                    input_size,
+                    final_output_size,
+                    options,
+                )?
+            } else {
+                finalize_with_size_check(
+                    input,
+                    &temp_output,
+                    &output,
+                    input_size,
+                    final_output_size,
+                    options,
+                    LABEL_JXL,
+                    extra_info.as_deref(),
+                )?
+            };
             Ok(if explored_optimized {
                 task.with_optimization_outcome(
                     foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
@@ -5146,7 +5242,7 @@ fn try_high_precision_decode(
     color_info: &ColorInfo,
     color_assessment: foundation::ffprobe_json::ColorInfoAssessment,
     precision: ImagePrecisionProfile,
-) -> Option<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     let decode_label = if color_assessment.has_hdr_signaling() {
         format!(
             "Forensic {} Decode Cycle: Initiating FFmpeg high bit-depth preservation",
@@ -5187,7 +5283,7 @@ fn try_high_precision_decode(
                 foundation::infra::static_logs::messages::LABEL_METADATA,
                 success_label
             );
-            Some((png16_path, Some(temp_file)))
+            Ok((png16_path, Some(temp_file)))
         }
         Err(e) => {
             let failure_prefix = if color_assessment.has_hdr_signaling() {
@@ -5206,9 +5302,12 @@ fn try_high_precision_decode(
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "hdr_png16_decode",
                 input,
-                format!("{failure_prefix} ({e}); falling back to standard bitstream decode"),
+                format!("{failure_prefix} ({e}); refusing a lower-precision fallback"),
             );
-            None
+            Err(ImgQualityError::ConversionError(format!(
+                "{failure_prefix} for {}: {e}",
+                input.display()
+            )))
         }
     }
 }
@@ -5507,6 +5606,47 @@ fn preprocess_gif_for_cjxl(
     }
 }
 
+fn preprocess_single_frame_video_for_cjxl(
+    input: &Path,
+    color_info: &ColorInfo,
+) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+    let temp_png_file =
+        foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "img_single_frame_video_png",
+            None,
+            Some(".png"),
+        )?;
+    let temp_png = temp_png_file.path().to_path_buf();
+    let pix_fmt = if color_info.has_alpha_channel() {
+        foundation::constants::PIX_FMT_RGBA
+    } else {
+        foundation::constants::PIX_FMT_RGB24
+    };
+    let mut builder = foundation::FfmpegBuilder::new();
+    builder
+        .overwrite()
+        .input(input)
+        .map("0:v:0")
+        .pix_fmt_str(pix_fmt)
+        .frames_v(1)
+        .output(&temp_png);
+    let output = run_image_process(builder.build()).map_err(|error| {
+        ImgQualityError::ConversionError(format!(
+            "Failed to decode the admitted single-frame video {}: {error}",
+            input.display()
+        ))
+    })?;
+    if !output.status.success() || !temp_png.exists() {
+        return Err(ImgQualityError::ConversionError(format!(
+            "Failed to decode the admitted single-frame video {}: {}",
+            input.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    foundation::progress_mode::preprocessing_success();
+    Ok((temp_png, Some(temp_png_file)))
+}
+
 fn preprocess_fallback_extension_align(
     input: &Path,
     ext: &str,
@@ -5650,10 +5790,8 @@ fn prepare_input_for_cjxl(
     );
 
     // Check if we need 16-bit decode for HDR or high-precision preservation.
-    if precision.should_use_high_precision_png16_decode()
-        && let Some(res) = try_high_precision_decode(input, color_info, color_assessment, precision)
-    {
-        return Ok(res);
+    if precision.should_use_high_precision_png16_decode() {
+        return try_high_precision_decode(input, color_info, color_assessment, precision);
     }
 
     let detected_ext = foundation::common_utils::detect_real_extension(input);
@@ -5734,6 +5872,10 @@ fn prepare_input_for_cjxl(
         }
 
         foundation::constants::EXT_GIF => preprocess_gif_for_cjxl(input),
+
+        "mp4" | "m4v" | "mov" | "mkv" | "webm" => {
+            preprocess_single_frame_video_for_cjxl(input, color_info)
+        }
 
         _ => preprocess_fallback_extension_align(input, &ext),
     }

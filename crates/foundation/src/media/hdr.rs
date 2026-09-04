@@ -1091,21 +1091,31 @@ pub fn decode_image_to_png16_preserving_precision(
         anyhow::bail!("Input does not require high-precision PNG16 decode");
     }
     // libjxl v0.12 can mislabel lossless HDR PNG input carrying CICP/ICC as
-    // sRGB even when `color_space=Rec2100PQ` is supplied. A raw 16-bit PPM has
-    // no competing embedded colour metadata, so cjxl must use the explicit
-    // source-derived colour-space hint. SDR/high-bit-depth inputs retain PNG.
+    // sRGB even when `color_space=Rec2100PQ` is supplied. Raw PPM/PAM has no
+    // competing embedded colour metadata, so cjxl must use the explicit
+    // source-derived colour-space hint. PAM is required when alpha exists;
+    // flattening to RGB here would silently destroy archival pixels.
     let raw_hdr_intermediate = matches!(
         color_info_to_jxl_color_encoding(color_info),
         Some("Rec2100PQ" | "Rec2100HLG")
     );
-    let suffix = if raw_hdr_intermediate { ".ppm" } else { ".png" };
+    let has_alpha = color_info.has_alpha_channel();
+    let suffix = match (raw_hdr_intermediate, has_alpha) {
+        (true, true) => ".pam",
+        (true, false) => ".ppm",
+        (false, _) => ".png",
+    };
     let temp_png = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "hdr_png16_decode",
         None,
         Some(suffix),
     )?;
     let temp_path = temp_png.path().to_path_buf();
-    let pix_fmt = crate::media_conversion_gate::precision_png16_decode_rgb_pix_fmt(&precision);
+    let pix_fmt = if has_alpha {
+        crate::constants::PIX_FMT_RGBA64BE
+    } else {
+        crate::media_conversion_gate::precision_png16_decode_rgb_pix_fmt(&precision)
+    };
     let output = crate::FfmpegBuilder::new()
         .overwrite()
         .input(input)

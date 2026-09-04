@@ -382,6 +382,28 @@ pub fn pix_fmt_indicates_float(pix_fmt: Option<&str>) -> bool {
             || pf_lower.contains("f16"))
 }
 
+/// Returns whether an `FFmpeg` pixel format carries a real alpha plane/channel.
+/// Numeric bit-depth prefixes such as `p4*` are deliberately not treated as
+/// alpha evidence.
+#[must_use]
+pub fn pix_fmt_has_alpha(pix_fmt: Option<&str>) -> bool {
+    let Some(pix_fmt) = pix_fmt else {
+        return false;
+    };
+    let pix_fmt = pix_fmt.to_ascii_lowercase();
+    pix_fmt.starts_with("yuva")
+        || pix_fmt.starts_with("rgba")
+        || pix_fmt.starts_with("bgra")
+        || pix_fmt.starts_with("argb")
+        || pix_fmt.starts_with("abgr")
+        || pix_fmt.starts_with("gbrap")
+        || pix_fmt.starts_with("ya8")
+        || pix_fmt.starts_with("ya16")
+        || pix_fmt.starts_with("ayuv")
+        || pix_fmt.starts_with("vuya")
+        || pix_fmt == "pal8"
+}
+
 impl ColorInfo {
     #[must_use]
     pub fn assessment(&self) -> ColorInfoAssessment {
@@ -416,6 +438,11 @@ impl ColorInfo {
     pub fn png_decode_rgb_pix_fmt(&self) -> &'static str {
         crate::media_precision::ImagePrecisionProfile::from_media_context(None, self, None)
             .png16_decode_rgb_pix_fmt_name()
+    }
+
+    #[must_use]
+    pub fn has_alpha_channel(&self) -> bool {
+        pix_fmt_has_alpha(self.pix_fmt.as_deref())
     }
 }
 
@@ -966,6 +993,16 @@ mod tests {
         assert!(pix_fmt_indicates_float(Some("rgbaf16le")));
         assert!(!pix_fmt_indicates_float(Some("yuv420p10le")));
         assert!(!pix_fmt_indicates_float(None));
+    }
+
+    #[test]
+    fn pixel_format_alpha_detection_rejects_bit_depth_lookalikes() {
+        for pix_fmt in ["rgba64be", "yuva444p10le", "gbrapf32le", "ya16be", "pal8"] {
+            assert!(pix_fmt_has_alpha(Some(pix_fmt)), "{pix_fmt}");
+        }
+        for pix_fmt in ["rgb48le", "yuv444p10le", "p410le", "gray16be"] {
+            assert!(!pix_fmt_has_alpha(Some(pix_fmt)), "{pix_fmt}");
+        }
     }
 
     #[test]

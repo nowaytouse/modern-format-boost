@@ -86,9 +86,11 @@ cargo run --locked -p dev --bin check_all -- \
 | 内容签名识别 | JPEG/JFIF、PNG/APNG、WebP、GIF、TIFF/BigTIFF、BMP、HEIC/HEIF/HIF、AVIF、JXL、JP2/J2K、ICO/CUR、QOI、EXR、FLIF、PSD、PNM 和 DDS；能识别不等于承诺转换 |
 | 已核验转换核心 | 已确认静态的 JPEG，以及已证明无损的 PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/单帧 GIF/WebP/AVIF/HEIC/HEIF/JP2；使用格式专用的像素、元数据和结构证明 |
 | 仅原件归档 | SVG/SVGZ 与相机 RAW（`CR2`、`CR3`、`NEF`、`ARW`、`DNG`、`RAF`、`RW2` 及项目已枚举的扩展列表）可被发现，但只逐字节保留；改名后的 DNG 仍按 TIFF `DNGVersion` 标签识别；栅格化会丢失矢量语义或传感器/CFA/厂商私有数据 |
-| 不进入普通栅格转换 | 视频/动图、PSD/PSB/KRA/CLIP/Procreate/笔刷、AI/EPS/PDF、2D/3D/模型/工程源文件、DDS、HDR/EXR、QOI/FLIF 及未知/私有格式会被保留、跳过或忽略，不靠扩展名猜测 |
+| 不进入普通栅格转换 | 多帧动图和真实视频、PSD/PSB/KRA/CLIP/Procreate/笔刷、AI/EPS/PDF、2D/3D/模型/工程源文件、DDS、HDR/EXR、QOI/FLIF 及未知/私有格式会被保留、跳过或忽略，不靠扩展名猜测 |
 
-IMG 不会静默压平动图、多帧或视频容器：已证明只有一帧的 GIF/WebP/AVIF/HEIC/HEIF 仍是 IMG 静图；动态实例交给 `vid`。MP4/MOV/MKV/WebM 即使只有一帧也仍是视频容器，因为帧数不会消除时间轴、轨道、变换与色彩语义。直接像素→JXL 明确关闭渐进 DC 和合成噪声；普通任务使用 effort 7，ultimate/归档任务使用 effort 10，effort 11 仅用于独立且快速的 JPEG 比特流可逆转码。已生成的 JXL 无法原地无损切换渐进特性；改变它必须重新编码并重跑完整归档证明。
+IMG 不会静默压平动图或多帧内容：已证明只有一帧的 GIF/WebP/AVIF/HEIC/HEIF 仍是 IMG 静图；动态实例交给 `vid`。MP4/M4V、MOV、MKV、WebM 只有一个严格例外：完整解码计数必须证明容器仅有一个视频流、恰好一帧、没有音频/字幕/数据/附件流、没有章节或 program，且时长不超过两秒。满足全部条件时会规范化为像素等价的 JXL 静图，但不会宣称能重建原视频容器；任何缺失或矛盾证据都保留在 `vid` 范围。
+
+直接像素→JXL 明确关闭额外渐进 DC，不请求渐进 AC，并关闭合成替代噪声。无损 `d=0` 会保留包括真实传感器噪声在内的原像素；有损路径可能平滑噪声，但不会用人工噪声冒充原始纹理。普通任务使用 effort 7；ultimate/归档像素编码使用 effort 10，其全局分析会关闭分块编码并可能显著增加内存；effort 11 仅用于独立且快速的 JPEG 比特流可逆转码。已生成的 JXL 无法原地无损切换渐进特性，改变它必须重新编码并重跑完整归档证明。IMG 不会把所有输入强制为 sRGB：已核验的 ICC/CICP、广色域、HDR 和高位深证据会传给编码器，16 位透明度也使用带 alpha 的中间格式，不会压平成 RGB。
 
 ### 谁适合使用？
 

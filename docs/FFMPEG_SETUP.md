@@ -26,6 +26,7 @@ Install the enhanced version directly from the tap:
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
+brew install flite
 brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-chromaprint \
     --with-dvd \
@@ -68,6 +69,7 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-libbluray \
     --with-libbs2b \
     --with-libcaca \
+    --with-libflite \
     --with-libgsm \
     --with-openssl@3 \
     --with-speex
@@ -77,15 +79,14 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
 _Note: `--with-dvd` is the tap's single DVD switch and enables both
 `libdvdnav` and `libdvdread`. `--with-decklink` is intentionally excluded
 because it needs the Blackmagic DeckLink SDK. The tap does not declare Flite
-as a dependency; Homebrew now provides it, so install `flite` first and append
-`--with-libflite` only when text-to-speech support is required. This does not
-add a media encoder used by MFB. `--with-alt-name` only changes command names
+as a dependency, so the command installs `flite` first before enabling
+`--with-libflite`. This adds text-to-speech support, not a media encoder used by
+MFB. `--with-alt-name` only changes command names
 and does not add codec capability. The current formula exposes `ggml` as an
 optional dependency, while `--with-whisper-cpp` is the switch that adds
 FFmpeg's `--enable-whisper`._
 
-For the widest Homebrew-only feature set, run `brew install flite` before the
-command above and append `--with-libflite`. DeckLink remains the only
+This is the widest Homebrew-only feature set. DeckLink remains the only
 capability that requires a separately supplied SDK.
 
 #### 2. Verify the Installed Capability Set
@@ -99,7 +100,14 @@ ffmpeg -hide_banner -encoders
 ffmpeg -hide_banner -decoders
 ffmpeg -hide_banner -filters
 ffprobe -version
+brew linkage --test ffmpeg
 ```
+
+If `brew linkage --test ffmpeg` reports missing versioned libraries after an
+optional dependency upgrade (for example OpenVINO), rerun the same command from
+step 1 with `brew reinstall` in place of `brew install`, then repeat every
+verification command. Do not fabricate compatibility symlinks, downgrade the
+dependency, or link the core formula over this tap-owned installation.
 
 ---
 
@@ -118,6 +126,7 @@ ffprobe -version
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
+brew install flite
 brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-chromaprint \
     --with-dvd \
@@ -160,6 +169,7 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-libbluray \
     --with-libbs2b \
     --with-libcaca \
+    --with-libflite \
     --with-libgsm \
     --with-openssl@3 \
     --with-speex
@@ -168,14 +178,13 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
 
 _注意：`--with-dvd` 是该 tap 唯一的 DVD 开关，会同时启用 `libdvdnav` 与
 `libdvdread`。`--with-decklink` 被有意排除，因为它需要 Blackmagic DeckLink
-SDK。该 tap 没有为 Flite 声明依赖；Homebrew 目前已经提供 `flite`，如确实需要文本
-转语音，可先安装它，再为上面的命令追加 `--with-libflite`。这不会增加 MFB 使用的
-媒体编码器。`--with-alt-name` 只改变命令名，不增加编解码能力。当前 formula 将
+SDK。该 tap 没有为 Flite 声明依赖，因此命令会先安装 `flite`，再启用
+`--with-libflite`。它增加文本转语音支持，不增加 MFB 使用的媒体编码器。
+`--with-alt-name` 只改变命令名，不增加编解码能力。当前 formula 将
 `ggml` 暴露为可选依赖；真正为 FFmpeg 添加 `--enable-whisper` 的开关是
 `--with-whisper-cpp`。_
 
-如果追求 Homebrew 可提供的最宽功能集，可先执行 `brew install flite`，再给上面的
-命令追加 `--with-libflite`。DeckLink 仍是唯一必须另外提供 SDK 的能力。
+这就是 Homebrew 可提供的最宽功能集。DeckLink 仍是唯一必须另外提供 SDK 的能力。
 
 #### 2. 验证实际能力集
 
@@ -187,4 +196,10 @@ ffmpeg -hide_banner -encoders
 ffmpeg -hide_banner -decoders
 ffmpeg -hide_banner -filters
 ffprobe -version
+brew linkage --test ffmpeg
 ```
+
+如果升级可选依赖后（例如 OpenVINO）`brew linkage --test ffmpeg` 报告带版本号的动态库
+缺失，应把步骤 1 中同一条命令的 `brew install` 改为 `brew reinstall` 后完整重建，再
+重新执行全部验证命令。不要伪造兼容软链接、降级依赖，也不要把 core formula 强制
+链接到这套由 tap 管理的安装之上。

@@ -1239,15 +1239,59 @@ fn fast_static_skip_or_ignore(
         })?;
 
     if detected_format_is_video(&detected_format) {
-        let reason = format!(
-            "{} is a video container; IMG accepts image containers only, regardless of frame count",
-            detected_format.as_str()
-        );
-        let file_size = foundation::io_utils::metadata_with_retry(input)
-            .map_err(|error| anyhow::anyhow!("Failed to inspect {}: {error}", input.display()))?
-            .len();
-        foundation::progress_mode::image_ignored(input, &reason, None);
-        return Ok(Some(conversion_output_ignored(input, reason, file_size)));
+        return match foundation::probe_single_frame_video_still(input)? {
+            foundation::SingleFrameVideoStillProbe::Ineligible(reason) => {
+                let reason = format!("{} stays in VID scope: {reason}", detected_format.as_str());
+                let file_size = foundation::io_utils::metadata_with_retry(input)
+                    .map_err(|error| {
+                        anyhow::anyhow!("Failed to inspect {}: {error}", input.display())
+                    })?
+                    .len();
+                foundation::progress_mode::image_ignored(input, &reason, None);
+                Ok(Some(conversion_output_ignored(input, reason, file_size)))
+            }
+            foundation::SingleFrameVideoStillProbe::Eligible(probe) => {
+                let color_info = foundation::ffprobe_json::ColorInfo {
+                    color_space: probe.color_space.clone(),
+                    color_transfer: probe.color_transfer.clone(),
+                    color_primaries: probe.color_primaries.clone(),
+                    color_range: None,
+                    pix_fmt: Some(probe.pix_fmt.clone()),
+                    bit_depth: probe.bit_depth,
+                    bit_depth_inferred_from_pix_fmt: probe.bit_depth_inferred_from_pix_fmt,
+                    mastering_display: probe.hdr.mastering_display.clone(),
+                    max_cll: probe.hdr.max_cll.clone(),
+                    is_dolby_vision: probe.hdr.is_dolby_vision(),
+                    is_hdr10_plus: probe.hdr.hdr10_plus,
+                    is_float: foundation::ffprobe_json::pix_fmt_indicates_float(Some(
+                        &probe.pix_fmt,
+                    )),
+                };
+                let color_context =
+                    foundation::image_analyzer::ConversionColorContext::classify(color_info);
+                let options = auto_convert_build_options(
+                    config,
+                    detected_format.as_str().to_string(),
+                    "exact single-frame still container".to_string(),
+                );
+                foundation::log_info!(
+                    foundation::infra::static_logs::messages::LABEL_PROBE,
+                    &format!(
+                        "IMG accepted exact single-frame, no-audio {:.3}s {} container: {}",
+                        probe.duration.unwrap_or_default(),
+                        detected_format.as_str(),
+                        input.display()
+                    )
+                );
+                let result = img::lossless_converter::convert_to_jxl(
+                    input,
+                    &options,
+                    0.0,
+                    Some(&color_context),
+                )?;
+                Ok(Some(convert_result_to_output(result)?))
+            }
+        };
     }
 
     if detected_format_is_outside_img_raster_scope(&detected_format) {
@@ -1584,7 +1628,7 @@ mod conversion_result_adapter_tests {
     }
 
     #[test]
-    fn video_containers_are_never_img_static_inputs_regardless_of_frame_count() {
+    fn video_containers_require_the_exact_img_still_probe() {
         use foundation::image_detection::DetectedFormat;
         for format in [
             DetectedFormat::MP4,
@@ -1809,7 +1853,7 @@ fn auto_convert_single_file(
 
     let quality_label = analysis.quality_summary();
 
-    let options = auto_convert_build_options(config, &analysis, quality_label);
+    let options = auto_convert_build_options(config, analysis.format.clone(), quality_label);
 
     let result = dispatch_static_conversion(input, &analysis, &options, config)?;
 
@@ -2448,11 +2492,10 @@ fn auto_convert_directory(
         }
     };
 
-    let files = foundation::collect_image_files_for_perceived_speed(
-        input,
-        foundation::IMAGE_EXTENSIONS_FOR_CONVERT,
-        recursive,
-    )?;
+    let mut img_candidates = foundation::IMAGE_EXTENSIONS_FOR_CONVERT.to_vec();
+    img_candidates.extend_from_slice(&["mp4", "m4v", "mov", "mkv", "webm"]);
+    let files =
+        foundation::collect_image_files_for_perceived_speed(input, &img_candidates, recursive)?;
 
     tracing::info!(
         target: "static_log",
@@ -9540,7 +9583,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
 
 fn auto_convert_build_options(
     config: &AutoConvertConfig,
-    analysis: &foundation::image_analyzer::ImageAnalysis,
+    input_format: String,
     quality_label: String,
 ) -> img::lossless_converter::ConvertOptions {
     img::lossless_converter::ConvertOptions {
@@ -9619,7 +9662,7 @@ fn auto_convert_build_options(
         } else {
             2
         },
-        input_format: Some(analysis.format.clone()),
+        input_format: Some(input_format),
         quality_label: Some(quality_label),
         codec: foundation::conversion_types::SelectedCodec::Hevc,
     }
