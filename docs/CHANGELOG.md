@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ### IMG delivery defaults and safety fixes (2026-09-05)
 
+- Archive fallback copies now compare an independently staged, metadata-enriched
+  delivery and its filesystem metadata before reusing an existing destination.
+  Matching payloads with stale timestamps, permissions or extended attributes
+  fail without modifying the existing copy. Conflicts, symbolic links,
+  source aliases and unsafe relative paths fail closed; fresh copies are published
+  without replacing an existing path. Repeated XMP-enriched copies remain idempotent.
+- Delivery orientation checks no longer report success after a mismatch, decoder
+  failure or missing decoder. Rejected moved candidates are removed; source media,
+  adjacent XMP and caller-owned in-place files remain in custody.
+- Live Photo retention recognizes JPEG content under alternate, missing or
+  misleading extensions, case-insensitive same-stem pairs and failed directory
+  probes, instead of treating uncertain companions as absent. Native filename
+  stems remain byte-preserving, including non-UTF-8 paths, through the shared
+  non-auditing probe helper and the updated M174/M175 contracts.
+- AVIF-to-JXL checks native gain maps and CLLI before the HDR/high-precision
+  decoder path. Unsupported CLLI retains the original AVIF and XMP; PQ without
+  CLLI remains supported. Existing AVIF Meme delivery still never re-encodes.
 - JXL progressive/responsive/noise options now follow libjxl defaults. The
   previous explicit-off policy is frozen behind default-off `--jxl-fixed-features`.
   JPEG reconstruction and all final integrity gates remain unchanged.
@@ -13,6 +30,8 @@ All notable changes to this project will be documented in this file.
   retries; already accepted source AVIF files are not needlessly re-encoded.
 - AAE sidecars are staged and published without overwriting an existing file.
   Identical regular sidecars are reused; conflicting files and symlinks fail closed.
+  Their staging parent now uses the shared audited path resolver, fixing the
+  M158/M172 failures in Shared Repository Health and Deep Production Audit.
 - Workspace tests exclude fuzz executables: the deep audit had launched an
   unbounded fuzz target through `cargo test --all-targets` and hit its three-hour
   timeout. Dedicated fuzz smoke tests retain their existing explicit budgets.

@@ -14,8 +14,9 @@ overlays, FastImg Tier 2 custody, and JPEG restoration.
 | MFB audit fields and manifests                            | Application-owned    | Versioned, atomic, and hash-linked |
 
 An external XMP sidecar is never merged by rewriting a reconstructible JXL.
-The complete existing container is copied byte-for-byte, one validated `xml `
-box is appended, and exact JPEG reconstruction is proved again. Repeating the
+The complete existing container is copied byte-for-byte, one validated `xml`
+box (four-byte type including its trailing space) is appended, and exact JPEG
+reconstruction is proved again. Repeating the
 same overlay is an idempotent no-op.
 
 The decoder is invoked with `--reconstruct_jpeg` on the real input first. Its
@@ -57,6 +58,12 @@ metadata:
   resulting JXL is a pixel-equivalent still derivative and is never described
   as a reconstruction of the original video container.
 
+Archive fallback copies stage metadata and XMP independently before publishing
+without replacing an existing path. Reusing an existing destination requires
+both identical delivered bytes and the expected filesystem metadata (permissions,
+modification time and preserved extended attributes). A conflict returns failure
+without modifying that existing file or the source.
+
 All `cjxl` outputs explicitly request the JXL container so append-only metadata
 boxes remain available. Direct pixel encoding uses effort 7 normally and effort
 10 for ultimate/archive work. Effort 10 disables libjxl chunked encoding and can
@@ -84,13 +91,13 @@ is frozen. The 2026-09-05 baseline used local `cjxl` v0.13,
 512×512 deterministic inputs, and identical settings except for the named
 feature:
 
-| Input / comparison | Explicit off | Alternative | Observed change |
-| --- | ---: | ---: | ---: |
-| Clean gradient, `d=1/e7`, file size | 730 B | `-p`: 879 B | +20.4% |
-| Deterministic noisy image, `d=1/e7`, file size | 146,339 B | `-p`: 150,481 B | +2.83% |
-| Clean gradient, peak RSS | 44.7 MB | `-p`: 55.0 MB | about +23% |
-| Deterministic noisy image, peak RSS | 46.4 MB | `-p`: 61.3 MB | about +32% |
-| Textured image, `d=3/e7`, file size | `--noise=0`: 19,052 B | `--noise=1`: 18,686 B | -1.92% |
+| Input / comparison                             |          Explicit off |           Alternative | Observed change |
+| ---------------------------------------------- | --------------------: | --------------------: | --------------: |
+| Clean gradient, `d=1/e7`, file size            |                 730 B |           `-p`: 879 B |          +20.4% |
+| Deterministic noisy image, `d=1/e7`, file size |             146,339 B |       `-p`: 150,481 B |          +2.83% |
+| Clean gradient, peak RSS                       |               44.7 MB |         `-p`: 55.0 MB |      about +23% |
+| Deterministic noisy image, peak RSS            |               46.4 MB |         `-p`: 61.3 MB |      about +32% |
+| Textured image, `d=3/e7`, file size            | `--noise=0`: 19,052 B | `--noise=1`: 18,686 B |          -1.92% |
 
 The encoder's auto policy happened to equal explicit-off output on the first
 two samples, but that is not a cross-version contract. The measured range also
@@ -99,14 +106,14 @@ project invariant.
 
 Effort measurements explain the production split:
 
-| 512×512 lossless workload | Size | Time | Peak RSS |
-| --- | ---: | ---: | ---: |
-| Pixel encode e7 | 1,757 B | 0.06 s | 20.9 MB |
-| Pixel encode e10 | 1,261 B | 0.31 s | 29.4 MB |
-| Pixel encode e11 | 952 B | 3.58 s | 511.1 MB |
-| JPEG bitstream transcode e7 | 3,140 B | 0.01 s | 17.8 MB |
-| JPEG bitstream transcode e10 | 2,785 B | 0.02 s | 19.7 MB |
-| JPEG bitstream transcode e11 | 2,785 B | 0.02 s | 19.3 MB |
+| 512×512 lossless workload    |    Size |   Time | Peak RSS |
+| ---------------------------- | ------: | -----: | -------: |
+| Pixel encode e7              | 1,757 B | 0.06 s |  20.9 MB |
+| Pixel encode e10             | 1,261 B | 0.31 s |  29.4 MB |
+| Pixel encode e11             |   952 B | 3.58 s | 511.1 MB |
+| JPEG bitstream transcode e7  | 3,140 B | 0.01 s |  17.8 MB |
+| JPEG bitstream transcode e10 | 2,785 B | 0.02 s |  19.7 MB |
+| JPEG bitstream transcode e11 | 2,785 B | 0.02 s |  19.3 MB |
 
 This supports e7 for normal pixel work, e10 only for explicit ultimate/archive
 pixel work, and e11 for JPEG bitstream transcode. It also agrees with libjxl's
@@ -128,7 +135,7 @@ The commit order is fixed:
 4. Flush the temporary file and verify its size.
 5. Prove that the complete pre-existing byte prefix and JBRD hash are unchanged.
 6. Hash XMP through the same open descriptor used for copying, then verify the
-   final `xml ` payload against that hash.
+   final `xml` box payload against that hash.
 7. Recheck the live source identity and BLAKE3 to reject concurrent edits.
 8. Atomically rename, then flush the committed file and parent directory.
 9. Re-prove exact JPEG reconstruction or the original non-JBRD classification.

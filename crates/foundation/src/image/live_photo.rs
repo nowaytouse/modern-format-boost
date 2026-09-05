@@ -7,7 +7,21 @@ use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
-const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg"];
+const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg", "jpe", "jfif"];
+
+fn live_member_extension(path: &Path) -> String {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+
+    match detect_true_format(path) {
+        Ok(FormatKind::Jpeg) => "jpg".to_string(),
+        Ok(FormatKind::Heic | FormatKind::Heif) => "heic".to_string(),
+        Ok(FormatKind::Mov) => "mov".to_string(),
+        // A missing/truncated probe must not undo conservative retention of
+        // conventional same-stem pairs. This fallback only protects originals;
+        // it never authorizes conversion or cleanup.
+        _ => crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path),
+    }
+}
 
 /// Check if a file is part of a Live Photo pair
 ///
@@ -18,7 +32,11 @@ const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg"];
 /// Same-stem discovery is followed by Apple Content Identifier verification.
 /// A proven mismatch is not a pair; missing or unreadable identity metadata is
 /// retained conservatively so metadata loss cannot make a real pair unsafe.
-fn regular_companions(parent: &Path, stem: &str, extensions: &[&str]) -> Vec<PathBuf> {
+fn regular_companions(
+    parent: &Path,
+    stem: &std::ffi::OsStr,
+    extensions: &[&str],
+) -> std::io::Result<Vec<PathBuf>> {
     let entries = match std::fs::read_dir(parent) {
         Ok(entries) => entries,
         Err(error) => {
@@ -27,7 +45,7 @@ fn regular_companions(parent: &Path, stem: &str, extensions: &[&str]) -> Vec<Pat
                 parent,
                 format!("failed to inspect Live Photo companion directory: {error}"),
             );
-            return Vec::new();
+            return Err(error);
         }
     };
 
@@ -41,36 +59,34 @@ fn regular_companions(parent: &Path, stem: &str, extensions: &[&str]) -> Vec<Pat
                     parent,
                     format!("failed to read a Live Photo companion directory entry: {error}"),
                 );
-                continue;
+                return Err(error);
             }
         };
         let path = entry.path();
-        let same_stem = path
-            .file_stem()
-            .is_some_and(|candidate| candidate == std::ffi::OsStr::new(stem));
-        let matching_extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|extension| {
-                extensions
-                    .iter()
-                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-            });
-        if !same_stem || !matching_extension {
+        let same_stem = crate::media_conversion_gate::path_file_stem_os_or_none(&path)
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(stem));
+        if !same_stem {
             continue;
         }
         match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_file() => companions.push(path),
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if extensions.contains(&live_member_extension(&path).as_str()) {
+                    companions.push(path);
+                }
+            }
             Ok(_) => {}
-            Err(error) => crate::media_conversion_gate::probe_image_format_audit(
-                "live_photo_companion_metadata_failed",
-                &path,
-                format!("failed to inspect a matching Live Photo companion: {error}"),
-            ),
+            Err(error) => {
+                crate::media_conversion_gate::probe_image_format_audit(
+                    "live_photo_companion_metadata_failed",
+                    &path,
+                    format!("failed to inspect a matching Live Photo companion: {error}"),
+                );
+                return Err(error);
+            }
         }
     }
     companions.sort_unstable();
-    companions
+    Ok(companions)
 }
 
 fn parse_content_identifier_json(stdout: &[u8]) -> anyhow::Result<Option<String>> {
@@ -176,15 +192,14 @@ fn same_stem_pair_is_live(path: &Path, companion: &Path) -> bool {
     }
 }
 
-/// Check whether a path belongs to a same-stem Apple still/MOV pair.
+/// Protect a same-stem Apple still/MOV pair or a candidate whose companion
+/// directory could not be verified. Inconclusive probes never authorize cleanup.
 #[must_use]
 pub fn is_live(path: &Path) -> bool {
-    let ext_lower = crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path);
-    if ext_lower.is_empty() {
+    let ext_lower = live_member_extension(path);
+    let Some(stem) = crate::media_conversion_gate::path_file_stem_os_or_none(path) else {
         return false;
-    }
-
-    let stem = crate::media_conversion_gate::path_file_stem_lossy_or_empty(path);
+    };
     let Some(parent) = path.parent() else {
         return false;
     };
@@ -193,16 +208,19 @@ pub fn is_live(path: &Path) -> bool {
     }
 
     let companions = if LIVE_STILL_EXTENSIONS.contains(&ext_lower.as_str()) {
-        regular_companions(parent, &stem, &["mov"])
+        regular_companions(parent, stem, &["mov"])
     } else if ext_lower == "mov" {
-        regular_companions(parent, &stem, LIVE_STILL_EXTENSIONS)
+        regular_companions(parent, stem, LIVE_STILL_EXTENSIONS)
     } else {
-        Vec::new()
+        return false;
     };
 
-    companions
-        .iter()
-        .any(|companion| same_stem_pair_is_live(path, companion))
+    match companions {
+        Ok(companions) => companions
+            .iter()
+            .any(|companion| same_stem_pair_is_live(path, companion)),
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -307,5 +325,68 @@ mod tests {
 
         let conflicting = br#"[{"Apple:ContentIdentifier":"one","Keys:ContentIdentifier":"two"}]"#;
         assert!(parse_content_identifier_json(conflicting).is_err());
+    }
+
+    #[test]
+    fn live_pair_protection_uses_content_identity_for_jpeg_aliases() -> anyhow::Result<()> {
+        for extension in ["jpe", "jfif", "png", ""] {
+            let root = TempDir::new()?;
+            let still = root.path().join("img_0042").with_extension(extension);
+            let motion = root.path().join("IMG_0042.MOV");
+            image::RgbImage::from_pixel(8, 8, image::Rgb([40, 80, 120]))
+                .save_with_format(&still, image::ImageFormat::Jpeg)?;
+            File::create(&motion)?;
+            assert_eq!(
+                crate::image::format_detect::detect_true_format(&still)?,
+                crate::image::format_detect::FormatKind::Jpeg
+            );
+            assert!(
+                is_live(&still),
+                "JPEG content with .{extension} bypassed protection"
+            );
+            assert!(
+                is_live(&motion),
+                "MOV could not discover the .{extension} JPEG companion"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_companion_directory_probe_does_not_authorize_standalone_processing()
+    -> std::io::Result<()> {
+        let root = TempDir::new()?;
+        let parent = root.path().join("unreadable-parent");
+        File::create(&parent)?;
+        assert!(
+            is_live(&parent.join("IMG_0043.JPG")),
+            "a failed directory probe must retain a possible Live Photo member"
+        );
+        Ok(())
+    }
+
+    // Darwin filesystems reject these filenames before the detector is reached.
+    // The portable OsStr boundary is also tested without filesystem I/O in the gate.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_pair_protection_preserves_non_utf8_stems() -> std::io::Result<()> {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = TempDir::new()?;
+        let still = root.path().join(OsStr::from_bytes(b"img_\xff.JPG"));
+        let motion = root.path().join(OsStr::from_bytes(b"IMG_\xff.MOV"));
+        let different = root.path().join("img_\u{fffd}.JPG");
+        File::create(&still)?;
+        File::create(&motion)?;
+        File::create(&different)?;
+
+        assert!(is_live(&still), "native still stem must match its MOV");
+        assert!(is_live(&motion), "native MOV stem must match its still");
+        assert!(
+            !is_live(&different),
+            "lossy text must not alias a native stem"
+        );
+        Ok(())
     }
 }

@@ -4380,6 +4380,12 @@ pub fn delivery_dot_path() -> &'static Path {
     Path::new(".")
 }
 
+/// Native file stem for lightweight identity probes (no allocation or audit).
+#[must_use]
+pub fn path_file_stem_os_or_none(path: &Path) -> Option<&std::ffi::OsStr> {
+    path.file_stem()
+}
+
 /// File stem for lightweight probes (empty when missing; no delivery audit).
 #[must_use]
 pub fn path_file_stem_lossy_or_empty(path: &Path) -> String {
@@ -8785,6 +8791,9 @@ mod tests {
 
         let non_utf8 = OsStr::from_bytes(b"\xff\xfe");
         let path = Path::new("/tmp").join(non_utf8).with_extension("jpg");
+
+        assert_eq!(path_file_stem_os_or_none(&path), Some(non_utf8));
+        assert!(path_file_stem_os_or_none(Path::new("/")).is_none());
 
         let os_stem = path_file_stem_os_or_delivery_err(&path, "unit_test")
             .expect("non-UTF-8 stem must remain joinable");

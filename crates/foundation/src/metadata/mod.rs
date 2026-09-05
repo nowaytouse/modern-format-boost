@@ -2081,7 +2081,7 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             ));
         }
-        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        let parent = crate::media_conversion_gate::path_parent_or_dot(&destination);
         let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
             "aae_sidecar",
             parent,

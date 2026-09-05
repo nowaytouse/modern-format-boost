@@ -5779,49 +5779,146 @@ mod tests {
         assert!(parse_exiftool_image_data_sha256(&duplicate).is_err());
     }
 
+    fn avif_progressive_state(avifdec: &Path, path: &Path) -> anyhow::Result<String> {
+        let output = std::process::Command::new(avifdec)
+            .arg("--info")
+            .arg(path)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "avifdec --info failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let info = String::from_utf8_lossy(&output.stdout);
+        let state = info
+            .lines()
+            .find_map(|line| {
+                let (label, value) = line.split_once(':')?;
+                label
+                    .trim()
+                    .eq_ignore_ascii_case("* Progressive")
+                    .then_some(value.trim())
+            })
+            .ok_or_else(|| anyhow::anyhow!("avifdec did not report Progressive state"))?;
+        anyhow::ensure!(
+            matches!(state, "Available" | "Unavailable"),
+            "avifdec reported unexpected Progressive state {state:?} for {}",
+            path.display()
+        );
+        Ok(state.to_string())
+    }
+
     #[test]
     fn existing_avif_meme_candidate_never_reencodes_primary_image() -> anyhow::Result<()> {
         use crate::ToolBuilder;
 
-        if !crate::ExiftoolBuilder::check_available() {
+        const CONTRACT: &str = "existing AVIF progressive Meme Mode adoption";
+        crate::test_ci_contract::require_tool_on_path("avifenc", CONTRACT);
+        crate::test_ci_contract::require_tool_on_path("avifdec", CONTRACT);
+        if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
             return Ok(());
         }
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/metadata_clear_baseline.avif.fixture");
+        let Some(avifenc) = crate::common_utils::resolve_tool_path("avifenc") else {
+            return Ok(());
+        };
+        let Some(avifdec) = crate::common_utils::resolve_tool_path("avifdec") else {
+            return Ok(());
+        };
         let temp = tempfile::tempdir()?;
+        let png = temp.path().join("source.png");
+        image::RgbImage::from_fn(96, 64, |x, y| {
+            image::Rgb([
+                (x * 5 + y * 3).to_le_bytes()[0],
+                (x * 7 + y * 11).to_le_bytes()[0],
+                (x * 13 + y * 17).to_le_bytes()[0],
+            ])
+        })
+        .save(&png)?;
 
-        let clean = temp.path().join("clean.avif");
-        let clean_source_hash = crate::common_utils::calculate_blake3_hash(&fixture)?;
-        let clean_candidate_hash = prepare_existing_avif_meme_candidate(&fixture, &clean)?;
-        assert_eq!(clean_candidate_hash, clean_source_hash);
-        assert!(matches!(
-            verify_existing_avif_meme_delivery_integrity(&fixture, &clean)?,
-            IntegrityResult::FinalModernDelivery { .. }
-        ));
+        for (name, progressive, expected_state) in [
+            ("progressive", true, "Available"),
+            ("nonprogressive", false, "Unavailable"),
+        ] {
+            let source = temp.path().join(format!("{name}-source.avif"));
+            let mut encoder = std::process::Command::new(&avifenc);
+            encoder.args(["--speed", "8"]);
+            if progressive {
+                encoder.arg("--progressive");
+            }
+            let encode_result = encoder.arg(&png).arg(&source).output()?;
+            anyhow::ensure!(
+                encode_result.status.success(),
+                "failed to create {name} AVIF fixture: {}",
+                String::from_utf8_lossy(&encode_result.stderr)
+            );
+            assert_eq!(avif_progressive_state(&avifdec, &source)?, expected_state);
 
-        let dirty = temp.path().join("dirty.avif");
-        std::fs::copy(&fixture, &dirty)?;
-        let status = crate::ExiftoolBuilder::new()
-            .arg("-XMP-dc:Description=MFB synthetic test")
-            .overwrite_original()
-            .input(&dirty)
-            .build()
-            .status()?;
-        anyhow::ensure!(status.success(), "failed to create synthetic XMP fixture");
-        let source_image_data = image_data_sha256(&dirty)?;
-        let sanitized = temp.path().join("sanitized.avif");
-        prepare_existing_avif_meme_candidate(&dirty, &sanitized)?;
+            let source_hash = crate::common_utils::calculate_blake3_hash(&source)?;
+            let source_image_data = image_data_sha256(&source)?;
+            let source_features = avif_codec_feature_hash(&source)?;
+            let clean = temp.path().join(format!("{name}-clean.avif"));
+            let clean_candidate_hash = prepare_existing_avif_meme_candidate(&source, &clean)?;
+            assert_eq!(clean_candidate_hash, source_hash);
+            assert_eq!(
+                crate::common_utils::calculate_blake3_hash(&clean)?,
+                source_hash
+            );
+            assert_eq!(image_data_sha256(&clean)?, source_image_data);
+            assert_eq!(avif_codec_feature_hash(&clean)?, source_features);
+            assert_eq!(avif_progressive_state(&avifdec, &clean)?, expected_state);
+            assert!(matches!(
+                verify_existing_avif_meme_delivery_integrity(&source, &clean)?,
+                IntegrityResult::FinalModernDelivery {
+                    source_hash: verified_source,
+                    output_hash: verified_output,
+                } if verified_source == verified_output && verified_source == source_hash
+            ));
+            assert_eq!(
+                crate::common_utils::calculate_blake3_hash(&source)?,
+                source_hash
+            );
 
-        assert_eq!(image_data_sha256(&sanitized)?, source_image_data);
-        crate::metadata::verify_output_embedded_metadata(
-            &dirty,
-            &sanitized,
-            crate::metadata::MetadataOutputPolicy::Clear,
-        )?;
-        assert!(matches!(
-            verify_existing_avif_meme_delivery_integrity(&dirty, &sanitized)?,
-            IntegrityResult::FinalModernDelivery { .. }
-        ));
+            let dirty = temp.path().join(format!("{name}-dirty.avif"));
+            std::fs::copy(&source, &dirty)?;
+            let status = crate::ExiftoolBuilder::new()
+                .arg("-XMP-dc:Description=MFB synthetic progressive adoption test")
+                .overwrite_original()
+                .input(&dirty)
+                .build()
+                .status()?;
+            anyhow::ensure!(status.success(), "failed to create {name} XMP fixture");
+            anyhow::ensure!(
+                !crate::metadata::embedded_metadata_is_clear(&dirty)?,
+                "{name} dirty fixture did not contain removable metadata"
+            );
+            assert_eq!(avif_progressive_state(&avifdec, &dirty)?, expected_state);
+            let dirty_hash = crate::common_utils::calculate_blake3_hash(&dirty)?;
+            let dirty_image_data = image_data_sha256(&dirty)?;
+            let dirty_features = avif_codec_feature_hash(&dirty)?;
+            let sanitized = temp.path().join(format!("{name}-sanitized.avif"));
+            prepare_existing_avif_meme_candidate(&dirty, &sanitized)?;
+
+            assert!(crate::metadata::embedded_metadata_is_clear(&sanitized)?);
+            assert_eq!(image_data_sha256(&sanitized)?, dirty_image_data);
+            assert_eq!(avif_codec_feature_hash(&sanitized)?, dirty_features);
+            assert_eq!(
+                avif_progressive_state(&avifdec, &sanitized)?,
+                expected_state
+            );
+            assert_eq!(
+                crate::common_utils::calculate_blake3_hash(&dirty)?,
+                dirty_hash
+            );
+            assert_eq!(
+                crate::common_utils::calculate_blake3_hash(&source)?,
+                source_hash
+            );
+            assert!(matches!(
+                verify_existing_avif_meme_delivery_integrity(&dirty, &sanitized)?,
+                IntegrityResult::FinalModernDelivery { .. }
+            ));
+        }
         Ok(())
     }
 

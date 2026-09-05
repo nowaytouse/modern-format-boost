@@ -285,6 +285,7 @@ enum OfficialSourceDecoder {
     Heif,
     WebP,
     Jxl,
+    LegacyRaster,
 }
 
 impl OfficialSourceDecoder {
@@ -294,6 +295,7 @@ impl OfficialSourceDecoder {
             Self::Heif => "heif-convert",
             Self::WebP => "dwebp",
             Self::Jxl => "djxl",
+            Self::LegacyRaster => "magick",
         }
     }
 }
@@ -304,6 +306,10 @@ const fn official_source_decoder(format: FormatKind) -> Option<OfficialSourceDec
         FormatKind::Heic | FormatKind::Heif => Some(OfficialSourceDecoder::Heif),
         FormatKind::WebP => Some(OfficialSourceDecoder::WebP),
         FormatKind::Jxl => Some(OfficialSourceDecoder::Jxl),
+        // The conversion path already uses this adapter for cursor/icon and
+        // JPEG 2000 sources unsupported by the Rust image decoder. Decode the
+        // original independently here; decoder gaps must not bypass the audit.
+        FormatKind::Ico | FormatKind::Jp2 => Some(OfficialSourceDecoder::LegacyRaster),
         _ => None,
     }
 }
@@ -331,6 +337,9 @@ fn official_source_decode_command(
         }
         OfficialSourceDecoder::WebP => {
             command.arg(source).arg("-o").arg(output);
+        }
+        OfficialSourceDecoder::LegacyRaster => {
+            command.arg(source).args(["-depth", "16"]).arg(output);
         }
     }
     command

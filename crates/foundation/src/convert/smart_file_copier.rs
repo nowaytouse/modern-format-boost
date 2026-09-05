@@ -137,16 +137,36 @@ pub fn smart_copy_with_structure(
     base_dir: Option<&Path>,
     verbose: bool,
 ) -> Result<PathBuf> {
-    let dest = if let Some(base) = base_dir {
+    let requested_dest = if let Some(base) = base_dir {
         let rel_path =
             crate::media_conversion_gate::strip_prefix_or_self(source, base, "delivery_io_copy");
+        if rel_path.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            return Err(anyhow::anyhow!(
+                "Refusing archive copy outside output directory: source {} does not form a safe relative path under {}",
+                source.display(),
+                base.display()
+            ));
+        }
         output_dir.join(rel_path)
     } else {
         let file_name = source.file_name().context("Source file has no filename")?;
         output_dir.join(file_name)
     };
 
-    if paths_alias(source, &dest)? {
+    if paths_alias(source, &requested_dest)? {
+        return Err(anyhow::anyhow!(
+            "Refusing to copy source onto itself: {}",
+            source.display()
+        ));
+    }
+
+    let dest = corrected_copy_destination(source, &requested_dest)?;
+    if dest != requested_dest && paths_alias(source, &dest)? {
         return Err(anyhow::anyhow!(
             "Refusing to copy source onto itself: {}",
             source.display()
@@ -158,57 +178,133 @@ pub fn smart_copy_with_structure(
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
-    if !dest.exists() {
-        fs::copy(source, &dest).with_context(|| {
-            format!("Failed to copy {} to {}", source.display(), dest.display())
-        })?;
+    let destination_exists = match fs::symlink_metadata(&dest) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(anyhow::anyhow!(
+                    "Refusing to preserve onto symbolic-link destination: {}",
+                    dest.display()
+                ));
+            }
+            if !metadata.is_file() {
+                return Err(anyhow::anyhow!(
+                    "Refusing to preserve onto non-regular destination: {}",
+                    dest.display()
+                ));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Failed to inspect copy destination: {}", dest.display())
+            });
+        }
+    };
 
-        if verbose {
-            crate::ui_stderr::line(
-                "📋",
-                "[META]",
-                format!("   Copied: {} → {}", source.display(), dest.display()),
-            );
-        }
-    } else if verbose {
-        match fs::metadata(&dest) {
-            Ok(meta) => {
-                crate::ui_stderr::line(
-                    "⏭️",
-                    "[SKIP]",
-                    format!(
-                        "   Already exists: {} ({} bytes)",
-                        dest.display(),
-                        meta.len()
-                    ),
-                );
-            }
-            Err(e) => {
-                crate::media_conversion_gate::delivery_pipeline_path_audit(
-                    "smart_file_copy",
-                    &dest,
-                    format!("failed to read destination metadata for skip message: {e}"),
-                );
-                crate::ui_stderr::line(
-                    crate::modern_ui::symbols::WARNING,
-                    crate::modern_ui::symbols::plain::WARNING,
-                    format!("   Already exists but inaccessible: {}", dest.display()),
-                );
-            }
-        }
+    let parent = dest.parent().context("Copy destination has no parent")?;
+    let suffix = dest
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())
+        .map_or_else(|| String::from(".tmp"), |extension| format!(".{extension}"));
+    let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "smart_file_copy",
+        parent,
+        ".mfb-copy-",
+        &suffix,
+    )?;
+    let copied = fs::copy(source, staged.path()).with_context(|| {
+        format!(
+            "Failed to stage copy {} for {}",
+            source.display(),
+            dest.display()
+        )
+    })?;
+    let source_size = fs::metadata(source)
+        .with_context(|| format!("Failed to inspect copy source: {}", source.display()))?
+        .len();
+    if copied != source_size {
+        return Err(anyhow::anyhow!(
+            "Staged copy length mismatch for {}: expected {source_size}, copied {copied}",
+            source.display()
+        ));
     }
 
-    let dest = fix_extension_if_mismatch(&dest)?;
-
-    crate::copy(source, &dest).with_context(|| {
+    crate::copy(source, staged.path()).with_context(|| {
         format!(
-            "Copied {} to {} but failed to preserve metadata",
+            "Staged {} for {} but failed to preserve metadata",
             source.display(),
             dest.display()
         )
     })?;
 
+    if destination_exists {
+        let staged_hash = crate::common_utils::calculate_blake3_hash(staged.path())?;
+        let destination_hash = crate::common_utils::calculate_blake3_hash(&dest)?;
+        if staged_hash != destination_hash {
+            return Err(anyhow::anyhow!(
+                "Refusing to preserve {} because destination has a different payload: {}",
+                source.display(),
+                dest.display()
+            ));
+        }
+        crate::metadata::verify_exact_metadata_copy(staged.path(), &dest).with_context(|| {
+            format!(
+                "Refusing to reuse existing copy with different filesystem metadata: {}",
+                dest.display()
+            )
+        })?;
+        if verbose {
+            crate::ui_stderr::line(
+                "⏭️",
+                "[SKIP]",
+                format!("   Already preserved: {}", dest.display()),
+            );
+        }
+        return Ok(dest);
+    }
+
+    staged.persist_noclobber(&dest).map_err(|error| {
+        anyhow::anyhow!(
+            "Failed to publish preserved copy {} without overwriting an existing path: {}",
+            dest.display(),
+            error.error
+        )
+    })?;
+
+    if verbose {
+        crate::ui_stderr::line(
+            "📋",
+            "[META]",
+            format!("   Copied: {} → {}", source.display(), dest.display()),
+        );
+    }
+
     Ok(dest)
+}
+
+fn corrected_copy_destination(source: &Path, destination: &Path) -> Result<PathBuf> {
+    use crate::quality_matcher::SourceCodec;
+
+    let current_ext =
+        crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(destination);
+    if let Some(codec) = SourceCodec::identify_by_content(source)?
+        && !codec.is_extension_compatible(&current_ext)
+    {
+        let corrected = destination.with_extension(codec.default_extension());
+        crate::ui_stderr::line(
+            crate::modern_ui::symbols::WARNING,
+            crate::modern_ui::symbols::plain::WARNING,
+            format!(
+                "[Extension Fix] {} -> {} (content does not match extension)",
+                destination.display(),
+                corrected.display()
+            ),
+        );
+        return Ok(corrected);
+    }
+    Ok(destination.to_path_buf())
 }
 
 /// Return whether two existing paths identify the same filesystem object.
@@ -339,6 +435,30 @@ mod tests {
     }
 
     #[test]
+    fn test_smart_copy_rejects_parent_escape_from_output_root() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let base = temp.path().join("input");
+        let output = temp.path().join("delivery/nested");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&output).unwrap();
+        let source = base.join("../original.txt");
+        fs::write(&source, b"original archive bytes").unwrap();
+        let escaped_destination = temp.path().join("delivery/original.txt");
+
+        let result = smart_copy_with_structure(&source, &output, Some(&base), false);
+
+        assert_eq!(fs::read(&source).unwrap(), b"original archive bytes");
+        assert!(
+            result.is_err(),
+            "relative parent components must not escape output root"
+        );
+        assert!(
+            !escaped_destination.exists(),
+            "no out-of-root copy may be created"
+        );
+    }
+
+    #[test]
     fn test_copy_on_skip_with_none() {
         let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let source = temp.path().join("test.txt");
@@ -359,6 +479,231 @@ mod tests {
             .expect_err("fallback copy must refuse a source/destination alias");
         assert!(error.to_string().contains("source onto itself"));
         assert_eq!(fs::read_to_string(&source).unwrap(), "test");
+    }
+
+    #[test]
+    fn test_smart_copy_rejects_existing_different_payload_without_mutation() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&source_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = source_dir.join("archive.jxl");
+        let destination = output_dir.join("archive.jxl");
+        fs::write(&source, b"source archive payload").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&destination, b"unrelated existing payload")
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let error = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
+            .expect_err("a conflicting archive destination must fail closed");
+
+        assert!(error.to_string().contains("different payload"));
+        assert_eq!(fs::read(&source).unwrap(), b"source archive payload");
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            b"unrelated existing payload"
+        );
+    }
+
+    #[test]
+    fn test_smart_copy_rejects_existing_metadata_mismatch_without_mutation() {
+        for mismatch in ["mtime", "permissions"] {
+            let temp = TempDir::new().expect("create metadata-conflict fixture");
+            let source = temp.path().join("archive.txt");
+            let output_dir = temp.path().join("output");
+            fs::create_dir(&output_dir).expect("create output directory");
+            let destination = output_dir.join("archive.txt");
+            fs::write(&source, b"matching archive payload").expect("write source");
+            fs::write(&destination, b"matching archive payload").expect("write existing copy");
+            crate::copy(&source, &destination).expect("align baseline metadata");
+            let source_before = fs::metadata(&source).expect("source metadata");
+            if mismatch == "mtime" {
+                filetime::set_file_mtime(
+                    &destination,
+                    filetime::FileTime::from_unix_time(1_600_000_000, 0),
+                )
+                .expect("set stale output timestamp");
+            } else {
+                let mut permissions = source_before.permissions();
+                permissions.set_readonly(true);
+                fs::set_permissions(&destination, permissions)
+                    .expect("set conflicting permissions");
+            }
+            let destination_before = fs::metadata(&destination).expect("existing metadata");
+
+            let result = smart_copy_with_structure(&source, &output_dir, None, false);
+
+            let destination_after =
+                fs::metadata(&destination).expect("preserved existing metadata");
+            assert_eq!(
+                destination_after.modified().unwrap(),
+                destination_before.modified().unwrap()
+            );
+            assert_eq!(
+                destination_after.permissions(),
+                destination_before.permissions()
+            );
+            assert_eq!(fs::read(&source).unwrap(), b"matching archive payload");
+            assert_eq!(fs::read(&destination).unwrap(), b"matching archive payload");
+            assert_eq!(
+                fs::metadata(&source).unwrap().permissions(),
+                source_before.permissions()
+            );
+            assert_eq!(
+                fs::metadata(&source).unwrap().modified().unwrap(),
+                source_before.modified().unwrap()
+            );
+            // Restore only test-owned permissions so Windows can remove the fixture.
+            fs::set_permissions(&destination, source_before.permissions())
+                .expect("restore fixture permissions");
+            let error =
+                result.expect_err("matching bytes must not hide missing filesystem metadata");
+            assert!(
+                error.to_string().contains("different filesystem metadata"),
+                "{mismatch}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_copy_on_skip_accepts_existing_identical_regular_payload() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&source_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = source_dir.join("archive.jxl");
+        let destination = output_dir.join("archive.jxl");
+        fs::write(&source, b"matching archive payload").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&destination, b"matching archive payload")
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        crate::copy(&source, &destination).expect("align matching archive metadata");
+
+        let preserved = copy_on_skip_or_fail(&source, Some(&output_dir), Some(&source_dir), false)
+            .unwrap_or_else(|e| panic!("identical destination should be idempotent: {e:?}"));
+
+        assert_eq!(preserved, Some(destination.clone()));
+        assert_eq!(fs::read(&source).unwrap(), b"matching archive payload");
+        assert_eq!(fs::read(&destination).unwrap(), b"matching archive payload");
+    }
+
+    #[test]
+    fn test_smart_copy_repeat_accepts_matching_xmp_enriched_delivery() {
+        assert!(
+            crate::ExiftoolBuilder::check_available(),
+            "repeat-copy regression requires ExifTool"
+        );
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&source_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = source_dir.join("archive.jpg");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([18, 52, 86]))
+            .save(&source)
+            .unwrap_or_else(|e| panic!("write JPEG fixture: {e:?}"));
+        fs::write(
+            source.with_extension("xmp"),
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>archive copy regression</dc:title>
+</rdf:Description>
+</rdf:RDF></x:xmpmeta>"#,
+        )
+        .unwrap_or_else(|e| panic!("write XMP fixture: {e:?}"));
+
+        let destination = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
+            .unwrap_or_else(|e| panic!("first XMP-enriched copy failed: {e:?}"));
+        let first_delivery = fs::read(&destination).unwrap();
+        assert_ne!(
+            first_delivery,
+            fs::read(&source).unwrap(),
+            "fixture must prove that sidecar enrichment changes delivered bytes"
+        );
+
+        let repeated = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
+            .unwrap_or_else(|e| panic!("matching enriched delivery must be idempotent: {e:?}"));
+
+        assert_eq!(repeated, destination);
+        assert_eq!(fs::read(&destination).unwrap(), first_delivery);
+    }
+
+    #[test]
+    fn test_smart_copy_rejects_conflict_at_content_corrected_destination() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&source_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = source_dir.join("video.jpg");
+        let requested_destination = output_dir.join("video.jpg");
+        let corrected_destination = output_dir.join("video.mp4");
+        let mut mp4_payload = [0_u8; 32];
+        mp4_payload[4..8].copy_from_slice(b"ftyp");
+        mp4_payload[8..12].copy_from_slice(b"isom");
+        fs::write(&source, mp4_payload).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&corrected_destination, b"unrelated corrected-name payload")
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let error = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
+            .expect_err("a conflict at the corrected destination must fail closed");
+
+        assert!(error.to_string().contains("different payload"));
+        assert_eq!(fs::read(&source).unwrap(), mp4_payload);
+        assert_eq!(
+            fs::read(&corrected_destination).unwrap(),
+            b"unrelated corrected-name payload"
+        );
+        assert!(!requested_destination.exists());
+    }
+
+    #[test]
+    fn test_smart_copy_rejects_requested_source_alias_before_extension_correction() {
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = temp.path().join("video.jpg");
+        let mut mp4_payload = [0_u8; 32];
+        mp4_payload[4..8].copy_from_slice(b"ftyp");
+        mp4_payload[8..12].copy_from_slice(b"isom");
+        fs::write(&source, mp4_payload).unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let error = smart_copy_with_structure(&source, temp.path(), None, false)
+            .expect_err("requested source alias must fail before extension correction");
+
+        assert!(error.to_string().contains("source onto itself"));
+        assert_eq!(fs::read(&source).unwrap(), mp4_payload);
+        assert!(!temp.path().join("video.mp4").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_smart_copy_rejects_destination_symlink_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source_dir = temp.path().join("input");
+        let output_dir = temp.path().join("output");
+        fs::create_dir_all(&source_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let source = source_dir.join("archive.jxl");
+        let target = temp.path().join("symlink-target.jxl");
+        let destination = output_dir.join("archive.jxl");
+        fs::write(&source, b"source archive payload").unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&target, b"target must remain untouched")
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        symlink(&target, &destination).unwrap_or_else(|e| panic!("error: {e:?}"));
+
+        let error = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
+            .expect_err("a destination symlink must fail closed");
+
+        assert!(error.to_string().contains("symbolic-link destination"));
+        assert_eq!(fs::read(&source).unwrap(), b"source archive payload");
+        assert_eq!(fs::read(&target).unwrap(), b"target must remain untouched");
+        assert!(
+            fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to

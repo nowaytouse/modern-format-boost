@@ -5376,13 +5376,39 @@ fn avif_info_has_gain_map(info: &str) -> Result<bool> {
     Ok(!value.eq_ignore_ascii_case("absent"))
 }
 
-/// Probe an AVIF with the authoritative decoder before a path that cannot
-/// carry auxiliary gain-map data.
-///
-/// An absent state is the only affirmative
-/// proof that flattening is safe; missing or malformed probe output fails
-/// closed.
-pub fn avif_path_has_gain_map(input: &Path) -> Result<bool> {
+fn avif_info_has_clli(info: &str) -> Result<bool> {
+    let Some(value) = info.lines().find_map(|line| {
+        let (label, value) = line.split_once(':')?;
+        label
+            .trim()
+            .eq_ignore_ascii_case("* CLLI")
+            .then_some(value.trim())
+    }) else {
+        return Ok(false);
+    };
+    if value.eq_ignore_ascii_case("absent") {
+        return Ok(false);
+    }
+
+    let (max_cll, max_fall) = value.split_once(',').ok_or_else(|| {
+        ImgQualityError::ConversionError(format!(
+            "avifdec reported malformed CLLI state '{value}'; native source retained"
+        ))
+    })?;
+    max_cll.trim().parse::<u32>().map_err(|error| {
+        ImgQualityError::ConversionError(format!(
+            "avifdec reported malformed CLLI MaxCLL '{max_cll}': {error}; native source retained"
+        ))
+    })?;
+    max_fall.trim().parse::<u32>().map_err(|error| {
+        ImgQualityError::ConversionError(format!(
+            "avifdec reported malformed CLLI MaxFALL '{max_fall}': {error}; native source retained"
+        ))
+    })?;
+    Ok(true)
+}
+
+fn read_avif_info(input: &Path) -> Result<String> {
     let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
         .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
     let mut info_command = Command::new(avifdec);
@@ -5392,24 +5418,45 @@ pub fn avif_path_has_gain_map(input: &Path) -> Result<bool> {
     let info = run_image_process(info_command).map_err(ImgQualityError::IoError)?;
     if !info.status.success() {
         return Err(ImgQualityError::ConversionError(format!(
-            "avifdec gain-map probe failed: {}",
+            "avifdec AVIF metadata probe failed: {}",
             String::from_utf8_lossy(&info.stderr)
         )));
     }
-    avif_info_has_gain_map(&String::from_utf8_lossy(&info.stdout))
+    Ok(String::from_utf8_lossy(&info.stdout).into_owned())
 }
 
-fn preprocess_avif_for_cjxl(
-    input: &Path,
-) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
-        .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
-    if avif_path_has_gain_map(input)? {
+/// Probe an AVIF with the authoritative decoder before a path that cannot
+/// carry auxiliary gain-map data.
+///
+/// An absent state is the only affirmative
+/// proof that flattening is safe; missing or malformed probe output fails
+/// closed.
+pub fn avif_path_has_gain_map(input: &Path) -> Result<bool> {
+    avif_info_has_gain_map(&read_avif_info(input)?)
+}
+
+fn ensure_avif_jxl_metadata_preservable(input: &Path) -> Result<()> {
+    let info = read_avif_info(input)?;
+    if avif_info_has_gain_map(&info)? {
         return Err(ImgQualityError::ConversionError(
             "AVIF carries a gain map that the JXL pixel path cannot preserve; native source retained"
                 .to_string(),
         ));
     }
+    if avif_info_has_clli(&info)? {
+        return Err(ImgQualityError::ConversionError(
+            "AVIF carries CLLI metadata that the JXL pixel path cannot preserve; native source retained"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn decode_avif_for_cjxl(
+    input: &Path,
+) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+    let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
+        .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
 
     let temp_file = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "img_lossless_avif_png",
@@ -5797,11 +5844,6 @@ fn prepare_input_for_cjxl(
         intermediate_suffix,
     );
 
-    // Check if we need 16-bit decode for HDR or high-precision preservation.
-    if precision.should_use_high_precision_png16_decode() {
-        return try_high_precision_decode(input, color_info, color_assessment, precision);
-    }
-
     let detected_ext = foundation::common_utils::detect_real_extension(input);
     let literal_ext = foundation::media_conversion_gate::path_extension_lowercase_or_empty(
         input,
@@ -5829,13 +5871,22 @@ fn prepare_input_for_cjxl(
         literal_ext
     };
 
+    if ext == foundation::constants::EXT_AVIF {
+        ensure_avif_jxl_metadata_preservable(input)?;
+    }
+
+    // Check if we need 16-bit decode for HDR or high-precision preservation.
+    if precision.should_use_high_precision_png16_decode() {
+        return try_high_precision_decode(input, color_info, color_assessment, precision);
+    }
+
     match ext.as_str() {
         foundation::constants::EXT_JPG | foundation::constants::EXT_JPEG => {
             preprocess_jpeg_for_cjxl(input, precision, intermediate_depth, intermediate_suffix)
         }
 
         foundation::constants::EXT_WEBP => preprocess_webp_for_cjxl(input),
-        foundation::constants::EXT_AVIF => preprocess_avif_for_cjxl(input),
+        foundation::constants::EXT_AVIF => decode_avif_for_cjxl(input),
 
         foundation::constants::EXT_TIFF | foundation::constants::EXT_TIF => {
             preprocess_lossless_with_magick(
@@ -6756,6 +6807,15 @@ mod tests {
         assert!(!avif_info_has_gain_map(" * Gain map : Absent").expect("absent state"));
         assert!(avif_info_has_gain_map(" * Gain map : Present").expect("present state"));
         assert!(avif_info_has_gain_map(" * XMP Metadata : Absent").is_err());
+    }
+
+    #[test]
+    fn avif_clli_probe_is_explicit_and_fail_closed() {
+        assert!(!avif_info_has_clli(" * CLLI : Absent").expect("absent state"));
+        assert!(avif_info_has_clli(" * CLLI : 1000, 400").expect("present state"));
+        assert!(avif_info_has_clli(" * CLLI : 1000").is_err());
+        assert!(avif_info_has_clli(" * CLLI : bright, 400").is_err());
+        assert!(!avif_info_has_clli(" * Gain map : Absent").expect("CLLI omitted"));
     }
 
     #[test]

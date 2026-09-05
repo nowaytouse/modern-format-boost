@@ -1975,8 +1975,17 @@ fn commit_temp_to_output_with_metadata_inner(
                 output = %output.display(),
                 "delivery orientation pixel audit skipped (pixel equivalence already verified by caller)"
             );
-        } else {
-            audit_orientation_pixel_verification_for_delivery(src, output)?;
+        } else if src_exists {
+            audit_orientation_pixel_verification_for_delivery(src, output).inspect_err(|_| {
+                // Only remove the candidate moved by this commit. An in-place
+                // caller retains custody of its file even when validation fails.
+                if !in_place_commit {
+                    crate::media_conversion_gate::delivery_remove_file_or_audit(
+                        "delivery orientation pixel verification failure",
+                        output,
+                    );
+                }
+            })?;
         }
         if !preserve_codec_embedded_metadata {
             strip_residual_orientation_tag_for_delivery(output)?;
@@ -2301,33 +2310,27 @@ fn audit_orientation_pixel_verification_for_delivery(
             );
         }
         Ok(crate::image::orientation::PixelDiffResult::SkippedToolAbsent { tool }) => {
-            tracing::warn!(
-                target: "orientation_pixel_diff",
-                source = %source.display(),
-                output = %output.display(),
-                tool = %tool,
-                "delivery orientation pixel verification skipped because decoder tool is absent"
-            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "Delivery orientation pixel verification unavailable: {tool} is absent; source retained"
+                ),
+            ));
         }
         Ok(crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel }) => {
-            tracing::warn!(
-                target: "orientation_pixel_diff",
-                source = %source.display(),
-                output = %output.display(),
-                format = ?format,
-                max_delta,
-                channel,
-                "delivery orientation pixel verification mismatch; non-destructive conversion output preserved"
-            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Delivery orientation pixel verification mismatch for {}: max delta {max_delta}, channel {channel}; source retained",
+                    output.display()
+                ),
+            ));
         }
         Err(err) => {
-            tracing::warn!(
-                target: "orientation_pixel_diff",
-                source = %source.display(),
-                output = %output.display(),
-                error = %err,
-                "delivery orientation pixel verification errored; non-destructive conversion output preserved"
-            );
+            return Err(std::io::Error::other(format!(
+                "Delivery orientation pixel verification failed for {}: {err}; source retained",
+                output.display()
+            )));
         }
     }
     Ok(())
@@ -4153,6 +4156,92 @@ mod tests {
 
         strip_residual_orientation_tag_for_delivery(&jxl_output)
             .expect("JXL Orientation cleanup must happen upstream during metadata copy");
+    }
+
+    #[test]
+    fn delivery_commit_rejects_wrong_pixels_and_preserves_source_custody() {
+        if !generated_jxl_toolchain_available_or_skip("delivery pixel mismatch custody") {
+            return;
+        }
+        let root = tempdir_in("/tmp").expect("create pixel custody fixture");
+        let source = root.path().join("source.png");
+        let sidecar = source.with_extension("xmp");
+        let wrong = root.path().join("wrong.png");
+        let wrong_dimensions = root.path().join("wrong-dimensions.png");
+        image::RgbImage::from_fn(16, 16, |x, _| {
+            let value = u8::try_from(x * 17).expect("fixture gradient");
+            image::Rgb([value, value, value])
+        })
+        .save(&source)
+        .expect("write source pixels");
+        image::RgbImage::from_fn(16, 16, |x, _| {
+            let value = u8::try_from(255 - x * 17).expect("inverse fixture gradient");
+            image::Rgb([value, value, value])
+        })
+        .save(&wrong)
+        .expect("write opposite pixels");
+        image::RgbImage::from_pixel(8, 16, image::Rgb([40, 80, 120]))
+            .save(&wrong_dimensions)
+            .expect("write wrong dimensions");
+        std::fs::write(
+            &sidecar,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">
+<photoshop:DateCreated>2025-10-24T12:00:24+08:00</photoshop:DateCreated>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+        )
+        .expect("write source sidecar");
+        let source_bytes = std::fs::read(&source).expect("read source");
+        let sidecar_bytes = std::fs::read(&sidecar).expect("read sidecar");
+
+        for (label, pixels, expected_error, in_place) in [
+            ("wrong", &wrong, Some("pixel verification mismatch"), false),
+            (
+                "dimensions",
+                &wrong_dimensions,
+                Some("dimension mismatch"),
+                false,
+            ),
+            (
+                "in-place",
+                &wrong,
+                Some("pixel verification mismatch"),
+                true,
+            ),
+            ("matching", &source, None, false),
+        ] {
+            let temp = root.path().join(format!("{label}.search.jxl"));
+            let output = if in_place {
+                temp.clone()
+            } else {
+                root.path().join(format!("{label}.jxl"))
+            };
+            command_status_success(
+                Command::new(crate::constants::TOOL_CJXL)
+                    .arg(pixels)
+                    .arg(&temp)
+                    .arg("--distance=0")
+                    .arg("--container=1")
+                    .arg("--effort=1"),
+                "encode pixel custody fixture",
+            );
+            let result = commit_temp_to_output_with_metadata(&temp, &output, false, Some(&source));
+            assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+            assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_bytes);
+            if let Some(expected_error) = expected_error {
+                let error = result.expect_err("wrong pixels must not be reported as delivered");
+                assert!(error.to_string().contains(expected_error), "{error}");
+                assert_eq!(
+                    output.exists(),
+                    in_place,
+                    "only caller-owned in-place files remain"
+                );
+            } else {
+                assert!(result.expect("matching pixels must remain deliverable"));
+                assert!(output.exists());
+            }
+        }
     }
 
     #[test]

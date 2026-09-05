@@ -61,8 +61,9 @@ Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/co
   Both paths must emit positive JPEG reconstruction evidence, produce a non-empty
   file, avoid pixel-to-JPEG fallback and pass the byte-identical hash proof after
   metadata commit. Reconstruction-owned JBRD/Exif/XMP/JUMBF bytes remain frozen.
-  On JPEG→JXL, external XMP is appended **inside the JXL** as an idempotent `xml `
-  overlay and exact reconstruction is proved again. On JXL→JPEG, `restore-jpeg`
+  On JPEG→JXL, external XMP is appended **inside the JXL** as an idempotent `xml`
+  overlay (the four-byte box type includes a trailing space), and exact
+  reconstruction is proved again. On JXL→JPEG, `restore-jpeg`
   keeps the recovered JPEG bytes unchanged and delivers the effective appended
   XMP as a separately hashed `.xmp` sidecar; embedding new XMP into that JPEG
   would necessarily destroy byte identity. If container XMP
@@ -125,9 +126,9 @@ matrix covers:
 `cargo test --locked -p img --all-targets -- --list` is the reproducible test
 inventory for the checked-out revision. The dedicated production matrix locks
 truncated JPEG + XMP source retention, animated WebP chunk classification,
-  AVIF/HEIC sequence-brand boundaries, JXL Tier 2 versus AVIF Meme Mode routing,
-  existing-AVIF re-encoding and clean-metadata proofs, and empty-directory
-  pruning that preserves unrelated hidden files. Optional codec
+AVIF/HEIC sequence-brand boundaries, JXL Tier 2 versus AVIF Meme Mode routing,
+existing-AVIF re-encoding and clean-metadata proofs, and empty-directory
+pruning that preserves unrelated hidden files. Optional codec
 branches report their availability; the inventory does not claim that every
 host ran every external codec or a live Photos transaction.
 
@@ -393,15 +394,15 @@ flowchart TD
 
 ### `img run`
 
-| Input                                          | Action                                                       |
-| ---------------------------------------------- | ------------------------------------------------------------ |
-| Static JPEG (including UltraHDR)            | Byte-reconstructible JXL archive followed by delivery checks |
-| PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/static GIF | Pixel-lossless JXL conversion and delivery checks |
-| Proven-lossless WebP/AVIF/HEIC/HEIF/JP2 | Pixel-lossless JXL with metadata and feature proof |
-| Lossy/unknown modern container or existing JXL | Retain byte-for-byte to avoid unproved archival damage |
-| SVG/SVGZ or enumerated camera RAW | Retain byte-for-byte; do not discard vector or sensor archive semantics |
-| Animated or unverified animatable image container | Ignore on `img`; a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains a still |
-| MP4/MOV/MKV/WebM, even when they contain one frame | Ignore on `img`; video-container semantics always belong to `vid` |
+| Input                                              | Action                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Static JPEG (including UltraHDR)                   | Byte-reconstructible JXL archive followed by delivery checks                   |
+| PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/static GIF         | Pixel-lossless JXL conversion and delivery checks                              |
+| Proven-lossless WebP/AVIF/HEIC/HEIF/JP2            | Pixel-lossless JXL with metadata and feature proof                             |
+| Lossy/unknown modern container or existing JXL     | Retain byte-for-byte to avoid unproved archival damage                         |
+| SVG/SVGZ or enumerated camera RAW                  | Retain byte-for-byte; do not discard vector or sensor archive semantics        |
+| Animated or unverified animatable image container  | Ignore on `img`; a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains a still |
+| MP4/MOV/MKV/WebM, even when they contain one frame | Ignore on `img`; video-container semantics always belong to `vid`              |
 
 `img run` enables content exploration, quality matching, compression, metadata
 preservation, timestamp preservation, recursion and Apple compatibility by
@@ -411,10 +412,10 @@ or probe the database.
 
 ### `img fast-img`
 
-| Strategy           | Primary path                                                                            | Destructive gate                                                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `jxl` (default)    | Content-confirmed JPEG → reversible JPEG-reconstruction JXL in an adjacent working tree | Decode/integrity, orientation/metadata, BLAKE3 and final-delivery proof before source cleanup                                           |
-| `jxl` Tier 2       | Confirmed-static, confirmed-lossy WebP/JP2/JXL/AVIF/HEIC/HEIF original → Apple Photos   | Live library reconciliation plus asset UUID/content-hash custody before deleting that exact source                                      |
+| Strategy           | Primary path                                                                                                | Destructive gate                                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jxl` (default)    | Content-confirmed JPEG → reversible JPEG-reconstruction JXL in an adjacent working tree                     | Decode/integrity, orientation/metadata, BLAKE3 and final-delivery proof before source cleanup                                                                              |
+| `jxl` Tier 2       | Confirmed-static, confirmed-lossy WebP/JP2/JXL/AVIF/HEIC/HEIF original → Apple Photos                       | Live library reconciliation plus asset UUID/content-hash custody before deleting that exact source                                                                         |
 | `avif` (Meme Mode) | Non-AVIF static input → bounded AVIF search; existing AVIF → no-reencode adoption or container-only cleanup | Primary image/codec-feature and clear-metadata proof; a validated matching XMP sidecar is removed only after the same proof; `--shortest-path` adds verified Photos import |
 
 JXL Tier 2 is deliberately positive-evidence-only. Lossless media, JXL carrying
@@ -431,15 +432,15 @@ live-library verification gates run before source cleanup.
 `img run` and FastImg share the same low-level integrity, metadata, path-safety
 and final-commit primitives, but they are not the same processing strategy:
 
-| Concern             | `img run`                                                                                             | `img fast-img`                                                                               |
-| ------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Product goal        | Broad static-image optimization and safe skip/copy routing                                            | Bounded, resumable production delivery                                                       |
-| Analysis            | Exact local detection by default; optional cache/database heuristics plus HDR/precision/color detours | Content identity plus the evidence required by the selected JXL/AVIF path                    |
-| JPEG → JXL          | Requires exact reconstruction for replacement; otherwise retains the source                           | Requires exact JPEG reconstruction for the JXL primary tier; otherwise retains the source    |
+| Concern                    | `img run`                                                                                                           | `img fast-img`                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product goal               | Broad static-image optimization and safe skip/copy routing                                                          | Bounded, resumable production delivery                                                                                                                     |
+| Analysis                   | Exact local detection by default; optional cache/database heuristics plus HDR/precision/color detours               | Content identity plus the evidence required by the selected JXL/AVIF path                                                                                  |
+| JPEG → JXL                 | Requires exact reconstruction for replacement; otherwise retains the source                                         | Requires exact JPEG reconstruction for the JXL primary tier; otherwise retains the source                                                                  |
 | Existing modern containers | Proven-lossless WebP/AVIF/HEIC/HEIF/JP2 enter the JXL proof chain; JXL and lossy/unknown modern sources stay native | JXL Tier 2 custody-delivers proven lossy originals; AVIF Meme Mode never re-encodes an existing AVIF and applies only proved container cleanup when needed |
-| AVIF encoding             | Not selected through the normal `img run` codec surface                                          | Meme Mode searches confirmed-static non-AVIF inputs in the final AVIF encoder domain and strips embedded metadata |
-| Photos              | Apple compatibility is an output policy, not an import claim                                          | `--shortest-path` uses checkpointed import plus live Photos UUID/content proof               |
-| Cleanup             | Only when explicitly requested and after final verification                                           | Mandatory for each proven delivery; incomplete/ambiguous sources remain with resumable state |
+| AVIF encoding              | Not selected through the normal `img run` codec surface                                                             | Meme Mode searches confirmed-static non-AVIF inputs in the final AVIF encoder domain and strips embedded metadata                                          |
+| Photos                     | Apple compatibility is an output policy, not an import claim                                                        | `--shortest-path` uses checkpointed import plus live Photos UUID/content proof                                                                             |
+| Cleanup                    | Only when explicitly requested and after final verification                                                         | Mandatory for each proven delivery; incomplete/ambiguous sources remain with resumable state                                                               |
 
 ### Abnormal or decoder-hostile stills
 
@@ -464,15 +465,15 @@ and the source plus sidecars are retained.
 “Static image support” means formats the project can identify and route with
 positive evidence—not every historical image or private camera format:
 
-| Scope                                       | Formats / behavior                                                                                                                                                              |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Content-signature identity                  | JPEG/JFIF, PNG/APNG, WebP, GIF, TIFF/BigTIFF, BMP, HEIC/HEIF/HIF, AVIF, JXL, JP2/J2K, ICO/CUR, QOI, EXR, FLIF, PSD, PNM and DDS; recognition is not a conversion promise        |
-| Normal `img` discovery                      | JPG/JPEG/JPE/JFIF, PNG, WebP, AVIF, HEIC/HEIF/HIF, TIFF/TIF, SVG/SVGZ, GIF, BMP, TGA, ICO/CUR, PNM/PPM/PGM/PBM/PAM, JP2/J2K, JXL, WBMP and enumerated camera-RAW extensions |
-| Proven conversion core                      | Confirmed-static JPEG plus proven-lossless PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/static GIF/WebP/AVIF/HEIC/HEIF/JP2; codec payload, pixels, metadata and known HDR auxiliaries use format-specific proof paths |
-| FastImg JXL                                 | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF, HEIC and HEIF                                        |
-| FastImg AVIF                                | Non-AVIF static inputs use Meme Mode search; existing AVIF is adopted or metadata-sanitized without re-encoding, with encoded image/HDR/gain-map features proved unchanged |
+| Scope                                       | Formats / behavior                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content-signature identity                  | JPEG/JFIF, PNG/APNG, WebP, GIF, TIFF/BigTIFF, BMP, HEIC/HEIF/HIF, AVIF, JXL, JP2/J2K, ICO/CUR, QOI, EXR, FLIF, PSD, PNM and DDS; recognition is not a conversion promise                                                                                                                             |
+| Normal `img` discovery                      | JPG/JPEG/JPE/JFIF, PNG, WebP, AVIF, HEIC/HEIF/HIF, TIFF/TIF, SVG/SVGZ, GIF, BMP, TGA, ICO/CUR, PNM/PPM/PGM/PBM/PAM, JP2/J2K, JXL, WBMP and enumerated camera-RAW extensions                                                                                                                          |
+| Proven conversion core                      | Confirmed-static JPEG plus proven-lossless PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/static GIF/WebP/AVIF/HEIC/HEIF/JP2; codec payload, pixels, metadata and known HDR auxiliaries use format-specific proof paths                                                                                             |
+| FastImg JXL                                 | True JPEG bitstreams for reversible JXL; Tier 2 only for positively proven lossy static WebP, JP2, JXL, AVIF, HEIC and HEIF                                                                                                                                                                          |
+| FastImg AVIF                                | Non-AVIF static inputs use Meme Mode search; existing AVIF is adopted or metadata-sanitized without re-encoding, with encoded image/HDR/gain-map features proved unchanged                                                                                                                           |
 | Archive-original inputs                     | SVG/SVGZ and camera RAW (`CR2`, `CR3`, `NEF`, `ARW`, `DNG`, `RAF`, `RW2`, plus the documented extended list) are accepted but retained byte-for-byte; DNG is also recognized by its TIFF `DNGVersion` tag when renamed; rasterizing them would discard vector or sensor/CFA/maker-note archive value |
-| Explicitly outside normal raster conversion | Multi-frame animation and true video, PSD/PSB/KRA/CLIP/Procreate/brush, AI/EPS/PDF, 2D/3D/model/project sources, DDS, HDR/EXR, QOI/FLIF and unknown/private formats are retained, skipped or ignored rather than guessed |
+| Explicitly outside normal raster conversion | Multi-frame animation and true video, PSD/PSB/KRA/CLIP/Procreate/brush, AI/EPS/PDF, 2D/3D/model/project sources, DDS, HDR/EXR, QOI/FLIF and unknown/private formats are retained, skipped or ignored rather than guessed                                                                             |
 
 Animated or multi-page content is not silently flattened by `img`. A proven
 single-frame GIF, WebP, AVIF, HEIC or HEIF remains a still-image input; an
@@ -493,8 +494,12 @@ preserve the decoded source samples exactly.
 
 Meme Mode (`img fast-img --strategy avif`) enables progressive encoding for new
 AVIF candidates, including quality probes and retries. Existing AVIF inputs
-accepted without re-encoding are not rewritten merely to add progressive
-layers. No synthetic size percentage is used to override either default.
+are never re-encoded: existing progressive layers are preserved, and inputs
+without them remain non-progressive. Both clean adoption and metadata-only
+sanitization must preserve the encoded image and codec-feature proof.
+`avifdec` reporting `Progressive: Available` already means the file offers
+progressive layers; `Active` is a decoder mode, not a file switch to rewrite.
+No synthetic size percentage is used to override either default.
 
 Normal work uses effort 7. Ultimate/archive pixel encoding uses effort 10,
 whose global analysis disables chunked encoding and can require substantially
@@ -559,24 +564,24 @@ successful optimization.
 
 ### Image Format Decision Matrix
 
-| Input Format                                     | Static? | Action in `img run`           | Output        | Notes                                                 |
-| :----------------------------------------------- | :-----: | :---------------------------- | :------------ | :---------------------------------------------------- |
-| JPEG                                             |   ✅    | **Reversible reconstruction** | `.jxl`        | Original JPEG recovery is verified when JBRD succeeds |
-| PNG / TIFF / BMP / other lossless stills         |   ✅    | **Lossless convert**          | `.jxl`        | May use detour pathway first                          |
-| Proven-lossless WebP / AVIF / HEIC / HEIF / JP2 |   ✅    | **Lossless convert**          | `.jxl`        | Exact pixels plus metadata and feature-specific proof |
-| Lossy/unknown modern container or existing JXL   |   ✅    | **Retain byte-for-byte**      | keep original | Avoid generation loss or unproved archival damage     |
-| HEIC / HEIF with Gainmap                         |   ✅    | **Dedicated HDR route**       | `.jxl` + sidecars | Synthesize HDR and verify every auxiliary asset    |
-| Legacy lossy stills after static validation      |   ✅    | **Near-lossless convert**     | `.jxl`        | Current `img run` batch path stays JXL-focused        |
-| Animated GIF / WebP / APNG / HEIC / HEIF / JXL   |   ❌    | **Ignore on img**             | —             | Use **`vid run`** → `.mp4` / `.mov`                   |
+| Input Format                                    | Static? | Action in `img run`           | Output            | Notes                                                 |
+| :---------------------------------------------- | :-----: | :---------------------------- | :---------------- | :---------------------------------------------------- |
+| JPEG                                            |   ✅    | **Reversible reconstruction** | `.jxl`            | Original JPEG recovery is verified when JBRD succeeds |
+| PNG / TIFF / BMP / other lossless stills        |   ✅    | **Lossless convert**          | `.jxl`            | May use detour pathway first                          |
+| Proven-lossless WebP / AVIF / HEIC / HEIF / JP2 |   ✅    | **Lossless convert**          | `.jxl`            | Exact pixels plus metadata and feature-specific proof |
+| Lossy/unknown modern container or existing JXL  |   ✅    | **Retain byte-for-byte**      | keep original     | Avoid generation loss or unproved archival damage     |
+| HEIC / HEIF with Gainmap                        |   ✅    | **Dedicated HDR route**       | `.jxl` + sidecars | Synthesize HDR and verify every auxiliary asset       |
+| Legacy lossy stills after static validation     |   ✅    | **Near-lossless convert**     | `.jxl`            | Current `img run` batch path stays JXL-focused        |
+| Animated GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌    | **Ignore on img**             | —                 | Use **`vid run`** → `.mp4` / `.mov`                   |
 
 ### `img` entrypoints
 
-| Entry                              | Static output                                                                  | Animated          | AVIF                                         |
-| ---------------------------------- | ------------------------------------------------------------------------------ | ----------------- | -------------------------------------------- |
-| **`img run`**                      | JPEG and proven-lossless stills enter JXL; lossy/unknown modern sources stay native | Ignored        | Not an output codec; proven-lossless AVIF may enter JXL |
-| **`img fast-img --strategy jxl`**  | Reversible JXL for true JPEG; Tier-2 custody for proven lossy modern originals | Retained/ignored  | Existing lossy AVIF may be a Tier-2 original |
-| **`img fast-img --strategy avif`** | Non-AVIF static input uses bounded AVIF search; existing AVIF is adopted or container-sanitized without re-encoding; a validated matching XMP sidecar is removed only after proof | Rejected/retained | Encoded image/HDR/gain-map features must remain exact |
-| **`smart_convert()`**              | Library API: JXL or retain per `determine_strategy`                            | Domain ignore     | Not available; use FastImg Meme Mode         |
+| Entry                              | Static output                                                                                                                                                                     | Animated          | AVIF                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------- |
+| **`img run`**                      | JPEG and proven-lossless stills enter JXL; lossy/unknown modern sources stay native                                                                                               | Ignored           | Not an output codec; proven-lossless AVIF may enter JXL |
+| **`img fast-img --strategy jxl`**  | Reversible JXL for true JPEG; Tier-2 custody for proven lossy modern originals                                                                                                    | Retained/ignored  | Existing lossy AVIF may be a Tier-2 original            |
+| **`img fast-img --strategy avif`** | Non-AVIF static input uses bounded AVIF search; existing AVIF is adopted or container-sanitized without re-encoding; a validated matching XMP sidecar is removed only after proof | Rejected/retained | Encoded image/HDR/gain-map features must remain exact   |
+| **`smart_convert()`**              | Library API: JXL or retain per `determine_strategy`                                                                                                                               | Domain ignore     | Not available; use FastImg Meme Mode                    |
 
 ### Animated Media Decision Matrix (`vid` only)
 
@@ -609,7 +614,7 @@ best-effort fallback applies.
 | HDR Type          | Detection                                | Preservation Strategy                                                                                                                                      |
 | :---------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                                                                            |
-| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized HDR JXL plus verified decoded gain-map/depth sidecars; unknown auxiliary relationships retain the native source                                 |
+| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized HDR JXL plus verified decoded gain-map/depth sidecars; unknown auxiliary relationships retain the native source                                |
 | **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:)            | Exact JPEG→JXL archive by default; the full MPF/gainmap JPEG reconstructs byte-for-byte. Explicit pixel synthesis is non-archival and non-destructive only |
 | **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                                                                            |
 | **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                                                                |

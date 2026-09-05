@@ -946,6 +946,37 @@ const fn low_u16(value: u32) -> u16 {
     u16::from_le_bytes([bytes[0], bytes[1]])
 }
 
+fn write_hdr_avif_fixture(fixture_root: &Path, stem: &str, clli: Option<&str>) -> Result<PathBuf> {
+    let hdr_png = fixture_root.join(format!("{stem}.png"));
+    image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
+        let red = (x * 521 + y * 257) % 65_536;
+        let green = (x * 313 + y * 733 + 17) % 65_536;
+        let blue = (x * 911 + y * 419 + 31) % 65_536;
+        image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
+    })
+    .save(&hdr_png)?;
+
+    let source = fixture_root.join(format!("{stem}.avif"));
+    let mut command = Command::new(tool_path("avifenc")?);
+    command.args([
+        "--lossless",
+        "--speed",
+        "8",
+        "--depth",
+        "12,4",
+        "--yuv",
+        "444",
+        "--cicp",
+        "9/16/0",
+    ]);
+    if let Some(clli) = clli {
+        command.args(["--clli", clli]);
+    }
+    command.arg(&hdr_png).arg(&source);
+    run_status(command, "create lossless HDR AVIF fixture")?;
+    Ok(source)
+}
+
 fn add_avif_lossless_fixture(
     fixture_root: &Path,
     png: &Path,
@@ -961,36 +992,6 @@ fn add_avif_lossless_fixture(
         run_status(command, "create lossless AVIF fixture")?;
         fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
         fixtures.push((source, FormatKind::Avif));
-
-        let hdr_png = fixture_root.join("pattern-hdr.png");
-        image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
-            let red = (x * 521 + y * 257) % 65_536;
-            let green = (x * 313 + y * 733 + 17) % 65_536;
-            let blue = (x * 911 + y * 419 + 31) % 65_536;
-            image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
-        })
-        .save(&hdr_png)?;
-        let hdr_source = fixture_root.join("pattern-hdr.avif");
-        let mut command = Command::new(tool_path("avifenc")?);
-        command
-            .args([
-                "--lossless",
-                "--speed",
-                "8",
-                "--depth",
-                "12,4",
-                "--yuv",
-                "444",
-                "--cicp",
-                "9/16/0",
-                "--clli",
-                "1000,400",
-            ])
-            .arg(&hdr_png)
-            .arg(&hdr_source);
-        run_status(command, "create lossless HDR AVIF fixture")?;
-        fs::write(hdr_source.with_extension("xmp"), MATRIX_XMP)?;
-        fixtures.push((hdr_source, FormatKind::Avif));
     }
     Ok(())
 }
@@ -1183,11 +1184,18 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
             "HDR AVIF fixture probe failed"
         );
         let source_info = String::from_utf8_lossy(&source_info.stdout);
+        let source_clli = source_info.lines().find_map(|line| {
+            let (label, value) = line.split_once(':')?;
+            label
+                .trim()
+                .eq_ignore_ascii_case("* CLLI")
+                .then_some(value.trim())
+        });
         ensure!(
             source_info.contains("Color Primaries: 9")
                 && source_info.contains("Transfer Char. : 16")
-                && source_info.contains("CLLI           : 1000, 400"),
-            "HDR AVIF fixture lost its Rec.2100/PQ/CLLI contract: {source_info}"
+                && source_clli.is_none_or(|value| value.eq_ignore_ascii_case("Absent")),
+            "HDR AVIF fixture lost its Rec.2100/PQ/no-CLLI contract: {source_info}"
         );
 
         let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
@@ -1250,6 +1258,73 @@ fn lossless_static_to_jxl_matrix_is_pixel_exact_and_preserves_xmp() -> Result<()
     for (source, format) in create_lossless_raster_fixtures(root.path())? {
         verify_lossless_raster_jxl_case(root.path(), &source, format)?;
     }
+    Ok(())
+}
+
+#[test]
+fn hdr_avif_without_clli_to_jxl_preserves_pq() -> Result<()> {
+    if let Some(tool) = [
+        "avifenc", "avifdec", "cjxl", "djxl", "jxlinfo", "exiftool", "magick",
+    ]
+    .into_iter()
+    .find(|tool| !tool_available(tool))
+    {
+        eprintln!("Skipping HDR AVIF no-CLLI JXL regression: {tool} is unavailable");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    let source = write_hdr_avif_fixture(root.path(), "pattern-hdr", None)?;
+    fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
+    verify_lossless_raster_jxl_case(root.path(), &source, FormatKind::Avif)
+}
+
+#[test]
+fn avif_clli_to_jxl_fails_closed_without_source_or_sidecar_mutation() -> Result<()> {
+    if let Some(tool) = ["avifenc", "avifdec", "cjxl", "djxl", "exiftool", "magick"]
+        .into_iter()
+        .find(|tool| !tool_available(tool))
+    {
+        eprintln!("Skipping AVIF CLLI fail-closed regression: {tool} is unavailable");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    let input = root.path().join("input");
+    let output = root.path().join("output");
+    fs::create_dir_all(&input)?;
+    let source = write_hdr_avif_fixture(&input, "pattern-hdr-clli", Some("1000,400"))?;
+    let sidecar = source.with_extension("xmp");
+    fs::write(&sidecar, MATRIX_XMP)?;
+    let source_before = fs::read(&source)?;
+
+    let mut options = ConvertOptions {
+        output_dir: Some(output.clone()),
+        child_threads: 1,
+        ..ConvertOptions::default()
+    };
+    options.flags.set(ConvertFlags::FORCE, true);
+    options.flags.set(ConvertFlags::ULTIMATE, true);
+
+    let error = convert_to_jxl(&source, &options, 0.0, None)
+        .err()
+        .ok_or_else(|| anyhow!("AVIF CLLI must not be reported as a successful JXL conversion"))?;
+    ensure!(
+        error.to_string().contains("CLLI"),
+        "failure must identify the unpreservable AVIF CLLI boundary: {error}"
+    );
+    ensure!(
+        fs::read(&source)? == source_before,
+        "source AVIF was changed"
+    );
+    ensure!(
+        fs::read(&sidecar)? == MATRIX_XMP,
+        "source XMP sidecar was changed"
+    );
+    ensure!(
+        !output.exists() || fs::read_dir(&output)?.next().is_none(),
+        "failed AVIF CLLI conversion left an unverified JXL output"
+    );
     Ok(())
 }
 

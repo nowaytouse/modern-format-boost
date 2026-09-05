@@ -13447,7 +13447,7 @@ fn media_conversion_path_stem_remove_m174() {
         (
             "crates/foundation/src/live_photo.rs",
             &[
-                "path_file_stem_lossy_or_empty",
+                "path_file_stem_os_or_none",
                 "path_extension_lowercase_or_empty_unchecked",
             ][..],
         ),
@@ -13485,6 +13485,13 @@ fn media_conversion_remove_file_ssot_m175() {
     assert!(
         gate.contains("path_file_stem_lossy_or_empty"),
         "gate must export path_file_stem_lossy_or_empty (M175)"
+    );
+    let native_stem = gate_fn_body(&gate, "path_file_stem_os_or_none");
+    assert!(
+        native_stem.contains("path.file_stem()")
+            && !native_stem.contains("to_str")
+            && !native_stem.contains("audit"),
+        "native probe stem must retain OsStr identity without conversion or audit (M175)"
     );
 
     let raw_remove_hits = delivery_raw_remove_file_offenders(&root);
@@ -13529,12 +13536,13 @@ fn media_conversion_remove_file_ssot_m175() {
     .expect("live_photo.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     let prod_live = production_scope(&live);
     assert!(
-        prod_live.contains("path_file_stem_lossy_or_empty"),
-        "live_photo must use non-auditing stem helper (M175)"
+        prod_live.contains("path_file_stem_os_or_none"),
+        "live_photo must use the native, non-auditing stem helper (M175)"
     );
     assert!(
-        !prod_live.contains("path_file_stem_or_empty"),
-        "live_photo must not audit on every probe (M175)"
+        !prod_live.contains("path_file_stem_or_empty")
+            && !prod_live.contains("path_file_stem_lossy_or_empty"),
+        "live_photo must neither audit on every probe nor discard non-UTF-8 stems (M175)"
     );
 }
 

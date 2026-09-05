@@ -31,7 +31,7 @@
 ### 项目保证什么，又不保证什么？
 
 - 只有通过对应路径的解码、质量、元数据与完整性闸门，候选文件才会交付。受大小约束的路径比较的是编码媒体载荷；找不到符合策略的候选时，保留源文件并明确跳过或失败。
-- JPEG→JXL 会直接用真实 JXL 尝试 `djxl --reconstruct_jpeg`，不会把帮助文本当作能力真相；只有解码器明确报告“不支持该参数”时，才退回由 `.jpg` 扩展名选择的官方兼容接口。两条路径都必须得到正向 JPEG 重建诊断、非空输出、无像素转 JPEG 回退以及逐字节哈希证明，不会因版本号或退出码猜测成功。JBRD、原始 Exif/XMP/JUMBF 与编码数据会被冻结。JPEG→JXL 时，外部 XMP 会作为 `xml ` overlay **追加进 JXL 容器内**并再次核验精确重建；JXL→JPEG 时，`restore-jpeg` 不改写逐字节恢复出的 JPEG，而把最新有效 overlay 作为单独哈希核验的同名 `.xmp` 侧车交付，因为把新增 XMP 嵌进 JPEG 必然会改变原 JPEG 字节。
+- JPEG→JXL 会直接用真实 JXL 尝试 `djxl --reconstruct_jpeg`，不会把帮助文本当作能力真相；只有解码器明确报告“不支持该参数”时，才退回由 `.jpg` 扩展名选择的官方兼容接口。两条路径都必须得到正向 JPEG 重建诊断、非空输出、无像素转 JPEG 回退以及逐字节哈希证明，不会因版本号或退出码猜测成功。JBRD、原始 Exif/XMP/JUMBF 与编码数据会被冻结。JPEG→JXL 时，外部 XMP 会作为 `xml` overlay（四字节 box 类型末尾含一个空格） **追加进 JXL 容器内**并再次核验精确重建；JXL→JPEG 时，`restore-jpeg` 不改写逐字节恢复出的 JPEG，而把最新有效 overlay 作为单独哈希核验的同名 `.xmp` 侧车交付，因为把新增 XMP 嵌进 JPEG 必然会改变原 JPEG 字节。
 - Overlay 采用同目录唯一临时文件、源身份/哈希复核、原子替换与文件/父目录刷盘；版本化审计链记录 JBRD、overlay、最终容器与重建哈希但不记录媒体内容。完整规则见 [`JXL_XMP_ARCHIVE_CONTRACT.md`](hardening/JXL_XMP_ARCHIVE_CONTRACT.md)。
 - 现代容器的元数据处理采用“先正面合并、再证明”的路径。已证实无损的 AVIF、HEIC/HEIF、WebP 与 JP2 进入 JXL 转换；XMP 会随 JXL 容器写入，并核验像素、尺寸、辅助/HDR/来源证明标记及其余结构元数据。FastImg JXL Tier 2 对原生现代源文件使用暂存副本和格式原生写入器，只有同一组证明通过才提交；AVIF Meme Mode 则明确清理内嵌 Exif/XMP/ICC，不把侧车合并进输出，只在最终证明后精确删除侧车。已有 AVIF 不重新编码：清洁文件逐字节保留，需清理时也必须证明主图像 SHA-256 及 `avifdec` 可见的编码/HDR/增益图特征不变。若选定路径无法证明增益图、辅助项目、签名、未知属性/chunk 或编码载荷完整，才明确保留原始媒体与侧车供复核，绝不静默丢弃。JPEG、PNG、JPEG XL、AVIF/HEIF、WebP、TIFF/BigTIFF 与 GIF 内已有的 C2PA/JUMBF 真实性清单一律视为不可改写的存档数据：合并元数据时保留已签名媒体和侧车，不以主图像哈希未变冒充完整签名仍有效。
 - 项目不是“魔法缩容器”。完整文件可能因容器与元数据而更大，高质量候选也可能没有任何空间收益。
@@ -53,8 +53,8 @@ IMG 回归套件直接覆盖公开的检测、转换与交付边界；仅编译�
 
 `cargo test --locked -p img --all-targets -- --list` 是当前检出 revision 的可复现
 测试清单。生产矩阵锁定“截断 JPEG + XMP 保留源文件”、动画 WebP 分块分类、
-  AVIF/HEIC sequence brand 边界、JXL Tier 2 与 AVIF Meme Mode 路由、已有 AVIF
-  禁止重复编码与容器清理证明，以及清理空目录时保留
+AVIF/HEIC sequence brand 边界、JXL Tier 2 与 AVIF Meme Mode 路由、已有 AVIF
+禁止重复编码与容器清理证明，以及清理空目录时保留
 无关隐藏文件等回归。可选编解码器分支会明确报告可用性；清单不表示每台机器都
 执行了所有外部编解码器或真实 Photos 事务。
 
@@ -81,18 +81,18 @@ cargo run --locked -p dev --bin check_all -- \
 
 ### 实际静态图像范围
 
-| 范围 | 格式 / 行为 |
-| :--- | :--- |
-| 内容签名识别 | JPEG/JFIF、PNG/APNG、WebP、GIF、TIFF/BigTIFF、BMP、HEIC/HEIF/HIF、AVIF、JXL、JP2/J2K、ICO/CUR、QOI、EXR、FLIF、PSD、PNM 和 DDS；能识别不等于承诺转换 |
-| 已核验转换核心 | 已确认静态的 JPEG，以及已证明无损的 PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/单帧 GIF/WebP/AVIF/HEIC/HEIF/JP2；使用格式专用的像素、元数据和结构证明 |
-| 仅原件归档 | SVG/SVGZ 与相机 RAW（`CR2`、`CR3`、`NEF`、`ARW`、`DNG`、`RAF`、`RW2` 及项目已枚举的扩展列表）可被发现，但只逐字节保留；改名后的 DNG 仍按 TIFF `DNGVersion` 标签识别；栅格化会丢失矢量语义或传感器/CFA/厂商私有数据 |
-| 不进入普通栅格转换 | 多帧动图和真实视频、PSD/PSB/KRA/CLIP/Procreate/笔刷、AI/EPS/PDF、2D/3D/模型/工程源文件、DDS、HDR/EXR、QOI/FLIF 及未知/私有格式会被保留、跳过或忽略，不靠扩展名猜测 |
+| 范围               | 格式 / 行为                                                                                                                                                                                                        |
+| :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 内容签名识别       | JPEG/JFIF、PNG/APNG、WebP、GIF、TIFF/BigTIFF、BMP、HEIC/HEIF/HIF、AVIF、JXL、JP2/J2K、ICO/CUR、QOI、EXR、FLIF、PSD、PNM 和 DDS；能识别不等于承诺转换                                                               |
+| 已核验转换核心     | 已确认静态的 JPEG，以及已证明无损的 PNG/TIFF/BMP/TGA/ICO/CUR/NetPBM/单帧 GIF/WebP/AVIF/HEIC/HEIF/JP2；使用格式专用的像素、元数据和结构证明                                                                         |
+| 仅原件归档         | SVG/SVGZ 与相机 RAW（`CR2`、`CR3`、`NEF`、`ARW`、`DNG`、`RAF`、`RW2` 及项目已枚举的扩展列表）可被发现，但只逐字节保留；改名后的 DNG 仍按 TIFF `DNGVersion` 标签识别；栅格化会丢失矢量语义或传感器/CFA/厂商私有数据 |
+| 不进入普通栅格转换 | 多帧动图和真实视频、PSD/PSB/KRA/CLIP/Procreate/笔刷、AI/EPS/PDF、2D/3D/模型/工程源文件、DDS、HDR/EXR、QOI/FLIF 及未知/私有格式会被保留、跳过或忽略，不靠扩展名猜测                                                 |
 
 IMG 不会静默压平动图或多帧内容：已证明只有一帧的 GIF/WebP/AVIF/HEIC/HEIF 仍是 IMG 静图；动态实例交给 `vid`。MP4/M4V、MOV、MKV、WebM 只有一个严格例外：完整解码计数必须证明容器仅有一个视频流、恰好一帧、没有音频/字幕/数据/附件流、没有章节或 program，且时长不超过两秒。满足全部条件时会规范化为像素等价的 JXL 静图，但不会宣称能重建原视频容器；任何缺失或矛盾证据都保留在 `vid` 范围。
 
 像素→JXL 默认让 libjxl 自动处理渐进、responsive 与噪声特性，不强制经验参数。此前明确关闭这些特性的策略冻结保留，仅通过 `img run --jxl-fixed-features` 显式启用，默认关闭。该高级开关不影响 JPEG 比特流重建，也不绕过像素、元数据或重建核验；无损 `d=0` 仍必须逐像素保留解码后的原始样本。
 
-AVIF 表情包模式（`img fast-img --strategy avif`）默认对新编码候选开启渐进加载，质量探测和重试使用同一策略。可直接采用的现有 AVIF 不会仅为添加渐进层而重新编码；不使用人工设定的体积百分比覆盖默认行为。
+AVIF 表情包模式（`img fast-img --strategy avif`）默认对新编码候选开启渐进加载，质量探测和重试使用同一策略。已有 AVIF 保持不重编码：原来包含渐进层就保留，没有渐进层就维持原状；原样采用和仅清理元数据都必须通过主图像及编码特征不变的核验。`avifdec` 的 `Progressive: Available` 表示文件已经提供渐进层，`Active` 只是解码器选择逐层读取时的状态，不是待写入文件的开关。不使用人工设定的体积百分比覆盖默认行为。
 
 普通任务使用 effort 7；ultimate/归档像素编码使用 effort 10，其全局分析会关闭分块编码并可能显著增加内存；effort 11 只用于独立且快速的 JPEG 比特流可逆转码。实测全局强制 `--buffering=1` 没有降低峰值内存，还改变了 e7 输出表现，因此保留 libjxl 的按负载默认值。已生成的 JXL 无法原地切换渐进特性：`d=0` 解码后重编码可以保住像素，但会改变 JXL 字节并要求重跑元数据与归档证明；JBRD JPEG 更不能把它当作简单开关。IMG 不会把所有输入强制为 sRGB：已核验的 ICC/CICP、广色域、HDR 和高位深证据会传给编码器；生产矩阵现已同时证明 16 位 alpha 与 TIFF 打印分辨率保留。
 
@@ -248,25 +248,25 @@ Rust SSOT：[`delivery_codec_strategy.rs`](../crates/foundation/src/convert/deli
 
 ### 图像格式决策矩阵
 
-| 输入格式                                    | 静态？ | `img run` 中的动作 | 输出       | 备注                              |
-| :------------------------------------------ | :----: | :----------------- | :--------- | :-------------------------------- |
-| JPEG                                        |   ✅   | **无损重建**       | `.jxl`     | 位精确 `cjxl --lossless_jpeg=1`   |
-| UltraHDR JPEG                               |   ✅   | **精确归档**       | `.jxl`     | 完整 MPF/增益图 JPEG 可逐字节重建 |
-| PNG / TIFF / BMP / 其他无损静态图           |   ✅   | **无损转换**       | `.jxl`     | 可能先走迂回路径                  |
-| 已证明无损的 WebP / AVIF / HEIC / HEIF / JP2 |   ✅   | **无损转换**       | `.jxl`     | 像素、元数据与已知功能资产逐项核验 |
-| 有损/语义不明的现代容器或已有 JXL             |   ✅   | **逐字节保留**     | 保留原文件 | 避免代际损失或破坏未知归档结构      |
-| 带有增益图的 HEIC / HEIF                      |   ✅   | **专用 HDR 路径**  | `.jxl` + sidecar | 合成 HDR 并核验辅助资产          |
-| 静态验证后的遗留有损静态图                  |   ✅   | **近无损转换**     | `.jxl`     | 当前 `img run` 批量路径专注于 JXL |
-| 动画 GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌   | **img 忽略**       | —          | 请用 **`vid run`**                |
+| 输入格式                                     | 静态？ | `img run` 中的动作 | 输出             | 备注                               |
+| :------------------------------------------- | :----: | :----------------- | :--------------- | :--------------------------------- |
+| JPEG                                         |   ✅   | **无损重建**       | `.jxl`           | 位精确 `cjxl --lossless_jpeg=1`    |
+| UltraHDR JPEG                                |   ✅   | **精确归档**       | `.jxl`           | 完整 MPF/增益图 JPEG 可逐字节重建  |
+| PNG / TIFF / BMP / 其他无损静态图            |   ✅   | **无损转换**       | `.jxl`           | 可能先走迂回路径                   |
+| 已证明无损的 WebP / AVIF / HEIC / HEIF / JP2 |   ✅   | **无损转换**       | `.jxl`           | 像素、元数据与已知功能资产逐项核验 |
+| 有损/语义不明的现代容器或已有 JXL            |   ✅   | **逐字节保留**     | 保留原文件       | 避免代际损失或破坏未知归档结构     |
+| 带有增益图的 HEIC / HEIF                     |   ✅   | **专用 HDR 路径**  | `.jxl` + sidecar | 合成 HDR 并核验辅助资产            |
+| 静态验证后的遗留有损静态图                   |   ✅   | **近无损转换**     | `.jxl`           | 当前 `img run` 批量路径专注于 JXL  |
+| 动画 GIF / WebP / APNG / HEIC / HEIF / JXL   |   ❌   | **img 忽略**       | —                | 请用 **`vid run`**                 |
 
 ### `img` 入口
 
-| 入口                               | 静图输出                                           | 动图        | AVIF                             |
-| ---------------------------------- | -------------------------------------------------- | ----------- | -------------------------------- |
-| **`img run`**                      | JPEG 与已证明无损静图进入 JXL；现代有损/未知源原样保留 | **忽略**    | 不作为输出 codec；无损 AVIF 可进入 JXL |
-| **`img fast-img --strategy jxl`**  | 真实 JPEG 可逆 JXL；已确认现代有损源进入验证交付层 | 保留/忽略   | 可作为原样交付的现代有损源       |
+| 入口                               | 静图输出                                                                     | 动图        | AVIF                                                               |
+| ---------------------------------- | ---------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------ |
+| **`img run`**                      | JPEG 与已证明无损静图进入 JXL；现代有损/未知源原样保留                       | **忽略**    | 不作为输出 codec；无损 AVIF 可进入 JXL                             |
+| **`img fast-img --strategy jxl`**  | 真实 JPEG 可逆 JXL；已确认现代有损源进入验证交付层                           | 保留/忽略   | 可作为原样交付的现代有损源                                         |
 | **`img fast-img --strategy avif`** | 非 AVIF 静图走有界搜索；已有 AVIF 只原样托管或做容器元数据清理，绝不重复编码 | 拒绝/保留   | 主图像/HDR/增益图特征必须保持一致；有效 XMP 侧车仅在最终证明后删除 |
-| **`smart_convert()`**              | JXL 或按 `determine_strategy` 原样保留             | 域外 ignore | 不可用，请使用 FastImg Meme Mode |
+| **`smart_convert()`**              | JXL 或按 `determine_strategy` 原样保留                                       | 域外 ignore | 不可用，请使用 FastImg Meme Mode                                   |
 
 ### 动画媒体决策矩阵（仅 `vid`）
 
