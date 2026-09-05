@@ -16,6 +16,7 @@ pub struct CjxlBuilder {
     lossless_jpeg: bool,
     allow_jpeg_recon: Option<bool>,
     allow_expert_options: bool,
+    fixed_features: bool,
     color_space: Option<String>,
     icc_profile: Option<PathBuf>,
     apple_compat: bool,
@@ -64,6 +65,13 @@ impl CjxlBuilder {
 
     pub const fn allow_expert_options(&mut self, allow: bool) -> &mut Self {
         self.allow_expert_options = allow;
+        self
+    }
+
+    /// Frozen opt-in policy: disable progressive/responsive transforms and generated noise.
+    /// The default leaves these choices to libjxl.
+    pub const fn fixed_features(&mut self, enabled: bool) -> &mut Self {
+        self.fixed_features = enabled;
         self
     }
 
@@ -120,13 +128,10 @@ impl ToolBuilder for CjxlBuilder {
         // overlays require the JXL container even when cjxl would omit it.
         cmd.arg(constants::JXL_ARG_CONTAINER);
 
-        // Pixel encodes are archival/local outputs, not progressive web
-        // derivatives. Disable every cjxl auto policy that can add progressive
-        // previews/responsive transforms or generated noise. Progressive AC is
-        // opt-in and remains disabled by deliberately omitting `-p`,
-        // `--progressive_ac`, and `--qprogressive_ac`. JPEG reconstruction stays
-        // on its immutable bitstream-transcode path without these overrides.
-        if !self.lossless_jpeg {
+        // Normal encoding delegates optional features to libjxl. Retain the
+        // former fixed policy only as an explicit, frozen advanced opt-in;
+        // it must never alter JPEG bitstream reconstruction.
+        if self.fixed_features && !self.lossless_jpeg {
             cmd.arg(constants::JXL_ARG_PROGRESSIVE_DC_DISABLED);
             cmd.arg(constants::JXL_ARG_RESPONSIVE_DISABLED);
             cmd.arg(constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED);
@@ -334,19 +339,19 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--allow_expert_options"));
         assert!(
             args.iter()
-                .any(|arg| arg == constants::JXL_ARG_PROGRESSIVE_DC_DISABLED)
+                .all(|arg| arg != constants::JXL_ARG_PROGRESSIVE_DC_DISABLED)
         );
         assert!(
             args.iter()
-                .any(|arg| arg == constants::JXL_ARG_RESPONSIVE_DISABLED)
+                .all(|arg| arg != constants::JXL_ARG_RESPONSIVE_DISABLED)
         );
         assert!(
             args.iter()
-                .any(|arg| arg == constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED)
+                .all(|arg| arg != constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED)
         );
         assert!(
             args.iter()
-                .any(|arg| arg == constants::JXL_ARG_PHOTON_NOISE_DISABLED)
+                .all(|arg| arg != constants::JXL_ARG_PHOTON_NOISE_DISABLED)
         );
         assert!(!args.iter().any(|arg| matches!(
             arg.as_ref(),
@@ -360,6 +365,7 @@ mod tests {
         builder
             .input(Path::new("in.jpg"))
             .output(Path::new("out.jxl"))
+            .fixed_features(true)
             .lossless_jpeg(true);
 
         let args = builder
@@ -371,6 +377,22 @@ mod tests {
         assert!(!args.contains(&constants::JXL_ARG_RESPONSIVE_DISABLED.to_string()));
         assert!(!args.contains(&constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED.to_string()));
         assert!(!args.contains(&constants::JXL_ARG_PHOTON_NOISE_DISABLED.to_string()));
+    }
+
+    #[test]
+    fn fixed_features_are_an_explicit_opt_in() {
+        let mut builder = CjxlBuilder::new();
+        builder.fixed_features(true);
+        let command = builder.build();
+        let args = command.get_args().collect::<Vec<_>>();
+        for flag in [
+            constants::JXL_ARG_PROGRESSIVE_DC_DISABLED,
+            constants::JXL_ARG_RESPONSIVE_DISABLED,
+            constants::JXL_ARG_ADAPTIVE_NOISE_DISABLED,
+            constants::JXL_ARG_PHOTON_NOISE_DISABLED,
+        ] {
+            assert!(args.contains(&std::ffi::OsStr::new(flag)));
+        }
     }
 
     #[test]

@@ -1987,6 +1987,37 @@ pub fn aae_sidecar_destination(aae: &Path, output: &Path) -> io::Result<PathBuf>
     Ok(output.with_extension(ext))
 }
 
+fn regular_files_have_same_contents(left: &Path, right: &Path) -> io::Result<bool> {
+    let left_metadata = std::fs::symlink_metadata(left)?;
+    let right_metadata = std::fs::symlink_metadata(right)?;
+    if !left_metadata.is_file()
+        || left_metadata.file_type().is_symlink()
+        || !right_metadata.is_file()
+        || right_metadata.file_type().is_symlink()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return Ok(false);
+    }
+
+    let mut left = BufReader::new(std::fs::File::open(left)?);
+    let mut right = BufReader::new(std::fs::File::open(right)?);
+    let mut left_buffer = [0_u8; 16 * 1024];
+    let mut right_buffer = [0_u8; 16 * 1024];
+    loop {
+        let left_read = left.read(&mut left_buffer)?;
+        let right_read = right.read(&mut right_buffer)?;
+        if left_read != right_read {
+            return Ok(false);
+        }
+        if left_buffer[..left_read] != right_buffer[..left_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
+}
+
 /// Copy an Apple AAE sidecar beside a converted asset.
 ///
 /// # Errors
@@ -2004,6 +2035,41 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 destination,
             });
         }
+        match std::fs::symlink_metadata(&destination) {
+            Ok(_) if regular_files_have_same_contents(&aae, &destination)? => {
+                return Ok(AaeSidecarAction::AlreadyAdjacent {
+                    source: aae,
+                    destination,
+                });
+            }
+            Ok(_) => {
+                crate::media_conversion_gate::delivery_api_path_fallback_audit(
+                    "aae_migrate_collision",
+                    &destination,
+                    format!(
+                        "refusing to overwrite existing AAE sidecar with {}",
+                        aae.display()
+                    ),
+                );
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "AAE destination already exists with different content: {}",
+                        destination.display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!(
+                        "failed to inspect AAE destination {}: {e}",
+                        destination.display()
+                    ),
+                ));
+            }
+        }
         if let Some(parent) = destination.parent()
             && !parent.is_dir()
         {
@@ -2015,7 +2081,14 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             ));
         }
-        std::fs::copy(&aae, &destination).map_err(|e| {
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "aae_sidecar",
+            parent,
+            ".mfb-aae-",
+            ".tmp",
+        )?;
+        std::fs::copy(&aae, staged.path()).map_err(|e| {
             crate::media_conversion_gate::delivery_api_path_fallback_audit(
                 "aae_migrate_failed",
                 &destination,
@@ -2030,7 +2103,7 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             )
         })?;
-        apply_file_timestamps(&aae, &destination).map_err(|e| {
+        apply_file_timestamps(&aae, staged.path()).map_err(|e| {
             crate::media_conversion_gate::delivery_metadata_path_audit(
                 "delivery_metadata_sidecar",
                 &destination,
@@ -2045,7 +2118,7 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             )
         })?;
-        if let Err(e) = copy_preservable_xattrs(&aae, &destination) {
+        if let Err(e) = copy_preservable_xattrs(&aae, staged.path()) {
             crate::media_conversion_gate::delivery_metadata_path_audit(
                 "delivery_metadata_sidecar",
                 &destination,
@@ -2060,6 +2133,25 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             ));
         }
+        staged.persist_noclobber(&destination).map_err(|error| {
+            crate::media_conversion_gate::delivery_api_path_fallback_audit(
+                "aae_migrate_failed",
+                &destination,
+                format!(
+                    "failed to publish AAE sidecar without overwrite: {}",
+                    error.error
+                ),
+            );
+            io::Error::new(
+                error.error.kind(),
+                format!(
+                    "failed to publish AAE sidecar {} to {} without overwrite: {}",
+                    aae.display(),
+                    destination.display(),
+                    error.error
+                ),
+            )
+        })?;
         Ok(AaeSidecarAction::Copied {
             source: aae,
             destination,

@@ -275,6 +275,8 @@ fn contract_handle_aae_copy_reports_action_and_preserves_source() {
     fs::create_dir_all(dst.parent().expect("dst parent")).expect("create dst parent");
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"aae-payload").expect("write sidecar");
+    let source_mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+    filetime::set_file_mtime(&sidecar, source_mtime).expect("set source AAE mtime");
 
     let action = handle_aae_sidecar(&src, &dst).expect("copy AAE");
     assert_eq!(
@@ -289,6 +291,127 @@ fn contract_handle_aae_copy_reports_action_and_preserves_source() {
         b"aae-payload"
     );
     assert!(sidecar.is_file(), "copy mode must not remove source AAE");
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(
+            &fs::metadata(dst.with_extension("AAE")).expect("copied AAE metadata")
+        ),
+        source_mtime,
+        "staged publication must retain AAE timestamp preservation"
+    );
+}
+
+#[test]
+fn contract_handle_aae_collision_preserves_both_files() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("IMG_0003.HEIC");
+    let sidecar = temp.path().join("IMG_0003.AAE");
+    let dst = temp.path().join("out").join("IMG_0003.jxl");
+    let destination = dst.with_extension("AAE");
+    fs::create_dir_all(dst.parent().expect("dst parent")).expect("create dst parent");
+    fs::write(&src, b"heic").expect("write src");
+    fs::write(&sidecar, b"source-aae").expect("write source AAE");
+    fs::write(&destination, b"unrelated-existing-aae").expect("write destination AAE");
+
+    let err = handle_aae_sidecar(&src, &dst)
+        .expect_err("a different destination AAE must be a collision");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(&sidecar).expect("read source AAE"), b"source-aae");
+    assert_eq!(
+        fs::read(&destination).expect("read destination AAE"),
+        b"unrelated-existing-aae"
+    );
+}
+
+#[test]
+fn contract_handle_aae_identical_destination_is_idempotent() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("IMG_0004.HEIC");
+    let sidecar = temp.path().join("IMG_0004.AAE");
+    let dst = temp.path().join("out").join("IMG_0004.jxl");
+    let destination = dst.with_extension("AAE");
+    fs::create_dir_all(dst.parent().expect("dst parent")).expect("create dst parent");
+    fs::write(&src, b"heic").expect("write src");
+    fs::write(&sidecar, b"same-aae").expect("write source AAE");
+    fs::write(&destination, b"same-aae").expect("write destination AAE");
+
+    let action = handle_aae_sidecar(&src, &dst).expect("identical AAE is idempotent");
+
+    assert_eq!(
+        action,
+        AaeSidecarAction::AlreadyAdjacent {
+            source: sidecar.clone(),
+            destination: destination.clone(),
+        }
+    );
+    assert_eq!(fs::read(&sidecar).expect("read source AAE"), b"same-aae");
+    assert_eq!(
+        fs::read(&destination).expect("read destination AAE"),
+        b"same-aae"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_handle_aae_symlink_collision_does_not_touch_target() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("IMG_0005.HEIC");
+    let sidecar = temp.path().join("IMG_0005.AAE");
+    let dst = temp.path().join("out").join("IMG_0005.jxl");
+    let destination = dst.with_extension("AAE");
+    let symlink_target = temp.path().join("unrelated.AAE");
+    fs::create_dir_all(dst.parent().expect("dst parent")).expect("create dst parent");
+    fs::write(&src, b"heic").expect("write src");
+    fs::write(&sidecar, b"source-aae").expect("write source AAE");
+    fs::write(&symlink_target, b"unrelated-aae").expect("write symlink target");
+    std::os::unix::fs::symlink(&symlink_target, &destination).expect("create destination symlink");
+
+    let err = handle_aae_sidecar(&src, &dst).expect_err("destination symlink must be a collision");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(
+        fs::symlink_metadata(&destination)
+            .expect("inspect destination")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&sidecar).expect("read source AAE"), b"source-aae");
+    assert_eq!(
+        fs::read(&symlink_target).expect("read symlink target"),
+        b"unrelated-aae"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_handle_aae_hardlink_alias_is_idempotent() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("IMG_0006.HEIC");
+    let sidecar = temp.path().join("IMG_0006.AAE");
+    let dst = temp.path().join("out").join("IMG_0006.jxl");
+    let destination = dst.with_extension("AAE");
+    fs::create_dir_all(dst.parent().expect("dst parent")).expect("create dst parent");
+    fs::write(&src, b"heic").expect("write src");
+    fs::write(&sidecar, b"same-inode-aae").expect("write source AAE");
+    fs::hard_link(&sidecar, &destination).expect("hard-link destination to source AAE");
+
+    let action = handle_aae_sidecar(&src, &dst).expect("hard-link alias is idempotent");
+
+    assert_eq!(
+        action,
+        AaeSidecarAction::AlreadyAdjacent {
+            source: sidecar.clone(),
+            destination: destination.clone(),
+        }
+    );
+    assert_eq!(
+        fs::read(&sidecar).expect("read source AAE"),
+        b"same-inode-aae"
+    );
+    assert_eq!(
+        fs::read(&destination).expect("read destination AAE"),
+        b"same-inode-aae"
+    );
 }
 
 #[test]

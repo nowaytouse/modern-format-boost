@@ -652,7 +652,7 @@ fn perform_icc_d50_retry(
         temp_output,
         actual_dist,
         max_threads,
-        options.apple_compat(),
+        options.flags,
         patched_icc_path,
         color_info,
         effort_plan,
@@ -741,7 +741,7 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
             actual_dist,
             actual_eff,
             max_threads,
-            options.apple_compat(),
+            options.flags,
         )
         .is_ok()
         {
@@ -801,7 +801,7 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
             actual_dist,
             actual_eff,
             max_threads,
-            options.apple_compat(),
+            options.flags,
         )
         .is_ok()
         {
@@ -864,6 +864,7 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
                     .distance(actual_dist)
                     .effort(actual_eff)
                     .threads(max_threads)
+                    .fixed_features(options.jxl_fixed_features())
                     .apple_compat(options.apple_compat());
                 apply_jxl_color_info(&mut cjxl_builder, Some(color_for_precision));
 
@@ -1388,7 +1389,7 @@ pub fn convert_to_jxl(
         &temp_output,
         actual_dist,
         max_threads,
-        options.apple_compat(),
+        options.flags,
         icc_path,
         color_info,
         &effort_plan,
@@ -1678,7 +1679,7 @@ pub fn convert_to_jxl_probe(
         &temp_output,
         actual_dist,
         max_threads,
-        options.apple_compat(),
+        options.flags,
         icc_path,
         color_info,
         &effort_plan,
@@ -2983,10 +2984,14 @@ fn build_avifenc_command(
     lossless: bool,
     metadata_policy: AvifencMetadataPolicy,
     speed: Option<u8>,
+    progressive: bool,
 ) -> std::process::Command {
     let mut builder = foundation::AvifencBuilder::new();
     let effective_speed = speed.unwrap_or(AVIFENC_PRODUCTION_SPEED);
     builder.speed(effective_speed).jobs("all");
+    if progressive {
+        builder.arg("--progressive");
+    }
     match detect_avif_input_color_model(input) {
         AvifencInputColorModel::Grayscale => {
             // For grayscale PNGs (color_type 0 or 4), let avifenc auto-select YUV400.
@@ -3138,6 +3143,7 @@ fn run_avifenc_with_malformed_xmp_retry(
     timeout: Duration,
     operation: &str,
     metadata_retry: &mut AvifencMetadataRetryState,
+    progressive: bool,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let mut command = build_avifenc_command(
         input,
@@ -3146,6 +3152,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         lossless,
         metadata_retry.policy(),
         speed,
+        progressive,
     );
     let output = run_avifenc_command(&mut command, timeout, operation)?;
     if output.status.success() {
@@ -3179,6 +3186,7 @@ fn run_avifenc_with_malformed_xmp_retry(
                         icc: false,
                     },
                     speed,
+                    progressive,
                 );
                 match run_avifenc_command(&mut srgb_retry, timeout, operation) {
                     Ok(srgb_out) if srgb_out.status.success() => {
@@ -3239,6 +3247,7 @@ fn run_avifenc_with_malformed_xmp_retry(
         lossless,
         metadata_retry.policy(),
         speed,
+        progressive,
     );
     run_avifenc_command(&mut retry, timeout, operation)
 }
@@ -3358,6 +3367,7 @@ pub fn convert_to_avif_from_encoder_input_with_speed_and_state(
         avifenc_timeout()?,
         "official avifenc encode",
         metadata_retry,
+        options.avif_progressive(),
     );
 
     match result {
@@ -3517,6 +3527,7 @@ pub fn convert_to_avif_probe_from_encoder_input_with_speed_and_state(
         avifenc_probe_timeout()?,
         "official avifenc quality probe",
         metadata_retry,
+        options.avif_progressive(),
     );
 
     match result {
@@ -3635,6 +3646,7 @@ pub fn convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and
         avifenc_probe_timeout()?,
         "official avifenc lossless Meme probe",
         metadata_retry,
+        options.avif_progressive(),
     );
     match result {
         Ok(output) if output.status.success() => {
@@ -4131,8 +4143,7 @@ fn try_jxl_pre_avif_fallback(
             distance,
             effort,
             max_threads,
-            apple_compat: options.apple_compat(),
-            allow_expert_options: options.allow_expert_options(),
+            flags: options.flags,
             icc_path,
             color_info,
             stage_label: "Pre-AVIF fallback probe",
@@ -4277,6 +4288,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
         avifenc_timeout()?,
         "official avifenc lossless encode",
         &mut metadata_retry,
+        options.avif_progressive(),
     );
 
     match result {
@@ -4457,7 +4469,7 @@ pub fn convert_to_jxl_matched(
         &temp_output,
         actual_dist,
         max_threads,
-        options.apple_compat(),
+        options.flags,
         None,
         None,
         &effort_plan,
@@ -4504,7 +4516,7 @@ fn run_direct_jxl_encode_with_effort(
     distance: f32,
     effort: u8,
     max_threads: usize,
-    apple_compat: bool,
+    flags: ConvertFlags,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> std::io::Result<Output> {
@@ -4515,7 +4527,8 @@ fn run_direct_jxl_encode_with_effort(
         .distance(distance)
         .effort(effort)
         .threads(max_threads)
-        .apple_compat(apple_compat);
+        .apple_compat(flags.contains(ConvertFlags::APPLE_COMPAT))
+        .fixed_features(flags.contains(ConvertFlags::JXL_FIXED_FEATURES));
 
     apply_jxl_color_info(&mut builder, color_info);
 
@@ -4531,7 +4544,7 @@ fn run_direct_jxl_encode_with_policy(
     temp_output: &Path,
     distance: f32,
     max_threads: usize,
-    apple_compat: bool,
+    flags: ConvertFlags,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
     plan: &[JxlEffortPlan],
@@ -4548,7 +4561,7 @@ fn run_direct_jxl_encode_with_policy(
         distance,
         *effort,
         max_threads,
-        apple_compat,
+        flags,
         icc_path,
         color_info,
     )
@@ -4561,7 +4574,7 @@ fn encode_direct_jxl_probe_with_effort(
     distance: f32,
     effort: u8,
     max_threads: usize,
-    apple_compat: bool,
+    flags: ConvertFlags,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> std::result::Result<(), String> {
@@ -4571,7 +4584,7 @@ fn encode_direct_jxl_probe_with_effort(
         distance,
         effort,
         max_threads,
-        apple_compat,
+        flags,
         icc_path,
         color_info,
     )
@@ -4597,8 +4610,7 @@ struct JxlProbeContext<'a> {
     distance: f32,
     effort: u8,
     max_threads: usize,
-    apple_compat: bool,
-    allow_expert_options: bool,
+    flags: ConvertFlags,
     icc_path: Option<&'a Path>,
     color_info: Option<&'a ColorInfo>,
     stage_label: &'a str,
@@ -4612,8 +4624,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
         distance,
         effort,
         max_threads,
-        apple_compat,
-        allow_expert_options,
+        flags,
         icc_path,
         color_info,
         stage_label,
@@ -4630,7 +4641,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
             candidate_distance,
             effort,
             max_threads,
-            apple_compat,
+            flags,
             icc_path,
             color_info,
         )?;
@@ -4657,7 +4668,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
             candidate_distance,
             effort,
             max_threads,
-            apple_compat,
+            flags,
         )
         .map_err(|e| e.to_string())?;
         verify_jxl_health(output).map_err(|err| {
@@ -4668,7 +4679,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
 
     run_jxl_exploration_probe_with(
         distance,
-        allow_expert_options,
+        flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS),
         &mut direct_encode,
         &mut fallback_encode,
     )
@@ -4788,8 +4799,7 @@ fn try_explore_ultimate_jxl_distance(
                 distance,
                 effort: exploration_effort,
                 max_threads,
-                apple_compat: options.apple_compat(),
-                allow_expert_options: options.allow_expert_options(),
+                flags: options.flags,
                 icc_path,
                 color_info,
                 stage_label: "Screening probe",
@@ -4850,8 +4860,7 @@ fn try_explore_ultimate_jxl_distance(
             distance: finalist.distance,
             effort: exploration_effort,
             max_threads,
-            apple_compat: options.apple_compat(),
-            allow_expert_options: options.allow_expert_options(),
+            flags: options.flags,
             icc_path,
             color_info,
             stage_label: "Finalist encode",
@@ -5003,8 +5012,7 @@ fn try_explore_ultimate_jxl_distance(
                 distance: candidate_distance,
                 effort: exploration_effort,
                 max_threads,
-                apple_compat: options.apple_compat(),
-                allow_expert_options: options.allow_expert_options(),
+                flags: options.flags,
                 icc_path,
                 color_info,
                 stage_label: "Quality-boundary refinement",
@@ -6051,6 +6059,7 @@ mod tests {
                 icc: false,
             },
             None,
+            false,
         );
         let args: Vec<_> = command
             .get_args()
@@ -6089,6 +6098,7 @@ mod tests {
                 lossless,
                 AvifencMetadataPolicy::Preserve,
                 Some(0),
+                false,
             );
             let args: Vec<_> = command
                 .get_args()
@@ -6132,13 +6142,19 @@ mod tests {
             false,
             AvifencMetadataRetryState::strip_all().policy(),
             Some(0),
+            true,
         );
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
 
-        for flag in ["--ignore-exif", "--ignore-xmp", "--ignore-icc"] {
+        for flag in [
+            "--ignore-exif",
+            "--ignore-xmp",
+            "--ignore-icc",
+            "--progressive",
+        ] {
             assert!(args.iter().any(|arg| arg == flag), "missing {flag}");
         }
     }
@@ -7674,6 +7690,7 @@ mod tests {
             false,
             AvifencMetadataPolicy::Preserve,
             Some(0),
+            false,
         );
         let args: Vec<String> = cmd
             .get_args()
@@ -7714,6 +7731,7 @@ mod tests {
             false,
             AvifencMetadataPolicy::Preserve,
             Some(0),
+            false,
         );
         let args: Vec<String> = cmd
             .get_args()
@@ -7754,6 +7772,7 @@ mod tests {
             false,
             AvifencMetadataPolicy::Preserve,
             Some(0),
+            false,
         );
         let args: Vec<String> = cmd
             .get_args()
@@ -7777,7 +7796,7 @@ mod tests {
         );
 
         let root = tempfile::tempdir().expect("tempdir");
-        let round_trip = |input: &Path, stem: &str| {
+        let round_trip = |input: &Path, stem: &str, lossless: bool| {
             let encoded = root.path().join(format!("{stem}.avif"));
             let decoded = root.path().join(format!("{stem}.png"));
             let mut retry_state = super::AvifencMetadataRetryState::default();
@@ -7785,11 +7804,12 @@ mod tests {
                 input,
                 &encoded,
                 Some(100),
-                false,
+                lossless,
                 Some(0),
                 Duration::from_secs(30),
                 "synthetic_channel_regression",
                 &mut retry_state,
+                true,
             )
             .expect("run avifenc");
             assert!(
@@ -7822,7 +7842,7 @@ mod tests {
             super::AvifencInputColorModel::Unknown,
             "JPEG clone must exercise the non-PNG production path"
         );
-        let decoded_gray = round_trip(&gray_jpeg, "gray");
+        let decoded_gray = round_trip(&gray_jpeg, "gray", false);
         let max_channel_delta = decoded_gray.pixels().iter().fold(0u8, |max_delta, pixel| {
             max_delta.max(
                 pixel[0]
@@ -7848,7 +7868,14 @@ mod tests {
         })
         .save(&channels_png)
         .expect("save synthetic single-channel PNG");
-        let decoded_channels = round_trip(&channels_png, "channels");
+        let decoded_channels = round_trip(&channels_png, "channels", true);
+        assert_eq!(
+            decoded_channels,
+            image::open(&channels_png)
+                .expect("open source PNG")
+                .to_rgb8(),
+            "progressive lossless AVIF must preserve final decoded pixels"
+        );
         for (x, expected_channel) in [(50, 0usize), (150, 1), (250, 2)] {
             let pixel = decoded_channels.get_pixel(x, 50);
             assert!(

@@ -483,22 +483,18 @@ a duration no longer than two seconds. That payload is normalized to a
 pixel-equivalent JXL still; it is not claimed to reconstruct the original video
 container. Missing or contradictory evidence leaves the file in `vid` scope.
 
-Direct pixel-to-JXL output does not leave progressive or generated-noise policy
-to the encoder's auto mode. It passes `--progressive_dc=0`, `--responsive=0`,
-`--noise=0`, and `--photon_noise_iso=0`, and never requests `-p`, progressive
-AC, or quantized progressive AC. These switches disable generated noise; they
-are not a destructive pre-encode denoiser. Lossless `d=0` therefore keeps the
-real source pixels—including real sensor noise—while lossy paths may smooth
-texture but never replace it with synthetic noise. The immutable JPEG
-bitstream-transcode path receives no pixel-policy overrides because the source
-JPEG and its JBRD reconstruction proof remain authoritative.
+Pixel-to-JXL encoding leaves progressive, responsive and noise choices to
+libjxl by default. The former fixed policy is frozen and available only through
+`img run --jxl-fixed-features`: it explicitly disables progressive DC,
+responsive transforms, adaptive noise and photon noise. This advanced flag is
+off by default, never affects JPEG bitstream reconstruction, and never bypasses
+pixel, metadata or reconstruction verification. Lossless `d=0` must still
+preserve the decoded source samples exactly.
 
-The size effect is measured, not assumed to be a universal percentage. With
-local `cjxl` v0.13, `-p` increased two deterministic 512×512 `d=1/e7` samples by
-20.4% and 2.83%, while peak memory increased by about 23% and 32%; adaptive
-noise changed a textured `d=3` sample from 19,052 to 18,686 bytes (-1.92%).
-Different images and encoder versions can produce different deltas, so IMG
-locks the intended policy rather than promising the often-quoted 13%/39%.
+Meme Mode (`img fast-img --strategy avif`) enables progressive encoding for new
+AVIF candidates, including quality probes and retries. Existing AVIF inputs
+accepted without re-encoding are not rewritten merely to add progressive
+layers. No synthetic size percentage is used to override either default.
 
 Normal work uses effort 7. Ultimate/archive pixel encoding uses effort 10,
 whose global analysis disables chunked encoding and can require substantially

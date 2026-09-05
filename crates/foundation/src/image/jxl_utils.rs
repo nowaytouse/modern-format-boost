@@ -911,7 +911,7 @@ pub struct ImagemagickCjxlPipelineRequest<'a> {
     pub metadata_policy: JxlMetadataPolicy,
     pub output_depth: u8,
     pub icc_policy: JxlIccPolicy,
-    pub apple_compat: bool,
+    pub flags: crate::ConvertFlags,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -955,7 +955,7 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         metadata_policy,
         output_depth,
         icc_policy,
-        apple_compat,
+        flags,
     } = request;
     debug_assert!(crate::constants::is_supported_jxl_effort(effort));
 
@@ -1017,7 +1017,8 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         .distance(distance)
         .effort(effort)
         .threads(max_threads)
-        .apple_compat(apple_compat);
+        .apple_compat(flags.contains(crate::ConvertFlags::APPLE_COMPAT))
+        .fixed_features(flags.contains(crate::ConvertFlags::JXL_FIXED_FEATURES));
 
     let mut cjxl_proc = cjxl_builder
         .build()
@@ -1194,7 +1195,11 @@ pub fn run_imagemagick_cjxl_pipeline(
         metadata_policy: request.metadata_policy,
         output_depth: request.output_depth,
         icc_policy: request.icc_policy,
-        apple_compat: request.apple_compat,
+        flags: if request.apple_compat {
+            crate::ConvertFlags::APPLE_COMPAT
+        } else {
+            crate::ConvertFlags::empty()
+        },
     })
 }
 
@@ -1228,7 +1233,7 @@ pub fn try_imagemagick_fallback_with_effort(
     distance: f32,
     effort: u8,
     max_threads: usize,
-    apple_compat: bool,
+    flags: crate::ConvertFlags,
 ) -> std::result::Result<(), std::io::Error> {
     debug_assert!(crate::constants::is_supported_jxl_effort(effort));
     let base_request = ImagemagickCjxlPipelineRequest {
@@ -1240,7 +1245,7 @@ pub fn try_imagemagick_fallback_with_effort(
         metadata_policy: JxlMetadataPolicy::Preserve,
         output_depth: 16,
         icc_policy: JxlIccPolicy::Preserve,
-        apple_compat,
+        flags,
     };
 
     // Attempt 1: no -strip, depth 16, preserve metadata
@@ -1462,7 +1467,11 @@ pub fn try_imagemagick_fallback(
         crate::constants::jxl_distance_for_mode(distance, ultimate),
         crate::constants::jxl_effort_for_mode(ultimate),
         max_threads,
-        apple_compat,
+        if apple_compat {
+            crate::ConvertFlags::APPLE_COMPAT
+        } else {
+            crate::ConvertFlags::empty()
+        },
     )
 }
 

@@ -42,6 +42,7 @@ bitflags! {
         const VERBOSE = 1 << 12;
         const ALLOW_EXPERT_OPTIONS = 1 << 13;
         const ARCHIVE_MODE = 1 << 14;
+        const JXL_FIXED_FEATURES = 1 << 15;
     }
 }
 
@@ -118,6 +119,10 @@ impl ConversionConfig {
     #[must_use]
     pub const fn allow_expert_options(&self) -> bool {
         self.flags.contains(ConfigFlags::ALLOW_EXPERT_OPTIONS)
+    }
+    #[must_use]
+    pub const fn jxl_fixed_features(&self) -> bool {
+        self.flags.contains(ConfigFlags::JXL_FIXED_FEATURES)
     }
     #[must_use]
     pub const fn archive_mode(&self) -> bool {
@@ -619,7 +624,8 @@ fn convert_to_jxl(
             config.ultimate_mode(),
             config.archive_mode(),
         ))
-        .threads(max_threads);
+        .threads(max_threads)
+        .fixed_features(config.jxl_fixed_features());
 
     if *format == DetectedFormat::JPEG {
         builder.lossless_jpeg(true);

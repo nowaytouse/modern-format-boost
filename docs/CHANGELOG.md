@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-01
 
+### IMG delivery defaults and safety fixes (2026-09-05)
+
+- JXL progressive/responsive/noise options now follow libjxl defaults. The
+  previous explicit-off policy is frozen behind default-off `--jxl-fixed-features`.
+  JPEG reconstruction and all final integrity gates remain unchanged.
+- AVIF Meme Mode enables progressive encoding for new candidates, probes and
+  retries; already accepted source AVIF files are not needlessly re-encoded.
+- AAE sidecars are staged and published without overwriting an existing file.
+  Identical regular sidecars are reused; conflicting files and symlinks fail closed.
+- Workspace tests exclude fuzz executables: the deep audit had launched an
+  unbounded fuzz target through `cargo test --all-targets` and hit its three-hour
+  timeout. Dedicated fuzz smoke tests retain their existing explicit budgets.
+
 ### Archive-value and CI corrective review
 
 - **Product releases are Apple Silicon only**: nightly and tagged release

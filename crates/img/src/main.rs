@@ -111,6 +111,11 @@ enum Commands {
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
 
+        /// Frozen advanced opt-in: disable JXL progressive/responsive transforms and generated noise.
+        /// By default libjxl selects its own optional features. Does not affect JPEG reconstruction.
+        #[arg(long = "jxl-fixed-features", default_value_t = false)]
+        jxl_fixed_features: bool,
+
         #[arg(long, default_value_t = true)]
         preserve_timestamps: bool,
 
@@ -435,6 +440,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         allow_size_tolerance,
         no_allow_size_tolerance,
         allow_expert_options,
+        jxl_fixed_features,
         preserve_timestamps,
         preserve,
         verbose,
@@ -558,6 +564,12 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
             "Expert Options Audit: gated encoder/decoder fallbacks enabled; final verification remains mandatory"
         );
     }
+    if jxl_fixed_features {
+        log_stat!(
+            foundation::infra::static_logs::messages::LABEL_CONFIG,
+            "JXL Fixed Features Audit: frozen advanced policy enabled; progressive/responsive transforms and generated noise disabled"
+        );
+    }
     if !allow_size_tolerance {
         log_stat!(
             foundation::infra::static_logs::messages::LABEL_CONFIG,
@@ -588,6 +600,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     config_flags.set(ConfigFlags::ARCHIVE_MODE, archive);
     config_flags.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
     config_flags.set(ConfigFlags::ALLOW_EXPERT_OPTIONS, allow_expert_options);
+    config_flags.set(ConfigFlags::JXL_FIXED_FEATURES, jxl_fixed_features);
     config_flags.set(ConfigFlags::VERBOSE, verbose);
     let config = AutoConvertConfig {
         output_dir: output,
@@ -1161,6 +1174,9 @@ impl AutoConvertConfig {
     }
     const fn allow_expert_options(&self) -> bool {
         self.flags.contains(ConfigFlags::ALLOW_EXPERT_OPTIONS)
+    }
+    const fn jxl_fixed_features(&self) -> bool {
+        self.flags.contains(ConfigFlags::JXL_FIXED_FEATURES)
     }
     const fn archive(&self) -> bool {
         self.flags.contains(ConfigFlags::ARCHIVE_MODE)
@@ -4828,7 +4844,7 @@ fn fast_img_run_encode_job_inner(
         let convert_options = foundation::ConvertOptions {
             output_dir: Some(working_copy.to_path_buf()),
             base_dir: Some(src_dir.to_path_buf()),
-            flags: foundation::ConvertFlags::FORCE,
+            flags: foundation::ConvertFlags::FORCE | foundation::ConvertFlags::AVIF_PROGRESSIVE,
             ..Default::default()
         };
         if format == FormatKind::Avif {
@@ -9652,6 +9668,11 @@ fn auto_convert_build_options(
                 } else {
                     img::lossless_converter::ConvertFlags::empty()
                 }
+                | if config.jxl_fixed_features() {
+                    img::lossless_converter::ConvertFlags::JXL_FIXED_FEATURES
+                } else {
+                    img::lossless_converter::ConvertFlags::empty()
+                }
                 | if config.archive() {
                     img::lossless_converter::ConvertFlags::ARCHIVE
                 } else {
@@ -12446,6 +12467,23 @@ mod fast_img_hardening_tests {
             anyhow::bail!("expected run command");
         };
         assert!(archive);
+        Ok(())
+    }
+
+    #[test]
+    fn run_jxl_fixed_features_requires_explicit_opt_in() -> anyhow::Result<()> {
+        for (args, expected) in [
+            (vec!["img", "run", "/images"], false),
+            (vec!["img", "run", "/images", "--jxl-fixed-features"], true),
+        ] {
+            let Commands::Run {
+                jxl_fixed_features, ..
+            } = Cli::try_parse_from(args)?.command
+            else {
+                anyhow::bail!("expected run command");
+            };
+            assert_eq!(jxl_fixed_features, expected);
+        }
         Ok(())
     }
 

@@ -752,7 +752,13 @@ fn cargo_test_args(package: PackageScope) -> Vec<String> {
     if let Some(package_name) = package.package_name() {
         args.extend(["-p".to_string(), package_name.to_string()]);
     } else {
-        args.push("--workspace".to_string());
+        // --all-targets overrides fuzz bin test=false and starts unbounded
+        // libFuzzer loops. Execute them only through the budgeted fuzz smoke stage.
+        args.extend([
+            "--workspace".to_string(),
+            "--exclude".to_string(),
+            "modern-format-boost-fuzz".to_string(),
+        ]);
     }
     args.push("--all-targets".to_string());
     if package == PackageScope::Workspace {
@@ -1911,6 +1917,7 @@ mod tests {
     fn workspace_tests_are_serialized_for_process_global_media_guards() {
         let test = cargo_test_args(PackageScope::Workspace).join(" ");
         assert!(test.contains("--workspace"));
+        assert!(test.contains("--exclude modern-format-boost-fuzz"));
         assert!(test.contains("--all-features"));
         assert!(test.contains("--no-fail-fast"));
         assert!(test.contains("--test-threads=1"));

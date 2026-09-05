@@ -128,14 +128,10 @@ fn test_cjxl_flag_order_parity() {
     assert!(get_arg(&args, 0).contains("in.png"));
     assert!(get_arg(&args, 1).contains("out.jxl"));
     assert_eq!(get_arg(&args, 2), "--container=1");
-    assert_eq!(get_arg(&args, 3), "--progressive_dc=0");
-    assert_eq!(get_arg(&args, 4), "--responsive=0");
-    assert_eq!(get_arg(&args, 5), "--noise=0");
-    assert_eq!(get_arg(&args, 6), "--photon_noise_iso=0");
-    assert_eq!(get_arg(&args, 7), "-d");
-    assert_eq!(get_arg(&args, 8), "0.5");
-    assert_eq!(get_arg(&args, 9), "-e");
-    assert_eq!(get_arg(&args, 10), "7");
+    assert_eq!(get_arg(&args, 3), "-d");
+    assert_eq!(get_arg(&args, 4), "0.5");
+    assert_eq!(get_arg(&args, 5), "-e");
+    assert_eq!(get_arg(&args, 6), "7");
 }
 
 fn test_djxl_flag_order_parity() {

@@ -1142,6 +1142,8 @@ bitflags::bitflags! {
         const REQUIRE_OUTPUT_DELIVERY = 1 << 12;
         const ALLOW_EXPERT_OPTIONS = 1 << 14;
         const ARCHIVE = 1 << 15;
+        const JXL_FIXED_FEATURES = 1 << 16;
+        const AVIF_PROGRESSIVE = 1 << 17;
     }
 }
 
@@ -1238,6 +1240,16 @@ impl ConvertOptions {
     #[must_use]
     pub const fn allow_expert_options(&self) -> bool {
         self.flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS)
+    }
+
+    #[must_use]
+    pub const fn jxl_fixed_features(&self) -> bool {
+        self.flags.contains(ConvertFlags::JXL_FIXED_FEATURES)
+    }
+
+    #[must_use]
+    pub const fn avif_progressive(&self) -> bool {
+        self.flags.contains(ConvertFlags::AVIF_PROGRESSIVE)
     }
 }
 

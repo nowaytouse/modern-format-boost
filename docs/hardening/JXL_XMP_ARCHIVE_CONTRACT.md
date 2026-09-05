@@ -64,23 +64,23 @@ therefore require whole-image working memory; effort 11 runs multiple expert
 lossless configurations and is not used for general pixel encoding. JPEG
 bitstream transcode is a distinct, fast workload and uses effort 11 by default;
 an encoder that rejects expert options is retried at effort 10. Direct pixel
-encoding explicitly sets `--progressive_dc=0`, `--responsive=0`, `--noise=0`,
-and `--photon_noise_iso=0`. Progressive AC remains disabled by the absence of
-`-p`, `--progressive_ac`, and `--qprogressive_ac`. IMG therefore neither adds a
-progressive preview/responsive transform nor substitutes generated adaptive or
-photon noise. These controls do not pre-filter real source noise: `d=0` keeps
-the decoded samples exactly, while a lossy encode may naturally smooth them.
-The immutable JPEG-transcode path receives none of these pixel-policy
-overrides. Changing progressive behavior later requires a new encode and a new
+encoding delegates progressive, responsive and noise behavior to libjxl by
+default. Only the frozen, default-off `img run --jxl-fixed-features` policy sets
+`--progressive_dc=0`, `--responsive=0`, `--noise=0`, and `--photon_noise_iso=0`.
+It does not request progressive AC flags. These controls do not pre-filter real
+source noise: `d=0` must preserve decoded samples exactly. The immutable
+JPEG-transcode path receives none of these pixel-policy overrides, even when
+the advanced flag is enabled. Changing progressive behavior requires a new encode and a new
 archive proof; it is not an in-place lossless metadata toggle. No path may
 bypass its pixel or exact-reconstruction proof. The controls are available in
 the CI-pinned libjxl v0.12 as well as the production v0.13 toolchain; see the
 official [cjxl option definitions](https://github.com/libjxl/libjxl/blob/v0.12.0/tools/cjxl_main.cc).
 
-## Measured encoder-policy evidence
+## Historical encoder-policy measurements (development frozen)
 
-The policy is based on controlled, privacy-safe synthetic measurements, not a
-fixed web-derived percentage. The 2026-09-05 baseline used local `cjxl` v0.13,
+These measurements document the former explicit-off policy; they do not set
+the current libjxl-auto default or a size threshold. Feature-policy development
+is frozen. The 2026-09-05 baseline used local `cjxl` v0.13,
 512×512 deterministic inputs, and identical settings except for the named
 feature:
 
