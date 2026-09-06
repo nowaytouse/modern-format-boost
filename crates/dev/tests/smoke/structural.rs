@@ -15,6 +15,71 @@ fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn mpc_bootstrap_runs_cargo_from_workspace_and_propagates_failure() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::process::Command;
+
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    let bin_dir = temp.path().join("bin");
+    std::fs::create_dir(&bin_dir).unwrap();
+    let cargo = bin_dir.join("cargo");
+    std::fs::write(
+        &cargo,
+        "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$MFB_TEST_CARGO_TRACE\"\nexit 73\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let installer = temp.path().join("installer");
+    let compile = Command::new("rustc")
+        .args(["--edition", "2024"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/install_media_dependencies.rs"
+        ))
+        .arg("-o")
+        .arg(&installer)
+        .output()
+        .unwrap();
+    assert!(compile.status.success(), "{compile:?}");
+
+    let trace = temp.path().join("cargo-trace");
+    let output = Command::new(&installer)
+        .env("PATH", &bin_dir)
+        .env("GITHUB_WORKSPACE", &workspace)
+        .env("MFB_MPC_ONLY", "1")
+        .env_remove("MFB_MPC_ARCHIVE")
+        .env("MFB_TEST_CARGO_TRACE", &trace)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("exit status: 73"),
+        "{output:?}"
+    );
+    let trace = std::fs::read_to_string(trace).unwrap();
+    let lines = trace.lines().collect::<Vec<_>>();
+    assert_eq!(
+        std::path::Path::new(lines[0]),
+        workspace,
+        "Cargo must discover workspace .cargo/config.toml, not use the extraction directory"
+    );
+    assert_eq!(&lines[1..4], &["run", "--locked", "--manifest-path"]);
+    assert_eq!(std::path::Path::new(lines[4]), workspace.join("Cargo.toml"));
+    assert_eq!(
+        &lines[5..10],
+        &["-p", "dev", "--bin", "download_gnu_mpc", "--"]
+    );
+    let archive = std::path::Path::new(lines[10]);
+    assert!(archive.is_absolute());
+    assert_eq!(archive.file_name().unwrap(), "mpc.tar.xz");
+    assert_ne!(archive.parent().unwrap(), workspace);
+}
+
 #[test]
 fn product_release_workflows_publish_only_macos_arm64() {
     for source in [

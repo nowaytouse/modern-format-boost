@@ -222,7 +222,8 @@ fn install_gnu_mpc(workdir: &Path, workspace: &Path) -> Result<()> {
                     OsStr::new("--"),
                     archive.as_os_str(),
                 ],
-                Some(workdir),
+                // --manifest-path does not load the workspace's Cargo config.
+                Some(workspace),
             )?;
             archive
         }
