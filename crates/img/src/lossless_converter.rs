@@ -2051,6 +2051,26 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
     }
 }
 
+/// Run the shared JPEG reconstruction policy against a caller-owned output.
+///
+/// The caller retains temp-file and delivery ownership; this only centralizes
+/// the e11-first command and its installed-cjxl compatibility retries.
+pub(crate) fn run_cjxl_jpeg_encode_with_policy(
+    input: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+    max_threads: usize,
+) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    run_cjxl_jpeg_encode_with_plan_mode(
+        input,
+        temp_output,
+        options,
+        max_threads,
+        None,
+        JpegLosslessTranscodePlanMode::Policy,
+    )
+}
+
 fn run_jpegtran_layer(
     input: &Path,
     output: &Path,

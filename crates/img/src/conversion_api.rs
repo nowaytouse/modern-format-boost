@@ -616,20 +616,32 @@ fn convert_to_jxl(
     )
     .child_threads;
 
-    let mut builder = foundation::CjxlBuilder::new();
-    builder
-        .input(&input_abs)
-        .output(&output_abs)
-        .effort(foundation::jxl_effort_policy::encoder_effort_for_mode(
-            config.ultimate_mode(),
-            config.archive_mode(),
-        ))
-        .threads(max_threads)
-        .fixed_features(config.jxl_fixed_features());
-
     if *format == DetectedFormat::JPEG {
-        builder.lossless_jpeg(true);
+        let output = crate::lossless_converter::run_cjxl_jpeg_encode_with_policy(
+            &input_abs,
+            &output_abs,
+            &jpeg_lossless_options(config),
+            max_threads,
+        )
+        .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        if !output.status.success() {
+            return Err(ImgQualityError::ConversionError(format!(
+                "cjxl JPEG lossless transcode failed: {}",
+                output.stderr.trim()
+            )));
+        }
     } else {
+        let mut builder = foundation::CjxlBuilder::new();
+        builder
+            .input(&input_abs)
+            .output(&output_abs)
+            .effort(foundation::jxl_effort_policy::encoder_effort_for_mode(
+                config.ultimate_mode(),
+                config.archive_mode(),
+            ))
+            .threads(max_threads)
+            .fixed_features(config.jxl_fixed_features());
+
         match compression {
             CompressionType::Lossless => {
                 builder.distance(0.0);
@@ -644,24 +656,24 @@ fn convert_to_jxl(
                 )));
             }
         }
-    }
 
-    if config.apple_compat() {
-        builder.apple_compat(true);
-    }
+        if config.apple_compat() {
+            builder.apple_compat(true);
+        }
 
-    let mut command = builder.build();
-    let status = foundation::process_runner::run_command_with_liveness_timeout(
-        &mut command,
-        std::time::Duration::from_secs(120),
-        foundation::process_runner::image_process_hard_timeout(),
-        "JXL image conversion",
-    )?;
+        let mut command = builder.build();
+        let status = foundation::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            std::time::Duration::from_secs(120),
+            foundation::process_runner::image_process_hard_timeout(),
+            "JXL image conversion",
+        )?;
 
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
+        if !status.status.success() {
+            return Err(ImgQualityError::ConversionError(
+                String::from_utf8_lossy(&status.stderr).to_string(),
+            ));
+        }
     }
 
     // Verify output file
@@ -707,6 +719,28 @@ fn convert_to_jxl(
     }
 
     Ok(())
+}
+
+fn jpeg_lossless_options(config: &ConversionConfig) -> foundation::ConvertOptions {
+    let mut flags = foundation::ConvertFlags::empty();
+    flags.set(
+        foundation::ConvertFlags::APPLE_COMPAT,
+        config.apple_compat(),
+    );
+    flags.set(foundation::ConvertFlags::ULTIMATE, config.ultimate_mode());
+    flags.set(foundation::ConvertFlags::ARCHIVE, config.archive_mode());
+    flags.set(
+        foundation::ConvertFlags::ALLOW_EXPERT_OPTIONS,
+        config.allow_expert_options(),
+    );
+    flags.set(
+        foundation::ConvertFlags::JXL_FIXED_FEATURES,
+        config.jxl_fixed_features(),
+    );
+    foundation::ConvertOptions {
+        flags,
+        ..Default::default()
+    }
 }
 
 /// Make output path absolute for tools that require it (e.g. avifenc).
@@ -759,6 +793,27 @@ mod tests {
         assert_eq!(strategy.target, TargetFormat::JXL);
         assert!(strategy.command.contains("--lossless_jpeg=1"));
         Ok(())
+    }
+
+    #[test]
+    fn jpeg_conversion_api_uses_shared_reconstruction_effort_policy() {
+        for ultimate in [false, true] {
+            let mut config = ConversionConfig::default();
+            config.flags.set(ConfigFlags::ULTIMATE_MODE, ultimate);
+            let options = jpeg_lossless_options(&config);
+            let plan = foundation::jxl_effort_policy::effort_plan_for_mode(
+                foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+                options.ultimate(),
+                options.archive(),
+            );
+            assert_eq!(plan.len(), 1);
+            assert_eq!(
+                plan[0].effort(),
+                foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+            );
+            assert_eq!(options.ultimate(), ultimate);
+            assert_eq!(options.jxl_fixed_features(), config.jxl_fixed_features());
+        }
     }
 
     #[test]

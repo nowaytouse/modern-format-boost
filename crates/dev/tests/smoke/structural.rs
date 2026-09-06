@@ -38,6 +38,23 @@ fn product_release_workflows_publish_only_macos_arm64() {
 }
 
 #[test]
+fn nightly_release_excludes_unrelated_ci_artifacts() {
+    let source = include_str!("../../../../.github/workflows/cd-nightly.yml");
+    let download = source
+        .split_once("uses: actions/download-artifact@")
+        .expect("nightly must download its build artifact")
+        .1
+        .split("\n      - name:")
+        .next()
+        .unwrap();
+    assert!(download.contains("name: modern-format-boost-aarch64-apple-darwin"));
+    assert!(!download.contains("merge-multiple: true"));
+    assert!(
+        source.contains("files: release-assets/modern-format-boost-aarch64-apple-darwin.tar.gz")
+    );
+}
+
+#[test]
 fn smoke_heic_bit_depth_parsing_honest() {
     let mut hvcc = vec![0u8; 20];
     // Byte 17: bit_depth_luma_minus8 (bits 0-2)

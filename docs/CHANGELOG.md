@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-01
 
+### Photos custody and nightly delivery closure (2026-09-06)
+
+- An explicit Photos library selection is exclusive and validated. Import and
+  reconciliation check the active library before and after AppleScript calls;
+  persisted custody proofs retain their library binding across primary and
+  tier-2 resume paths. A mismatched or unreadable library retains the sources.
+- The opt-in debug-library regression exercises a real JXL import plus both
+  uncheckpointed and checkpointed recovery, requiring the same UUID, exact
+  original-payload custody and no duplicate asset.
+- JPEG deletion rejects source/output aliases and symbolic links. Current XMP
+  must match the final JXL overlay before source-sidecar cleanup is authorized;
+  an edit made after delivery is retained instead of discarded.
+- The public JPEG conversion API now shares the existing e11-first reconstruction
+  policy and installed-tool compatibility handling. Other image paths keep their
+  existing pixel-encoding policy.
+- Reconstruction preflight tests share the existing environment-isolation guard;
+  failures include the complete classification buckets. Missing reconstructed
+  JPEG errors identify the output path and decoder evidence.
+- Nightly publishing downloads and uploads only its Apple Silicon build archive,
+  excluding unrelated CI coverage artifacts. Release notes distinguish the current
+  build from retained historical attachments.
+
 ### IMG delivery defaults and safety fixes (2026-09-05)
 
 - Archive fallback copies now compare an independently staged, metadata-enriched

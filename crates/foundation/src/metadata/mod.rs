@@ -1633,6 +1633,23 @@ pub fn validate_xmp_sidecar(path: &Path) -> io::Result<()> {
     validate_xmp_document(&mut file, path).map(|_| ())
 }
 
+/// Prove that deleting this sidecar cannot discard a newer JXL XMP edit.
+/// The final overlay must contain the complete current sidecar, including
+/// properties that a metadata reader does not recognize.
+pub(crate) fn verify_jxl_xmp_sidecar_custody(xmp_path: &Path, dst: &Path) -> io::Result<()> {
+    let xmp_path = require_regular_sidecar(xmp_path.to_path_buf(), "XMP")?;
+    let container = validate_appendable_jxl_container(dst)?;
+    let mut xmp = std::fs::File::open(&xmp_path)?;
+    let size = validate_xmp_document(&mut xmp, &xmp_path)?;
+    if !jxl_last_xml_payload_matches(dst, &container, &mut xmp, size)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "current XMP sidecar is not preserved in the final JXL overlay; source and sidecar must be retained",
+        ));
+    }
+    Ok(())
+}
+
 /// Append one authoritative XMP overlay to a JXL container without rewriting
 /// existing JBRD, Exif, ICC, XMP, JUMBF, unknown, or codestream bytes.
 ///

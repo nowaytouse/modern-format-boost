@@ -24,20 +24,68 @@ pub fn get_extension_lowercase(path: &Path) -> String {
     crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(path)
 }
 
+/// Resolve and validate an explicitly selected Apple Photos library.
+///
+/// An explicit selection is a safety boundary: if it is present but invalid,
+/// callers must not fall back to another library.
+pub fn explicit_photos_library_path() -> anyhow::Result<Option<PathBuf>> {
+    let Some(raw_path) = std::env::var_os("MFB_PHOTOS_LIBRARY_PATH") else {
+        return Ok(None);
+    };
+    validate_photos_library_path(Path::new(&raw_path)).map(Some)
+}
+
+pub(crate) fn validate_photos_library_path(path: &Path) -> anyhow::Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("MFB_PHOTOS_LIBRARY_PATH is set but empty");
+    }
+    let canonical = std::fs::canonicalize(path).with_context(|| {
+        format!(
+            "MFB_PHOTOS_LIBRARY_PATH does not resolve to a readable Photos library: {}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        canonical.is_dir()
+            && canonical
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("photoslibrary"),
+        "MFB_PHOTOS_LIBRARY_PATH is not a .photoslibrary package: {}",
+        canonical.display()
+    );
+    let database = canonical.join("database/Photos.sqlite");
+    anyhow::ensure!(
+        database.is_file(),
+        "MFB_PHOTOS_LIBRARY_PATH has no Photos database: {}",
+        database.display()
+    );
+    std::fs::File::open(&database).with_context(|| {
+        format!(
+            "MFB_PHOTOS_LIBRARY_PATH database is not readable: {}",
+            database.display()
+        )
+    })?;
+    anyhow::ensure!(
+        database.canonicalize()?.starts_with(&canonical),
+        "Photos database must remain inside the selected library"
+    );
+    Ok(canonical)
+}
+
 /// Resolve candidate Apple Photos libraries for `osxphotos query --db`.
 ///
-/// The explicit override remains first, followed by libraries in `~/Pictures`
-/// ordered by database modification time. Callers that hold an imported Photos
-/// UUID must probe these candidates instead of assuming the newest database is
-/// the library Photos actually imported into.
+/// An explicit override is exclusive. Otherwise libraries in `~/Pictures` are
+/// ordered by database modification time; callers must verify returned UUIDs.
 pub fn photos_library_paths() -> anyhow::Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    if let std::result::Result::Ok(env_path) = std::env::var("MFB_PHOTOS_LIBRARY_PATH") {
-        let path = PathBuf::from(env_path);
-        if path.exists() {
-            paths.push(path);
-        }
+    if let Some(explicit) = explicit_photos_library_path()? {
+        return Ok(vec![explicit]);
     }
+    discovered_photos_library_paths()
+}
+
+pub(crate) fn discovered_photos_library_paths() -> anyhow::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
 
     let home = match std::env::var("HOME") {
         Ok(h) => PathBuf::from(h),

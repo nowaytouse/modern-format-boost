@@ -50,6 +50,9 @@ pub struct LibraryAssetRecord {
 pub struct LibraryHandle {
     pub imported_assets: Vec<LibraryAssetRecord>,
     pub import_error_count: usize,
+    /// Canonical explicitly selected library shared by every proof in this batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_library_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -1086,6 +1089,7 @@ mod tests {
             library_handle: Some(LibraryHandle {
                 imported_assets,
                 import_error_count: 0,
+                photos_library_path: None,
             }),
             output_format: None,
         }
@@ -1976,6 +1980,9 @@ pub struct WorkingCopyMarker {
     /// Primary fast-img Photos assets, including UUIDs needed for fresh resume verification.
     #[serde(default)]
     pub photos_imported_assets: Vec<LibraryAssetRecord>,
+    /// Canonical Photos library selected for this marker's import custody proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_library_path: Option<PathBuf>,
     pub error: Option<String>,
     /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
     #[serde(default = "default_strategy")]
@@ -2052,6 +2059,7 @@ impl WorkingCopyMarker {
             tier2_imported_assets: Vec::new(),
             tier2_in_progress: false,
             photos_imported_assets: Vec::new(),
+            photos_library_path: None,
             error: None,
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,

@@ -600,6 +600,28 @@ pub fn safe_delete_jpeg_source(
         )));
     }
 
+    for path in [source, output] {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "delete-gate 2 FAIL: cannot inspect {}: {error}",
+                path.display()
+            ))
+        })?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "delete-gate 2 FAIL: source and output must be regular non-symlink files: {}",
+                path.display()
+            )));
+        }
+    }
+    if crate::checkpoint::files_alias_same_inode(source, output).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("delete-gate 2 FAIL: file identity check: {error}"))
+    })? {
+        return Err(ImgQualityError::AnalysisError(
+            "delete-gate 2 FAIL: output aliases the source file".to_string(),
+        ));
+    }
+
     let current_source_hash = calculate_blake3_hash(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!("delete-gate 3 FAIL: BLAKE3(source) failed: {e}"))
     })?;
@@ -622,7 +644,9 @@ pub fn safe_delete_jpeg_source(
         ));
     }
 
-    // Gate 3: audit log
+    let matching_xmp_sidecar = xmp_sidecar_for_verified_output_cleanup(source, output)?;
+
+    // Gate 3: audit log after all custody checks pass.
     tracing::info!(
         target: "fast_img_delete",
         source = %source.display(),
@@ -632,7 +656,6 @@ pub fn safe_delete_jpeg_source(
         "delete-gate PASS: removing source JPEG"
     );
 
-    let matching_xmp_sidecar = crate::metadata::find_xmp_sidecar(source);
     safe_remove_file(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "delete failed for {} (output preserved at {}): {e}",
@@ -652,8 +675,24 @@ pub fn safe_delete_jpeg_source(
 /// # Errors
 /// Returns an error if a matching sidecar exists but cannot be removed.
 pub fn safe_delete_matching_xmp_sidecar(source: &Path, output: &Path) -> Result<bool> {
-    let matching_xmp_sidecar = crate::metadata::find_xmp_sidecar(source);
+    let matching_xmp_sidecar = xmp_sidecar_for_verified_output_cleanup(source, output)?;
     delete_matching_xmp_sidecar_path(source, output, matching_xmp_sidecar.as_deref())
+}
+
+fn xmp_sidecar_for_verified_output_cleanup(
+    source: &Path,
+    output: &Path,
+) -> Result<Option<PathBuf>> {
+    let sidecar = crate::metadata::find_xmp_sidecar(source);
+    if let Some(path) = &sidecar
+        && crate::image::format_detect::detect_true_format(output)?
+            == crate::image::format_detect::FormatKind::Jxl
+    {
+        crate::metadata::verify_jxl_xmp_sidecar_custody(path, output).map_err(|error| {
+            ImgQualityError::AnalysisError(format!("delete-gate XMP custody failed: {error}"))
+        })?;
+    }
+    Ok(sidecar)
 }
 
 fn delete_matching_xmp_sidecar_path(
@@ -859,6 +898,7 @@ fn safe_delete_modern_lossy_static_source_after_reverify(
 pub fn reverify_modern_lossy_static_photos_custody(
     library_handle: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
+    let selected = selected_photos_library(library_handle.photos_library_path.as_deref())?;
     if library_handle.imported_assets.is_empty() {
         return Ok(());
     }
@@ -888,7 +928,7 @@ pub fn reverify_modern_lossy_static_photos_custody(
         "tier-2 final Photos custody verification start"
     );
 
-    let probes = query_osxphotos_asset_probes(&uuids)?;
+    let probes = query_selected_photos_asset_probes(&uuids, selected.as_deref())?;
     let probe_by_uuid = index_photos_probes_by_uuid(&uuids, probes)?;
 
     for asset in &library_handle.imported_assets {
@@ -957,6 +997,7 @@ pub fn safe_delete_modern_lossy_static_source(
     let library_handle = crate::pipeline::verification::LibraryHandle {
         imported_assets: vec![import_proof.clone()],
         import_error_count: 0,
+        photos_library_path: None,
     };
     reverify_modern_lossy_static_photos_custody(&library_handle)?;
     safe_delete_modern_lossy_static_source_after_reverify(source, import_proof)
@@ -1080,6 +1121,7 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
+    bind_photos_library_proof(marker, library.photos_library_path.as_deref())?;
     for asset in &library.imported_assets {
         marker
             .tier2_imported_assets
@@ -1103,6 +1145,7 @@ pub fn library_handle_from_marker_tier2_proof(
     Some(crate::pipeline::verification::LibraryHandle {
         imported_assets: marker.tier2_imported_assets.clone(),
         import_error_count: 0,
+        photos_library_path: marker.photos_library_path.clone(),
     })
 }
 
@@ -1225,6 +1268,143 @@ fn photos_import_fail_fast_enabled() -> bool {
     BatchErrorMode::current().is_fail_fast()
 }
 
+fn selected_photos_library(bound: Option<&Path>) -> Result<Option<PathBuf>> {
+    let explicit = crate::common_utils::explicit_photos_library_path()?;
+    let bound = bound
+        .map(crate::common_utils::validate_photos_library_path)
+        .transpose()?;
+    if let (Some(bound), Some(explicit)) = (&bound, &explicit)
+        && bound != explicit
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos library binding mismatch: checkpoint={} selected={}; sources retained",
+            bound.display(),
+            explicit.display()
+        )));
+    }
+    Ok(bound.or(explicit))
+}
+
+fn require_selected_photos_database(
+    selected: &Path,
+    active_databases: &BTreeSet<PathBuf>,
+) -> Result<()> {
+    let expected = selected.join("database/Photos.sqlite").canonicalize()?;
+    if active_databases != &BTreeSet::from([expected]) {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos active library does not match selected {}; refusing import/reconciliation; active databases={active_databases:?}",
+            selected.display()
+        )));
+    }
+    Ok(())
+}
+
+fn require_active_photos_library(selected: Option<&Path>) -> Result<()> {
+    let Some(selected) = selected else {
+        return Ok(());
+    };
+    let output = run_fast_img_command_with_timeout(
+        std::process::Command::new("/usr/sbin/lsof").args(["-a", "-c", "Photos", "-Fn"]),
+        Duration::from_secs(30),
+        "verify selected Photos library",
+    )?;
+    if !output.status.success() {
+        return Err(ImgQualityError::AnalysisError(
+            "cannot prove the active Photos library; open the selected library before importing"
+                .to_string(),
+        ));
+    }
+    let text = std::str::from_utf8(&output.stdout).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("Photos database path is not UTF-8: {error}"))
+    })?;
+    let databases = text
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .filter(|path| path.ends_with(".photoslibrary/database/Photos.sqlite"))
+        .map(|path| Path::new(path).canonicalize())
+        .collect::<std::io::Result<BTreeSet<_>>>()?;
+    require_selected_photos_database(selected, &databases)
+}
+
+fn bind_photos_library_proof(
+    marker: &mut WorkingCopyMarker,
+    selected: Option<&Path>,
+) -> Result<()> {
+    if let Some(bound) = &marker.photos_library_path
+        && Some(bound.as_path()) != selected
+    {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos proof belongs to a different or unbound library; checkpoint and sources retained".to_string(),
+        ));
+    }
+    marker.photos_library_path = selected.map(Path::to_path_buf);
+    Ok(())
+}
+
+/// Bind a legacy marker only after its existing custody is proved in the selected library.
+pub fn bind_marker_to_selected_photos_library(marker: &mut WorkingCopyMarker) -> Result<()> {
+    let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
+    if marker.photos_library_path == selected {
+        return Ok(());
+    }
+    if !marker.photos_imported_assets.is_empty() {
+        reverify_media_outputs_in_library(
+            &build_fast_img_output_import_candidates(marker)?,
+            &marker.photos_imported_assets,
+            selected.as_deref(),
+        )?;
+    }
+    if let Some(mut handle) = library_handle_from_marker_tier2_proof(marker) {
+        handle.photos_library_path.clone_from(&selected);
+        reverify_modern_lossy_static_photos_custody(&handle)?;
+    }
+    bind_photos_library_proof(marker, selected.as_deref())?;
+    write_marker_atomic(marker)?;
+    Ok(())
+}
+
+fn query_selected_photos_asset_probes(
+    uuids: &[String],
+    selected: Option<&Path>,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    query_photos_with_scope(
+        uuids,
+        selected,
+        query_osxphotos_asset_probes_from_library,
+        query_discovered_photos_asset_probes,
+    )
+}
+
+fn query_photos_with_scope(
+    uuids: &[String],
+    selected: Option<&Path>,
+    mut query_exact: impl FnMut(&[String], &Path) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    mut query_discovered: impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    if uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    match selected {
+        Some(library) => query_exact(uuids, library),
+        None => query_discovered(uuids),
+    }
+}
+
+fn with_photos_library_guard<T>(
+    selected: Option<&Path>,
+    mut verify_active: impl FnMut(&Path) -> Result<()>,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if let Some(library) = selected {
+        verify_active(library)?;
+    }
+    let result = operation()?;
+    if let Some(library) = selected {
+        verify_active(library)?;
+    }
+    Ok(result)
+}
+
 /// Import fast-img outputs into Photos with per-item UUID checkpoints.
 ///
 /// This deliberately does not use `osxphotos import`: current osxphotos filters
@@ -1247,18 +1427,21 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
     reconcile_existing: bool,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
+    let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
+    require_active_photos_library(selected.as_deref())?;
     let output_paths = fast_img_marker_output_paths(marker)?;
     validate_fast_img_marker_output_hashes(marker)?;
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
     let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-    import_marker_outputs_with_photos_checkpoint(
+    import_marker_outputs_with_photos_checkpoint_in_library(
         marker,
         &output_paths,
         reconcile_existing,
-        query_osxphotos_asset_probes,
+        |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
         quarantine_probe,
+        selected.as_deref(),
     )
 }
 
@@ -1266,7 +1449,20 @@ pub fn import_media_outputs_with_library_verifier(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
-    let import_report = import_media_outputs_with_photos_applescript(candidates)?;
+    let selected = selected_photos_library(None)?;
+    require_active_photos_library(selected.as_deref())?;
+    let import_report = import_media_outputs_with_photos_applescript_with(
+        candidates,
+        photos_import_fail_fast_enabled(),
+        &mut |entries| {
+            run_photos_import_applescript_session_mode_in_library(
+                "media",
+                entries,
+                "import",
+                selected.as_deref(),
+            )
+        },
+    )?;
     let imported_rel_paths = import_report
         .report_pairs
         .iter()
@@ -1284,10 +1480,11 @@ pub fn import_media_outputs_with_library_verifier(
     let mut library_handle = library_handle_from_media_output_probes(
         &imported_candidates,
         &import_report.report_pairs,
-        query_osxphotos_asset_probes,
+        |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
         quarantine_probe,
     )?;
     library_handle.import_error_count = import_report.failed_count;
+    library_handle.photos_library_path = selected;
     Ok(library_handle)
 }
 
@@ -1317,18 +1514,30 @@ pub fn reverify_media_outputs_with_library_verifier(
     candidates: &[PhotosImportCandidate],
     persisted_assets: &[LibraryAssetRecord],
 ) -> Result<LibraryHandle> {
+    reverify_media_outputs_in_library(candidates, persisted_assets, None)
+}
+
+/// Reverify persisted UUIDs only in their checkpoint-bound Photos library.
+pub fn reverify_media_outputs_in_library(
+    candidates: &[PhotosImportCandidate],
+    persisted_assets: &[LibraryAssetRecord],
+    bound_library: Option<&Path>,
+) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
+    let selected = selected_photos_library(bound_library)?;
     let report_pairs = photos_import_report_pairs_from_persisted_assets(persisted_assets)?;
     #[cfg(target_os = "macos")]
     let quarantine_probe = path_has_quarantine_xattr;
     #[cfg(not(target_os = "macos"))]
     let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-    library_handle_from_media_output_probes(
+    let mut handle = library_handle_from_media_output_probes(
         candidates,
         &report_pairs,
-        query_osxphotos_asset_probes,
+        |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
         quarantine_probe,
-    )
+    )?;
+    handle.photos_library_path = selected;
+    Ok(handle)
 }
 
 /// Build Photos import rows from the exact outputs recorded by a fast-img run.
@@ -1677,9 +1886,24 @@ pub fn import_modern_lossy_static_tier(
     src_dir: &Path,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
 ) -> Result<LibraryHandle> {
+    import_modern_lossy_static_tier_in_library(src_dir, candidates, None)
+}
+
+/// Import native tier-2 originals without changing their marker's library binding.
+pub fn import_modern_lossy_static_tier_in_library(
+    src_dir: &Path,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+    bound_library: Option<&Path>,
+) -> Result<LibraryHandle> {
+    let _photos_import_lock = acquire_photos_import_lock()?;
+    let selected = selected_photos_library(bound_library)?;
     if candidates.is_empty() {
-        return Ok(LibraryHandle::default());
+        return Ok(LibraryHandle {
+            photos_library_path: selected,
+            ..LibraryHandle::default()
+        });
     }
+    require_active_photos_library(selected.as_deref())?;
     let base_candidates = build_modern_lossy_static_import_candidates(src_dir, candidates);
     let staging = tempfile::tempdir().map_err(|error| {
         ImgQualityError::AnalysisError(format!(
@@ -1901,7 +2125,10 @@ pub fn import_modern_lossy_static_tier(
         }
     }
 
-    let mut handle = import_or_reconcile_modern_lossy_static_candidates(&import_candidates)?;
+    let mut handle = import_or_reconcile_modern_lossy_static_candidates(
+        &import_candidates,
+        selected.as_deref(),
+    )?;
     apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
     handle.import_error_count = handle
         .import_error_count
@@ -1955,18 +2182,22 @@ fn apply_tier2_enriched_delivery_proofs(
 pub fn import_or_reconcile_verified_media_candidates(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
-    import_or_reconcile_modern_lossy_static_candidates(candidates)
+    let _photos_import_lock = acquire_photos_import_lock()?;
+    let selected = selected_photos_library(None)?;
+    require_active_photos_library(selected.as_deref())?;
+    import_or_reconcile_modern_lossy_static_candidates(candidates, selected.as_deref())
 }
 
 fn import_or_reconcile_modern_lossy_static_candidates(
     candidates: &[PhotosImportCandidate],
+    selected_library: Option<&Path>,
 ) -> Result<LibraryHandle> {
-    let _photos_import_lock = acquire_photos_import_lock()?;
     validate_photos_import_candidates(candidates)?;
     let mut imported_assets = Vec::new();
     let mut failed_count = 0usize;
     for candidate in candidates {
-        let handle = import_or_reconcile_single_modern_lossy_candidate(candidate)?;
+        let handle =
+            import_or_reconcile_single_modern_lossy_candidate(candidate, selected_library)?;
         imported_assets.extend(handle.imported_assets);
         failed_count = failed_count
             .checked_add(handle.import_error_count)
@@ -1980,18 +2211,21 @@ fn import_or_reconcile_modern_lossy_static_candidates(
     Ok(LibraryHandle {
         imported_assets,
         import_error_count: failed_count,
+        photos_library_path: selected_library.map(Path::to_path_buf),
     })
 }
 
 fn reconcile_single_modern_lossy_candidate(
     candidate: &PhotosImportCandidate,
+    selected_library: Option<&Path>,
 ) -> Result<Option<LibraryAssetRecord>> {
     let candidates = std::slice::from_ref(candidate);
     let manifest_entries = photos_import_candidate_manifest_entries(candidates);
-    let stdout = run_photos_import_applescript_session_mode(
+    let stdout = run_photos_import_applescript_session_mode_in_library(
         "tier-2 media reconciliation",
         &manifest_entries,
         "reconcile_all",
+        selected_library,
     )?;
     let candidate_ids = photos_reconciled_candidate_ids(candidates, &stdout)?;
     if candidate_ids[0].is_empty() {
@@ -2006,7 +2240,7 @@ fn reconcile_single_modern_lossy_candidate(
         match library_handle_from_media_output_probes(
             candidates,
             &report_pair,
-            query_osxphotos_asset_probes,
+            |uuids| query_selected_photos_asset_probes(uuids, selected_library),
             quarantine_probe,
         ) {
             Ok(mut handle) => return Ok(handle.imported_assets.pop()),
@@ -2027,10 +2261,11 @@ fn reconcile_single_modern_lossy_candidate(
 
 fn reconcile_single_modern_lossy_candidate_with_recovery(
     candidate: &PhotosImportCandidate,
+    selected_library: Option<&Path>,
 ) -> Result<Option<LibraryAssetRecord>> {
     let mut poisoned_attempts = 0usize;
     loop {
-        match reconcile_single_modern_lossy_candidate(candidate) {
+        match reconcile_single_modern_lossy_candidate(candidate, selected_library) {
             Ok(asset) => return Ok(asset),
             Err(err) => {
                 let detail = err.to_string();
@@ -2062,11 +2297,15 @@ fn photos_reconciliation_content_mismatch(detail: &str) -> bool {
 
 fn import_or_reconcile_single_modern_lossy_candidate(
     candidate: &PhotosImportCandidate,
+    selected_library: Option<&Path>,
 ) -> Result<LibraryHandle> {
-    if let Some(asset) = reconcile_single_modern_lossy_candidate_with_recovery(candidate)? {
+    if let Some(asset) =
+        reconcile_single_modern_lossy_candidate_with_recovery(candidate, selected_library)?
+    {
         return Ok(LibraryHandle {
             imported_assets: vec![asset],
             import_error_count: 0,
+            photos_library_path: selected_library.map(Path::to_path_buf),
         });
     }
 
@@ -2074,7 +2313,12 @@ fn import_or_reconcile_single_modern_lossy_candidate(
     let mut attempt = 0usize;
     loop {
         let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
-            run_photos_import_applescript_session("media", manifest_entries)
+            run_photos_import_applescript_session_mode_in_library(
+                "media",
+                manifest_entries,
+                "import",
+                selected_library,
+            )
         };
         match import_media_outputs_with_photos_applescript_with(
             candidates,
@@ -2086,22 +2330,26 @@ fn import_or_reconcile_single_modern_lossy_candidate(
                 let quarantine_probe = path_has_quarantine_xattr;
                 #[cfg(not(target_os = "macos"))]
                 let quarantine_probe = |path: &Path| Ok(path_has_quarantine_xattr(path));
-                return library_handle_from_media_output_probes(
+                let mut handle = library_handle_from_media_output_probes(
                     candidates,
                     &report.report_pairs,
-                    query_osxphotos_asset_probes,
+                    |uuids| query_selected_photos_asset_probes(uuids, selected_library),
                     quarantine_probe,
-                );
+                )?;
+                handle.photos_library_path = selected_library.map(Path::to_path_buf);
+                return Ok(handle);
             }
             Err(err) => {
                 // A timed-out AppleEvent may have committed. Reconcile content
                 // before every retry so an ambiguous result cannot duplicate it.
-                if let Some(asset) =
-                    reconcile_single_modern_lossy_candidate_with_recovery(candidate)?
-                {
+                if let Some(asset) = reconcile_single_modern_lossy_candidate_with_recovery(
+                    candidate,
+                    selected_library,
+                )? {
                     return Ok(LibraryHandle {
                         imported_assets: vec![asset],
                         import_error_count: 0,
+                        photos_library_path: selected_library.map(Path::to_path_buf),
                     });
                 }
                 let detail = err.to_string();
@@ -2125,6 +2373,7 @@ fn import_or_reconcile_single_modern_lossy_candidate(
                     return Ok(LibraryHandle {
                         imported_assets: Vec::new(),
                         import_error_count: 1,
+                        photos_library_path: selected_library.map(Path::to_path_buf),
                     });
                 }
                 return Err(err);
@@ -2422,12 +2671,13 @@ on mfbEnsureAlbumIdForPath(albumPath)
 end mfbEnsureAlbumIdForPath
 "#;
 
-fn import_marker_outputs_with_photos_checkpoint<Q, P>(
+fn import_marker_outputs_with_photos_checkpoint_in_library<Q, P>(
     marker: &WorkingCopyMarker,
     output_paths: &[(String, PathBuf)],
     reconcile_existing: bool,
     mut query_assets: Q,
     mut is_quarantined: P,
+    selected_library: Option<&Path>,
 ) -> Result<LibraryHandle>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
@@ -2435,16 +2685,31 @@ where
 {
     prepare_photos_import_output_paths(output_paths)?;
     let mut checkpoint_marker = marker.clone();
+    let new_binding = checkpoint_marker.photos_library_path.is_none() && selected_library.is_some();
+    bind_photos_library_proof(&mut checkpoint_marker, selected_library)?;
     let mut plan = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
-    if reconcile_existing {
+    if reconcile_existing || new_binding {
         reverify_checkpointed_photos_assets(
             &checkpoint_marker,
             &plan.proven_assets,
             &mut query_assets,
             &mut is_quarantined,
         )?;
+    }
+    if new_binding {
+        if let Some(handle) = library_handle_from_marker_tier2_proof(&checkpoint_marker) {
+            reverify_modern_lossy_static_photos_custody(&handle)?;
+        }
+        write_marker_atomic(&checkpoint_marker)?;
+    }
+    if reconcile_existing {
         let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
-            run_photos_import_applescript_session_mode("media reconciliation", entries, "reconcile")
+            run_photos_import_applescript_session_mode_in_library(
+                "media reconciliation",
+                entries,
+                "reconcile",
+                selected_library,
+            )
         };
         reconcile_uncheckpointed_photos_assets(
             &mut checkpoint_marker,
@@ -2463,7 +2728,12 @@ where
     let mut imported_assets = proven_assets;
     let mut prepare_import_session = prepare_photos_import_session;
     let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| {
-        run_photos_import_applescript_session("fast-img", batch_entries)
+        run_photos_import_applescript_session_mode_in_library(
+            "fast-img",
+            batch_entries,
+            "import",
+            selected_library,
+        )
     };
     let mut pending_report = import_pending_media_entries_with_checkpoint(
         &mut checkpoint_marker,
@@ -2501,20 +2771,8 @@ where
     Ok(LibraryHandle {
         imported_assets,
         import_error_count: pending_report.failed_count,
+        photos_library_path: selected_library.map(Path::to_path_buf),
     })
-}
-
-fn import_media_outputs_with_photos_applescript(
-    candidates: &[PhotosImportCandidate],
-) -> Result<PhotosMediaImportReport> {
-    let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
-        run_photos_import_applescript_session("media", manifest_entries)
-    };
-    import_media_outputs_with_photos_applescript_with(
-        candidates,
-        photos_import_fail_fast_enabled(),
-        &mut run_import_batch,
-    )
 }
 
 fn import_media_outputs_with_photos_applescript_with<R>(
@@ -2807,11 +3065,13 @@ where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     P: FnMut(&Path) -> Result<bool>,
 {
+    let selected_library = marker.photos_library_path.clone();
     let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
-        run_photos_import_applescript_session_mode(
+        run_photos_import_applescript_session_mode_in_library(
             "same-run media reconciliation",
             entries,
             "reconcile",
+            selected_library.as_deref(),
         )
     };
     let recovered = reconcile_uncheckpointed_photos_assets(
@@ -3372,6 +3632,7 @@ fn photos_import_windows(
 
 /// Run one short Photos import session. Large libraries are split in Rust so
 /// verified assets can be checkpointed before Photos/iCloud session poison.
+#[cfg(test)]
 fn run_photos_import_applescript_session(
     media_kind: &str,
     manifest_entries: &[(PathBuf, String)],
@@ -3379,10 +3640,26 @@ fn run_photos_import_applescript_session(
     run_photos_import_applescript_session_mode(media_kind, manifest_entries, "import")
 }
 
+#[cfg(test)]
 fn run_photos_import_applescript_session_mode(
     media_kind: &str,
     manifest_entries: &[(PathBuf, String)],
     operation: &str,
+) -> Result<String> {
+    let selected = selected_photos_library(None)?;
+    run_photos_import_applescript_session_mode_in_library(
+        media_kind,
+        manifest_entries,
+        operation,
+        selected.as_deref(),
+    )
+}
+
+fn run_photos_import_applescript_session_mode_in_library(
+    media_kind: &str,
+    manifest_entries: &[(PathBuf, String)],
+    operation: &str,
+    selected_library: Option<&Path>,
 ) -> Result<String> {
     use std::io::Write as _;
 
@@ -3448,7 +3725,11 @@ fn run_photos_import_applescript_session_mode(
             .arg(timeout.as_secs().to_string())
             .arg(operation);
 
-        let output = crate::process_runner::ManagedProcess::spawn(&mut command)
+        let output = with_photos_library_guard(
+            selected_library,
+            |library| require_active_photos_library(Some(library)),
+            || {
+                crate::process_runner::ManagedProcess::spawn(&mut command)
             .and_then(|process| {
                 process.wait_liveness_timeout(timeout, timeout, "Photos AppleScript import chunk")
             })
@@ -3459,8 +3740,9 @@ fn run_photos_import_applescript_session_mode(
                     chunks.len(),
                     osascript.display()
                 ))
-            })?;
-
+            })
+            },
+        )?;
         if !output.status.success() {
             return Err(photos_applescript_import_chunk_error(
                 media_kind,
@@ -4722,6 +5004,7 @@ fn library_handle_from_media_output_probes_with_pixel_verifier(
     Ok(LibraryHandle {
         imported_assets,
         import_error_count: 0,
+        photos_library_path: None,
     })
 }
 
@@ -4802,6 +5085,7 @@ fn library_handle_from_batch_probes(
     Ok(LibraryHandle {
         imported_assets,
         import_error_count: 0,
+        photos_library_path: None,
     })
 }
 
@@ -4809,6 +5093,7 @@ pub fn apply_library_assets_to_marker(
     marker: &mut WorkingCopyMarker,
     library: &LibraryHandle,
 ) -> Result<()> {
+    bind_photos_library_proof(marker, library.photos_library_path.as_deref())?;
     for asset in &library.imported_assets {
         let Some((source_rel, entry)) = marker
             .blake3_log
@@ -4981,11 +5266,17 @@ fn query_osxphotos_asset_probes_from_library(
         .collect()
 }
 
+#[cfg(test)]
 fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    let selected = selected_photos_library(None)?;
+    query_selected_photos_asset_probes(uuids, selected.as_deref())
+}
+
+fn query_discovered_photos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut libraries = crate::common_utils::photos_library_paths()?;
+    let mut libraries = crate::common_utils::discovered_photos_library_paths()?;
     let library_hint = OSXPHOTOS_IMPORT_LIBRARY_HINT
         .lock()
         .map_err(|_| {
@@ -5935,6 +6226,7 @@ mod tests {
                 xmp_sidecar_blake3: None,
             }],
             import_error_count: 0,
+            photos_library_path: None,
         };
         let proofs = BTreeMap::from([(
             "album/photo.jxl".to_string(),
@@ -6437,6 +6729,7 @@ mod tests {
             &LibraryHandle {
                 imported_assets: vec![asset("a.webp", "hash-a", "UUID-A")],
                 import_error_count: 0,
+                photos_library_path: None,
             },
         )?;
         apply_tier2_library_assets_to_marker(
@@ -6447,6 +6740,7 @@ mod tests {
                     asset("b.jxl", "hash-b", "UUID-B"),
                 ],
                 import_error_count: 0,
+                photos_library_path: None,
             },
         )?;
 
@@ -7959,6 +8253,131 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "imports a synthetic fixture into an explicitly selected debug.photoslibrary"]
+    #[cfg(target_os = "macos")]
+    #[serial_test::serial]
+    fn photos_import_live_smoke_debug_library() -> anyhow::Result<()> {
+        let library = PathBuf::from(
+            std::env::var_os("MFB_LIVE_PHOTOS_SMOKE_DEBUG_LIBRARY")
+                .ok_or_else(|| anyhow::anyhow!("explicit debug Photos library is required"))?,
+        )
+        .canonicalize()?;
+        anyhow::ensure!(
+            library.file_name() == Some(std::ffi::OsStr::new("debug.photoslibrary")),
+            "live smoke is restricted to debug.photoslibrary"
+        );
+        let assert_debug_library_active = || require_active_photos_library(Some(&library));
+        let count_assets = || -> anyhow::Result<usize> {
+            assert_debug_library_active()?;
+            let output = run_fast_img_command_with_timeout(
+                std::process::Command::new(resolve_osascript_command()).args([
+                    "-e",
+                    "tell application \"Photos\" to return count of media items",
+                ]),
+                Duration::from_secs(30),
+                "count debug Photos assets",
+            )?;
+            anyhow::ensure!(output.status.success(), "Photos asset count failed");
+            Ok(String::from_utf8(output.stdout)?.trim().parse()?)
+        };
+        let _lock = acquire_photos_import_lock()?;
+        let before = count_assets()?;
+        let scratch = tempfile::Builder::new()
+            .prefix("mfb-photos-smoke-")
+            .tempdir()?;
+        let source_root = scratch.path().join("source");
+        let working_copy = scratch.path().join("debug_smoke_optimized");
+        std::fs::create_dir(&source_root)?;
+        std::fs::create_dir(&working_copy)?;
+        let jpeg = source_root.join("source.jpg");
+        let input_name = format!(
+            "{}.jxl",
+            scratch
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap()
+        );
+        let input = working_copy.join(&input_name);
+        image::RgbImage::from_fn(96, 64, |x, y| {
+            image::Rgb([
+                u8::try_from(x * 2).unwrap(),
+                u8::try_from(y * 3).unwrap(),
+                u8::try_from(x + y).unwrap(),
+            ])
+        })
+        .save_with_format(&jpeg, image::ImageFormat::Jpeg)?;
+        let cjxl = crate::common_utils::resolve_tool_path("cjxl")
+            .ok_or_else(|| anyhow::anyhow!("cjxl is required for the live smoke"))?;
+        let encoded = run_fast_img_command_with_timeout(
+            std::process::Command::new(cjxl)
+                .arg(&jpeg)
+                .arg(&input)
+                .args(["--distance=0", "--effort=1"]),
+            Duration::from_secs(60),
+            "encode live Photos JXL fixture",
+        )?;
+        anyhow::ensure!(
+            encoded.status.success(),
+            "fixture encoding failed: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        verify_jxl_roundtrip_integrity(&jpeg, &input)?;
+        let mut marker = WorkingCopyMarker::new(source_root, working_copy, 1);
+        marker.blake3_log.insert(
+            "source.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some(input_name),
+                src: crate::common_utils::calculate_blake3_hash(&jpeg)?,
+                out: crate::common_utils::calculate_blake3_hash(&input)?,
+                library_asset: None,
+            },
+        );
+        let output_paths = fast_img_marker_output_paths(&marker)?;
+        let mut imported_uuid = None;
+        for operation in ["import", "resume-uncheckpointed", "resume-checkpointed"] {
+            assert_debug_library_active()?;
+            validate_fast_img_marker_output_hashes(&marker)?;
+            let handle = import_marker_outputs_with_photos_checkpoint_in_library(
+                &marker,
+                &output_paths,
+                operation != "import",
+                |uuids| query_osxphotos_asset_probes_from_library(uuids, &library),
+                path_has_quarantine_xattr,
+                Some(&library),
+            )?;
+            assert_debug_library_active()?;
+            assert_eq!(handle.import_error_count, 0);
+            assert_eq!(handle.imported_assets.len(), 1);
+            assert_eq!(
+                handle.photos_library_path.as_deref(),
+                Some(library.as_path())
+            );
+            let uuid = handle.imported_assets[0].photos_uuid.clone().unwrap();
+            assert_ne!(uuid, "");
+            if let Some(expected) = &imported_uuid {
+                assert_eq!(
+                    &uuid, expected,
+                    "reconciliation and duplicate import must reuse UUID"
+                );
+            } else {
+                imported_uuid = Some(uuid);
+            }
+            if operation == "resume-uncheckpointed" {
+                apply_library_assets_to_marker(&mut marker, &handle)?;
+            }
+            assert_eq!(
+                count_assets()?,
+                before + 1,
+                "duplicate import must not add an asset"
+            );
+            eprintln!("debug Photos {operation}: UUID and original-payload custody verified");
+        }
+        verify_jxl_roundtrip_integrity(&jpeg, &input)?;
+        Ok(())
+    }
+
+    #[test]
     fn photos_import_retry_detection_covers_zero_import_invalid_connection_and_timeout() {
         assert!(
             photos_import_retry_reason(
@@ -8000,6 +8419,120 @@ mod tests {
             None,
             "a partial import must not retry already imported files"
         );
+    }
+
+    #[test]
+    fn photos_explicit_library_scope_rejects_invalid_selection_and_fallback() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let library = root.path().join("selected.photoslibrary");
+        std::fs::create_dir_all(library.join("database"))?;
+        for invalid in [
+            PathBuf::new(),
+            root.path().join("missing.photoslibrary"),
+            root.path().to_path_buf(),
+            library.clone(),
+        ] {
+            assert!(crate::common_utils::validate_photos_library_path(&invalid).is_err());
+        }
+        std::fs::write(library.join("database/Photos.sqlite"), b"test database")?;
+        let selected = crate::common_utils::validate_photos_library_path(&library)?;
+        assert_eq!(selected, library.canonicalize()?);
+        let requested = vec!["UUID-IN-OTHER-LIBRARY".to_string()];
+        for query_fails in [false, true] {
+            let result = query_photos_with_scope(
+                &requested,
+                Some(&selected),
+                |uuids, queried_library| {
+                    assert_eq!(uuids, requested);
+                    assert_eq!(queried_library, selected);
+                    if query_fails {
+                        Err(ImgQualityError::AnalysisError(
+                            "selected database unreadable".to_string(),
+                        ))
+                    } else {
+                        Ok(Vec::new())
+                    }
+                },
+                |_| panic!("an explicit selection must never query another library or cached hint"),
+            );
+            if query_fails {
+                assert!(result.is_err());
+            } else {
+                assert!(result?.is_empty());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn photos_explicit_library_scope_guards_operations_and_checkpoint_binding() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let selected = root.path().join("selected.photoslibrary");
+        std::fs::create_dir_all(selected.join("database"))?;
+        std::fs::write(selected.join("database/Photos.sqlite"), b"test database")?;
+        let selected = selected.canonicalize()?;
+        let selected_db = selected.join("database/Photos.sqlite").canonicalize()?;
+        let other = root.path().join("other.photoslibrary");
+        let wrong_databases = BTreeSet::from([other.join("database/Photos.sqlite")]);
+        for operation in ["import", "reconcile", "reconcile_all"] {
+            let invoked = std::cell::Cell::new(false);
+            let result = with_photos_library_guard(
+                Some(&selected),
+                |library| require_selected_photos_database(library, &wrong_databases),
+                || {
+                    invoked.set(true);
+                    Ok(operation)
+                },
+            );
+            assert!(result.is_err());
+            assert!(
+                !invoked.get(),
+                "wrong-library {operation} must be rejected before running"
+            );
+        }
+        let active = std::cell::Cell::new(true);
+        let result = with_photos_library_guard(
+            Some(&selected),
+            |library| {
+                let databases = if active.get() {
+                    BTreeSet::from([selected_db.clone()])
+                } else {
+                    wrong_databases.clone()
+                };
+                require_selected_photos_database(library, &databases)
+            },
+            || {
+                active.set(false);
+                Ok(())
+            },
+        );
+        assert!(
+            result.is_err(),
+            "a library switch during import must invalidate its result"
+        );
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        bind_photos_library_proof(&mut marker, Some(&selected))?;
+        let restored: WorkingCopyMarker = serde_json::from_str(&serde_json::to_string(&marker)?)?;
+        assert_eq!(
+            restored.photos_library_path.as_deref(),
+            Some(selected.as_path())
+        );
+        for invalid_binding in [None, Some(other.as_path())] {
+            let proof = LibraryHandle {
+                photos_library_path: invalid_binding.map(Path::to_path_buf),
+                ..Default::default()
+            };
+            assert!(apply_library_assets_to_marker(&mut marker, &proof).is_err());
+            assert!(apply_tier2_library_assets_to_marker(&mut marker, &proof).is_err());
+            assert_eq!(
+                marker.photos_library_path.as_deref(),
+                Some(selected.as_path())
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -8417,6 +8950,96 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn delete_gate_rejects_aliased_or_symlink_delivery() -> anyhow::Result<()> {
+        for case in ["same-path", "hardlink", "output-symlink", "source-symlink"] {
+            let scratch = tempfile::TempDir::new()?;
+            let original = scratch.path().join("original.jpg");
+            write_valid_test_jpeg(&original, [37, 82, 119]);
+            let original_bytes = std::fs::read(&original)?;
+            let mut source = original.clone();
+            let mut output = scratch.path().join("delivered.jpg");
+            match case {
+                "same-path" => output = original.clone(),
+                "hardlink" => std::fs::hard_link(&original, &output)?,
+                "output-symlink" => std::os::unix::fs::symlink(&original, &output)?,
+                "source-symlink" => {
+                    source = scratch.path().join("source.jpg");
+                    std::os::unix::fs::symlink(&original, &source)?;
+                    std::fs::copy(&original, &output)?;
+                }
+                _ => unreachable!(),
+            }
+            let proof = IntegrityResult::RoundtripMatch {
+                source_hash: crate::common_utils::calculate_blake3_hash(&source)?,
+                output_hash: crate::common_utils::calculate_blake3_hash(&output)?,
+            };
+            assert!(
+                safe_delete_jpeg_source(&source, &output, &proof).is_err(),
+                "matching hashes must not authorize unsafe delivery: {case}"
+            );
+            assert_eq!(std::fs::read(&original)?, original_bytes);
+            assert_eq!(std::fs::read(&source)?, original_bytes);
+            assert_eq!(std::fs::read(&output)?, original_bytes);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn delete_gate_preserves_xmp_changed_after_jxl_delivery() -> anyhow::Result<()> {
+        let scratch = tempfile::TempDir::new()?;
+        let source = scratch.path().join("source.jpg");
+        let output = scratch.path().join("delivered.jxl");
+        let sidecar = scratch.path().join("source.jpg.xmp");
+        write_valid_test_jpeg(&source, [37, 82, 119]);
+        let cjxl = crate::common_utils::resolve_tool_path("cjxl")
+            .ok_or_else(|| anyhow::anyhow!("cjxl is required for real JXL deletion proof"))?;
+        let encoded = run_fast_img_command_with_timeout(
+            std::process::Command::new(cjxl)
+                .arg(&source)
+                .arg(&output)
+                .args(["--distance=0", "--effort=1", "--container=1"]),
+            Duration::from_secs(60),
+            "encode JXL deletion regression",
+        )?;
+        anyhow::ensure!(encoded.status.success(), "JXL fixture encoding failed");
+        let delivered_xmp =
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><label>delivered</label></x:xmpmeta>";
+        let changed_xmp =
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><label>new edit</label></x:xmpmeta>";
+        std::fs::write(&sidecar, delivered_xmp)?;
+        crate::metadata::append_xmp_overlay_to_jxl(&sidecar, &output)?;
+        let proof = verify_final_jxl_delivery_integrity(&source, &output)?;
+        let source_bytes = std::fs::read(&source)?;
+        let output_bytes = std::fs::read(&output)?;
+        std::fs::write(&sidecar, changed_xmp)?;
+
+        let error = safe_delete_jpeg_source(&source, &output, &proof)
+            .expect_err("changed, undelivered XMP must protect both source and sidecar");
+        assert!(error.to_string().contains("XMP"));
+        assert_eq!(std::fs::read(&source)?, source_bytes);
+        assert_eq!(std::fs::read(&sidecar)?, changed_xmp);
+        assert_eq!(std::fs::read(&output)?, output_bytes);
+        assert!(crate::conversion::safe_delete_original(&source, &output, 1).is_err());
+        assert_eq!(std::fs::read(&source)?, source_bytes);
+        assert_eq!(std::fs::read(&sidecar)?, changed_xmp);
+
+        std::fs::write(&sidecar, delivered_xmp)?;
+        safe_delete_jpeg_source(&source, &output, &proof)?;
+        assert!(!source.exists());
+        assert!(!sidecar.exists());
+        assert_eq!(std::fs::read(&output)?, output_bytes);
+
+        std::fs::write(&sidecar, changed_xmp)?;
+        assert!(safe_delete_matching_xmp_sidecar(&source, &output).is_err());
+        assert_eq!(std::fs::read(&sidecar)?, changed_xmp);
+        std::fs::write(&sidecar, delivered_xmp)?;
+        assert!(safe_delete_matching_xmp_sidecar(&source, &output)?);
+        assert!(!sidecar.exists());
+        Ok(())
+    }
+
+    #[test]
     fn delete_gate_removes_source_when_all_pass() {
         let mut src = NamedTempFile::new().unwrap();
         src.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
@@ -8506,6 +9129,7 @@ mod tests {
                 xmp_sidecar_blake3: None,
             }],
             import_error_count: 0,
+            photos_library_path: None,
         };
         let error = delete_verified_modern_lossy_static_sources(src_dir.path(), &handle)
             .expect_err("unsafe relative path must fail before external verification");

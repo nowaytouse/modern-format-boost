@@ -220,8 +220,13 @@ pub fn run_exact_jpeg_reconstruction(
         ));
     }
     if output != Path::new("-") {
-        let metadata = std::fs::metadata(output)
-            .map_err(|error| format!("{context}: reconstructed JPEG is missing: {error}"))?;
+        let metadata = std::fs::metadata(output).map_err(|error| {
+            format!(
+                "{context}: reconstructed JPEG is missing at {}: {error}; decoder evidence: {}",
+                output.display(),
+                djxl_diagnostic(&result).trim()
+            )
+        })?;
         if metadata.len() == 0 {
             return Err(format!("{context}: reconstructed JPEG is empty"));
         }

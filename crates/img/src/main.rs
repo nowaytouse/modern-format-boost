@@ -15,8 +15,8 @@ use foundation::fast_img::{
     IntegrityResult, PhotosImportCandidate, apply_library_assets_to_marker,
     apply_tier2_library_assets_to_marker, build_fast_img_output_import_candidates,
     delete_verified_modern_lossy_static_sources,
-    import_media_outputs_with_checkpointed_library_verifier, import_modern_lossy_static_tier,
-    prune_empty_source_dirs_for_tier2_assets, reverify_media_outputs_with_library_verifier,
+    import_media_outputs_with_checkpointed_library_verifier,
+    prune_empty_source_dirs_for_tier2_assets, reverify_media_outputs_in_library,
     safe_delete_jpeg_source, safe_delete_matching_xmp_sidecar,
     verify_final_avif_delivery_integrity, verify_final_jxl_delivery_integrity,
 };
@@ -9240,6 +9240,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     if candidates.is_empty() && !marker.tier2_in_progress {
         return Ok((0, 0, 0));
     }
+    foundation::fast_img::bind_marker_to_selected_photos_library(marker)?;
     marker.tier2_in_progress = true;
     write_marker_atomic(marker)?;
     println!(
@@ -9247,10 +9248,17 @@ fn fast_img_deliver_modern_lossy_static_tier(
         candidates.len()
     );
     let library_handle = if candidates.is_empty() {
-        foundation::pipeline::verification::LibraryHandle::default()
+        foundation::pipeline::verification::LibraryHandle {
+            photos_library_path: marker.photos_library_path.clone(),
+            ..Default::default()
+        }
     } else {
-        import_modern_lossy_static_tier(src_dir, candidates)
-            .map_err(|err| anyhow::anyhow!("fast-img modern lossy Photos delivery failed: {err}"))?
+        foundation::fast_img::import_modern_lossy_static_tier_in_library(
+            src_dir,
+            candidates,
+            marker.photos_library_path.as_deref(),
+        )
+        .map_err(|err| anyhow::anyhow!("fast-img modern lossy Photos delivery failed: {err}"))?
     };
 
     if library_handle.import_error_count != 0
@@ -9274,6 +9282,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     let complete_library_handle = foundation::pipeline::verification::LibraryHandle {
         imported_assets: marker.tier2_imported_assets.clone(),
         import_error_count: 0,
+        photos_library_path: marker.photos_library_path.clone(),
     };
     let (deleted, already_deleted) =
         delete_verified_modern_lossy_static_sources(src_dir, &complete_library_handle).map_err(
@@ -9448,9 +9457,10 @@ fn fast_img_run_verification_and_delivery_pipeline(
     let import_candidates = build_fast_img_output_import_candidates(marker)?;
     let mut library_handle = if import_complete_or_later(&marker.stage) {
         let library_handle = if fast_img_marker_has_complete_import_proof(marker) {
-            let library_handle = reverify_media_outputs_with_library_verifier(
+            let library_handle = reverify_media_outputs_in_library(
                 &import_candidates,
                 &marker.photos_imported_assets,
+                marker.photos_library_path.as_deref(),
             )
             .map_err(|err| {
                 anyhow::anyhow!(
@@ -10305,6 +10315,7 @@ mod fast_img_hardening_tests {
             return Ok(());
         }
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
         let output_root = root.path().join("Album_restored_jpeg");
         let reconstructible = input_root.join("healthy.JXL");
@@ -10333,9 +10344,25 @@ mod fast_img_hardening_tests {
             &[reconstructible, non_reconstructible],
         )?;
 
-        assert_eq!(preflight.restorable.len(), 1);
-        assert_eq!(preflight.ineligible.len(), 1);
-        assert!(preflight.failures.is_empty());
+        assert_eq!(
+            preflight.restorable.len(),
+            1,
+            "unexpected preflight classifications: ineligible={:#?}, failures={:#?}",
+            preflight.ineligible,
+            preflight.failures
+        );
+        assert_eq!(
+            preflight.ineligible.len(),
+            1,
+            "unexpected preflight classifications: restorable={:#?}, failures={:#?}",
+            preflight.restorable,
+            preflight.failures
+        );
+        assert!(
+            preflight.failures.is_empty(),
+            "unexpected preflight failures: {:#?}",
+            preflight.failures
+        );
         assert_eq!(preflight.restorable[0].file_name().unwrap(), "healthy.JXL");
         assert_eq!(
             preflight.ineligible[0].source.file_name().unwrap(),
@@ -11107,6 +11134,7 @@ mod fast_img_hardening_tests {
         }
 
         let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
         let src = root.path().join("a.jpg");
         let source_xmp = root.path().join("a.xmp");
         let out = root.path().join("a.JXL");
@@ -13238,6 +13266,7 @@ mod fast_img_hardening_tests {
                 xmp_sidecar_blake3: None,
             }],
             import_error_count: 1,
+            photos_library_path: None,
         };
         apply_library_assets_to_marker(&mut marker, &library)?;
 
