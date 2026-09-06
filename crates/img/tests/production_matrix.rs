@@ -428,6 +428,90 @@ fn jpeg_orientation_matrix_and_encoding_variants_are_fail_closed() -> Result<()>
 }
 
 #[test]
+fn high_precision_jpegs_fail_closed_without_source_or_output_mutation() -> Result<()> {
+    for tool in ["cjpeg", "cjxl", "jpegtran", "exiftool"] {
+        if !tool_available(tool) {
+            eprintln!("Skipping high-precision JPEG regression: {tool} is unavailable");
+            return Ok(());
+        }
+    }
+    let cjpeg_help = Command::new(tool_path("cjpeg")?).arg("-help").output()?;
+    if !String::from_utf8_lossy(&cjpeg_help.stderr).contains("-precision")
+        && !String::from_utf8_lossy(&cjpeg_help.stdout).contains("-precision")
+    {
+        eprintln!("High-precision JPEG branch not executed: cjpeg lacks -precision support");
+        return Ok(());
+    }
+
+    let root = tempfile::tempdir()?;
+    let ppm = root.path().join("source.ppm");
+    let mut ppm_bytes = b"P6\n32 24\n65535\n".to_vec();
+    for y in 0_u16..24 {
+        for x in 0_u16..32 {
+            for sample in [x * 2_048, y * 2_730, (x + y) * 1_170] {
+                ppm_bytes.extend_from_slice(&sample.to_be_bytes());
+            }
+        }
+    }
+    fs::write(&ppm, ppm_bytes)?;
+
+    for (label, precision, lossless) in [("precision12", "12", false), ("precision16", "16", true)]
+    {
+        let source = root.path().join(format!("{label}.jpg"));
+        let sidecar = source.with_extension("xmp");
+        let output = root.path().join(format!("{label}-output"));
+        let mut command = Command::new(tool_path("cjpeg")?);
+        command.args(["-strict", "-precision", precision]);
+        if lossless {
+            command.args(["-lossless", "1"]);
+        } else {
+            command.args(["-quality", "90"]);
+        }
+        command.arg("-outfile").arg(&source).arg(&ppm);
+        run_status(command, &format!("cjpeg {precision}-bit JPEG fixture"))?;
+
+        let bits = Command::new(tool_path("exiftool")?)
+            .args(["-s3", "-BitsPerSample"])
+            .arg(&source)
+            .output()?;
+        ensure!(
+            bits.status.success() && String::from_utf8_lossy(&bits.stdout).trim() == precision,
+            "{label} fixture did not retain {precision}-bit JPEG precision"
+        );
+        fs::write(&sidecar, MATRIX_XMP)?;
+        let source_before = fs::read(&source)?;
+
+        let mut options = exact_jpeg_options(&output);
+        options.flags.set(ConvertFlags::DELETE_ORIGINAL, true);
+        let result = convert_jpeg_to_jxl(&source, &options, None)?;
+        ensure!(
+            !result.success && !result.skipped,
+            "{label} must fail, not skip or succeed"
+        );
+        ensure!(
+            result
+                .message
+                .contains("JPEG cannot be byte-identically reconstructed"),
+            "{label} failure did not state the reconstruction boundary: {}",
+            result.message
+        );
+        ensure!(
+            fs::read(&source)? == source_before,
+            "{label} source JPEG changed"
+        );
+        ensure!(
+            fs::read(&sidecar)? == MATRIX_XMP,
+            "{label} XMP sidecar changed"
+        );
+        ensure!(
+            !output.exists() || fs::read_dir(&output)?.next().is_none(),
+            "{label} failure left an unverified output"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn jpeg_metadata_matrix_preserves_xmp_and_icc_without_breaking_jbrd() -> Result<()> {
     for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
         if !tool_available(tool) {

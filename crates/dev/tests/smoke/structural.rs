@@ -5,6 +5,23 @@ use foundation::image_heic_analysis::{
 use foundation::image_jpeg_analysis::is_jpeg_complete;
 
 #[test]
+fn photos_live_test_helpers_match_their_macos_only_callers() {
+    let source = include_str!("../../../foundation/src/image/fast_img.rs");
+    for helper in [
+        "run_photos_import_applescript_session",
+        "run_photos_import_applescript_session_mode",
+        "query_osxphotos_asset_probes",
+    ] {
+        assert!(
+            source.contains(&format!(
+                "#[cfg(all(test, target_os = \"macos\"))]\nfn {helper}("
+            )),
+            "{helper} is only used by macOS live tests and must not enter Linux test builds"
+        );
+    }
+}
+
+#[test]
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
     for source in [
         include_str!("../../../../.github/workflows/ci-quality.yml"),

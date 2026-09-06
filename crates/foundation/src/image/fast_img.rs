@@ -3632,7 +3632,7 @@ fn photos_import_windows(
 
 /// Run one short Photos import session. Large libraries are split in Rust so
 /// verified assets can be checkpointed before Photos/iCloud session poison.
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn run_photos_import_applescript_session(
     media_kind: &str,
     manifest_entries: &[(PathBuf, String)],
@@ -3640,7 +3640,7 @@ fn run_photos_import_applescript_session(
     run_photos_import_applescript_session_mode(media_kind, manifest_entries, "import")
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn run_photos_import_applescript_session_mode(
     media_kind: &str,
     manifest_entries: &[(PathBuf, String)],
@@ -5266,7 +5266,7 @@ fn query_osxphotos_asset_probes_from_library(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn query_osxphotos_asset_probes(uuids: &[String]) -> Result<Vec<FastImgLibraryAssetProbe>> {
     let selected = selected_photos_library(None)?;
     query_selected_photos_asset_probes(uuids, selected.as_deref())

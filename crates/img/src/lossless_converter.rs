@@ -7648,17 +7648,17 @@ mod tests {
         );
     }
 
-    /// Add the two `UltraHDR` identification segments to an otherwise valid JPEG.
+    /// Build two complete JPEG images linked by a standard relative-offset MPF index.
     #[cfg(test)]
-    fn make_fake_ultrahdr_jpeg(base_jpeg: &[u8]) -> Vec<u8> {
+    fn make_ultrahdr_jpeg(base_jpeg: &[u8], gainmap_jpeg: &[u8]) -> Vec<u8> {
         assert_eq!(base_jpeg.get(..2), Some(&[0xFF, 0xD8][..]));
-        let mut buf = Vec::with_capacity(base_jpeg.len() + 256);
+        let mut buf = Vec::new();
         buf.extend_from_slice(&base_jpeg[..2]);
 
         // APP1 (0xE1) — XMP segment with hdrgm: namespace
         // Header: "http://ns.adobe.com/xap/1.0/\0" (29 bytes) + XMP body
         let xmp_ns: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
-        let xmp_body: &[u8] = b"<x:xmpmeta xmlns:hdrgm=\"http://ns.google.com/photos/1.0/camera/\"><hdrgm:Version>1.0</hdrgm:Version></x:xmpmeta>";
+        let xmp_body: &[u8] = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:Version="1.0" hdrgm:GainMapMin="0" hdrgm:GainMapMax="2" hdrgm:Gamma="1" hdrgm:OffsetSDR="0.015625" hdrgm:OffsetHDR="0.015625" hdrgm:HDRCapacityMin="0" hdrgm:HDRCapacityMax="2"/></rdf:RDF></x:xmpmeta>"#;
         let app1_payload_len = xmp_ns.len() + xmp_body.len();
         let app1_seg_len = foundation::numeric_cast::usize_to_u16_sat(app1_payload_len + 2); // includes length field itself
         buf.extend_from_slice(&[0xFF, 0xE1]);
@@ -7666,18 +7666,47 @@ mod tests {
         buf.extend_from_slice(xmp_ns);
         buf.extend_from_slice(xmp_body);
 
-        // APP2 (0xE2) — MPF segment: "MPF\0" identifier + minimal padding
-        let mpf_id: &[u8] = b"MPF\0";
-        let mpf_padding: &[u8] = &[0u8; 8]; // minimal non-zero tail so length field is valid
-        let app2_seg_len =
-            foundation::numeric_cast::usize_to_u16_sat(mpf_id.len() + mpf_padding.len() + 2);
+        // TIFF header + three IFD entries + next-IFD pointer + two 16-byte MP entries.
+        let tiff_len = 8 + 2 + 3 * 12 + 4 + 2 * 16;
+        let tiff_start = buf.len() + 8; // APP2 marker/length and MPF identifier
+        let primary_len = buf.len() + 8 + tiff_len + base_jpeg.len() - 2;
+        let mut tiff = b"MM\0*\0\0\0\x08".to_vec();
+        tiff.extend_from_slice(&3_u16.to_be_bytes());
+        for (tag, kind, count, value) in [
+            (0xB000_u16, 7_u16, 4_u32, u32::from_be_bytes(*b"0100")),
+            (0xB001, 4, 1, 2),
+            (0xB002, 7, 32, 50),
+        ] {
+            tiff.extend_from_slice(&tag.to_be_bytes());
+            tiff.extend_from_slice(&kind.to_be_bytes());
+            tiff.extend_from_slice(&count.to_be_bytes());
+            tiff.extend_from_slice(&value.to_be_bytes());
+        }
+        tiff.extend_from_slice(&0_u32.to_be_bytes());
+        for value in [
+            0x2003_0000,
+            u32::try_from(primary_len).expect("primary fixture size fits u32"),
+            0,
+            0,
+            0,
+            u32::try_from(gainmap_jpeg.len()).expect("gainmap fixture size fits u32"),
+            u32::try_from(primary_len - tiff_start).expect("relative MPF offset fits u32"),
+            0,
+        ] {
+            tiff.extend_from_slice(&value.to_be_bytes());
+        }
+        assert_eq!(tiff.len(), tiff_len);
         buf.extend_from_slice(&[0xFF, 0xE2]);
-        buf.extend_from_slice(&app2_seg_len.to_be_bytes());
-        buf.extend_from_slice(mpf_id);
-        buf.extend_from_slice(mpf_padding);
-
+        buf.extend_from_slice(
+            &u16::try_from(6 + tiff.len())
+                .expect("APP2 size")
+                .to_be_bytes(),
+        );
+        buf.extend_from_slice(b"MPF\0");
+        buf.extend_from_slice(&tiff);
         buf.extend_from_slice(&base_jpeg[2..]);
-
+        assert_eq!(buf.len(), primary_len);
+        buf.extend_from_slice(gainmap_jpeg);
         buf
     }
 
@@ -7698,7 +7727,7 @@ mod tests {
 
         let tmp = tempdir().expect("tempdir");
         let base = tmp.path().join("base.jpg");
-        let src = tmp.path().join("fake_ultrahdr.jpg");
+        let src = tmp.path().join("ultrahdr.jpg");
         image::RgbImage::from_fn(32, 32, |x, y| {
             image::Rgb([
                 u8::try_from(x * 7).expect("fixture red channel fits in u8"),
@@ -7709,19 +7738,34 @@ mod tests {
         .save_with_format(&base, image::ImageFormat::Jpeg)
         .expect("write valid base JPEG");
 
-        let fake = make_fake_ultrahdr_jpeg(&std::fs::read(&base).expect("read base JPEG"));
+        let gainmap = tmp.path().join("gainmap.jpg");
+        image::GrayImage::from_fn(16, 16, |x, y| {
+            image::Luma([u8::try_from((x + y) * 8).expect("gainmap sample fits u8")])
+        })
+        .save_with_format(&gainmap, image::ImageFormat::Jpeg)
+        .expect("write valid gainmap JPEG");
+        let gainmap_bytes = std::fs::read(&gainmap).expect("read gainmap JPEG");
+        let fixture = make_ultrahdr_jpeg(
+            &std::fs::read(&base).expect("read base JPEG"),
+            &gainmap_bytes,
+        );
 
         // Preconditions: fixture must satisfy both guards in convert_jpeg_to_jxl
         assert!(
-            is_jpeg_complete(&fake),
+            is_jpeg_complete(&fixture),
             "fixture must pass is_jpeg_complete (truncated-JPEG guard)"
         );
         assert!(
-            is_ultra_hdr_jpeg(&fake),
+            is_ultra_hdr_jpeg(&fixture),
             "fixture must be detected as UltraHDR"
         );
+        let payload = foundation::image_jpeg_analysis::extract_ultrahdr_jpeg_payload(&fixture)
+            .expect("archive fixture must contain a decodable MPF-linked gain map");
+        assert_eq!(payload.gainmap_jpeg, gainmap_bytes);
+        assert_eq!(payload.gainmap_image.width(), 16);
+        assert_eq!(payload.gainmap_image.height(), 16);
 
-        std::fs::write(&src, &fake).expect("write fixture");
+        std::fs::write(&src, &fixture).expect("write fixture");
         let source_bytes_before = std::fs::read(&src).expect("read before");
 
         clear_processed_list();
