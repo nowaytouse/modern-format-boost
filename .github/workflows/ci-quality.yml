@@ -321,8 +321,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DENABLE_SHARED=OFF \
             -DWITH_TURBOJPEG=OFF \
-            -DWITH_SIMD=ON \
-            -DENABLE_TESTING=OFF
+            -DWITH_SIMD=ON
           cmake --build "$tools_root/libjpeg-build" --parallel 2
           sudo cmake --install "$tools_root/libjpeg-build"
 

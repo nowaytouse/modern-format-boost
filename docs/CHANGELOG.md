@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-01
 
+### IMG maintenance and CI warning fixes (2026-09-07)
+
+- Existing AVIF Meme candidate preparation and final delivery now share one
+  encoded-image, codec/HDR/gain-map and cleared-metadata proof. Preparation still
+  binds the proof to the source identity captured before copying; no re-encoding
+  or integrity gate was removed.
+- JPEG and tier-2 source-directory cleanup now reaches the shared fail-closed
+  root validation. A root replaced by a regular file is an error, not successful
+  cleanup; an already removed root remains an idempotent no-op. Genuine lone
+  Finder metadata remains eligible for scoped post-delivery cleanup.
+- Removed an unused FastImg build-policy constant and its self-assertion test.
+- Nightly publishing uses the Node 24 release action. Removed unused CMake
+  testing options without disabling upstream tests, and made libheif's SharpYUV
+  dependency explicit and required instead of silently building without it.
+
 ### Photos custody and nightly delivery closure (2026-09-06)
 
 - An explicit Photos library selection is exclusive and validated. Import and

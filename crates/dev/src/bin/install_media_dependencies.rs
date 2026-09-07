@@ -32,6 +32,7 @@ const APT_PACKAGES: &[&str] = &[
     "libx265-dev",
     "libaom-dev",
     "libdav1d-dev",
+    "libsharpyuv-dev",
     "libopus-dev",
     "libvpx-dev",
     "exiftool",
@@ -430,6 +431,7 @@ fn main() -> Result<()> {
             "-DWITH_EXAMPLES=OFF",
             "-DBUILD_TESTING=OFF",
             "-DWITH_OpenH264_DECODER=OFF",
+            "-DCMAKE_REQUIRE_FIND_PACKAGE_libsharpyuv=ON",
         ],
         Some(workdir),
     )?;

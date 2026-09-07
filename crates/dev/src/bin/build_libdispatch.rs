@@ -101,7 +101,6 @@ fn main() -> Result<()> {
             format!("-DCMAKE_C_COMPILER={cc}"),
             format!("-DCMAKE_CXX_COMPILER={cxx}"),
             "-DENABLE_SWIFT=OFF".into(),
-            "-DENABLE_TESTS=OFF".into(),
         ],
     )?;
     let jobs = std::thread::available_parallelism()

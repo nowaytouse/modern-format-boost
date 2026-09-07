@@ -293,6 +293,17 @@ pub fn verify_existing_avif_meme_delivery_integrity(
     source_avif: &Path,
     avif_output: &Path,
 ) -> Result<IntegrityResult> {
+    let (source_hash, output_hash) = verify_existing_avif_meme_custody(source_avif, avif_output)?;
+    Ok(IntegrityResult::FinalModernDelivery {
+        source_hash,
+        output_hash,
+    })
+}
+
+fn verify_existing_avif_meme_custody(
+    source_avif: &Path,
+    avif_output: &Path,
+) -> Result<(String, String)> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::format_detect::{FormatKind, detect_true_format};
 
@@ -378,10 +389,7 @@ pub fn verify_existing_avif_meme_delivery_integrity(
         "existing AVIF adoption integrity check"
     );
 
-    Ok(IntegrityResult::FinalModernDelivery {
-        source_hash,
-        output_hash,
-    })
+    Ok((source_hash, output_hash))
 }
 
 /// Verify a final delivered modern format output is safe to use as the sole
@@ -1155,9 +1163,6 @@ pub fn prune_empty_source_dirs_for_tier2_assets(
     imported_assets: &[crate::pipeline::verification::LibraryAssetRecord],
     remove_selected_root: bool,
 ) -> Result<usize> {
-    if !src_dir.is_dir() {
-        return Ok(0);
-    }
     let mut dirs = Vec::new();
     for asset in imported_assets {
         let source = src_dir.join(&asset.rel_path);
@@ -1757,8 +1762,6 @@ pub fn prepare_existing_avif_meme_candidate(source: &Path, staged_path: &Path) -
             source.display()
         ))
     })?;
-    let source_image_data = image_data_sha256(source)?;
-    let source_codec_features = avif_codec_feature_hash(source)?;
     let source_len = std::fs::metadata(source)
         .map_err(|error| {
             ImgQualityError::AnalysisError(format!(
@@ -1837,48 +1840,17 @@ pub fn prepare_existing_avif_meme_candidate(source: &Path, staged_path: &Path) -
         }
     }
 
-    let staged_image_data = image_data_sha256(staged_path)?;
-    if staged_image_data != source_image_data {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "existing AVIF metadata sanitization changed encoded primary-image data for {}; source retained",
-            source.display()
-        )));
-    }
-    if avif_codec_feature_hash(staged_path)? != source_codec_features {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "existing AVIF metadata sanitization changed codec/HDR/gain-map features for {}; source retained",
-            source.display()
-        )));
-    }
-    crate::metadata::verify_output_embedded_metadata(
-        source,
-        staged_path,
-        crate::metadata::MetadataOutputPolicy::Clear,
-    )
-    .map_err(|error| {
-        ImgQualityError::AnalysisError(format!(
-            "existing AVIF still violates Meme Mode metadata policy after container-only sanitization: {error}"
-        ))
-    })?;
-    let source_identity_after =
-        crate::common_utils::calculate_blake3_hash(source).map_err(|error| {
-            ImgQualityError::AnalysisError(format!(
-                "existing AVIF post-sanitize source hash failed for {}: {error}",
-                source.display()
-            ))
-        })?;
+    // Candidate preparation and final delivery use the same encoded-payload,
+    // feature and metadata proof. Bind it to the pre-copy source identity too.
+    let (source_identity_after, output_hash) =
+        verify_existing_avif_meme_custody(source, staged_path)?;
     if source_identity_after != source_identity {
         return Err(ImgQualityError::AnalysisError(format!(
             "existing AVIF source changed during metadata sanitization: {}",
             source.display()
         )));
     }
-    crate::common_utils::calculate_blake3_hash(staged_path).map_err(|error| {
-        ImgQualityError::AnalysisError(format!(
-            "existing AVIF sanitized candidate hash failed for {}: {error}",
-            staged_path.display()
-        ))
-    })
+    Ok(output_hash)
 }
 
 /// Import tier-2 lossy modern static sources directly into Photos.

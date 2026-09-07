@@ -30,6 +30,9 @@ fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
         assert!(source.contains("libheif-1.23.1"));
         assert!(!source.contains("libheif-1.21.0"));
     }
+    let installer = include_str!("../../src/bin/install_media_dependencies.rs");
+    assert!(installer.contains("\"libsharpyuv-dev\""));
+    assert!(installer.contains("-DCMAKE_REQUIRE_FIND_PACKAGE_libsharpyuv=ON"));
 }
 
 #[cfg(unix)]
@@ -122,6 +125,7 @@ fn product_release_workflows_publish_only_macos_arm64() {
 #[test]
 fn nightly_release_excludes_unrelated_ci_artifacts() {
     let source = include_str!("../../../../.github/workflows/cd-nightly.yml");
+    assert!(source.contains("uses: softprops/action-gh-release@v3."));
     let download = source
         .split_once("uses: actions/download-artifact@")
         .expect("nightly must download its build artifact")

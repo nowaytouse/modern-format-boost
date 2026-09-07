@@ -3,8 +3,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-pub const FAST_IMG_FORCE_SMART_BUILD: bool = false;
-
 /// Return the persistent user state root.
 ///
 /// # Errors
@@ -168,13 +166,6 @@ mod tests {
             std::env::remove_var("FROM_APP");
             std::env::remove_var("HOME");
         }
-    }
-
-    #[test]
-    fn test_fastmode_uses_smart_build_without_force() {
-        const {
-            assert!(!FAST_IMG_FORCE_SMART_BUILD);
-        };
     }
 
     #[test]

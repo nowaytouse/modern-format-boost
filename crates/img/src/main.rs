@@ -5867,9 +5867,6 @@ fn fast_img_prune_empty_source_dirs(
     src_dir: &Path,
     remove_selected_root: bool,
 ) -> anyhow::Result<usize> {
-    if !src_dir.is_dir() {
-        return Ok(0);
-    }
     let mut dirs = Vec::new();
     for rel in marker.blake3_log.keys() {
         let source = src_dir.join(fast_img_checked_rel_path(rel)?);
@@ -11942,6 +11939,29 @@ mod fast_img_hardening_tests {
         assert!(unrelated_empty.exists());
         assert!(keep_leaf.exists());
         assert!(src_root.exists());
+
+        // Both delivery tiers must distinguish a removed source root from a
+        // root replaced by a file; the latter is not successful cleanup.
+        let replaced_root = root.path().join("replaced-source-root");
+        std::fs::write(&replaced_root, b"user replacement")?;
+        let jpeg_cleanup = fast_img_prune_empty_source_dirs(&marker, &replaced_root, true);
+        let tier2_cleanup =
+            foundation::prune_empty_source_dirs_for_tier2_assets(&replaced_root, &[], true);
+        assert!(
+            jpeg_cleanup.is_err() && tier2_cleanup.is_err(),
+            "replacement roots must fail closed: JPEG={jpeg_cleanup:?}, Tier 2={tier2_cleanup:?}"
+        );
+        assert_eq!(std::fs::read(&replaced_root)?, b"user replacement");
+
+        let removed_root = root.path().join("already-removed-source-root");
+        assert_eq!(
+            fast_img_prune_empty_source_dirs(&marker, &removed_root, true)?,
+            0
+        );
+        assert_eq!(
+            foundation::prune_empty_source_dirs_for_tier2_assets(&removed_root, &[], true)?,
+            0
+        );
         Ok(())
     }
 
