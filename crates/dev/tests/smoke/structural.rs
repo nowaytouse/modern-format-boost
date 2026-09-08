@@ -22,6 +22,36 @@ fn photos_live_test_helpers_match_their_macos_only_callers() {
 }
 
 #[test]
+fn ci_health_reserves_cold_build_time_and_restores_cache_before_cargo() {
+    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let health = source
+        .split_once("\n  health-check:\n")
+        .unwrap()
+        .1
+        .split_once("\n  security-audit:\n")
+        .unwrap()
+        .0;
+    let timeout_minutes = health
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("timeout-minutes: "))
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    assert_eq!(
+        timeout_minutes, 360,
+        "a cold health run reached coverage after 176 minutes; 180 minutes cannot cover all gates"
+    );
+    let cache = health.find("- name: Cache Cargo dependencies").unwrap();
+    let bootstrap = health
+        .find("cargo run --locked -p dev --bin download_gnu_mpc")
+        .unwrap();
+    assert!(cache < bootstrap, "restore before the first Cargo build");
+    assert!(health.contains("--allow-non-nightly --ci --fuzz-smoke"));
+    assert!(health.contains("run: test -s lcov.info"));
+    assert!(!health.contains("--no-expensive"));
+}
+
+#[test]
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
     for source in [
         include_str!("../../../../.github/workflows/ci-quality.yml"),

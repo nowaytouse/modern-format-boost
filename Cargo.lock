@@ -874,7 +874,7 @@ checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#ed93d4fc60eaf876c6aded741bf992d524551930"
+source = "git+https://github.com/rust-lang/flate2-rs#fcc804306677bf8cfde2250bf0472d61b75d1c45"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1261,7 +1261,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.48.0"
-source = "git+https://github.com/mitsuhiko/insta#70be034869ec431519919d60102c2e65e7b54bae"
+source = "git+https://github.com/mitsuhiko/insta#06858e1c92ceef33d90e642cfce6e2fd36fbd1e2"
 dependencies = [
  "console",
  "once_cell",
@@ -3623,7 +3623,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#2dad389b030e9268d6645ac0bf0626b867e96068"
+source = "git+https://github.com/google/zerocopy#7f1bdfa367371fa55edf532568f6615e3c809ff1"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3631,7 +3631,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#2dad389b030e9268d6645ac0bf0626b867e96068"
+source = "git+https://github.com/google/zerocopy#7f1bdfa367371fa55edf532568f6615e3c809ff1"
 dependencies = [
  "proc-macro2",
  "quote",

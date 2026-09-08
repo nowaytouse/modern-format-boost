@@ -407,8 +407,9 @@ jobs:
     needs: validation
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # A cold fuzz/libheif build can push the full check beyond two hours on hosted runners.
-    timeout-minutes: 180
+    # Cold bench/fuzz builds reached coverage after 176 minutes. Leave time for
+    # instrumented dependencies and final gates even when the cache is absent.
+    timeout-minutes: 360
     env:
       # Match ClusterFuzzLite / fuzz: embedded libheif avoids libheif-sys build.rs PermissionDenied on runners.
       LIBHEIF_STATIC: "1"
@@ -430,6 +431,19 @@ jobs:
 
       - name: Ensure required nightly components on pinned toolchain
         run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-08-09
+
+      # Restore before the MPC downloader and just fix-gate compile the workspace.
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-health-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-health-
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -512,18 +526,6 @@ jobs:
         id: fix_gate
         continue-on-error: true
         run: just fix-gate
-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v5.0.5
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-cargo-health-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-health-
 
       - name: Install check_all CI tools (llvm-cov, hack, bloat, fuzz)
         run: cargo install cargo-llvm-cov cargo-hack cargo-bloat cargo-fuzz --locked

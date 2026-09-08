@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### IMG maintenance and CI warning fixes (2026-09-07)
 
+- Shared health checks reserve a six-hour cold-build budget and restore Cargo
+  caches before the first workspace build. Bench, bloat, feature, fuzz, coverage
+  and rustdoc gates remain enabled; the former three-hour limit could expire
+  immediately after coverage started, preventing nightly publication.
 - Existing AVIF Meme candidate preparation and final delivery now share one
   encoded-image, codec/HDR/gain-map and cleared-metadata proof. Preparation still
   binds the proof to the source identity captured before copying; no re-encoding
