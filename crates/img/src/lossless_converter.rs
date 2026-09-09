@@ -384,47 +384,6 @@ fn finalize_with_exact_metadata_and_size_check(
     }
 }
 
-fn finalize_with_sidecars_and_size_check(
-    input: &Path,
-    temp_output: &Path,
-    output: &Path,
-    input_size: u64,
-    output_size: u64,
-    options: &ConvertOptions,
-    format_label: &str,
-    extra_info: Option<&str>,
-    artifacts: &foundation::hdr::HdrArtifacts,
-) -> Result<TaskResult> {
-    match commit_with_size_check(
-        CommitSource::new(input, input_size),
-        temp_output,
-        output,
-        output_size,
-        options,
-        format_label,
-        extra_info,
-        PixelAudit::RequiredAtCommit,
-        false,
-    )? {
-        CommitOutcome::Skipped(task) => Ok(task),
-        CommitOutcome::Ready => {
-            if let Err(err) = foundation::hdr::persist_hdr_artifacts(output, artifacts) {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "hdr sidecar persist failure output cleanup",
-                    output,
-                );
-                return Err(ImgQualityError::ConversionError(format!(
-                    "Failed to persist HDR sidecars for {}: {err}",
-                    output.display()
-                )));
-            }
-
-            finalize_task(input, output, input_size, format_label, extra_info, options)
-                .map_err(ImgQualityError::IoError)
-        }
-    }
-}
-
 /// Finalize a JXL produced by a fallback pipeline (ffmpeg or imagemagick).
 /// Verifies health, then delegates to `finalize_with_size_check`.
 fn finalize_fallback_jxl(
@@ -452,162 +411,37 @@ fn finalize_fallback_jxl(
     )
 }
 
-/// Convert `HEIC` with Gainmap to `HDR` `JXL`.
+/// Preserve a HEIC gain-map asset whose auxiliary relationships cannot yet be
+/// mapped losslessly. This custody rule is independent of encoding effort flags.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The input file is invalid or a duplicate.
-/// - The `HDR` synthesis process fails.
 /// - The output file cannot be written or finalized.
 pub fn convert_heic_gainmap_to_jxl(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
     if let Err(e) = foundation::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input)?);
-    }
-
-    let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, EXT_JXL, options)?;
-
-    if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output)?);
-    }
-
-    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-
-    // Use 16-bit PNG for PQ HDR encoding with cjxl
-    let intermediate_format = foundation::hdr::IntermediateFormat::Png16;
-
-    // Call the synthesis logic from foundation
-    let artifacts = foundation::hdr::convert_heic_with_gainmap_to_jxl(
+    // Synthesized HDR pixels and auxiliary PNGs cannot preserve the source
+    // container's relationship graph. Ordinary IMG has the same archive contract.
+    TaskResult::skipped_with_fallback(
         input,
-        &temp_output,
-        options.apple_compat(),
-        intermediate_format,
-        options.ultimate(),
-        options.archive(),
-    )
-    .map_err(|e| {
-        let msg = format!(" HDR Synthesis Failure: {e}");
-        ImgQualityError::ConversionError(msg)
-    })?;
-
-    let output_size = fs::metadata(&temp_output)
-        .map_err(|e| {
-            ImgQualityError::ConversionError(format!(
-                "Failed to retrieve HDR synthesis output metadata: {e}"
-            ))
-        })?
-        .len();
-
-    // Verify health
-    if let Err(e) = verify_jxl_health(&temp_output) {
-        cleanup_temp_output(&temp_output, input);
-        return Err(ImgQualityError::ConversionError(format!(
-            "⛔ Synthetic HDR JXL health check failed: {e}"
-        )));
-    }
-
-    finalize_with_sidecars_and_size_check(
-        input,
-        &temp_output,
-        &output,
-        input_size,
-        output_size,
         options,
-        foundation::infra::static_logs::messages::LABEL_HDR_SYNTHESIS,
-        None,
-        &artifacts,
+        "HEIC gainmap retained as the original container; auxiliary relationships are not replaced by synthesized HDR pixels",
+        "heic_gainmap_archive_original",
     )
-    .map_err(|e| {
-        ImgQualityError::ConversionError(format!(" HDR Synthesis Finalization Error: {e}"))
-    })
+    .map_err(|error| ImgQualityError::ConversionError(error.to_string()))
 }
 
-/// Explicitly convert `UltraHDR JPEG` gainmap pixels to synthesized HDR `JXL`.
-///
-/// This changes representation and cannot reconstruct the original JPEG bytes.
-/// Destructive or exact-delivery callers must use [`convert_jpeg_to_jxl`] instead.
+/// Convert an `UltraHDR` JPEG through the shared reversible + native gain-map path.
 ///
 /// # Errors
 ///
-/// Returns an error if extraction, synthesis, or finalization fails.
+/// Returns an error if extraction, gain-map verification, or finalization fails.
 pub fn convert_ultrahdr_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<TaskResult> {
-    if let Err(e) = foundation::conversion::validate_input_file(input) {
-        return Err(ImgQualityError::ConversionError(e));
-    }
-    if options.should_delete_original()
-        || options.require_output_delivery()
-        || options.require_jpeg_reconstruction()
-    {
-        return Err(ImgQualityError::ConversionError(
-            "UltraHDR pixel synthesis is non-archival; use exact JPEG→JXL reconstruction for destructive or verified delivery"
-                .to_string(),
-        ));
-    }
-
-    if !options.force() && is_already_processed(input) {
-        return Ok(TaskResult::skipped_duplicate(input)?);
-    }
-
-    let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, EXT_JXL, options)?;
-
-    if output.exists() && !options.force() {
-        return Ok(TaskResult::skipped_exists(input, &output)?);
-    }
-
-    let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-
-    // Synthesize into an isolated temp path so final commit/metadata handling stays atomic.
-    let artifacts = foundation::hdr::convert_ultrahdr_jpeg_to_jxl(
-        input,
-        &temp_output,
-        options.apple_compat(),
-        foundation::hdr::IntermediateFormat::Png16,
-        options.ultimate(),
-        options.archive(),
-    )
-    .map_err(|e| {
-        let msg = format!(" UltraHDR Synthesis Failure: {e}");
-        ImgQualityError::ConversionError(msg)
-    })?;
-
-    let output_size = fs::metadata(&temp_output)
-        .map_err(|e| {
-            ImgQualityError::ConversionError(format!(
-                "Failed to retrieve synthesized JXL metadata: {e}"
-            ))
-        })?
-        .len();
-
-    // Verify health
-    if let Err(e) = verify_jxl_health(&temp_output) {
-        cleanup_temp_output(&temp_output, input);
-        return Err(ImgQualityError::ConversionError(format!(
-            "⛔ Synthesized UltraHDR JXL health check failed: {e}"
-        )));
-    }
-
-    finalize_with_sidecars_and_size_check(
-        input,
-        &temp_output,
-        &output,
-        input_size,
-        output_size,
-        options,
-        foundation::infra::static_logs::messages::LABEL_ULTRAHDR_SYNTHESIS,
-        Some("Native HDR"),
-        &artifacts,
-    )
-    .map_err(|e| {
-        ImgQualityError::ConversionError(format!(" UltraHDR Synthesis Finalization Error: {e}"))
-    })
+    convert_jpeg_to_jxl(input, options, None)
 }
 
 enum FallbackResult {
@@ -7650,7 +7484,7 @@ mod tests {
 
     /// Build two complete JPEG images linked by a standard relative-offset MPF index.
     #[cfg(test)]
-    fn make_ultrahdr_jpeg(base_jpeg: &[u8], gainmap_jpeg: &[u8]) -> Vec<u8> {
+    fn make_ultrahdr_jpeg(base_jpeg: &[u8], gainmap_jpeg: &[u8], iso_only: bool) -> Vec<u8> {
         assert_eq!(base_jpeg.get(..2), Some(&[0xFF, 0xD8][..]));
         let mut buf = Vec::new();
         buf.extend_from_slice(&base_jpeg[..2]);
@@ -7659,12 +7493,40 @@ mod tests {
         // Header: "http://ns.adobe.com/xap/1.0/\0" (29 bytes) + XMP body
         let xmp_ns: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
         let xmp_body: &[u8] = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:Version="1.0" hdrgm:GainMapMin="0" hdrgm:GainMapMax="2" hdrgm:Gamma="1" hdrgm:OffsetSDR="0.015625" hdrgm:OffsetHDR="0.015625" hdrgm:HDRCapacityMin="0" hdrgm:HDRCapacityMax="2"/></rdf:RDF></x:xmpmeta>"#;
-        let app1_payload_len = xmp_ns.len() + xmp_body.len();
+        let iso_namespace = b"urn:iso:std:iso:ts:21496:-1\0";
+        let (namespace, primary_metadata, marker): (&[u8], &[u8], u8) = if iso_only {
+            (iso_namespace, &[0; 4], 0xE2)
+        } else {
+            (xmp_ns, xmp_body, 0xE1)
+        };
+        let gainmap_with_iso;
+        let gainmap_jpeg = if iso_only {
+            // Independent ISO fixture: common denominator 64, one channel,
+            // headroom 0/2 stops, min/max 0/2, gamma 1, both offsets 1/64.
+            let mut iso = vec![0, 0, 0, 0, 0x48];
+            for numerator in [64_u32, 0, 128, 0, 128, 64, 1, 1] {
+                iso.extend_from_slice(&numerator.to_be_bytes());
+            }
+            let mut secondary = vec![0xFF, 0xD8, 0xFF, 0xE2];
+            secondary.extend_from_slice(
+                &u16::try_from(iso_namespace.len() + iso.len() + 2)
+                    .unwrap()
+                    .to_be_bytes(),
+            );
+            secondary.extend_from_slice(iso_namespace);
+            secondary.extend_from_slice(&iso);
+            secondary.extend_from_slice(&gainmap_jpeg[2..]);
+            gainmap_with_iso = secondary;
+            &gainmap_with_iso
+        } else {
+            gainmap_jpeg
+        };
+        let app1_payload_len = namespace.len() + primary_metadata.len();
         let app1_seg_len = foundation::numeric_cast::usize_to_u16_sat(app1_payload_len + 2); // includes length field itself
-        buf.extend_from_slice(&[0xFF, 0xE1]);
+        buf.extend_from_slice(&[0xFF, marker]);
         buf.extend_from_slice(&app1_seg_len.to_be_bytes());
-        buf.extend_from_slice(xmp_ns);
-        buf.extend_from_slice(xmp_body);
+        buf.extend_from_slice(namespace);
+        buf.extend_from_slice(primary_metadata);
 
         // TIFF header + three IFD entries + next-IFD pointer + two 16-byte MP entries.
         let tiff_len = 8 + 2 + 3 * 12 + 4 + 2 * 16;
@@ -7710,6 +7572,34 @@ mod tests {
         buf
     }
 
+    #[test]
+    fn archive_heic_gainmap_keeps_original_container_without_synthesis() {
+        let temp = tempfile::tempdir().expect("archive fixture");
+        let source = temp.path().join("source.heic");
+        // Opaque bytes lock the policy before any decoder or synthesis is invoked.
+        let original = b"original HEIC container with auxiliary relationships";
+        fs::write(&source, original).unwrap();
+        for (directory, flags) in [
+            ("default", ConvertFlags::DELETE_ORIGINAL),
+            (
+                "archive",
+                ConvertFlags::ARCHIVE | ConvertFlags::DELETE_ORIGINAL,
+            ),
+        ] {
+            let options = ConvertOptions {
+                flags,
+                output_dir: Some(temp.path().join(directory)),
+                ..ConvertOptions::default()
+            };
+            let result = convert_heic_gainmap_to_jxl(&source, &options)
+                .expect("default and archive must both preserve the original container");
+            assert!(result.success && result.skipped);
+            assert_eq!(fs::read(&source).unwrap(), original);
+            assert_eq!(fs::read(result.output_path.unwrap()).unwrap(), original);
+            assert!(!temp.path().join(directory).join("source.jxl").exists());
+        }
+    }
+
     /// `FastImg` archives `UltraHDR` JPEGs through JPEG bitstream reconstruction.
     /// The complete source container, including its gainmap payload, must round-trip
     /// byte-for-byte; automatic HDR synthesis is not an archival substitute.
@@ -7748,6 +7638,7 @@ mod tests {
         let fixture = make_ultrahdr_jpeg(
             &std::fs::read(&base).expect("read base JPEG"),
             &gainmap_bytes,
+            false,
         );
 
         // Preconditions: fixture must satisfy both guards in convert_jpeg_to_jxl
@@ -7783,15 +7674,62 @@ mod tests {
             "UltraHDR must be archived"
         );
         let output = result.output_path.expect("UltraHDR JXL output path");
+        foundation::image::gain_map::verify_jpeg_gain_map(&src, Path::new(&output))
+            .expect("default IMG must carry an equivalent native JXL gain map, without ARCHIVE");
         foundation::fast_img::verify_jxl_roundtrip_integrity(&src, Path::new(&output))
             .expect("UltraHDR JPEG must reconstruct byte-for-byte");
         foundation::fast_img::verify_final_jxl_delivery_integrity(&src, Path::new(&output))
             .expect("UltraHDR JXL must pass final delivery verification");
-        let synthesis_error = convert_ultrahdr_jpeg_to_jxl(&src, &options)
-            .expect_err("verified delivery must reject non-archival HDR synthesis");
+        for flags in [
+            ConvertFlags::FORCE,
+            ConvertFlags::ARCHIVE | ConvertFlags::FORCE,
+        ] {
+            options.flags = flags;
+            let direct = convert_ultrahdr_jpeg_to_jxl(&src, &options)
+                .expect("the former synthesis entry point must use native gain-map preservation");
+            assert!(direct.success && !direct.skipped);
+            let direct_output = direct.output_path.expect("native gain-map output");
+            foundation::image::gain_map::verify_jpeg_gain_map(&src, Path::new(&direct_output))
+                .unwrap();
+            foundation::fast_img::verify_jxl_roundtrip_integrity(&src, Path::new(&direct_output))
+                .unwrap();
+        }
+
+        let iso_src = tmp.path().join("iso-only.jpg");
+        let iso_fixture = make_ultrahdr_jpeg(&std::fs::read(&base).unwrap(), &gainmap_bytes, true);
+        assert!(is_ultra_hdr_jpeg(&iso_fixture));
         assert!(
-            synthesis_error.to_string().contains("non-archival"),
-            "unexpected synthesis guard: {synthesis_error}"
+            foundation::image_jpeg_analysis::extract_xmp_from_jpeg_data(&iso_fixture).is_none()
+        );
+        std::fs::write(&iso_src, &iso_fixture).unwrap();
+        options.flags = ConvertFlags::FORCE;
+        let result = convert_jpeg_to_jxl(&iso_src, &options, None)
+            .expect("ISO-only UltraHDR must convert by default");
+        assert!(result.success && !result.skipped);
+        let iso_output = result.output_path.unwrap();
+        foundation::image::gain_map::verify_jpeg_gain_map(&iso_src, Path::new(&iso_output))
+            .unwrap();
+        foundation::fast_img::verify_final_jxl_delivery_integrity(&iso_src, Path::new(&iso_output))
+            .unwrap();
+
+        // A recoverable-looking but wrong MPF range must not define native
+        // semantics, nor overwrite an existing good destination under --force.
+        let bad_src = tmp.path().join("bad-mpf.jpg");
+        let mut bad_fixture = fixture;
+        let tiff = bad_fixture
+            .windows(4)
+            .position(|bytes| bytes == b"MPF\0")
+            .unwrap()
+            + 4;
+        bad_fixture[tiff + 50 + 16 + 8..tiff + 50 + 16 + 12].fill(0);
+        std::fs::write(&bad_src, &bad_fixture).unwrap();
+        let bad_output = tmp.path().join("bad-mpf.jxl");
+        std::fs::write(&bad_output, b"previous output must survive").unwrap();
+        assert!(convert_jpeg_to_jxl(&bad_src, &options, None).is_err());
+        assert_eq!(std::fs::read(&bad_src).unwrap(), bad_fixture);
+        assert_eq!(
+            std::fs::read(&bad_output).unwrap(),
+            b"previous output must survive"
         );
 
         let source_bytes_after = std::fs::read(&src).expect("read after");

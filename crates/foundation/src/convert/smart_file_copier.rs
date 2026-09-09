@@ -173,6 +173,26 @@ pub fn smart_copy_with_structure(
         ));
     }
 
+    // The selected root may itself be an intentional alias, but descendants
+    // must not redirect a structured archive copy outside that selected tree.
+    if let Some(relative_parent) = dest.strip_prefix(output_dir)?.parent() {
+        let mut directory = output_dir.to_path_buf();
+        for component in relative_parent.components() {
+            directory.push(component);
+            match fs::symlink_metadata(&directory) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(anyhow::anyhow!(
+                        "Refusing archive copy through symbolic-link subdirectory: {}",
+                        directory.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("Failed to inspect archive directory"),
+            }
+        }
+    }
+
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
@@ -240,21 +260,7 @@ pub fn smart_copy_with_structure(
     })?;
 
     if destination_exists {
-        let staged_hash = crate::common_utils::calculate_blake3_hash(staged.path())?;
-        let destination_hash = crate::common_utils::calculate_blake3_hash(&dest)?;
-        if staged_hash != destination_hash {
-            return Err(anyhow::anyhow!(
-                "Refusing to preserve {} because destination has a different payload: {}",
-                source.display(),
-                dest.display()
-            ));
-        }
-        crate::metadata::verify_exact_metadata_copy(staged.path(), &dest).with_context(|| {
-            format!(
-                "Refusing to reuse existing copy with different filesystem metadata: {}",
-                dest.display()
-            )
-        })?;
+        verify_existing_archive_copy(staged.path(), &dest)?;
         if verbose {
             crate::ui_stderr::line(
                 "⏭️",
@@ -265,13 +271,19 @@ pub fn smart_copy_with_structure(
         return Ok(dest);
     }
 
-    staged.persist_noclobber(&dest).map_err(|error| {
-        anyhow::anyhow!(
-            "Failed to publish preserved copy {} without overwriting an existing path: {}",
-            dest.display(),
-            error.error
-        )
-    })?;
+    if let Err(error) = staged.persist_noclobber(&dest) {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            // A concurrent pair member may have published the same archive.
+            // Reuse only after proving payload and metadata, never overwrite it.
+            verify_existing_archive_copy(error.file.path(), &dest)?;
+        } else {
+            return Err(anyhow::anyhow!(
+                "Failed to publish preserved copy {} without overwriting an existing path: {}",
+                dest.display(),
+                error.error
+            ));
+        }
+    }
 
     if verbose {
         crate::ui_stderr::line(
@@ -282,6 +294,30 @@ pub fn smart_copy_with_structure(
     }
 
     Ok(dest)
+}
+
+fn verify_existing_archive_copy(staged: &Path, destination: &Path) -> Result<()> {
+    if !fs::symlink_metadata(destination)?.is_file() {
+        return Err(anyhow::anyhow!(
+            "Refusing to reuse a non-regular archive destination: {}",
+            destination.display()
+        ));
+    }
+    if crate::common_utils::calculate_blake3_hash(staged)?
+        != crate::common_utils::calculate_blake3_hash(destination)?
+    {
+        return Err(anyhow::anyhow!(
+            "Refusing to reuse archive destination with a different payload: {}",
+            destination.display()
+        ));
+    }
+    crate::metadata::verify_exact_metadata_copy(staged, destination).with_context(|| {
+        format!(
+            "Refusing to reuse existing copy with different filesystem metadata: {}",
+            destination.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn corrected_copy_destination(source: &Path, destination: &Path) -> Result<PathBuf> {
@@ -376,6 +412,9 @@ pub fn copy_on_skip_or_fail(
         None => Ok(None),
         Some(out_dir) => match smart_copy_with_structure(source, out_dir, base_dir, verbose) {
             Ok(dest) => {
+                // Retained originals carry the same edit-history obligation as
+                // converted assets, including when an existing copy is reused.
+                crate::metadata::handle_aae_sidecar(source, &dest)?;
                 let reason = "adjacent_copy_on_skip_or_fail";
                 crate::infra::static_logs::emit_mfb_audit(
                     "preserved",
@@ -455,6 +494,72 @@ mod tests {
         assert!(
             !escaped_destination.exists(),
             "no out-of-root copy may be created"
+        );
+    }
+
+    #[test]
+    fn test_copy_on_skip_preserves_aae_and_rejects_sidecar_collision() {
+        let temp = TempDir::new().expect("archive fixture");
+        let source = temp.path().join("archive.txt");
+        let sidecar = source.with_extension("AAE");
+        let output = temp.path().join("output");
+        fs::write(&source, b"original archive").unwrap();
+        fs::write(&sidecar, b"original edit history").unwrap();
+
+        let destination = copy_on_skip_or_fail(&source, Some(&output), None, false)
+            .expect("preserve archive asset")
+            .expect("delivered path");
+        let delivered_sidecar = destination.with_extension("AAE");
+        assert_eq!(
+            fs::read(&delivered_sidecar).unwrap(),
+            fs::read(&sidecar).unwrap()
+        );
+        copy_on_skip_or_fail(&source, Some(&output), None, false)
+            .expect("complete archive can be reused");
+
+        fs::write(&delivered_sidecar, b"unrelated edit history").unwrap();
+        assert!(copy_on_skip_or_fail(&source, Some(&output), None, false).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"original archive");
+        assert_eq!(fs::read(&sidecar).unwrap(), b"original edit history");
+        assert_eq!(
+            fs::read(&delivered_sidecar).unwrap(),
+            b"unrelated edit history"
+        );
+    }
+
+    #[test]
+    fn test_concurrent_archive_copy_is_idempotent_with_aae() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("archive.txt");
+        let output = temp.path().join("output");
+        fs::create_dir(&output).unwrap();
+        fs::write(&source, vec![42_u8; 65536]).unwrap();
+        fs::write(source.with_extension("AAE"), b"edit history").unwrap();
+        let barrier = std::sync::Barrier::new(8);
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        copy_on_skip_or_fail(&source, Some(&output), None, false)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        for result in results {
+            result.expect("concurrent identical archive delivery must be idempotent");
+        }
+        assert_eq!(
+            fs::read(output.join("archive.txt")).unwrap(),
+            fs::read(&source).unwrap()
+        );
+        assert_eq!(
+            fs::read(output.join("archive.AAE")).unwrap(),
+            b"edit history"
         );
     }
 
@@ -672,6 +777,25 @@ mod tests {
         assert!(error.to_string().contains("source onto itself"));
         assert_eq!(fs::read(&source).unwrap(), mp4_payload);
         assert!(!temp.path().join("video.mp4").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_archive_copy_cannot_escape_through_linked_subdirectory() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("input");
+        let output = temp.path().join("output");
+        let unrelated = temp.path().join("unrelated");
+        fs::create_dir_all(base.join("photos")).unwrap();
+        fs::create_dir(&output).unwrap();
+        fs::create_dir(&unrelated).unwrap();
+        let source = base.join("photos/original.txt");
+        fs::write(&source, b"original archive").unwrap();
+        std::os::unix::fs::symlink(&unrelated, output.join("photos")).unwrap();
+
+        assert!(copy_on_skip_or_fail(&source, Some(&output), Some(&base), false).is_err());
+        assert!(!unrelated.join("original.txt").exists());
+        assert_eq!(fs::read(&source).unwrap(), b"original archive");
     }
 
     #[cfg(unix)]

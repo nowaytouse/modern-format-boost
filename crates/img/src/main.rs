@@ -1535,6 +1535,9 @@ const fn detected_format_is_outside_img_raster_scope(
 }
 
 #[cfg(test)]
+static FAST_IMG_TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod conversion_result_adapter_tests {
     #![allow(
         clippy::unwrap_used,
@@ -1693,6 +1696,113 @@ mod conversion_result_adapter_tests {
     }
 
     #[test]
+    fn archive_single_live_still_delivers_companion_and_rejects_collision() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("IMG_0042.jpg");
+        let companion = temp.path().join("img_0042.MOV");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([18, 52, 86])).save(&input)?;
+        std::fs::write(&companion, b"retained Live Photo motion payload")?;
+        let output = temp.path().join("output");
+        let config = AutoConvertConfig {
+            output_dir: Some(output.clone()),
+            base_dir: Some(temp.path().to_path_buf()),
+            flags: ConfigFlags::ARCHIVE_MODE | ConfigFlags::APPLE_COMPAT,
+            child_threads: 1,
+            cache: None,
+            error_mode: foundation::BatchErrorMode::FailFast,
+        };
+
+        let result = super::auto_convert_single_file(&input, &config)?;
+        assert!(result.skipped);
+        assert_eq!(
+            std::fs::read(output.join("IMG_0042.jpg"))?,
+            std::fs::read(&input)?
+        );
+        let delivered = output.join("img_0042.MOV");
+        assert_eq!(std::fs::read(&delivered)?, std::fs::read(&companion)?);
+        std::fs::write(&delivered, b"unrelated motion payload")?;
+        assert!(super::auto_convert_single_file(&input, &config).is_err());
+        assert_eq!(
+            std::fs::read(&companion)?,
+            b"retained Live Photo motion payload"
+        );
+        assert_eq!(std::fs::read(&delivered)?, b"unrelated motion payload");
+        Ok(())
+    }
+
+    #[test]
+    fn archive_live_jpeg_transcodes_reversibly_with_unchanged_companions() -> anyhow::Result<()> {
+        // Other CLI tests temporarily replace and remove the shared scratch root.
+        let _env_lock = super::FAST_IMG_TEST_ENV_LOCK
+            .lock()
+            .expect("shared CLI test environment lock");
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("IMG_0084.jpg");
+        let companion = temp.path().join("IMG_0084.MOV");
+        let edits = temp.path().join("IMG_0084.AAE");
+        image::RgbImage::from_pixel(32, 32, image::Rgb([18, 52, 86])).save(&input)?;
+        // This is a custody test, not a native Live Photo playback fixture.
+        std::fs::write(&companion, b"unchanged Live Photo motion payload")?;
+        std::fs::write(&edits, b"unchanged Apple adjustment recipe")?;
+        let output = temp.path().join("output");
+        let mut config = AutoConvertConfig {
+            output_dir: Some(output.clone()),
+            base_dir: Some(temp.path().to_path_buf()),
+            flags: ConfigFlags::ARCHIVE_MODE,
+            child_threads: 1,
+            cache: None,
+            error_mode: foundation::BatchErrorMode::FailFast,
+        };
+
+        let result = super::auto_convert_single_file(&input, &config)?;
+        assert!(!result.skipped && !result.ignored, "{}", result.message);
+        let jxl = output.join("IMG_0084.jxl");
+        assert!(jxl.is_file());
+        let restored = temp.path().join("restored.jpg");
+        foundation::jxl_utils::run_exact_jpeg_reconstruction(&jxl, &restored, "Live Photo archive")
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(std::fs::read(&restored)?, std::fs::read(&input)?);
+        assert_eq!(
+            std::fs::read(output.join("IMG_0084.MOV"))?,
+            std::fs::read(&companion)?
+        );
+        assert_eq!(
+            std::fs::read(output.join("IMG_0084.AAE"))?,
+            std::fs::read(&edits)?
+        );
+
+        // A second archive of the JXL still must carry the same motion resource.
+        config.output_dir = Some(temp.path().join("second"));
+        config.base_dir = Some(output);
+        let repeated = super::auto_convert_single_file(&jxl, &config)?;
+        assert!(repeated.skipped);
+        assert_eq!(
+            std::fs::read(temp.path().join("second/IMG_0084.jxl"))?,
+            std::fs::read(&jxl)?
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("second/IMG_0084.MOV"))?,
+            std::fs::read(&companion)?
+        );
+
+        // A motion collision must reject delivery before publishing the still.
+        let collision = temp.path().join("collision");
+        std::fs::create_dir(&collision)?;
+        std::fs::write(collision.join("IMG_0084.MOV"), b"unrelated motion")?;
+        config.output_dir = Some(collision.clone());
+        config.base_dir = Some(temp.path().to_path_buf());
+        config.flags.insert(ConfigFlags::FORCE);
+        assert!(super::auto_convert_single_file(&input, &config).is_err());
+        assert!(!collision.join("IMG_0084.jxl").exists());
+        assert_eq!(std::fs::read(&restored)?, std::fs::read(&input)?);
+        assert_eq!(
+            std::fs::read(collision.join("IMG_0084.MOV"))?,
+            b"unrelated motion"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn disguised_project_payload_is_ignored_without_mutation() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let input = temp.path().join("disguised-project.jpg");
@@ -1777,11 +1887,20 @@ fn auto_convert_single_file(
     foundation::progress_mode::set_log_context(&label);
     let _log_guard = foundation::progress_mode::LogContextGuard;
 
-    // Check for Live Photos first (before any analysis)
-    // Apple-compatible and archival paths must preserve the still/MOV pair.
-    if (config.apple_compat() || config.archive()) && foundation::live_photo::is_live(input) {
-        let reason =
-            "Live Photo detected in Apple-compatible/archive mode - skipping to preserve pair";
+    // Preserve companions before a conversion can publish or remove its source.
+    // Archive effort alone must not block byte-reversible JPEG recompression.
+    let live_companions = foundation::live_photo::find_live_companions(input)?;
+    if config.output_dir.is_some() {
+        for companion in &live_companions {
+            copy_original_if_adjacent_mode(companion, config)?;
+        }
+    }
+    let reversible_live_jpeg = !live_companions.is_empty()
+        && !config.apple_compat()
+        && foundation::format_detect::detect_true_format(input)?
+            == foundation::format_detect::FormatKind::Jpeg;
+    if !live_companions.is_empty() && !reversible_live_jpeg {
+        let reason = "Live Photo resources retained unchanged; no permitted byte-reversible still conversion on this route";
         foundation::progress_mode::image_skipped(input, reason);
         let file_size = foundation::io_utils::metadata_with_retry(input)
             .map_err(|e| {
@@ -1875,11 +1994,21 @@ fn auto_convert_single_file(
 
     let quality_label = analysis.quality_summary();
 
-    let options = auto_convert_build_options(config, analysis.format.clone(), quality_label);
+    let mut options = auto_convert_build_options(config, analysis.format.clone(), quality_label);
+    if reversible_live_jpeg {
+        options
+            .flags
+            .insert(img::lossless_converter::ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION);
+    }
 
     let result = dispatch_static_conversion(input, &analysis, &options, config)?;
 
-    let output = convert_result_to_output(result)?;
+    let mut output = convert_result_to_output(result)?;
+    if reversible_live_jpeg && !output.skipped && !output.ignored {
+        output.message.push_str(
+            "; Live Photo still archived reversibly, motion retained unchanged; reconstruct JPEG for native pairing",
+        );
+    }
 
     if output.skipped {
         if config.verbose() {
@@ -1964,7 +2093,7 @@ fn dispatch_static_conversion(
                 && h.hdr.has_gainmap
             {
                 foundation::log_detail!(&format!(
-                    "{} HDR Synthesis Cycle: {} (Gainmap detected)",
+                    "{} HEIC auxiliary-asset preservation: {} (Gainmap detected)",
                     foundation::infra::static_logs::messages::LABEL_DONE,
                     input.display()
                 ));
@@ -9918,10 +10047,10 @@ mod fast_img_hardening_tests {
     };
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use tempfile::TempDir;
 
-    static FAST_IMG_TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+    use super::FAST_IMG_TEST_ENV_LOCK;
     const MINIMAL_JXL_BYTES: &[u8] = &[0xFF, 0x0A, 0x00];
 
     struct TestEnvGuard {

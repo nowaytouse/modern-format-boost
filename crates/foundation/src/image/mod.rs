@@ -27,6 +27,8 @@ pub mod jxl_explorer;
 
 pub mod jxl_utils;
 
+pub mod gain_map;
+
 pub mod live_photo;
 
 pub mod loop_intent;

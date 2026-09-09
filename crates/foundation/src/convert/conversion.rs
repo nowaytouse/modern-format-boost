@@ -1778,9 +1778,24 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
             "JPEG-reconstructible JXL commit requires its source JPEG",
         )
     })?;
+    if output.exists() && !force {
+        return Ok(false);
+    }
+    crate::image::gain_map::attach_jpeg_gain_map(source, temp).map_err(|error| {
+        std::io::Error::other(format!("Native gain-map preservation failed: {error:#}"))
+    })?;
     let committed =
         commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)?;
     if committed {
+        if let Err(error) = crate::image::gain_map::verify_jpeg_gain_map(source, output) {
+            crate::media_conversion_gate::delivery_remove_file_or_audit(
+                "native gain-map proof failed after metadata commit",
+                output,
+            );
+            return Err(std::io::Error::other(format!(
+                "Native gain-map proof failed after metadata commit: {error:#}"
+            )));
+        }
         if let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output) {
             crate::media_conversion_gate::delivery_remove_file_or_audit(
                 "JPEG reconstruction invalidated during metadata commit",

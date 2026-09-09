@@ -7,13 +7,16 @@ use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
-const LIVE_STILL_EXTENSIONS: &[&str] = &["heic", "heif", "hif", "jpg", "jpeg", "jpe", "jfif"];
+// JXL is also protected as an archived still, not a claim of native Live playback.
+const LIVE_STILL_EXTENSIONS: &[&str] =
+    &["heic", "heif", "hif", "jpg", "jpeg", "jpe", "jfif", "jxl"];
 
 fn live_member_extension(path: &Path) -> String {
     use crate::image::format_detect::{FormatKind, detect_true_format};
 
     match detect_true_format(path) {
         Ok(FormatKind::Jpeg) => "jpg".to_string(),
+        Ok(FormatKind::Jxl) => "jxl".to_string(),
         Ok(FormatKind::Heic | FormatKind::Heif) => "heic".to_string(),
         Ok(FormatKind::Mov) => "mov".to_string(),
         // A missing/truncated probe must not undo conservative retention of
@@ -196,15 +199,28 @@ fn same_stem_pair_is_live(path: &Path, companion: &Path) -> bool {
 /// directory could not be verified. Inconclusive probes never authorize cleanup.
 #[must_use]
 pub fn is_live(path: &Path) -> bool {
+    match find_live_companions(path) {
+        Ok(companions) => !companions.is_empty(),
+        // Discovery already audited the error; uncertainty only protects originals.
+        Err(_) => true,
+    }
+}
+
+/// Locate the companions protected by [`is_live`] for complete archive delivery.
+///
+/// # Errors
+/// Returns an error if companion discovery is incomplete; callers must not
+/// report the pair as delivered when only the requested member was copied.
+pub fn find_live_companions(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     let ext_lower = live_member_extension(path);
     let Some(stem) = crate::media_conversion_gate::path_file_stem_os_or_none(path) else {
-        return false;
+        return Ok(Vec::new());
     };
     let Some(parent) = path.parent() else {
-        return false;
+        return Ok(Vec::new());
     };
     if stem.is_empty() {
-        return false;
+        return Ok(Vec::new());
     }
 
     let companions = if LIVE_STILL_EXTENSIONS.contains(&ext_lower.as_str()) {
@@ -212,15 +228,13 @@ pub fn is_live(path: &Path) -> bool {
     } else if ext_lower == "mov" {
         regular_companions(parent, stem, LIVE_STILL_EXTENSIONS)
     } else {
-        return false;
+        return Ok(Vec::new());
     };
 
-    match companions {
-        Ok(companions) => companions
-            .iter()
-            .any(|companion| same_stem_pair_is_live(path, companion)),
-        Err(_) => true,
-    }
+    Ok(companions?
+        .into_iter()
+        .filter(|companion| same_stem_pair_is_live(path, companion))
+        .collect())
 }
 
 #[cfg(test)]

@@ -1259,6 +1259,7 @@ struct AppendableJxlContainer {
     total_size: u64,
     last_xml: Option<JxlBoxSpan>,
     jbrd: Option<JxlBoxSpan>,
+    gain_map: Option<JxlBoxSpan>,
     xml_box_count: usize,
 }
 
@@ -1406,6 +1407,7 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
     let mut offset = 0_u64;
     let mut last_xml = None;
     let mut jbrd = None;
+    let mut gain_map = None;
     let mut box_count = 0_usize;
     let mut xml_box_count = 0_usize;
     while offset < total_size {
@@ -1473,6 +1475,11 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
                     path.display()
                 ),
             ));
+        } else if header[4..8] == *b"jhgm" && gain_map.replace(span).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "duplicate JXL gain-map box",
+            ));
         }
         offset = offset
             .checked_add(box_size)
@@ -1482,8 +1489,73 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
         total_size,
         last_xml,
         jbrd,
+        gain_map,
         xml_box_count,
     })
+}
+
+#[cfg(feature = "jpegxl-ffi")]
+pub(crate) fn read_gain_map_from_jxl(path: &Path) -> io::Result<Vec<u8>> {
+    let container = validate_appendable_jxl_container(path)?;
+    let span = container
+        .gain_map
+        .ok_or_else(|| io::Error::other("JXL native gain map is missing"))?;
+    if span.payload_size > 256 * 1024 * 1024 {
+        return Err(io::Error::other(
+            "JXL gain map exceeds 256 MiB safety limit",
+        ));
+    }
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(span.payload_offset))?;
+    let mut bytes = vec![0; usize::try_from(span.payload_size).map_err(io::Error::other)?];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(feature = "jpegxl-ffi")]
+pub(crate) fn append_gain_map_to_jxl(dst: &Path, bundle: &[u8]) -> io::Result<()> {
+    let identity = jxl_file_identity(dst)?;
+    let container = validate_appendable_jxl_container(dst)?;
+    if container.gain_map.is_some() {
+        return if read_gain_map_from_jxl(dst)? == bundle {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "refusing to replace an existing JXL gain map",
+            ))
+        };
+    }
+    let size = u32::try_from(bundle.len())
+        .map_err(io::Error::other)?
+        .checked_add(8)
+        .ok_or_else(|| io::Error::other("JXL gain-map box length overflow"))?;
+    let hash = blake3_file_hash(dst)?;
+    let parent = crate::media_conversion_gate::output_parent_or_dot(dst);
+    let mut staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "jxl_gain_map",
+        parent,
+        ".mfb-jhgm-",
+        ".tmp",
+    )?;
+    if io::copy(&mut std::fs::File::open(dst)?, staged.as_file_mut())? != container.total_size {
+        return Err(io::Error::other("JXL changed while staging its gain map"));
+    }
+    staged.write_all(&size.to_be_bytes())?;
+    staged.write_all(b"jhgm")?;
+    staged.write_all(bundle)?;
+    staged.flush()?;
+    staged.as_file().sync_all()?;
+    if blake3_file_span(staged.path(), 0, container.total_size)? != hash
+        || read_gain_map_from_jxl(staged.path())? != bundle
+        || jxl_file_identity(dst)? != identity
+        || blake3_file_hash(dst)? != hash
+    {
+        return Err(io::Error::other(
+            "JXL gain-map append did not preserve its original container",
+        ));
+    }
+    staged.persist(dst).map_err(|error| error.error)?;
+    crate::io_utils::sync_committed_file_and_parent(dst)
 }
 
 fn jxl_last_xml_payload_matches(
@@ -2150,7 +2222,15 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                 ),
             ));
         }
-        staged.persist_noclobber(&destination).map_err(|error| {
+        if let Err(error) = staged.persist_noclobber(&destination) {
+            if error.error.kind() == io::ErrorKind::AlreadyExists
+                && regular_files_have_same_contents(&aae, &destination)?
+            {
+                return Ok(AaeSidecarAction::AlreadyAdjacent {
+                    source: aae,
+                    destination,
+                });
+            }
             crate::media_conversion_gate::delivery_api_path_fallback_audit(
                 "aae_migrate_failed",
                 &destination,
@@ -2159,7 +2239,7 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                     error.error
                 ),
             );
-            io::Error::new(
+            return Err(io::Error::new(
                 error.error.kind(),
                 format!(
                     "failed to publish AAE sidecar {} to {} without overwrite: {}",
@@ -2167,8 +2247,8 @@ pub fn handle_aae_sidecar(input: &Path, output: &Path) -> io::Result<AaeSidecarA
                     destination.display(),
                     error.error
                 ),
-            )
-        })?;
+            ));
+        }
         Ok(AaeSidecarAction::Copied {
             source: aae,
             destination,

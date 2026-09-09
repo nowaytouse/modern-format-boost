@@ -982,12 +982,30 @@ fn encode_png_sidecar_bytes(image: &DynamicImage) -> Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
-fn persist_sidecar(path: &Path, data: &[u8]) -> Result<()> {
+// Return whether this call created the file, so rollback never removes reused archives.
+fn persist_sidecar(path: &Path, data: &[u8]) -> Result<bool> {
     if data.is_empty() {
         return Err(anyhow!(
             "Refusing to write empty sidecar: {}",
             path.display()
         ));
+    }
+
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.is_file()
+                && metadata.len() == crate::numeric_cast::usize_to_u64(data.len())
+                && fs::read(path)? == data
+            {
+                return Ok(false);
+            }
+            return Err(anyhow!(
+                "Refusing to overwrite conflicting HDR sidecar: {}",
+                path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("Failed to inspect HDR sidecar destination"),
     }
 
     let parent = path
@@ -1011,15 +1029,10 @@ fn persist_sidecar(path: &Path, data: &[u8]) -> Result<()> {
         .flush()
         .with_context(|| format!("Failed to flush staged sidecar {}", path.display()))?;
 
-    if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to replace existing sidecar {}", path.display()))?;
-    }
-
     temp_file
-        .persist(path)
+        .persist_noclobber(path)
         .map_err(|e| anyhow!("Failed to persist sidecar {}: {}", path.display(), e.error))?;
-    Ok(())
+    Ok(true)
 }
 
 /// Persist HDR sidecar artifacts next to the finalized output.
@@ -1030,22 +1043,27 @@ fn persist_sidecar(path: &Path, data: &[u8]) -> Result<()> {
 /// sidecars from this call are cleaned up before returning.
 pub fn persist_hdr_artifacts(output: &Path, artifacts: &HdrArtifacts) -> Result<Vec<PathBuf>> {
     let mut written_paths: Vec<PathBuf> = Vec::new();
+    let mut created_paths: Vec<PathBuf> = Vec::new();
 
     for artifact in &artifacts.sidecars {
         let sidecar_path = sidecar_output_path(output, artifact.suffix, artifact.extension);
-        if let Err(err) = persist_sidecar(&sidecar_path, &artifact.data) {
-            for written in &written_paths {
-                if let Err(cleanup_err) = fs::remove_file(written)
-                    && cleanup_err.kind() != std::io::ErrorKind::NotFound
-                {
-                    crate::media_conversion_gate::delivery_cleanup_audit(
-                        written,
-                        "hdr_sidecar_partial_cleanup",
-                        cleanup_err,
-                    );
+        match persist_sidecar(&sidecar_path, &artifact.data) {
+            Ok(true) => created_paths.push(sidecar_path.clone()),
+            Ok(false) => {}
+            Err(err) => {
+                for written in &created_paths {
+                    if let Err(cleanup_err) = fs::remove_file(written)
+                        && cleanup_err.kind() != std::io::ErrorKind::NotFound
+                    {
+                        crate::media_conversion_gate::delivery_cleanup_audit(
+                            written,
+                            "hdr_sidecar_partial_cleanup",
+                            cleanup_err,
+                        );
+                    }
                 }
+                return Err(err);
             }
-            return Err(err);
         }
 
         crate::log_success!(
@@ -2110,6 +2128,35 @@ mod tests {
             sidecar_output_path(output, "depth", "png"),
             PathBuf::from("/tmp/photo.depth.png")
         );
+    }
+
+    #[test]
+    fn test_hdr_sidecar_collision_never_overwrites_existing_archive() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let output = temp.path().join("frame.jxl");
+        let existing = output.with_extension("gainmap.jpg");
+        fs::write(&existing, b"existing archive")?;
+        let mut artifacts = HdrArtifacts::default();
+        artifacts.push_raw_sidecar("gainmap", "jpg", b"new payload".to_vec(), "gainmap");
+        assert!(persist_hdr_artifacts(&output, &artifacts).is_err());
+        assert_eq!(fs::read(&existing)?, b"existing archive");
+        Ok(())
+    }
+
+    #[test]
+    fn test_hdr_sidecar_rollback_keeps_reused_archive() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let output = temp.path().join("frame.jxl");
+        let existing = output.with_extension("gainmap.jpg");
+        fs::write(&existing, b"existing archive")?;
+        let mut artifacts = HdrArtifacts::default();
+        artifacts.push_raw_sidecar("gainmap", "jpg", b"existing archive".to_vec(), "gainmap");
+        artifacts.push_raw_sidecar("depth", "png", b"new depth".to_vec(), "depth");
+        artifacts.push_raw_sidecar("invalid", "png", Vec::new(), "invalid");
+        assert!(persist_hdr_artifacts(&output, &artifacts).is_err());
+        assert_eq!(fs::read(&existing)?, b"existing archive");
+        assert!(!output.with_extension("depth.png").exists());
+        Ok(())
     }
 
     #[test]

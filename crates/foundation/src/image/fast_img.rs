@@ -442,6 +442,11 @@ pub fn verify_final_delivery_integrity(
     })?;
     let jxl_byte_reconstructible = if format == crate::image::format_detect::FormatKind::Jxl {
         verify_jxl_roundtrip_integrity(source_jpeg, output)?;
+        crate::image::gain_map::verify_jpeg_gain_map(source_jpeg, output).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "final-integrity: native gain-map verification failed: {error:#}"
+            ))
+        })?;
         true
     } else {
         false
@@ -8958,7 +8963,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn delete_gate_preserves_xmp_changed_after_jxl_delivery() -> anyhow::Result<()> {
+        // Roundtrip scratch reads MFB_HOME_ROOT; share the environment writers' lock.
         let scratch = tempfile::TempDir::new()?;
         let source = scratch.path().join("source.jpg");
         let output = scratch.path().join("delivered.jxl");

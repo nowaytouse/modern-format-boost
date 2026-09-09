@@ -681,6 +681,9 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
 
         // APP2 (0xE2): check for XMP gainmap or MPF
         if marker == 0xE2 {
+            if payload.starts_with(b"urn:iso:std:iso:ts:21496:-1\0") {
+                has_gainmap_xmp = true;
+            }
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 let xmp_slice = if let Some(s) = payload.get(29..) {
                     s
@@ -857,6 +860,17 @@ pub struct UltraHdrJpegPayload {
 /// Returns an error if the JPEG is malformed, base image cannot be decoded, or
 /// MPF/GainMap is missing.
 pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload, String> {
+    extract_ultrahdr_jpeg_payload_impl(data, false)
+}
+
+pub(crate) fn extract_native_gain_map_source(data: &[u8]) -> Result<UltraHdrJpegPayload, String> {
+    extract_ultrahdr_jpeg_payload_impl(data, true)
+}
+
+fn extract_ultrahdr_jpeg_payload_impl(
+    data: &[u8],
+    strict: bool,
+) -> Result<UltraHdrJpegPayload, String> {
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_JPEG,
         &format!(
@@ -950,7 +964,7 @@ pub fn extract_ultrahdr_jpeg_payload(data: &[u8]) -> Result<UltraHdrJpegPayload,
         &format!("MPF segment found (size={} bytes)", mpf_segment.len())
     );
 
-    let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment, Some(base_aspect))?;
+    let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment, Some(base_aspect), strict)?;
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_JPEG,
         &format!(
@@ -1558,6 +1572,7 @@ fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],
     expected_aspect: Option<f64>,
+    strict: bool,
 ) -> Result<Vec<u8>, String> {
     // Determine endianness
     let is_big_endian = if mpf_data.starts_with(mpf::TIFF_BIG_ENDIAN) {
@@ -1802,6 +1817,12 @@ fn extract_gainmap_from_mpf(
         );
         "NumberOfImages tag (0xB001) not found in IFD.".to_string()
     })?;
+    if strict && num_images != 2 {
+        return Err(
+            "Native gain-map mapping requires an unambiguous two-image MPF relationship"
+                .to_string(),
+        );
+    }
 
     if num_images < 2 {
         crate::media_conversion_gate::probe_image_format_batch_audit(
@@ -1939,6 +1960,26 @@ fn extract_gainmap_from_mpf(
     let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
     let gainmap_offset_usize = usize::try_from(gainmap_offset)
         .map_err(|_| format!("gainmap_offset {gainmap_offset} overflows usize"))?;
+    if strict {
+        // Recovery heuristics remain available for diagnostics, but cannot
+        // establish the source semantics of a newly published native gain map.
+        let start = mpf_base_pos
+            .checked_add(gainmap_offset_usize)
+            .ok_or("MPF offset overflow")?;
+        let end = start
+            .checked_add(gainmap_len_usize)
+            .ok_or("MPF length overflow")?;
+        let bytes = jpeg_data
+            .get(start..end)
+            .ok_or("Native gain-map MPF range is outside the JPEG")?;
+        if !bytes.starts_with(&[0xFF, 0xD8]) || !bytes.ends_with(&JPEG_EOI_BYTES) {
+            return Err(
+                "Native gain map requires complete MPF-linked JPEG bytes without repairs"
+                    .to_string(),
+            );
+        }
+        return Ok(bytes.to_vec());
+    }
     let gainmap_candidate = recover_gainmap_candidate(
         jpeg_data,
         mpf_base_pos,
@@ -2557,7 +2598,7 @@ mod tests {
         let mpf_segment = find_mpf_segment(&data).unwrap_or_else(|_| panic!("Should find MPF"));
 
         // [THEN] Standard relative logic would fail, but fallback should work
-        let gainmap_extracted = extract_gainmap_from_mpf(&data, &mpf_segment, None)
+        let gainmap_extracted = extract_gainmap_from_mpf(&data, &mpf_segment, None, false)
             .unwrap_or_else(|_| panic!("Fallback failed"));
         assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
     }
@@ -2628,7 +2669,7 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]);
 
         let mpf_segment = find_mpf_segment(&data).unwrap_or_else(|_| panic!("Should find MPF"));
-        let gainmap_extracted = extract_gainmap_from_mpf(&data, &mpf_segment, None)
+        let gainmap_extracted = extract_gainmap_from_mpf(&data, &mpf_segment, None, false)
             .unwrap_or_else(|_| panic!("Fallback failed"));
 
         assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);

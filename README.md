@@ -198,12 +198,13 @@ outcomes over silent quality damage:
   efficient batching and maximum throughput.
 - 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via
   extraction sidecars and x265 SEI injection.
-- 🌅 **HDR Gainmap Preservation**: IMG converts an HEIC/HEIF gain-map source
-  only when it can synthesize the HDR rendition and preserve the decoded gain
-  map and known depth data as verified sidecars. Unknown auxiliary-image
-  relationships fail closed and retain the native source. UltraHDR JPEG
-  follows the exact JPEG-archive path by default, keeping its complete
-  MPF/gainmap container byte-reconstructible.
+- 🌅 **HDR Gainmap Preservation**: UltraHDR JPEG uses exact JPEG reconstruction
+  plus a native JXL `jhgm` gain map, with lossless gain-map pixels and checked
+  ISO 21496-1 / Adobe XMP semantics. Readback verifies pixels, parameters and
+  reconstruction before delivery. HEIC/HEIF auxiliary assets retain their
+  original container until their complete relationships can be mapped; IMG
+  never substitutes synthesized HDR pixels for the source asset. These default
+  custody guarantees do not depend on the `--archive` encoding-effort flag.
 - **🔍 Vendor Metadata Awareness**: Intelligent scanning for Samsung/Google
   specific XMP namespaces in HEIC files to ensure maximum context preservation.
 
@@ -285,14 +286,14 @@ Every file goes through a multi-stage decision pipeline:
   detected precision. Modern-container detours are derivative-only, never a
   default archival replacement. Every candidate still runs the normal
   structure, pixel/orientation, metadata and size gates.
-- **Stage 4 — HDR Gainmap Handling**: HEIC/HEIF gain-map sources use the
-  dedicated HDR-JXL path with individually verified auxiliary sidecars. AVIF is
+- **Stage 4 — HDR Gainmap Handling**: HEIC/HEIF gain-map sources retain their
+  complete native auxiliary-asset relationships. AVIF is
   probed through `avifdec --info` before decoding; a detected or unprovable gain
   map retains the complete native source instead of silently flattening HDR.
-  UltraHDR JPEG is archived through JBRD: the original JPEG, including its MPF
-  gain map and private metadata, must reconstruct byte-for-byte. Pixel synthesis
-  is non-archival and is never selected automatically by a destructive or
-  verified-delivery path.
+  UltraHDR JPEG carries a native `jhgm` gain map and also uses JBRD: the original
+  JPEG, including its MPF gain map and private metadata, must reconstruct
+  byte-for-byte. Native gain-map pixels and ISO/Adobe parameters are verified
+  separately; neither native mapping nor custody is gated on `--archive`.
 - **Stage 5 — Static-only on `img`**: `img run` **ignores** animated assets
   (`IMG_ANIMATED_HANDOFF`). Use **`vid run`** for GIF/WebP/APNG and all video.
 - **Stage 6 — Verify & Commit**: Output structure, decoded pixels/orientation,
@@ -564,15 +565,16 @@ successful optimization.
 
 ### Image Format Decision Matrix
 
-| Input Format                                    | Static? | Action in `img run`           | Output            | Notes                                                 |
-| :---------------------------------------------- | :-----: | :---------------------------- | :---------------- | :---------------------------------------------------- |
-| JPEG                                            |   ✅    | **Reversible reconstruction** | `.jxl`            | Original JPEG recovery is verified when JBRD succeeds |
-| PNG / TIFF / BMP / other lossless stills        |   ✅    | **Lossless convert**          | `.jxl`            | May use detour pathway first                          |
-| Proven-lossless WebP / AVIF / HEIC / HEIF / JP2 |   ✅    | **Lossless convert**          | `.jxl`            | Exact pixels plus metadata and feature-specific proof |
-| Lossy/unknown modern container or existing JXL  |   ✅    | **Retain byte-for-byte**      | keep original     | Avoid generation loss or unproved archival damage     |
-| HEIC / HEIF with Gainmap                        |   ✅    | **Dedicated HDR route**       | `.jxl` + sidecars | Synthesize HDR and verify every auxiliary asset       |
-| Legacy lossy stills after static validation     |   ✅    | **Near-lossless convert**     | `.jxl`            | Current `img run` batch path stays JXL-focused        |
-| Animated GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌    | **Ignore on img**             | —                 | Use **`vid run`** → `.mp4` / `.mov`                   |
+| Input Format                                    | Static? | Action in `img run`              | Output        | Notes                                                 |
+| :---------------------------------------------- | :-----: | :------------------------------- | :------------ | :---------------------------------------------------- |
+| JPEG                                            |   ✅    | **Reversible reconstruction**    | `.jxl`        | Original JPEG recovery is verified when JBRD succeeds |
+| PNG / TIFF / BMP / other lossless stills        |   ✅    | **Lossless convert**             | `.jxl`        | May use detour pathway first                          |
+| Proven-lossless WebP / AVIF / HEIC / HEIF / JP2 |   ✅    | **Lossless convert**             | `.jxl`        | Exact pixels plus metadata and feature-specific proof |
+| Lossy/unknown modern container or existing JXL  |   ✅    | **Retain byte-for-byte**         | keep original | Avoid generation loss or unproved archival damage     |
+| UltraHDR JPEG                                   |   ✅    | **Reversible + native gain map** | `.jxl`        | Exact JPEG recovery plus `jhgm` pixel/semantic proof  |
+| HEIC / HEIF with Gainmap                        |   ✅    | **Retain complete asset**        | keep original | Preserve auxiliary relationships; no HDR synthesis    |
+| Legacy lossy stills after static validation     |   ✅    | **Near-lossless convert**        | `.jxl`        | Current `img run` batch path stays JXL-focused        |
+| Animated GIF / WebP / APNG / HEIC / HEIF / JXL  |   ❌    | **Ignore on img**                | —             | Use **`vid run`** → `.mp4` / `.mov`                   |
 
 ### `img` entrypoints
 
@@ -611,15 +613,15 @@ best-effort fallback applies.
 
 ### HDR Format Strategy
 
-| HDR Type          | Detection                                | Preservation Strategy                                                                                                                                      |
-| :---------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                                                                            |
-| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized HDR JXL plus verified decoded gain-map/depth sidecars; unknown auxiliary relationships retain the native source                                |
-| **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:)            | Exact JPEG→JXL archive by default; the full MPF/gainmap JPEG reconstructs byte-for-byte. Explicit pixel synthesis is non-archival and non-destructive only |
-| **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                                                                            |
-| **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                                                                |
-| **HDR10+**        | ST2094-40 dynamic metadata               | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention)                                                      |
-| **SDR**           | No HDR markers                           | Standard processing (yuv420p)                                                                                                                              |
+| HDR Type          | Detection                                | Preservation Strategy                                                                                                                                           |
+| :---------------- | :--------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR10**         | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args                                                                                                                 |
+| **HEIC Gainmap**  | HEIC auxiliary image (Apple/Samsung/ISO) | Retain the complete original container and auxiliary relationships; no implicit HDR pixel synthesis                                                             |
+| **UltraHDR JPEG** | JPEG MPF + ISO 21496-1 or Adobe XMP      | Native JXL `jhgm` with exact gain-map pixels and verified metadata semantics, alongside byte-exact JPEG reconstruction; unsupported semantics retain the source |
+| **HLG**           | color_trc = arib-std-b67                 | Color primaries + TRC preserved                                                                                                                                 |
+| **Dolby Vision**  | DOVI side_data in streams/frames         | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 conversion                                                                                     |
+| **HDR10+**        | ST2094-40 dynamic metadata               | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention)                                                           |
+| **SDR**           | No HDR markers                           | Standard processing (yuv420p)                                                                                                                                   |
 
 ## ⬇️ Installation
 

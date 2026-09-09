@@ -295,18 +295,18 @@ dependencies = [
 
 [[package]]
 name = "bon"
-version = "3.10.0"
+version = "3.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3fac94a66da67200398458a25412bcc3f9b6443b5119a6cad9cf3ccfcd8cc6"
+checksum = "60eafe0d77c3a2fc292c1d1346c3041b33c0a108085a2afabf672b70f69dbbc9"
 dependencies = [
  "bon-macros",
 ]
 
 [[package]]
 name = "bon-macros"
-version = "3.10.0"
+version = "3.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4654961ad0494e4774c5c60b4cb4cd0ae9b9d92d039d901638b1dba97ebebf5"
+checksum = "bd0f9631d8aaaee112c41985d675ef269e02acbd4f33122836af4f0c5f699ff6"
 dependencies = [
  "darling",
  "ident_case",
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "crc32fast"
 version = "1.5.1"
-source = "git+https://github.com/srijs/rust-crc32fast#9d028706a30a6ae50ba06f2d791965f2f21be67d"
+source = "git+https://github.com/srijs/rust-crc32fast#1e291e6cba1caf6d346d3d2a2f4d621ccf10f1cf"
 dependencies = [
  "cfg-if",
 ]
@@ -1089,9 +1089,9 @@ dependencies = [
 
 [[package]]
 name = "hashlink"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32069d97bb81e38fa67eab65e3393bf804bb85969f2bc06bf13f64aef5aba248"
+checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -1113,9 +1113,9 @@ dependencies = [
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.14"
+version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
+checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
 dependencies = [
  "typenum",
 ]
@@ -1220,7 +1220,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#80b40c0340be2cef32c9cf14e32ed6b8f925aaad"
+source = "git+https://github.com/console-rs/indicatif#1d07e48aa863cd345d57c97b520aa7254625753d"
 dependencies = [
  "console",
  "portable-atomic",
@@ -3622,16 +3622,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#7f1bdfa367371fa55edf532568f6615e3c809ff1"
+version = "0.8.57"
+source = "git+https://github.com/google/zerocopy#0c90b11ac70875b7d9e6a0c31f98ef5ce223c6a1"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.56"
-source = "git+https://github.com/google/zerocopy#7f1bdfa367371fa55edf532568f6615e3c809ff1"
+version = "0.8.57"
+source = "git+https://github.com/google/zerocopy#0c90b11ac70875b7d9e6a0c31f98ef5ce223c6a1"
 dependencies = [
  "proc-macro2",
  "quote",
