@@ -1756,7 +1756,9 @@ mod conversion_result_adapter_tests {
 
         let result = super::auto_convert_single_file(&input, &config)?;
         assert!(!result.skipped && !result.ignored, "{}", result.message);
-        let jxl = output.join("IMG_0084.jxl");
+        // Delivery uses uppercase extensions; compare spelling even on macOS.
+        let jxl = output.join("IMG_0084.JXL");
+        assert_eq!(std::path::Path::new(&result.output_path), jxl);
         assert!(jxl.is_file());
         let restored = temp.path().join("restored.jpg");
         foundation::jxl_utils::run_exact_jpeg_reconstruction(&jxl, &restored, "Live Photo archive")
@@ -1777,7 +1779,7 @@ mod conversion_result_adapter_tests {
         let repeated = super::auto_convert_single_file(&jxl, &config)?;
         assert!(repeated.skipped);
         assert_eq!(
-            std::fs::read(temp.path().join("second/IMG_0084.jxl"))?,
+            std::fs::read(temp.path().join("second/IMG_0084.JXL"))?,
             std::fs::read(&jxl)?
         );
         assert_eq!(
@@ -1793,7 +1795,7 @@ mod conversion_result_adapter_tests {
         config.base_dir = Some(temp.path().to_path_buf());
         config.flags.insert(ConfigFlags::FORCE);
         assert!(super::auto_convert_single_file(&input, &config).is_err());
-        assert!(!collision.join("IMG_0084.jxl").exists());
+        assert!(!collision.join("IMG_0084.JXL").exists());
         assert_eq!(std::fs::read(&restored)?, std::fs::read(&input)?);
         assert_eq!(
             std::fs::read(collision.join("IMG_0084.MOV"))?,
