@@ -1259,6 +1259,7 @@ struct AppendableJxlContainer {
     total_size: u64,
     last_xml: Option<JxlBoxSpan>,
     jbrd: Option<JxlBoxSpan>,
+    #[cfg(feature = "jpegxl-ffi")]
     gain_map: Option<JxlBoxSpan>,
     xml_box_count: usize,
 }
@@ -1489,6 +1490,7 @@ fn validate_appendable_jxl_container(path: &Path) -> io::Result<AppendableJxlCon
         total_size,
         last_xml,
         jbrd,
+        #[cfg(feature = "jpegxl-ffi")]
         gain_map,
         xml_box_count,
     })

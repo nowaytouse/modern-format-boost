@@ -195,6 +195,7 @@ impl Semantics {
 
     // ISO/Adobe reconstruction in the shared linear base color space. Comparing
     // all gain samples at several headrooms also catches direction/offset errors.
+    #[cfg(any(feature = "jpegxl-ffi", test))]
     fn reconstruct(&self, base: f64, gain: f64, channel: usize, weight: f64) -> f64 {
         let [min, max, gamma, base_offset, alt_offset] =
             self.channels[channel].map(Fraction::value);
@@ -396,8 +397,11 @@ fn iso_payload(jpeg: &[u8]) -> Result<Option<&[u8]>> {
 }
 
 struct Source {
+    #[cfg(feature = "jpegxl-ffi")]
     pixels: image::RgbImage,
+    #[cfg(feature = "jpegxl-ffi")]
     iso: Vec<u8>,
+    #[cfg(feature = "jpegxl-ffi")]
     semantics: Semantics,
 }
 
@@ -444,9 +448,16 @@ fn source(jpeg: &[u8]) -> Result<Option<Source>> {
         ),
         "gain-map JPEG is not 8-bit gray/RGB"
     );
+    // Validation still runs without the codec, but only native builds retain
+    // the decoded payload for encoding; attach/verify then report unsupported.
+    #[cfg(not(feature = "jpegxl-ffi"))]
+    drop((iso, semantics));
     Ok(Some(Source {
+        #[cfg(feature = "jpegxl-ffi")]
         pixels: payload.gainmap_image.to_rgb8(),
+        #[cfg(feature = "jpegxl-ffi")]
         iso,
+        #[cfg(feature = "jpegxl-ffi")]
         semantics,
     }))
 }
