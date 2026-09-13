@@ -1932,11 +1932,13 @@ fn commit_validated_candidate(
         ".{}",
         crate::media_conversion_gate::temp_output_extension_lossy(output)
     );
-    let staged = tempfile::Builder::new()
-        .prefix(".mfb-delivery-")
-        .suffix(&suffix)
-        .tempfile_in(parent)?
-        .into_temp_path();
+    let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "commit_validated_candidate",
+        parent,
+        ".mfb-delivery-",
+        &suffix,
+    )?
+    .into_temp_path();
     if in_place_commit {
         fs::copy(temp, &staged)?;
         let report = crate::metadata::preserve_filesystem_for_delivery(temp, &staged)?;
