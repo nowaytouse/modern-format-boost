@@ -99,7 +99,7 @@ struct Args {
     #[arg(long = "shortest-path")]
     shortest_path: bool,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_resume")]
     retry: bool,
 
     #[arg(short, long)]
@@ -1258,6 +1258,17 @@ fn run_fast_img_task(
     session: &DragDropSession,
 ) -> Result<(ProcessorStats, PathBuf)> {
     let target = args.inputs.first().context("input required")?;
+    let (command, output) = fast_img_launch_command(args, project_root, target)?;
+    let stats = command.run_collecting(args.dry_run, Some(session), false)?;
+    Ok((stats, output))
+}
+
+// Preview and execution must use exactly the same options and output binding.
+fn fast_img_launch_command(
+    args: &Args,
+    project_root: &Path,
+    target: &Path,
+) -> Result<(LaunchCommand, PathBuf)> {
     let output = resolve_fast_img_output_for_run(args, target)?;
     let img_bin = cli_binary(project_root, "img");
     let retry = args.retry || args.resume;
@@ -1266,14 +1277,13 @@ fn run_fast_img_task(
         target,
         &output,
         args.shortest_path,
-        true,
+        args.archive,
         retry,
         args.no_resume,
         args.strategy.as_deref(),
         args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
     ))?;
-    let stats = command.run_collecting(args.dry_run, Some(session), false)?;
-    Ok((stats, output))
+    Ok((command, output))
 }
 
 fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
@@ -1410,18 +1420,7 @@ fn plan_cli_invocations(
             LaunchMode::Images => commands.push(rust_run_command(project_root, "img", args, input)),
             LaunchMode::Videos => commands.push(rust_run_command(project_root, "vid", args, input)),
             LaunchMode::FastImg => {
-                let output = resolve_fast_img_output_for_run(args, input)?;
-                commands.push(LaunchCommand::from_argv(build_fast_img_command(
-                    &img_bin,
-                    input,
-                    &output,
-                    args.shortest_path,
-                    args.archive,
-                    args.retry || args.resume,
-                    args.no_resume,
-                    args.strategy.as_deref(),
-                    args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
-                ))?);
+                commands.push(fast_img_launch_command(args, project_root, input)?.0);
             }
             LaunchMode::RestoreJpeg => {
                 let (output, _) =
@@ -2889,6 +2888,43 @@ mod tests {
         assert_eq!(
             resolve_fast_img_output_for_run(&args, &source).unwrap(),
             parent.join("Album_optimized_4")
+        );
+    }
+
+    #[test]
+    fn fast_img_preview_and_execution_share_archive_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        std::fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--dry-run",
+            input.to_str().unwrap(),
+        ])
+        .unwrap();
+        for archive in [false, true] {
+            args.archive = archive;
+            let (execution, _) =
+                fast_img_launch_command(&args, Path::new("/repo"), &input).unwrap();
+            let preview = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(execution.program, preview[0].program);
+            assert_eq!(execution.args, preview[0].args);
+            assert_eq!(execution.args.contains(&"--archive".to_owned()), archive);
+        }
+        args.resume = true;
+        for retry in [false, true] {
+            args.retry = retry;
+            let (execution, _) =
+                fast_img_launch_command(&args, Path::new("/repo"), &input).unwrap();
+            let preview = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(execution.args, preview[0].args);
+            // fast-img has one explicit resume/retry entry point.
+            assert!(execution.args.contains(&"--retry".to_owned()));
+        }
+        assert!(
+            Args::try_parse_from(["drag_and_drop_processor", "--retry", "--no-resume",]).is_err()
         );
     }
 

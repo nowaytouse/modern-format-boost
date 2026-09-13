@@ -57,6 +57,14 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
     if !is_modern_static_image_format(format) {
         return Ok(None);
     }
+    if crate::live_photo::is_live(path) {
+        tracing::info!(
+            target: "modern_lossy_static",
+            path = %path.display(),
+            "retaining Live Photo asset outside standalone tier-2 import"
+        );
+        return Ok(None);
+    }
 
     // Bind every classification decision to the exact bytes later offered to
     // Photos. A path may be replaced while external/container probes run.

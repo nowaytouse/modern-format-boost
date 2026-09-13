@@ -2207,7 +2207,7 @@ impl ImageBatchWorker<'_> {
         }
     }
 
-    fn process(&self, path: &Path) {
+    fn process(&self, path: &Path, child_threads: usize) {
         let file_name = foundation::media_conversion_gate::path_file_name_for_log(path);
         let span = tracing::info_span!("image_processing", file = %path.display());
         let _enter = span.enter();
@@ -2230,7 +2230,9 @@ impl ImageBatchWorker<'_> {
             return;
         }
 
-        match auto_convert_single_file(path, self.config) {
+        let mut live_config = self.config.clone();
+        live_config.child_threads = child_threads;
+        match auto_convert_single_file(path, &live_config) {
             Ok(result) => {
                 if result.ignored {
                     self.counters.ignored.fetch_add(1, Ordering::Relaxed);
@@ -2364,10 +2366,12 @@ fn process_image_batch(
     worker: &ImageBatchWorker<'_>,
 ) {
     let next_index = AtomicUsize::new(0);
+    let admission = foundation::thread_manager::AdaptiveConcurrency::default();
     pool.install(|| {
         rayon::scope(|scope| {
             for _ in 0..max_threads {
                 let next_index = &next_index;
+                let admission = &admission;
                 scope.spawn(|_| {
                     loop {
                         if worker.pause_controller.is_paused()
@@ -2380,7 +2384,16 @@ fn process_image_batch(
                         let Some(path) = files.get(index) else {
                             break;
                         };
-                        worker.process(path);
+                        let Some(permit) = admission.acquire(
+                            foundation::thread_manager::WorkloadType::Image,
+                            || {
+                                worker.pause_controller.is_paused()
+                                    || worker.abort_requested.load(Ordering::SeqCst)
+                            },
+                        ) else {
+                            break;
+                        };
+                        worker.process(path, permit.child_threads);
                     }
                 });
             }
@@ -2625,7 +2638,9 @@ fn auto_convert_directory(
     let thread_config = foundation::thread_manager::get_balanced_thread_config(
         foundation::thread_manager::WorkloadType::Image,
     );
-    let pool_size = thread_config.parallel_tasks;
+    let pool_size = foundation::thread_manager::worker_capacity(
+        foundation::thread_manager::WorkloadType::Image,
+    );
 
     config_with_base.child_threads = thread_config.child_threads;
 
@@ -2749,11 +2764,11 @@ fn auto_convert_directory(
             foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
                 "thread_pool_fallback",
                 format!(
-                    "failed to create {max_threads} thread pool ({e}); falling back to 2 threads"
+                    "failed to create {max_threads} thread pool ({e}); falling back to 1 thread"
                 ),
             );
             rayon::ThreadPoolBuilder::new()
-                .num_threads(2)
+                .num_threads(1)
                 .build()
                 .map_err(|e| anyhow::anyhow!("Failed to create fallback thread pool: {e}"))?
         }
@@ -5760,11 +5775,12 @@ fn fast_img_delete_verified_source_jpegs(
         .collect::<Vec<_>>();
     let mut verified = Vec::new();
     if !existing.is_empty() {
-        let thread_config = foundation::thread_manager::get_balanced_thread_config(
-            foundation::thread_manager::WorkloadType::Image,
+        let parallelism = fast_img_effective_verify_parallelism(
+            existing.len(),
+            foundation::thread_manager::worker_capacity(
+                foundation::thread_manager::WorkloadType::Image,
+            ),
         );
-        let parallelism =
-            fast_img_effective_verify_parallelism(existing.len(), thread_config.parallel_tasks);
         let expected_format =
             foundation::delivery_codec_strategy::strategy_to_format_kind(strategy)
                 .ok_or_else(|| anyhow::anyhow!("unsupported fast-img strategy {strategy:?}"))?;
@@ -5791,10 +5807,14 @@ fn fast_img_delete_verified_source_jpegs(
             .num_threads(parallelism)
             .build()
             .map_err(|err| anyhow::anyhow!("fast-img verify thread pool init failed: {err}"))?;
+        let admission = foundation::thread_manager::AdaptiveConcurrency::default();
         let results = pool.install(|| {
             existing
                 .par_iter()
                 .map(|candidate| {
+                    let _permit = admission.acquire(
+                        foundation::thread_manager::WorkloadType::Image, || false,
+                    ).context("verification admission unexpectedly cancelled")?;
                     let integrity = match fast_img_verified_output_format(&candidate.output, strategy)? {
                         FormatKind::Avif => verify_final_avif_delivery_integrity(
                             &candidate.source,
@@ -7619,11 +7639,17 @@ fn restore_jpeg_preflight(
         .build()
         .context("restore-jpeg failed to create reconstruction preflight worker pool")?;
     let checked = std::sync::atomic::AtomicUsize::new(0);
+    let admission = foundation::thread_manager::AdaptiveConcurrency::default();
     let results = pool.install(|| {
         files
             .par_iter()
             .map(|source| {
-                let result = foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(source);
+                let result = admission
+                    .acquire(foundation::thread_manager::WorkloadType::Image, || false)
+                    .ok_or_else(|| "preflight admission unexpectedly cancelled".to_owned())
+                    .and_then(|_permit| {
+                        foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(source)
+                    });
                 let completed = checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == files.len() {
                     println!(
@@ -7961,12 +7987,17 @@ fn restore_jpeg_keep_source_parallel(
     let restored = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
     let file_count = files.len();
+    let admission = foundation::thread_manager::AdaptiveConcurrency::default();
 
     let pending = pool.install(|| {
         files
             .par_iter()
             .map(|file| {
-                let result = match restore_single_jpeg(file, input_root, output_root, force) {
+                let restored_file = admission.acquire(
+                    foundation::thread_manager::WorkloadType::Image, || false,
+                ).context("restore admission unexpectedly cancelled")
+                    .and_then(|_permit| restore_single_jpeg(file, input_root, output_root, force));
+                let result = match restored_file {
                     Ok(restored_file) => {
                         if restored_file.committed {
                             restored.fetch_add(1, Ordering::Relaxed);
@@ -9250,18 +9281,33 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             "fast-img parallel encode start"
         );
         let completed = AtomicUsize::new(0);
+        let admission = foundation::thread_manager::AdaptiveConcurrency::default();
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(parallel_tasks)
+            .num_threads(
+                foundation::thread_manager::worker_capacity(
+                    foundation::thread_manager::WorkloadType::Image,
+                )
+                .min(pending)
+                .max(1),
+            )
             .build()
             .map_err(|err| anyhow::anyhow!("fast-img encode thread pool init failed: {err}"))?;
         let results = pool.install(|| {
             jobs.par_iter()
                 .map(|job| {
+                    let permit = admission
+                        .acquire(foundation::thread_manager::WorkloadType::Image, || false)
+                        .ok_or_else(|| FastImgTranscodeError {
+                            rel_key: job.rel_key.clone(),
+                            out_rel_key: job.out_rel_key.clone(),
+                            src_hash: job.src_hash.clone(),
+                            reason: "encode admission unexpectedly cancelled".to_owned(),
+                        })?;
                     let result = fast_img_run_encode_job(
                         job,
                         src_dir,
                         working_copy,
-                        child_threads,
+                        permit.child_threads,
                         archive.0,
                         allow_expert_options.0,
                         strategy,

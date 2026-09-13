@@ -248,8 +248,8 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 
 [[package]]
 name = "bitflags"
-version = "2.13.1"
-source = "git+https://github.com/bitflags/bitflags#c3f8d31d59f3ba8c05833fb322ecab8a2cb88060"
+version = "2.13.2"
+source = "git+https://github.com/bitflags/bitflags#fa833ad35d0f952f6c60f8763b2a15efb45f4cab"
 dependencies = [
  "serde_core",
 ]
@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "blake3"
 version = "1.8.7"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#5a1edfd7abb5c3ce65070a851dff4f276a619cae"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#6aab490a26124663329dfd3961b8469f8fdb158b"
 dependencies = [
  "arrayvec",
  "cc",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
+source = "git+https://github.com/clap-rs/clap#48ed7869b91addcfb485decf2b445c74bef00535"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.6"
-source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
+source = "git+https://github.com/clap-rs/clap#48ed7869b91addcfb485decf2b445c74bef00535"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.4"
-source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
+source = "git+https://github.com/clap-rs/clap#48ed7869b91addcfb485decf2b445c74bef00535"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#af3044228bd76a87a3f46a3c7c3343563c059527"
+source = "git+https://github.com/clap-rs/clap#48ed7869b91addcfb485decf2b445c74bef00535"
 
 [[package]]
 name = "cmake"
@@ -520,8 +520,8 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "console"
-version = "0.16.5"
-source = "git+https://github.com/console-rs/console#ed342d0874091e5785829f978af0ca1b79fd92a3"
+version = "0.16.6"
+source = "git+https://github.com/console-rs/console#4329b774d2e7117df706193636b4734b147e6554"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -1604,9 +1604,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8f1ea3f21fd3405dcaf6c9b5c1630af9afc422d9073ea39c5f6d6c772e08ed"
+checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
 dependencies = [
  "libc",
 ]
@@ -2701,9 +2701,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.16.0"
+version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
+checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "socket2"
@@ -2966,9 +2966,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.5+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12c0ba9680044b4ce98d391a62094047eada0d64860b80166c39f4a6b5640785"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -2990,9 +2990,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.13+spec-1.1.0"
+version = "0.25.15+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
+checksum = "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -3153,9 +3153,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.26.0"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -3623,7 +3623,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#0c90b11ac70875b7d9e6a0c31f98ef5ce223c6a1"
+source = "git+https://github.com/google/zerocopy#c975a8467ffce74944fc151f05616fd00189b801"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3631,7 +3631,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#0c90b11ac70875b7d9e6a0c31f98ef5ce223c6a1"
+source = "git+https://github.com/google/zerocopy#c975a8467ffce74944fc151f05616fd00189b801"
 dependencies = [
  "proc-macro2",
  "quote",

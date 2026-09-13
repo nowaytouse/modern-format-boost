@@ -60,6 +60,7 @@ private final class LocalizationCatalog {
 
     private(set) var language: AppLanguage
     private var bundle: Bundle
+    private let lock = NSLock()
 
     private init() {
         language = UserDefaults.standard.string(forKey: languagePreferenceKey)
@@ -68,13 +69,18 @@ private final class LocalizationCatalog {
     }
 
     func select(_ language: AppLanguage) {
+        lock.lock()
         self.language = language
         bundle = Self.bundle(for: language)
+        lock.unlock()
         UserDefaults.standard.set(language.rawValue, forKey: languagePreferenceKey)
     }
 
     func text(_ key: String) -> String {
-        bundle.localizedString(forKey: key, value: key, table: nil)
+        lock.lock()
+        let selectedBundle = bundle
+        lock.unlock()
+        return selectedBundle.localizedString(forKey: key, value: key, table: nil)
     }
 
     private static func bundle(for language: AppLanguage) -> Bundle {
@@ -152,9 +158,22 @@ private enum OperationMode: String, CaseIterable {
     var capabilities: OperationCapabilities {
         switch self {
         case .adjacent:
-            OperationCapabilities(usesProcessingSelection: true, supportsUltimate: true, supportsResume: true)
+            OperationCapabilities(
+                usesProcessingSelection: true,
+                supportsUltimate: true,
+                supportsResume: true,
+                supportsArchive: true,
+                supportsStandardOptions: true
+            )
         case .fastImgJxl, .fastImgAvif:
-            OperationCapabilities(fixedProcessingMode: .imagesOnly, supportsUltimate: true, supportsShortestPath: true, supportsResume: true)
+            OperationCapabilities(
+                fixedProcessingMode: .imagesOnly,
+                supportsUltimate: true,
+                supportsShortestPath: true,
+                supportsResume: true,
+                supportsArchive: true,
+                supportsRetry: true
+            )
         case .fastVid:
             OperationCapabilities(fixedProcessingMode: .videosOnly, supportsShortestPath: true)
         case .restoreJpeg:
@@ -171,6 +190,9 @@ private struct OperationCapabilities {
     var supportsUltimate = false
     var supportsShortestPath = false
     var supportsResume = false
+    var supportsArchive = false
+    var supportsRetry = false
+    var supportsStandardOptions = false
 
     func resolvedProcessingMode(_ selected: ProcessingMode) -> ProcessingMode? {
         fixedProcessingMode ?? (usesProcessingSelection ? selected : nil)
@@ -183,10 +205,17 @@ private struct ProcessorRequest {
     let operationMode: OperationMode
     var backupPath: String? = nil
     var ultimate = true
-    var verbose = true
+    var verbose = false
     var shortestPath = false
     var resume = false
     var fresh = false
+    var archive = false
+    var retry = false
+    var force = false
+    var dryRun = false
+    var plain = false
+    var inPlace = false
+    var watch = false
     var photosContainer: PhotosAuditContainer?
 }
 
@@ -231,6 +260,19 @@ private enum ProcessorCommand {
         guard (!request.resume && !request.fresh) || capabilities.supportsResume else {
             throw HostError(message: localized("error.option_unavailable"))
         }
+        guard !((request.resume || request.retry) && request.fresh) else {
+            throw HostError(message: localized("error.resume_conflict"))
+        }
+        guard !request.archive || capabilities.supportsArchive,
+              !request.retry || capabilities.supportsRetry,
+              !(request.force || request.plain || request.inPlace) || capabilities.supportsStandardOptions
+        else { throw HostError(message: localized("error.option_unavailable")) }
+        if request.watch {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: request.targetPath, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else { throw HostError(message: localized("error.watch_directory")) }
+        }
         if request.photosContainer != nil {
             guard request.operationMode == .restoreJpeg,
                   isPhotosLibraryPackagePath(request.targetPath)
@@ -270,12 +312,18 @@ private enum ProcessorCommand {
         }
         if request.ultimate { arguments.append("--ultimate") }
         if request.verbose { arguments.append("--verbose") }
+        if request.archive { arguments.append("--archive") }
+        if request.retry { arguments.append("--retry") }
+        if request.force { arguments.append("--force") }
+        if request.dryRun { arguments.append("--dry-run") }
+        if request.plain { arguments.append("--plain") }
+        if request.inPlace { arguments.append("--in-place") }
+        if request.watch { arguments.append("--watch") }
         if request.shortestPath {
             arguments.append("--shortest-path")
         }
         if request.resume {
             arguments.append("--resume")
-            if request.operationMode.backendMode == "fast-img" { arguments.append("--retry") }
         } else if request.fresh {
             arguments.append("--no-resume")
         }
@@ -308,6 +356,29 @@ private enum ProcessorCommand {
     }
 }
 
+private func conciseProcessLog(_ text: String) -> String? {
+    let signals = [
+        "error", "fail", "warn", "complete", "finished", "summary", "processed", "converted",
+        "skipped", "progress", "MFB_RESUME_DECISION_REQUIRED", "[ERROR]", "[WARN]", "[SUMMARY]",
+        "[PROGRESS]", "[SUCCESS]", "✓", "✗", "▶︎",
+        "失败", "错误", "警告", "完成", "进度", "失敗", "エラー", "警告", "完了", "進捗",
+    ]
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+    let kept = lines.filter { line in
+        let lowered = line.lowercased()
+        if lowered.range(of: #"^(?:err:\s*)?\[?(?:debug|trace)(?:\s|\]|:)"#, options: .regularExpression) != nil {
+            return false
+        }
+        return signals.contains { lowered.contains($0.lowercased()) }
+            || lowered.range(of: #"\b\d{1,3}%(?!\w)"#, options: .regularExpression) != nil
+            || lowered.range(of: #"^(?:err:\s*)?\[(?:scan|copy|encode|meme mode|verify|import|skip|retain|done|restore|resume|final)\s*\]"#, options: .regularExpression) != nil
+            // Keep unclassified stderr diagnostics, but not routine INFO chatter.
+            || (lowered.hasPrefix("err:")
+                && lowered.range(of: #"^err:\s*\[?info(?:\s|\]|:)"#, options: .regularExpression) == nil)
+    }
+    return kept.isEmpty ? nil : kept.joined(separator: "\n")
+}
+
 private func isPhotosLibraryPath(_ path: String) -> Bool {
     URL(fileURLWithPath: path)
         .resolvingSymlinksInPath()
@@ -331,9 +402,9 @@ private func isPhotosUUID(_ value: String) -> Bool {
 }
 
 private func processingRequiresPhotosAutomation(_ request: ProcessorRequest) -> Bool {
-    request.operationMode == .iCloudImport
+    !request.dryRun && (request.operationMode == .iCloudImport
         || (request.shortestPath && request.operationMode.capabilities.supportsShortestPath)
-        || (request.operationMode == .restoreJpeg && isPhotosLibraryPath(request.targetPath))
+        || (request.operationMode == .restoreJpeg && isPhotosLibraryPath(request.targetPath)))
 }
 
 private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
@@ -624,7 +695,7 @@ private final class NativeHost {
         }
     }
 
-    func checkVersionAlignment() -> String {
+    nonisolated func checkVersionAlignment() -> String {
         guard let binary = ProcessorLocator.resolve() else {
             return localized("status.processor_unavailable")
         }
@@ -636,6 +707,11 @@ private final class NativeHost {
         process.standardError = output
         do {
             try process.run()
+            let watchdog = DispatchWorkItem {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
+            defer { watchdog.cancel() }
             let capture = try readBoundedProcessOutput(
                 output.fileHandleForReading,
                 limit: maxProcessLogChunkBytes
@@ -862,7 +938,7 @@ private final class NativeHost {
         guard let payload = processLogs.takeDelivery() else { return }
         onLog?(payload)
         if processLogs.finishDelivery() {
-            flushProcessLogs()
+            DispatchQueue.main.async { [weak self] in self?.flushProcessLogs() }
         } else if let completion = pendingProcessCompletion {
             pendingProcessCompletion = nil
             completion()
@@ -897,6 +973,7 @@ private final class NativeHost {
 @MainActor
 private final class NativeDropView: NSVisualEffectView {
     var onDrop: ((String) -> Void)?
+    var acceptsDrops = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -909,11 +986,11 @@ private final class NativeDropView: NSVisualEffectView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self]) ? .copy : []
+        acceptsDrops && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self]) ? .copy : []
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let urls = sender.draggingPasteboard.readObjects(
+        guard acceptsDrops, let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true],
         ) as? [URL], let first = urls.first else { return false }
@@ -945,6 +1022,14 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let verboseCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let shortestPathCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let resumeCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let freshCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let archiveCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let retryCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let forceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let dryRunCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let plainCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let inPlaceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let watchCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let commandField = NSTextField()
     private let logView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -962,6 +1047,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var configurationControlsEnabled = true
     private var processorStatus = ""
     private var selectedPhotosContainer: PhotosAuditContainer?
+    private var processingStartedAt: TimeInterval?
+    private var refreshTimer: Timer?
+    private var processingActivity: NSObjectProtocol?
 
     override init() {
         window = NSWindow(
@@ -984,13 +1072,32 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        processorStatus = host.checkVersionAlignment()
-        statusLabel.stringValue = processorStatus
+        statusLabel.stringValue = localized("status.checking_processor")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let status = self.host.checkVersionAlignment()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.processorStatus = status
+                if self.configurationControlsEnabled { self.statusLabel.stringValue = status }
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
         host.terminateActiveProcess()
+        setProcessing(false)
         NSApp.terminate(nil)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshProcessingStatus()
+    }
+
+    @objc private func refreshProcessingStatus() {
+        guard let startedAt = processingStartedAt else { return }
+        let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt))
+        statusLabel.stringValue = localized("status.running_elapsed", elapsed / 60, elapsed % 60)
     }
 
     private func configureWindow() {
@@ -1052,6 +1159,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetField.isEditable = false
         targetField.isSelectable = true
         targetField.lineBreakMode = .byTruncatingMiddle
+        targetField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         chooseButton.target = self
         chooseButton.action = #selector(chooseTarget)
         let targetRow = NSStackView(views: [targetField, chooseButton])
@@ -1062,6 +1170,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         backupField.isEditable = false
         backupField.isSelectable = true
         backupField.lineBreakMode = .byTruncatingMiddle
+        backupField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         backupButton.target = self
         backupButton.action = #selector(chooseBackup)
         backupLabel.alignment = .right
@@ -1092,6 +1201,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         photosScopeButton.action = #selector(choosePhotosScope)
         photosScopeButton.lineBreakMode = .byTruncatingMiddle
         photosScopeButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        photosScopeButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         photosScopeLabel.alignment = .right
         photosScopeLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
         photosScopeRow.addArrangedSubview(photosScopeLabel)
@@ -1106,20 +1216,32 @@ private final class AppController: NSObject, NSWindowDelegate {
         metadataSafetyLabel.maximumNumberOfLines = 3
 
         ultimateCheck.state = .on
-        verboseCheck.state = .on
-        for control in [ultimateCheck, verboseCheck, shortestPathCheck, resumeCheck] {
+        for control in [
+            ultimateCheck, verboseCheck, shortestPathCheck, archiveCheck,
+            forceCheck, dryRunCheck, plainCheck, inPlaceCheck, watchCheck,
+        ] {
             control.target = self
             control.action = #selector(configurationChanged)
         }
-        let options = NSStackView(views: [ultimateCheck, verboseCheck, shortestPathCheck, resumeCheck])
-        options.orientation = .horizontal
-        options.spacing = 18
+        for control in [resumeCheck, freshCheck, retryCheck] {
+            control.target = self
+            control.action = #selector(resumeChoiceChanged(_:))
+        }
+        let options = NSGridView(views: [
+            [ultimateCheck, shortestPathCheck, verboseCheck, dryRunCheck],
+            [resumeCheck, freshCheck, archiveCheck, retryCheck],
+            [forceCheck, plainCheck, inPlaceCheck, watchCheck],
+        ])
+        options.rowSpacing = 5
+        options.columnSpacing = 12
+        for column in 0 ..< 4 { options.column(at: column).xPlacement = .leading }
 
         commandField.isEditable = false
         commandField.isSelectable = true
         commandField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         commandField.textColor = .secondaryLabelColor
         commandField.lineBreakMode = .byTruncatingMiddle
+        commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         openButton.target = self
         openButton.action = #selector(openInTerminal)
@@ -1147,6 +1269,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .small
         progressIndicator.isDisplayedWhenStopped = false
@@ -1211,6 +1334,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func acceptTarget(_ path: String) {
+        guard configurationControlsEnabled else {
+            appendLog("✗ \(localized("error.task_running"))")
+            return
+        }
         selectedPhotosContainer = nil
         targetField.stringValue = path
         configurationChanged()
@@ -1228,7 +1355,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         photosScopeButton.isEnabled = false
         statusLabel.stringValue = localized("status.photos_scope_loading")
         host.loadPhotosAuditContainers(library: library) { [weak self] result in
-            guard let self, self.targetField.stringValue == library else { return }
+            guard let self, self.targetField.stringValue == library,
+                  self.selectedOperation == .restoreJpeg, self.configurationControlsEnabled
+            else { return }
             self.applyCapabilityState()
             switch result {
             case let .success(containers):
@@ -1270,6 +1399,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func configurationChanged() {
         applyCapabilityState()
         updateMetadataSafetyNotice()
+        guard configurationControlsEnabled else { return }
         guard !targetField.stringValue.isEmpty else {
             commandField.stringValue = ""
             statusLabel.stringValue = processorStatus.isEmpty ? localized("status.ready") : processorStatus
@@ -1282,6 +1412,23 @@ private final class AppController: NSObject, NSWindowDelegate {
             commandField.stringValue = ""
             statusLabel.stringValue = error.localizedDescription
         }
+    }
+
+    @objc private func resumeChoiceChanged(_ sender: NSButton) {
+        if selectedOperation.backendMode == "fast-img", sender !== freshCheck {
+            // The fast-img backend aliases resume and retry; show both effective flags.
+            resumeCheck.state = sender.state
+            retryCheck.state = sender.state
+        }
+        if sender.state == .on {
+            if sender === freshCheck {
+                resumeCheck.state = .off
+                retryCheck.state = .off
+            } else {
+                freshCheck.state = .off
+            }
+        }
+        configurationChanged()
     }
 
     @objc private func openInTerminal() {
@@ -1305,9 +1452,14 @@ private final class AppController: NSObject, NSWindowDelegate {
             lastRequest = request
             sawResumeDecision = false
             setProcessing(true)
-            appendLog("▶︎ \(try host.terminalCommand(for: request))")
+            appendLog(verboseCheck.state == .on
+                ? "▶︎ \(try host.terminalCommand(for: request))"
+                : "▶︎ \(localized("log.task_start"))")
             host.startProcessing(request)
-        } catch { present(error) }
+        } catch {
+            setProcessing(false)
+            present(error)
+        }
     }
 
     private var selectedOperation: OperationMode {
@@ -1322,9 +1474,23 @@ private final class AppController: NSObject, NSWindowDelegate {
             )
         }
         processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
-        ultimateCheck.isEnabled = configurationControlsEnabled && capabilities.supportsUltimate
+        // The launcher always enables --ultimate for supported operations.
+        // Show the effective policy instead of an off switch it cannot honor.
+        ultimateCheck.isEnabled = false
+        ultimateCheck.state = capabilities.supportsUltimate ? .on : .off
         shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
         resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
+        freshCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
+        archiveCheck.isEnabled = configurationControlsEnabled && capabilities.supportsArchive
+        retryCheck.isEnabled = configurationControlsEnabled && capabilities.supportsRetry
+        if selectedOperation.backendMode == "fast-img", resumeCheck.state == .on {
+            retryCheck.state = .on
+        }
+        for control in [forceCheck, plainCheck, inPlaceCheck] {
+            control.isEnabled = configurationControlsEnabled && capabilities.supportsStandardOptions
+        }
+        dryRunCheck.isEnabled = configurationControlsEnabled
+        watchCheck.isEnabled = configurationControlsEnabled
         let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
         backupButton.isEnabled = configurationControlsEnabled && backupAvailable
@@ -1342,6 +1508,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         if !capabilities.supportsUltimate { ultimateCheck.state = .off }
         if !capabilities.supportsShortestPath { shortestPathCheck.state = .off }
         if !capabilities.supportsResume { resumeCheck.state = .off }
+        if !capabilities.supportsResume { freshCheck.state = .off }
+        if !capabilities.supportsArchive { archiveCheck.state = .off }
+        if !capabilities.supportsRetry { retryCheck.state = .off }
+        if !capabilities.supportsStandardOptions {
+            for control in [forceCheck, plainCheck, inPlaceCheck] { control.state = .off }
+        }
     }
 
     private func updateMetadataSafetyNotice() {
@@ -1377,16 +1549,34 @@ private final class AppController: NSObject, NSWindowDelegate {
             verbose: verboseCheck.state == .on,
             shortestPath: shortestPathCheck.state == .on,
             resume: resumeCheck.state == .on,
+            fresh: freshCheck.state == .on,
+            archive: archiveCheck.state == .on,
+            retry: retryCheck.state == .on,
+            force: forceCheck.state == .on,
+            dryRun: dryRunCheck.state == .on,
+            plain: plainCheck.state == .on,
+            inPlace: inPlaceCheck.state == .on,
+            watch: watchCheck.state == .on,
             photosContainer: selectedPhotosContainer,
         )
     }
 
     private func appendLog(_ text: String) {
         if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
-        let next = logView.string.isEmpty ? text : "\(logView.string)\n\(text)"
+        guard let visible = verboseCheck.state == .on ? text : conciseProcessLog(text) else { return }
+        let next = logView.string.isEmpty ? visible : "\(logView.string)\n\(visible)"
         let lines = next.split(separator: "\n", omittingEmptySubsequences: false)
         logView.string = lines.count > 3_000 ? lines.suffix(3_000).joined(separator: "\n") : next
         logView.scrollToEndOfDocument(nil)
+    }
+
+    private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest) {
+        request.resume = !fresh
+        request.fresh = fresh
+        request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
+        resumeCheck.state = request.resume ? .on : .off
+        freshCheck.state = request.fresh ? .on : .off
+        retryCheck.state = request.retry ? .on : .off
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
@@ -1406,10 +1596,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 alert.addButton(withTitle: localized("alert.cancel"))
                 switch alert.runModal() {
                 case .alertFirstButtonReturn:
-                    retry.resume = true
-                    resumeCheck.state = .on
+                    applyResumeDecision(fresh: false, to: &retry)
                 case .alertSecondButtonReturn:
-                    retry.fresh = true
+                    applyResumeDecision(fresh: true, to: &retry)
                 default:
                     setProcessing(false)
                     statusLabel.stringValue = error.localizedDescription
@@ -1475,6 +1664,22 @@ private final class AppController: NSObject, NSWindowDelegate {
         verboseCheck.title = localized("option.verbose")
         shortestPathCheck.title = localized("option.shortest_path")
         resumeCheck.title = localized("option.resume")
+        freshCheck.title = localized("option.fresh")
+        archiveCheck.title = localized("option.archive")
+        retryCheck.title = localized("option.retry")
+        forceCheck.title = localized("option.force")
+        dryRunCheck.title = localized("option.dry_run")
+        plainCheck.title = localized("option.plain")
+        inPlaceCheck.title = localized("option.in_place")
+        watchCheck.title = localized("option.watch")
+        for (control, key) in [
+            (ultimateCheck, "option.ultimate.help"), (verboseCheck, "option.verbose.help"),
+            (shortestPathCheck, "option.shortest_path.help"), (resumeCheck, "option.resume.help"),
+            (freshCheck, "option.fresh.help"), (archiveCheck, "option.archive.help"),
+            (retryCheck, "option.retry.help"), (forceCheck, "option.force.help"),
+            (dryRunCheck, "option.dry_run.help"), (plainCheck, "option.plain.help"),
+            (inPlaceCheck, "option.in_place.help"), (watchCheck, "option.watch.help"),
+        ] { control.toolTip = localized(key) }
         commandField.placeholderString = localized("command.placeholder")
         replaceTitles(processingPopup, with: [
             localized("media.both"), localized("media.images"), localized("media.videos"),
@@ -1489,23 +1694,119 @@ private final class AppController: NSObject, NSWindowDelegate {
         ])
         replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
         replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
-        if host.isRunning { statusLabel.stringValue = localized("status.running") }
+        refreshProcessingStatus()
     }
 
     private func setProcessing(_ processing: Bool) {
         configurationControlsEnabled = !processing
+        (window.contentView as? NativeDropView)?.acceptsDrops = !processing
         for control in [
-            chooseButton, backupButton, operationPopup, verboseCheck, openButton, copyButton, runButton,
+            chooseButton, backupButton, operationPopup, openButton, copyButton, runButton,
         ] {
             control.isEnabled = !processing
         }
         applyCapabilityState()
         if processing {
+            if processingStartedAt == nil {
+                processingStartedAt = ProcessInfo.processInfo.systemUptime
+                processingActivity = ProcessInfo.processInfo.beginActivity(
+                    options: .userInitiatedAllowingIdleSystemSleep,
+                    reason: "Processing user-selected media"
+                )
+                let timer = Timer(timeInterval: 1, target: self,
+                                  selector: #selector(refreshProcessingStatus), userInfo: nil, repeats: true)
+                RunLoop.main.add(timer, forMode: .common)
+                refreshTimer = timer
+            }
             progressIndicator.startAnimation(nil)
-            statusLabel.stringValue = localized("status.running")
+            refreshProcessingStatus()
         } else {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+            processingStartedAt = nil
+            if let activity = processingActivity { ProcessInfo.processInfo.endActivity(activity) }
+            processingActivity = nil
             progressIndicator.stopAnimation(nil)
         }
+    }
+
+    func validateInterfaceForSelfTest() throws {
+        guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        let originalFrame = window.frame
+        let longPath = "/tmp/" + String(repeating: "long folder name/", count: 160)
+        targetField.stringValue = longPath + "test.photoslibrary"
+        backupField.stringValue = longPath + "backup"
+        commandField.stringValue = longPath + "command"
+        statusLabel.stringValue = longPath
+        photosScopeButton.title = longPath
+        for operation in [OperationMode.adjacent, .collect, .restoreJpeg] {
+            operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: operation)!)
+            applyCapabilityState()
+            updateMetadataSafetyNotice()
+            photosScopeButton.title = longPath
+            content.layoutSubtreeIfNeeded()
+            let visibleFields: [NSView] = [targetField, commandField, statusLabel]
+                + (backupRow.isHidden ? [] : [backupField])
+                + (photosScopeRow.isHidden ? [] : [photosScopeButton])
+            guard window.frame.size == originalFrame.size,
+                  content.frame.size == mainWindowContentSize,
+                  visibleFields.allSatisfy({
+                      let frame = $0.convert($0.bounds, to: content)
+                      return frame.minX >= 0 && frame.maxX <= content.bounds.maxX + 1
+                  })
+            else {
+                let fields = visibleFields.map { NSStringFromRect($0.convert($0.bounds, to: content)) }
+                throw HostError(message: "Long-path layout (\(operation)): window \(originalFrame.size) -> \(window.frame.size), content \(content.frame.size), fields \(fields)")
+            }
+        }
+
+        operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
+        applyCapabilityState()
+        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled,
+              archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
+              verboseCheck.state == .off
+        else { throw HostError(message: "Incorrect option capabilities or defaults") }
+        retryCheck.state = .on
+        freshCheck.state = .on
+        resumeChoiceChanged(freshCheck)
+        guard retryCheck.state == .off, resumeCheck.state == .off else {
+            throw HostError(message: "Fresh run left conflicting retry options enabled")
+        }
+        var recovery = ProcessorRequest(
+            targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
+            resume: true, retry: true
+        )
+        applyResumeDecision(fresh: true, to: &recovery)
+        let freshArguments = try ProcessorCommand.arguments(from: recovery)
+        guard freshArguments.contains("--no-resume"), !freshArguments.contains("--retry"),
+              freshCheck.state == .on, resumeCheck.state == .off, retryCheck.state == .off
+        else { throw HostError(message: "Fresh recovery decision disagrees with option state") }
+        applyResumeDecision(fresh: false, to: &recovery)
+        let resumeArguments = try ProcessorCommand.arguments(from: recovery)
+        guard resumeArguments.contains("--resume"), !resumeArguments.contains("--no-resume"),
+              resumeArguments.contains("--retry"), resumeCheck.state == .on,
+              retryCheck.state == .on, freshCheck.state == .off
+        else { throw HostError(message: "Resume recovery decision changed retry policy") }
+        retryCheck.state = .off
+        resumeChoiceChanged(retryCheck)
+        guard resumeCheck.state == .off, retryCheck.state == .off else {
+            throw HostError(message: "Fast-img resume alias stayed active after deselection")
+        }
+        setProcessing(true)
+        defer { setProcessing(false) }
+        processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
+        refreshProcessingStatus()
+        let runningStatus = statusLabel.stringValue
+        let runningTarget = targetField.stringValue
+        acceptTarget("/tmp/another-job")
+        verboseCheck.state = .on
+        configurationChanged()
+        guard statusLabel.stringValue == runningStatus,
+              runningStatus == localized("status.running_elapsed", 1, 5),
+              targetField.stringValue == runningTarget,
+              (window.contentView as? NativeDropView)?.acceptsDrops == false,
+              verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled
+        else { throw HostError(message: "Background status or running controls lost their state") }
     }
 
     private func present(_ error: Error) {
@@ -1594,10 +1895,42 @@ private func runSelfTest() -> Int32 {
         )
         let expected = [
             "--images-only", "--mode", "fast-img", "--strategy", "jxl", "--ultimate",
-            "--verbose", "--shortest-path", "--resume", "--retry", "/tmp/media",
+            "--verbose", "--shortest-path", "--resume", "/tmp/media",
         ]
         guard try ProcessorCommand.arguments(from: request) == expected else {
             fputs("native-host self-test argument mapping failed\n", stderr)
+            return 1
+        }
+        let standard = ProcessorRequest(
+            targetPath: "/tmp", processingMode: .imagesOnly, operationMode: .adjacent,
+            archive: true, force: true, dryRun: true, plain: true, inPlace: true, watch: true
+        )
+        guard try ProcessorCommand.arguments(from: standard) == [
+            "--images-only", "--ultimate", "--archive", "--force", "--dry-run",
+            "--plain", "--in-place", "--watch", "/tmp",
+        ] else {
+            fputs("native-host self-test standard flags or quiet default failed\n", stderr)
+            return 1
+        }
+        do {
+            _ = try ProcessorCommand.arguments(from: ProcessorRequest(
+                targetPath: "/tmp/media", processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                fresh: true, retry: true
+            ))
+            fputs("native-host self-test retry/fresh conflict was accepted\n", stderr)
+            return 1
+        } catch {}
+        guard conciseProcessLog("DEBUG codec internals") == nil,
+              conciseProcessLog("ERR: DEBUG codec internals") == nil,
+              conciseProcessLog("ERR: INFO codec internals") == nil,
+              conciseProcessLog("[ENCODE] 1/20 synthetic.jpg") != nil,
+              conciseProcessLog("ERROR: could not open debug image") != nil,
+              conciseProcessLog("ERR: Permission denied") == "ERR: Permission denied",
+              conciseProcessLog("Progress 50% ") == "Progress 50% ",
+              conciseProcessLog("50% ") == "50% ",
+              conciseProcessLog("处理失败：权限不足") != nil
+        else {
+            fputs("native-host self-test concise logs dropped a failure or progress\n", stderr)
             return 1
         }
         let restore = ProcessorRequest(
@@ -1672,7 +2005,8 @@ private func runSelfTest() -> Int32 {
         guard processingRequiresPhotosAutomation(request),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport)),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .videosOnly, operationMode: .fastVid, shortestPath: true)),
-              !processingRequiresPhotosAutomation(restore),
+               !processingRequiresPhotosAutomation(restore),
+               !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .iCloudImport, dryRun: true)),
               processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/debug.photoslibrary", processingMode: .imagesOnly, operationMode: .restoreJpeg, ultimate: false)),
               !processingRequiresPhotosAutomation(ProcessorRequest(targetPath: "/tmp/media", processingMode: .both, operationMode: .fastImgJxl))
         else {
@@ -1742,6 +2076,10 @@ private func runSelfTest() -> Int32 {
         guard fired == 1 else {
             fputs("native-host self-test watchdog exactly-once failed\n", stderr)
             return 1
+        }
+        try MainActor.assumeIsolated {
+            _ = NSApplication.shared
+            try AppController().validateInterfaceForSelfTest()
         }
         print("native-host self-test passed")
         return 0

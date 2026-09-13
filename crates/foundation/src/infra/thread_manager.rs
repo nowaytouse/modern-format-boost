@@ -9,7 +9,7 @@
 
 use crate::{RsyncBuilder, ToolBuilder};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::performance_schedule::PerfGovernorTier;
 use crate::x265_params::X265MemoryProfile;
@@ -276,6 +276,97 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     )
 }
 
+/// Worker capacity, not permission to start that many encodes. Live admission
+/// below enforces pressure limits, including when a run starts under pressure.
+#[must_use]
+pub fn worker_capacity(workload: WorkloadType) -> usize {
+    worker_capacity_for(
+        crate::media_conversion_gate::runtime_available_parallelism_or_default(
+            "thread_manager::worker_capacity",
+        ),
+        workload,
+    )
+}
+
+fn worker_capacity_for(total_cores: usize, workload: WorkloadType) -> usize {
+    // Fewer codec threads can permit more concurrent files in a stricter tier.
+    // Size the idle-worker ceiling for every policy, not only the relaxed one.
+    let mut capacity = 1;
+    for profile in [
+        X265MemoryProfile::Default,
+        X265MemoryProfile::Moderate,
+        X265MemoryProfile::LowMemory,
+    ] {
+        for tier in [
+            PerfGovernorTier::Relaxed,
+            PerfGovernorTier::Balanced,
+            PerfGovernorTier::Tight,
+        ] {
+            capacity = capacity.max(
+                balanced_thread_config_for(total_cores, workload, profile, false, tier)
+                    .parallel_tasks,
+            );
+        }
+    }
+    capacity
+}
+
+/// Limit admission of new files without interrupting in-flight encodes.
+/// The existing pool remains the ceiling; no background thread is needed.
+#[derive(Default)]
+pub struct AdaptiveConcurrency {
+    active: AtomicUsize,
+}
+
+pub struct WorkPermit<'a> {
+    gate: &'a AdaptiveConcurrency,
+    pub child_threads: usize,
+}
+
+impl AdaptiveConcurrency {
+    pub fn acquire(
+        &self,
+        workload: WorkloadType,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<WorkPermit<'_>> {
+        self.acquire_with(|| get_balanced_thread_config(workload), cancelled)
+    }
+
+    fn acquire_with(
+        &self,
+        allocation: impl Fn() -> ThreadAllocation,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<WorkPermit<'_>> {
+        loop {
+            if cancelled() {
+                return None;
+            }
+            let current = allocation();
+            if self
+                .active
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                    (active < current.parallel_tasks.max(1)).then(|| active + 1)
+                })
+                .is_ok()
+            {
+                return Some(WorkPermit {
+                    gate: self,
+                    child_threads: current.child_threads.max(1),
+                });
+            }
+            // Recheck pressure even if no encode finishes, so a recovered
+            // machine can admit work immediately rather than wait for a straggler.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for WorkPermit<'_> {
+    fn drop(&mut self) {
+        self.gate.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[must_use]
 pub fn get_optimal_threads() -> usize {
     get_balanced_thread_config(WorkloadType::Image).parallel_tasks
@@ -364,6 +455,88 @@ pub fn get_rsync_version() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_capacity_covers_all_live_allocations() {
+        for cores in 1..=256 {
+            for workload in [WorkloadType::Image, WorkloadType::Video] {
+                let capacity = worker_capacity_for(cores, workload);
+                for profile in [
+                    X265MemoryProfile::Default,
+                    X265MemoryProfile::Moderate,
+                    X265MemoryProfile::LowMemory,
+                ] {
+                    for tier in [
+                        PerfGovernorTier::Relaxed,
+                        PerfGovernorTier::Balanced,
+                        PerfGovernorTier::Tight,
+                    ] {
+                        for multi_instance in [false, true] {
+                            let allocation = balanced_thread_config_for(
+                                cores,
+                                workload,
+                                profile,
+                                multi_instance,
+                                tier,
+                            );
+                            assert!(
+                                capacity >= allocation.parallel_tasks,
+                                "{cores} cores: capacity {capacity} cannot fit {allocation:?} ({workload:?}, {profile:?}, {tier:?}, multi={multi_instance})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_admission_shrinks_recovers_and_cancels() {
+        let gate = AdaptiveConcurrency::default();
+        let cap = AtomicUsize::new(2);
+        let allocation = || ThreadAllocation {
+            parallel_tasks: cap.load(Ordering::SeqCst),
+            child_threads: 1,
+        };
+        let first = gate.acquire_with(allocation, || false).unwrap();
+        let second = gate.acquire_with(allocation, || false).unwrap();
+        cap.store(1, Ordering::SeqCst);
+        drop(second);
+        std::thread::scope(|scope| {
+            let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+            let (sampled_tx, sampled_rx) = std::sync::mpsc::channel();
+            let gate = &gate;
+            let waiting = scope.spawn(move || {
+                let permit = gate
+                    .acquire_with(
+                        || {
+                            let value = allocation();
+                            sampled_tx.send(()).unwrap();
+                            value
+                        },
+                        || false,
+                    )
+                    .unwrap();
+                entered_tx.send(()).unwrap();
+                drop(permit);
+            });
+            sampled_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert!(
+                entered_rx.try_recv().is_err(),
+                "reduced cap admitted an extra file"
+            );
+            cap.store(2, Ordering::SeqCst);
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            waiting.join().unwrap();
+        });
+        assert!(gate.acquire_with(allocation, || true).is_none());
+        drop(first);
+        assert_eq!(gate.active.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn test_default_thread_calculation() {

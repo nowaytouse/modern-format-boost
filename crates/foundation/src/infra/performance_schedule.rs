@@ -275,6 +275,75 @@ pub fn image_parallel_cap(profile: X265MemoryProfile, tier: PerfGovernorTier) ->
     }
 }
 
+/// Delay policy between independently verified Photos imports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhotosImportPacing {
+    pub transaction_delay_ms: u64,
+    pub digest_pause_interval: usize,
+    pub digest_pause_secs: u64,
+    pub window_pause_secs: u64,
+}
+
+/// Adapt idle time without weakening per-file Photos custody.
+///
+/// Callers resample this between imports so pressure changes take effect before
+/// the next file; independent `AppleEvent` transactions retain UUID ownership.
+#[must_use]
+pub const fn photos_import_pacing(tier: PerfGovernorTier) -> PhotosImportPacing {
+    match tier {
+        PerfGovernorTier::Relaxed => PhotosImportPacing {
+            transaction_delay_ms: 0,
+            digest_pause_interval: 0,
+            digest_pause_secs: 0,
+            window_pause_secs: 0,
+        },
+        PerfGovernorTier::Balanced => PhotosImportPacing {
+            transaction_delay_ms: 250,
+            digest_pause_interval: 200,
+            digest_pause_secs: 5,
+            window_pause_secs: 10,
+        },
+        PerfGovernorTier::Tight => PhotosImportPacing {
+            transaction_delay_ms: 2_000,
+            digest_pause_interval: 200,
+            digest_pause_secs: 30,
+            window_pause_secs: 60,
+        },
+    }
+}
+
+#[must_use]
+pub const fn photos_import_transaction_pause(
+    completed: usize,
+    total: usize,
+    tier: PerfGovernorTier,
+) -> std::time::Duration {
+    if completed == 0 || completed >= total {
+        return std::time::Duration::ZERO;
+    }
+    let pacing = photos_import_pacing(tier);
+    let mut millis = if completed.is_multiple_of(10) {
+        pacing.transaction_delay_ms
+    } else {
+        0
+    };
+    if pacing.digest_pause_interval > 0 && completed.is_multiple_of(pacing.digest_pause_interval) {
+        millis = millis.saturating_add(pacing.digest_pause_secs.saturating_mul(1_000));
+    }
+    std::time::Duration::from_millis(millis)
+}
+
+#[must_use]
+pub const fn photos_import_window_pause(
+    has_more_files: bool,
+    tier: PerfGovernorTier,
+) -> std::time::Duration {
+    if !has_more_files {
+        return std::time::Duration::ZERO;
+    }
+    std::time::Duration::from_secs(photos_import_pacing(tier).window_pause_secs)
+}
+
 /// Upper bound on concurrent video tasks for Default RAM profile.
 #[must_use]
 pub fn video_parallel_cap(profile: X265MemoryProfile, tier: PerfGovernorTier) -> usize {
@@ -463,6 +532,65 @@ mod tests {
         assert!(
             image_parallel_cap(X265MemoryProfile::Default, PerfGovernorTier::Tight)
                 < image_parallel_cap(X265MemoryProfile::Default, PerfGovernorTier::Relaxed)
+        );
+    }
+
+    #[test]
+    fn photos_import_pacing_keeps_pressure_headroom() {
+        let relaxed = photos_import_pacing(PerfGovernorTier::Relaxed);
+        let balanced = photos_import_pacing(PerfGovernorTier::Balanced);
+        let tight = photos_import_pacing(PerfGovernorTier::Tight);
+        assert_eq!(relaxed.transaction_delay_ms, 0);
+        assert!(balanced.transaction_delay_ms < tight.transaction_delay_ms);
+        assert!(balanced.digest_pause_secs < tight.digest_pause_secs);
+        assert!(balanced.window_pause_secs < tight.window_pause_secs);
+        assert_eq!(
+            photos_import_transaction_pause(10, 100, PerfGovernorTier::Relaxed),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(
+            photos_import_transaction_pause(10, 100, PerfGovernorTier::Balanced),
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            photos_import_transaction_pause(10, 100, PerfGovernorTier::Tight),
+            std::time::Duration::from_secs(2)
+        );
+        for completed in [0, 200, 201] {
+            assert_eq!(
+                photos_import_transaction_pause(completed, 200, PerfGovernorTier::Tight),
+                std::time::Duration::ZERO
+            );
+        }
+        assert_eq!(
+            photos_import_transaction_pause(200, 500, PerfGovernorTier::Tight),
+            std::time::Duration::from_secs(32),
+            "digest pacing must work across 100-file checkpoint windows"
+        );
+        let total_pause = |tier| {
+            (1..100)
+                .map(|completed| photos_import_transaction_pause(completed, 100, tier))
+                .sum::<std::time::Duration>()
+        };
+        assert_eq!(
+            total_pause(PerfGovernorTier::Balanced),
+            std::time::Duration::from_millis(2_250)
+        );
+        assert_eq!(
+            total_pause(PerfGovernorTier::Tight),
+            std::time::Duration::from_secs(18)
+        );
+        assert_eq!(
+            photos_import_window_pause(true, PerfGovernorTier::Balanced),
+            std::time::Duration::from_secs(10)
+        );
+        assert_eq!(
+            photos_import_window_pause(true, PerfGovernorTier::Tight),
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            photos_import_window_pause(false, PerfGovernorTier::Tight),
+            std::time::Duration::ZERO
         );
     }
 

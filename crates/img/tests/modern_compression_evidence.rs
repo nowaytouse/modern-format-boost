@@ -141,6 +141,23 @@ fn jxl_compression_evidence_from_real_cjxl_output() -> anyhow::Result<()> {
     assert_eq!(tier2_scan.probe_failures, Vec::new());
     assert_eq!(tier2_scan.candidates.len(), 1);
     assert_eq!(tier2_scan.candidates[0].path, modular_lossy);
+    let imports = foundation::fast_img::build_modern_lossy_static_import_candidates(
+        dir.path(),
+        &tier2_scan.candidates,
+    );
+    assert_eq!(imports[0].path, modular_lossy);
+    assert_eq!(imports[0].blake3, tier2_scan.candidates[0].blake3);
+
+    // A still codestream does not make a whole Live Photo a standalone image.
+    let companion = modular_lossy.with_extension("MOV");
+    std::fs::write(&companion, b"synthetic Live Photo companion")?;
+    let live_scan =
+        scan_modern_lossy_static_candidates(dir.path(), std::slice::from_ref(&modular_lossy))?;
+    assert!(
+        live_scan.candidates.is_empty(),
+        "Tier 2 must retain Live pairs"
+    );
+    assert!(modular_lossy.is_file() && companion.is_file());
 
     // Reversible JPEG transcode: jbrd reconstruction keeps its own semantics.
     if !tool_available("magick") {
@@ -202,6 +219,19 @@ fn avif_compression_evidence_from_real_avifenc_output() -> anyhow::Result<()> {
         detect_compression(&DetectedFormat::AVIF, &lossy420)?,
         CompressionType::Lossy,
         "subsampled AVIF must classify as ConfirmedLossy"
+    );
+    let tier2_scan =
+        scan_modern_lossy_static_candidates(dir.path(), std::slice::from_ref(&lossy420))?;
+    assert_eq!(tier2_scan.probe_failures, []);
+    assert_eq!(tier2_scan.candidates.len(), 1);
+    let imports = foundation::fast_img::build_modern_lossy_static_import_candidates(
+        dir.path(),
+        &tier2_scan.candidates,
+    );
+    assert_eq!(imports[0].path, lossy420);
+    assert_eq!(
+        imports[0].blake3,
+        foundation::common_utils::calculate_blake3_hash(&lossy420)?
     );
 
     // 4:4:4 (even at max quality): pixel format is not quantization proof.
