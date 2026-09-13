@@ -173,82 +173,63 @@ fn commit_with_size_check(
         extra_info
     ));
 
-    let committed = if preserve_codec_embedded_metadata {
-        foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
-            temp_output,
-            output,
-            options.force(),
-            Some(input),
-        )?
-    } else if pixel_audit.already_verified() {
-        foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
-            temp_output,
-            output,
-            options.force(),
-            Some(input),
-        )?
-    } else {
-        foundation::conversion::commit_temp_to_output_with_metadata(
-            temp_output,
-            output,
-            options.force(),
-            Some(input),
-        )?
-    };
+    let mut rejected = None;
+    let committed = foundation::conversion::commit_temp_to_output_with_metadata_checked(
+        temp_output,
+        output,
+        options.force(),
+        Some(input),
+        pixel_audit.already_verified(),
+        preserve_codec_embedded_metadata,
+        |candidate| {
+            if !options.compress() && !options.require_output_delivery() {
+                return Ok(true);
+            }
+            let (input_payload, output_payload) =
+            foundation::image::static_payload::measure(source.payload).and_then(|input_payload| {
+                foundation::image::static_payload::measure(candidate)
+                    .map(|output_payload| (input_payload, output_payload))
+            }).map_err(|error| std::io::Error::other(format!(
+                "Pure image payload measurement failed; source preserved without complete-file fallback: {error}"
+            )))?;
+            log_detail!(&format!(
+                "{} Pure image payload decision: {}B -> {}B (Efficiency: {})",
+                foundation::infra::static_logs::messages::LABEL_PHASE_5,
+                input_payload,
+                output_payload,
+                format_output_size_ratio_pct(input_payload, output_payload),
+            ));
+            let complete_output_size = fs::metadata(candidate)?.len();
+            if let Some(mut skipped) = check_size_tolerance(
+                input,
+                candidate,
+                input_payload,
+                output_payload,
+                options,
+                format_label,
+            )? {
+                skipped.input_size = input_size;
+                skipped.output_size = Some(complete_output_size);
+                rejected = Some(skipped);
+                return Ok(false);
+            }
+            Ok(true)
+        },
+    )?;
+    if let Some(skipped) = rejected {
+        return Ok(CommitOutcome::Skipped(skipped));
+    }
     if !committed {
         return Ok(CommitOutcome::Skipped(TaskResult::skipped_exists(
             input, output,
         )?));
-    }
-    if options.compress() || options.require_output_delivery() {
-        let payload_sizes =
-            foundation::image::static_payload::measure(source.payload).and_then(|input_payload| {
-                foundation::image::static_payload::measure(output)
-                    .map(|output_payload| (input_payload, output_payload))
-            });
-        let (input_payload, output_payload) = match payload_sizes {
-            Ok(sizes) => sizes,
-            Err(error) => {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "img pure-payload measurement failure",
-                    output,
-                );
-                return Ok(CommitOutcome::Skipped(TaskResult::skipped_custom(
-                    input,
-                    input_size,
-                    &format!(
-                        "Pure image payload measurement failed; source preserved without complete-file fallback: {error}"
-                    ),
-                    "pure_payload_measurement_failed",
-                )));
-            }
-        };
-        log_detail!(&format!(
-            "{} Pure image payload decision: {}B -> {}B (Efficiency: {})",
-            foundation::infra::static_logs::messages::LABEL_PHASE_5,
-            input_payload,
-            output_payload,
-            format_output_size_ratio_pct(input_payload, output_payload),
-        ));
-        if let Some(mut skipped) = check_size_tolerance(
-            input,
-            output,
-            input_payload,
-            output_payload,
-            options,
-            format_label,
-        ) {
-            skipped.input_size = input_size;
-            skipped.output_size = Some(fs::metadata(output)?.len());
-            return Ok(CommitOutcome::Skipped(skipped));
-        }
     }
 
     Ok(CommitOutcome::Ready)
 }
 
 /// Finalize conversion with size check and metadata preservation.
-/// Common pattern: commit temp → check size → finalize.
+/// Common pattern: prepare metadata → check size → commit → finalize.
 /// Returns `TaskResult` on success or error.
 /// # Errors
 ///
@@ -368,16 +349,7 @@ fn finalize_with_exact_metadata_and_size_check(
     )? {
         CommitOutcome::Skipped(task) => Ok(task),
         CommitOutcome::Ready => {
-            if let Err(error) = foundation::metadata::verify_exact_metadata_copy(input, output) {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "strict handoff metadata mismatch output cleanup",
-                    output,
-                );
-                return Err(ImgQualityError::ConversionError(format!(
-                    "Strict metadata verification failed for {}: {error}",
-                    output.display()
-                )));
-            }
+            // The shared commit verifies exact metadata before publication.
             finalize_task(input, output, input_size, format_label, extra_info, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -3594,40 +3566,33 @@ pub fn finalize_meme_avif_probe(
         return Err(error);
     }
 
-    if !foundation::conversion::commit_temp_to_output_with_metadata_pixel_already_verified(
+    if !foundation::conversion::commit_temp_to_output_with_metadata_checked(
         temp_output,
         &output,
         options.force(),
         None,
+        true,
+        false,
+        |candidate| {
+            verify_avif_probe_custody(candidate, expected_content_blake3, "before publication")
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            // CONTRACT: meme mode must not retain removable embedded metadata.
+            foundation::metadata::verify_output_embedded_metadata(
+                source,
+                candidate,
+                foundation::metadata::MetadataOutputPolicy::Clear,
+            )
+            .map_err(|error| {
+                std::io::Error::other(format!(
+                    "Meme Mode cleared-metadata verification failed for {}: {error}",
+                    output.display()
+                ))
+            })?;
+            Ok(true)
+        },
     )? {
         return Ok(TaskResult::skipped_exists(source, &output)?);
     }
-
-    if let Err(error) = verify_avif_probe_custody(&output, expected_content_blake3, "after commit")
-    {
-        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-            "meme AVIF custody mismatch output cleanup",
-            &output,
-        );
-        return Err(error);
-    }
-
-    // CONTRACT: meme mode must not retain removable embedded metadata.
-    foundation::metadata::verify_output_embedded_metadata(
-        source,
-        &output,
-        foundation::metadata::MetadataOutputPolicy::Clear,
-    )
-    .map_err(|error| {
-        foundation::media_conversion_gate::delivery_remove_file_or_audit(
-            "meme cleared-metadata mismatch output cleanup",
-            &output,
-        );
-        ImgQualityError::ConversionError(format!(
-            "Meme Mode cleared-metadata verification failed for {}: {error}",
-            output.display()
-        ))
-    })?;
 
     finalize_task(
         source,
@@ -5883,6 +5848,77 @@ mod tests {
     use vid::animated_image::is_high_quality_animated;
 
     #[test]
+    fn rejected_candidate_preserves_previous_output_and_reports_skip() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let input = dir.path().join("source.png");
+        let candidate = dir.path().join("candidate.png");
+        let output = dir.path().join("output.png");
+        image::RgbImage::from_pixel(16, 16, image::Rgb([10, 20, 30])).save(&input)?;
+        fs::copy(&input, &candidate)?;
+        fs::write(&output, b"previous verified delivery")?;
+        let size = fs::metadata(&input)?.len();
+        let options = ConvertOptions {
+            flags: ConvertFlags::FORCE | ConvertFlags::COMPRESS,
+            ..ConvertOptions::default()
+        };
+        let result = commit_with_size_check(
+            CommitSource::new(&input, size),
+            &candidate,
+            &output,
+            size,
+            &options,
+            "PNG",
+            None,
+            PixelAudit::VerifiedByCaller,
+            false,
+        );
+        let outcome = result.map_err(|error| {
+            anyhow::anyhow!(
+                "size rejection must report a skip, not read a removed candidate: {error}"
+            )
+        })?;
+        assert!(matches!(outcome, CommitOutcome::Skipped(_)));
+        assert_eq!(fs::read(&output)?, b"previous verified delivery");
+        assert!(input.is_file());
+
+        // A required passthrough copy failure is an error, not a completed skip.
+        // Use a distinct source because the successful skip above is processed.
+        let failed_input = dir.path().join("retryable.png");
+        fs::copy(&input, &failed_input)?;
+        fs::copy(&input, &candidate)?;
+        let blocked_dir = dir.path().join("not-a-directory");
+        fs::write(&blocked_dir, b"block output directory")?;
+        let failed_options = ConvertOptions {
+            output_dir: Some(blocked_dir),
+            ..options
+        };
+        let result = commit_with_size_check(
+            CommitSource::new(&failed_input, size),
+            &candidate,
+            &output,
+            size,
+            &failed_options,
+            "PNG",
+            None,
+            PixelAudit::VerifiedByCaller,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(!is_already_processed(&failed_input));
+        assert_eq!(fs::read(&output)?, b"previous verified delivery");
+        assert!(failed_input.is_file());
+        assert!(!candidate.exists());
+        assert!(fs::read_dir(dir.path())?.all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mfb-delivery-")
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn pixel_audit_only_skips_delivery_audit_after_explicit_proof() {
         assert!(!PixelAudit::RequiredAtCommit.already_verified());
         assert!(PixelAudit::VerifiedByCaller.already_verified());
@@ -6115,8 +6151,27 @@ mod tests {
         assert!(
             result
                 .output_path
-                .is_some_and(|path| Path::new(&path).is_file())
+                .as_ref()
+                .is_some_and(|path| Path::new(path).is_file())
         );
+        let output = Path::new(result.output_path.as_ref().unwrap());
+        let previous = fs::read(output)?;
+        fs::copy(output, &candidate)?;
+        let status = Command::new("exiftool")
+            .args(["-overwrite_original", "-XMP-dc:Description=must be cleared"])
+            .arg(&candidate)
+            .status()?;
+        anyhow::ensure!(
+            status.success(),
+            "failed to add metadata to regression candidate"
+        );
+        let hash = foundation::common_utils::calculate_blake3_hash(&candidate)?;
+        let error = finalize_meme_avif_probe(&source, &candidate, &hash, &options)
+            .expect_err("residual metadata must reject publication");
+        assert!(error.to_string().contains("cleared-metadata"));
+        assert_eq!(fs::read(output)?, previous);
+        assert!(source.exists());
+        assert!(!candidate.exists());
         Ok(())
     }
 

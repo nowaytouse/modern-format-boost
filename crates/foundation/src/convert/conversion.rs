@@ -1685,6 +1685,31 @@ pub fn commit_temp_to_output_preserving_exact_payload(
     force: bool,
     original: Option<&Path>,
 ) -> std::io::Result<bool> {
+    commit_temp_to_output_preserving_exact_payload_checked(temp, output, force, original, |_| {
+        Ok(true)
+    })
+}
+
+/// Apply exact-payload metadata and caller proofs before publishing the candidate.
+/// The acceptance callback follows [`commit_temp_to_output_with_metadata_checked`].
+///
+/// # Errors
+/// Propagates metadata, exact-payload, acceptance and publication errors.
+pub fn commit_temp_to_output_preserving_exact_payload_checked(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+    accept: impl FnOnce(&Path) -> std::io::Result<bool>,
+) -> std::io::Result<bool> {
+    commit_validated_candidate(temp, output, force, |candidate| {
+        prepare_exact_payload_candidate(candidate, original)?;
+        accept(candidate)
+    })
+}
+
+fn prepare_exact_payload_candidate(output: &Path, original: Option<&Path>) -> std::io::Result<()> {
+    let temp = output;
     validate_temp_output_commit_paths(temp, output)?;
     let temp_metadata = std::fs::metadata(temp)?;
     if !temp_metadata.is_file() || temp_metadata.len() == 0 {
@@ -1695,18 +1720,6 @@ pub fn commit_temp_to_output_preserving_exact_payload(
     }
     let expected_hash = crate::common_utils::calculate_blake3_hash(temp)
         .map_err(|error| std::io::Error::other(format!("Failed to hash exact payload: {error}")))?;
-    let in_place_commit = temp == output;
-    if !in_place_commit && !force && output.exists() {
-        crate::media_conversion_gate::delivery_remove_file_or_audit(
-            "exact payload temp cleanup when output exists",
-            temp,
-        );
-        return Ok(false);
-    }
-    if !in_place_commit {
-        crate::io_utils::robust_move(temp, output)?;
-    }
-
     if let Some(source) = original {
         let report = match crate::metadata::preserve_filesystem_for_delivery(source, output) {
             Ok(report) => report,
@@ -1752,7 +1765,7 @@ pub fn commit_temp_to_output_preserving_exact_payload(
         )));
     }
     crate::io_utils::sync_committed_file_and_parent(output)?;
-    Ok(true)
+    Ok(())
 }
 
 /// Commit a JPEG-reconstructible JXL without rewriting its codec-carried Exif.
@@ -1772,60 +1785,52 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
     force: bool,
     original: Option<&Path>,
 ) -> std::io::Result<bool> {
-    let source = original.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "JPEG-reconstructible JXL commit requires its source JPEG",
-        )
-    })?;
-    if output.exists() && !force {
-        return Ok(false);
-    }
-    crate::image::gain_map::attach_jpeg_gain_map(source, temp).map_err(|error| {
+    commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)
+}
+
+fn prepare_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
+    crate::image::gain_map::attach_jpeg_gain_map(source, output).map_err(|error| {
         std::io::Error::other(format!("Native gain-map preservation failed: {error:#}"))
     })?;
-    let committed =
-        commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)?;
-    if committed {
-        if let Err(error) = crate::image::gain_map::verify_jpeg_gain_map(source, output) {
-            crate::media_conversion_gate::delivery_remove_file_or_audit(
-                "native gain-map proof failed after metadata commit",
-                output,
-            );
-            return Err(std::io::Error::other(format!(
-                "Native gain-map proof failed after metadata commit: {error:#}"
-            )));
-        }
-        if let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output) {
-            crate::media_conversion_gate::delivery_remove_file_or_audit(
-                "JPEG reconstruction invalidated during metadata commit",
-                output,
-            );
-            return Err(std::io::Error::other(format!(
-                "JPEG reconstruction proof failed after metadata commit: {error}"
-            )));
-        }
-        if crate::metadata::find_xmp_sidecar(source).is_some() {
-            let reconstructed_jpeg_hash = crate::common_utils::calculate_blake3_hash(source)
-                .map_err(|error| {
-                    std::io::Error::other(format!(
-                        "Failed to hash source JPEG for JXL XMP audit: {error}"
-                    ))
-                })?;
-            crate::metadata::audit_jxl_overlay_reconstruction_proof(
-                output,
-                Some(&reconstructed_jpeg_hash),
-            )?;
-        }
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_METADATA,
-            &format!(
-                "Exact JPEG reconstruction verified after immutable JBRD/XMP metadata delivery: {}",
-                output.display()
-            )
+    prepare_output_metadata(output, Some(source), true, true)?;
+    if let Err(error) = crate::image::gain_map::verify_jpeg_gain_map(source, output) {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "native gain-map proof failed after metadata commit",
+            output,
         );
+        return Err(std::io::Error::other(format!(
+            "Native gain-map proof failed after metadata commit: {error:#}"
+        )));
     }
-    Ok(committed)
+    if let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output) {
+        crate::media_conversion_gate::delivery_remove_file_or_audit(
+            "JPEG reconstruction invalidated during metadata commit",
+            output,
+        );
+        return Err(std::io::Error::other(format!(
+            "JPEG reconstruction proof failed after metadata commit: {error}"
+        )));
+    }
+    if crate::metadata::find_xmp_sidecar(source).is_some() {
+        let reconstructed_jpeg_hash =
+            crate::common_utils::calculate_blake3_hash(source).map_err(|error| {
+                std::io::Error::other(format!(
+                    "Failed to hash source JPEG for JXL XMP audit: {error}"
+                ))
+            })?;
+        crate::metadata::audit_jxl_overlay_reconstruction_proof(
+            output,
+            Some(&reconstructed_jpeg_hash),
+        )?;
+    }
+    crate::log_info!(
+        crate::infra::static_logs::messages::LABEL_METADATA,
+        &format!(
+            "Exact JPEG reconstruction verified after immutable JBRD/XMP metadata delivery: {}",
+            output.display()
+        )
+    );
+    Ok(())
 }
 
 fn metadata_output_policy_for_delivery(
@@ -1850,23 +1855,71 @@ fn commit_temp_to_output_with_metadata_inner(
     pixel_audit_already_done: bool,
     preserve_codec_embedded_metadata: bool,
 ) -> std::io::Result<bool> {
-    validate_temp_output_commit_paths(temp, output)?;
+    commit_temp_to_output_with_metadata_checked(
+        temp,
+        output,
+        force,
+        original,
+        pixel_audit_already_done,
+        preserve_codec_embedded_metadata,
+        |_| Ok(true),
+    )
+}
 
-    // Temporary output may be generated in an isolated cache directory rather than
-    // beside the final output (e.g. ghost-mode / isolated search temp dirs).
-    // `robust_move()` handles cross-mount moves safely, so the validation here
-    // focuses on file legitimacy, resolved temp parent, and output parent safety.
-    if temp.exists() {
-        let size = fs::metadata(temp)?.len();
-        if size == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Refusing to commit empty output (temp file size 0)",
-            ));
+/// Prepare and verify metadata, then apply the caller's final acceptance check
+/// before replacing any existing output.
+///
+/// `false` rejects the owned candidate;
+/// the old output stays untouched. The callback receives a temporary path and
+/// must not retain it or delete the source.
+///
+/// `pixel_audit_already_done` requires an equivalent caller-side pixel proof.
+/// `preserve_codec_embedded_metadata` selects exact JPEG reconstruction in JXL
+/// (including its gain-map and XMP proofs), and requires the source JPEG.
+///
+/// # Errors
+/// Returns an error if metadata, acceptance validation or publication fails.
+pub fn commit_temp_to_output_with_metadata_checked(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+    pixel_audit_already_done: bool,
+    preserve_codec_embedded_metadata: bool,
+    accept: impl FnOnce(&Path) -> std::io::Result<bool>,
+) -> std::io::Result<bool> {
+    if preserve_codec_embedded_metadata && original.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "JPEG-reconstructible JXL commit requires its source JPEG",
+        ));
+    }
+    commit_validated_candidate(temp, output, force, |candidate| {
+        if preserve_codec_embedded_metadata && let Some(source) = original {
+            prepare_reconstructible_jxl_candidate(source, candidate)?;
+        } else {
+            prepare_output_metadata(candidate, original, pixel_audit_already_done, false)?;
         }
+        accept(candidate)
+    })
+}
+
+/// Keep the old delivery visible until every candidate proof has passed.
+/// Destination-side staging also makes cross-filesystem publication atomic.
+fn commit_validated_candidate(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    validate: impl FnOnce(&Path) -> std::io::Result<bool>,
+) -> std::io::Result<bool> {
+    validate_temp_output_commit_paths(temp, output)?;
+    if fs::metadata(temp)?.len() == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Refusing to commit empty output (temp file size 0)",
+        ));
     }
     let in_place_commit = temp == output;
-
     if !in_place_commit && !force && output.exists() {
         crate::media_conversion_gate::delivery_remove_file_or_audit(
             "commit temp cleanup when output exists",
@@ -1874,11 +1927,63 @@ fn commit_temp_to_output_with_metadata_inner(
         );
         return Ok(false);
     }
-
-    if !in_place_commit {
-        crate::io_utils::robust_move(temp, output)?;
+    let parent = crate::media_conversion_gate::output_parent_or_dot(output);
+    let suffix = format!(
+        ".{}",
+        crate::media_conversion_gate::temp_output_extension_lossy(output)
+    );
+    let staged = tempfile::Builder::new()
+        .prefix(".mfb-delivery-")
+        .suffix(&suffix)
+        .tempfile_in(parent)?
+        .into_temp_path();
+    if in_place_commit {
+        fs::copy(temp, &staged)?;
+        let report = crate::metadata::preserve_filesystem_for_delivery(temp, &staged)?;
+        if [report.xattr, report.timestamps]
+            .contains(&crate::metadata::MetadataLayerOutcome::PartialAudit)
+        {
+            return Err(std::io::Error::other(
+                "In-place candidate filesystem metadata preservation was partial",
+            ));
+        }
+        crate::metadata::verify_exact_metadata_copy(temp, &staged)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+    } else {
+        crate::io_utils::robust_move(temp, &staged)?;
     }
+    if !validate(&staged)? {
+        return Ok(false);
+    }
+    validate_temp_output_commit_paths(&staged, output)?;
+    crate::io_utils::sync_committed_file_and_parent(&staged)?;
+    let committed = if force || in_place_commit {
+        staged.persist(output)
+    } else {
+        staged.persist_noclobber(output)
+    };
+    match committed {
+        Ok(()) => {
+            crate::io_utils::sync_committed_file_and_parent(output)?;
+            Ok(true)
+        }
+        Err(error)
+            if !force
+                && !in_place_commit
+                && error.error.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.error),
+    }
+}
 
+fn prepare_output_metadata(
+    output: &Path,
+    original: Option<&Path>,
+    pixel_audit_already_done: bool,
+    preserve_codec_embedded_metadata: bool,
+) -> std::io::Result<()> {
     if preserve_codec_embedded_metadata
         && let Some(src) = original
         && crate::metadata::merge_xmp_sidecar_into_reconstructible_jxl(src, output)?
@@ -1991,16 +2096,7 @@ fn commit_temp_to_output_with_metadata_inner(
                 "delivery orientation pixel audit skipped (pixel equivalence already verified by caller)"
             );
         } else if src_exists {
-            audit_orientation_pixel_verification_for_delivery(src, output).inspect_err(|_| {
-                // Only remove the candidate moved by this commit. An in-place
-                // caller retains custody of its file even when validation fails.
-                if !in_place_commit {
-                    crate::media_conversion_gate::delivery_remove_file_or_audit(
-                        "delivery orientation pixel verification failure",
-                        output,
-                    );
-                }
-            })?;
+            audit_orientation_pixel_verification_for_delivery(src, output)?;
         }
         if !preserve_codec_embedded_metadata {
             strip_residual_orientation_tag_for_delivery(output)?;
@@ -2119,7 +2215,7 @@ fn commit_temp_to_output_with_metadata_inner(
 
     crate::io_utils::sync_committed_file_and_parent(output)?;
 
-    Ok(true)
+    Ok(())
 }
 
 fn repair_corrupt_jxl_brotli_exif_for_delivery(
@@ -3105,14 +3201,14 @@ impl SizeToleranceCheck<'_> {
         None
     }
 
-    fn handle_failure(&self, failure: SizeGuardFailure) -> TaskResult {
+    fn handle_failure(&self, failure: SizeGuardFailure) -> std::io::Result<TaskResult> {
         match failure {
             SizeGuardFailure::ToleranceExceeded => self.reject_tolerance_exceeded(),
             SizeGuardFailure::CompressionGoalMissed => self.reject_compression_goal(),
         }
     }
 
-    fn reject_tolerance_exceeded(&self) -> TaskResult {
+    fn reject_tolerance_exceeded(&self) -> std::io::Result<TaskResult> {
         let delta = self.delta();
         let mode = if self.options.effective_allow_size_tolerance() {
             "allowed growth: absolute byte allowance"
@@ -3121,14 +3217,18 @@ impl SizeToleranceCheck<'_> {
         };
 
         self.log_discard(delta, Some(mode));
-        self.cleanup_output(SizeGuardFailure::ToleranceExceeded);
-        self.preserve_original(SizeGuardFailure::ToleranceExceeded);
+        self.cleanup_output(SizeGuardFailure::ToleranceExceeded)?;
+        self.preserve_original(SizeGuardFailure::ToleranceExceeded)?;
         mark_as_processed(self.input);
 
-        TaskResult::skipped_size_increase(self.input, self.input_size, self.output_size)
+        Ok(TaskResult::skipped_size_increase(
+            self.input,
+            self.input_size,
+            self.output_size,
+        ))
     }
 
-    fn reject_compression_goal(&self) -> TaskResult {
+    fn reject_compression_goal(&self) -> std::io::Result<TaskResult> {
         let delta = self.delta();
 
         if delta.change_pct.abs() < 0.01_f64 {
@@ -3147,11 +3247,15 @@ impl SizeToleranceCheck<'_> {
             self.log_discard(delta, None);
         }
 
-        self.cleanup_output(SizeGuardFailure::CompressionGoalMissed);
-        self.preserve_original(SizeGuardFailure::CompressionGoalMissed);
+        self.cleanup_output(SizeGuardFailure::CompressionGoalMissed)?;
+        self.preserve_original(SizeGuardFailure::CompressionGoalMissed)?;
         mark_as_processed(self.input);
 
-        TaskResult::skipped_size_unchanged(self.input, self.input_size, self.format_label)
+        Ok(TaskResult::skipped_size_unchanged(
+            self.input,
+            self.input_size,
+            self.format_label,
+        ))
     }
 
     fn log_discard(&self, delta: SizeDeltaSummary, mode: Option<&str>) {
@@ -3207,7 +3311,7 @@ impl SizeToleranceCheck<'_> {
         ));
     }
 
-    fn cleanup_output(&self, failure: SizeGuardFailure) {
+    fn cleanup_output(&self, failure: SizeGuardFailure) -> std::io::Result<()> {
         if let Err(err) = fs::remove_file(self.output) {
             match failure {
                 SizeGuardFailure::ToleranceExceeded => {
@@ -3224,10 +3328,12 @@ impl SizeToleranceCheck<'_> {
                     );
                 }
             }
+            return Err(err);
         }
+        Ok(())
     }
 
-    fn preserve_original(&self, failure: SizeGuardFailure) {
+    fn preserve_original(&self, failure: SizeGuardFailure) -> std::io::Result<()> {
         match copy_on_skip_or_fail(
             self.input,
             self.options.output_dir.as_deref(),
@@ -3254,26 +3360,37 @@ impl SizeToleranceCheck<'_> {
                 }
             },
             Ok(None) => {}
-            Err(err) => match failure {
-                SizeGuardFailure::ToleranceExceeded => {
-                    crate::media_conversion_gate::delivery_api_path_fallback_audit(
-                        "size_guard_bitstream_copy_failed",
-                        self.input,
-                        format!("failed to copy original bitstream: {err}"),
-                    );
+            Err(err) => {
+                match failure {
+                    SizeGuardFailure::ToleranceExceeded => {
+                        crate::media_conversion_gate::delivery_api_path_fallback_audit(
+                            "size_guard_bitstream_copy_failed",
+                            self.input,
+                            format!("failed to copy original bitstream: {err}"),
+                        );
+                    }
+                    SizeGuardFailure::CompressionGoalMissed => {
+                        crate::log_upstream_error!(
+                            "File copy",
+                            format!("Conversion Audit: Upstream copy failed: {err}")
+                        );
+                    }
                 }
-                SizeGuardFailure::CompressionGoalMissed => {
-                    crate::log_upstream_error!(
-                        "File copy",
-                        format!("Conversion Audit: Upstream copy failed: {err}")
-                    );
-                }
-            },
+                return Err(std::io::Error::other(format!(
+                    "Failed to preserve rejected candidate's source: {err}"
+                )));
+            }
         }
+        Ok(())
     }
 }
 
-#[must_use]
+/// Reject an oversized candidate, clean it up and preserve its source.
+/// The output must be an owned temporary candidate, not a published delivery.
+///
+/// # Errors
+/// Propagates candidate cleanup and required source-copy failures. Such inputs
+/// must remain eligible for retry rather than being marked processed.
 pub fn check_size_tolerance(
     input: &Path,
     output: &Path,
@@ -3281,7 +3398,7 @@ pub fn check_size_tolerance(
     output_size: u64,
     options: &ConvertOptions,
     format_label: &str,
-) -> Option<TaskResult> {
+) -> std::io::Result<Option<TaskResult>> {
     let check = SizeToleranceCheck {
         input,
         output,
@@ -3294,6 +3411,7 @@ pub fn check_size_tolerance(
     check
         .evaluate()
         .map(|failure| check.handle_failure(failure))
+        .transpose()
 }
 
 /// Validate input file for conversion.
@@ -3753,6 +3871,61 @@ mod tests {
                 .contains("commit_temp_to_output has been removed"),
             "unexpected error message: {err}"
         );
+    }
+
+    #[test]
+    fn failed_metadata_commit_preserves_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_parent = dir.path().join("source-parent");
+        std::fs::write(&source_parent, b"source directory became a file").unwrap();
+        let source = source_parent.join("original.jpg");
+        let output = dir.path().join("existing.jxl");
+        let temp = dir.path().join("candidate.jxl");
+        let original_output = b"previous verified output must survive";
+        std::fs::write(&output, original_output).unwrap();
+        std::fs::write(&temp, b"new candidate").unwrap();
+
+        let result = commit_temp_to_output_with_metadata(&temp, &output, true, Some(&source));
+        assert!(
+            result.is_err(),
+            "unreadable source metadata must fail closed"
+        );
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            original_output,
+            "failed conversion must not replace an existing verified delivery"
+        );
+    }
+
+    #[test]
+    fn candidate_transaction_preserves_in_place_and_concurrent_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("output.jxl");
+        std::fs::write(&output, b"original").unwrap();
+        let failed = commit_validated_candidate(&output, &output, false, |candidate| {
+            std::fs::write(candidate, b"rejected")?;
+            Err(std::io::Error::other("injected validation failure"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"original");
+
+        let temp = dir.path().join("candidate.jxl");
+        let concurrent = dir.path().join("concurrent.jxl");
+        std::fs::write(&temp, b"candidate").unwrap();
+        let committed = commit_validated_candidate(&temp, &concurrent, false, |_| {
+            std::fs::write(&concurrent, b"concurrent writer")?;
+            Ok(true)
+        })
+        .unwrap();
+        assert!(!committed);
+        assert_eq!(std::fs::read(&concurrent).unwrap(), b"concurrent writer");
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mfb-delivery-")
+        }));
     }
 
     #[test]
@@ -4641,7 +4814,7 @@ mod tests {
 
         let result = check_size_tolerance(&input, &output, 4, 17, &opts, "JPEG lossless");
 
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
         assert!(
             output.exists(),
             "required delivery must preserve the verified output even when larger"

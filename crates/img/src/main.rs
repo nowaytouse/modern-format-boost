@@ -7235,7 +7235,7 @@ fn restore_single_jpeg(
     restore_jpeg_decode_to_temp(input, &temp_output)?;
 
     // Keep the official byte-exact djxl reconstruction for the
-    // post-commit byte proof. This avoids launching djxl a second time for
+    // candidate byte proof. This avoids launching djxl a second time for
     // every committed file.
     let proof_snapshot = temp_output.with_extension("mfb-restore-proof.jpg");
     let _proof_guard = foundation::conversion::TempOutputGuard::new(proof_snapshot.clone());
@@ -7246,101 +7246,53 @@ fn restore_single_jpeg(
         )
     })?;
 
-    let commit_result = foundation::conversion::commit_temp_to_output_preserving_exact_payload(
+    let mut candidate_proof = None;
+    let committed = foundation::conversion::commit_temp_to_output_preserving_exact_payload_checked(
         &temp_output,
         &output,
         force,
         Some(input),
+        |candidate| {
+            let validate = (|| -> anyhow::Result<()> {
+                let mut proof = restore_jpeg_build_current_proof_with_decoder(
+                    input,
+                    input_root,
+                    candidate,
+                    output_root,
+                    |_input, fresh_decode| {
+                        std::fs::copy(&proof_snapshot, fresh_decode)
+                            .map(|_| ())
+                            .context("restore-jpeg failed to stage djxl proof snapshot")
+                    },
+                )?;
+                restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof")?;
+                proof.output.clone_from(&output);
+                proof.output_rel = restore_jpeg_relative_string(&output, output_root)?;
+                // Validate and deliver sidecar metadata before replacing the JPEG.
+                // On any sidecar failure the previous JPEG remains untouched.
+                let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, &output, force)?;
+                proof.xmp_sidecar = xmp_commit.sidecar;
+                proof.source_xmp_sidecar = xmp_commit.source_sidecar;
+                proof.source_retention_reason = xmp_commit.source_retention_reason;
+                candidate_proof = Some(proof);
+                Ok(())
+            })();
+            validate
+                .map(|()| true)
+                .map_err(|error| std::io::Error::other(format!("{error:#}")))
+        },
     )
     .with_context(|| {
         format!(
             "restore-jpeg failed to commit byte-identical output {}",
             output.display()
         )
-    });
-    let committed = match commit_result {
-        Ok(committed) => committed,
-        Err(err) => {
-            if let Err(cleanup_error) =
-                restore_jpeg_remove_temp(&proof_snapshot, "failed exact payload commit")
-            {
-                return Err(err.context(format!(
-                    "restore-jpeg exact payload commit also failed to clean proof snapshot: {cleanup_error}"
-                )));
-            }
-            return Err(err);
-        }
+    })?;
+    let proof = if committed {
+        candidate_proof.context("restore-jpeg committed output is missing its candidate proof")?
+    } else {
+        restore_jpeg_build_current_proof(input, input_root, &output, output_root)?
     };
-    let xmp_commit = match restore_jpeg_commit_xmp_sidecar(input, &output, force) {
-        Ok(commit) => commit,
-        Err(error) => {
-            if committed {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "restore-jpeg incomplete metadata delivery cleanup",
-                    &output,
-                );
-            }
-            if let Err(cleanup_error) =
-                restore_jpeg_remove_temp(&proof_snapshot, "failed XMP sidecar delivery")
-            {
-                return Err(error.context(format!(
-                    "restore-jpeg XMP delivery also failed to clean proof snapshot: {cleanup_error}"
-                )));
-            }
-            return Err(error);
-        }
-    };
-    let proof_result = restore_jpeg_build_current_proof_with_decoder(
-        input,
-        input_root,
-        &output,
-        output_root,
-        |_input, fresh_decode| {
-            std::fs::copy(&proof_snapshot, fresh_decode)
-                .map(|_| ())
-                .with_context(|| {
-                    format!(
-                        "restore-jpeg failed to stage djxl proof snapshot {}",
-                        proof_snapshot.display()
-                    )
-                })
-        },
-    )
-    .with_context(|| {
-        format!(
-            "restore-jpeg failed to build deletion proof for {} -> {}",
-            input.display(),
-            output.display()
-        )
-    });
-    let cleanup_result = restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof");
-    let mut proof = match (proof_result, cleanup_result) {
-        (Ok(proof), Ok(())) => proof,
-        (Ok(_), Err(cleanup_err)) => return Err(cleanup_err),
-        (Err(err), Ok(())) => {
-            if committed {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "restore-jpeg failed final proof output cleanup",
-                    &output,
-                );
-            }
-            return Err(err);
-        }
-        (Err(err), Err(cleanup_err)) => {
-            if committed {
-                foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                    "restore-jpeg failed final proof output cleanup",
-                    &output,
-                );
-            }
-            return Err(err.context(format!(
-                "restore-jpeg proof snapshot cleanup also failed: {cleanup_err}"
-            )));
-        }
-    };
-    proof.xmp_sidecar = xmp_commit.sidecar;
-    proof.source_xmp_sidecar = xmp_commit.source_sidecar;
-    proof.source_retention_reason = xmp_commit.source_retention_reason;
 
     Ok(RestoreJpegResult { committed, proof })
 }
@@ -10611,6 +10563,19 @@ mod fast_img_hardening_tests {
         assert!(restored_without_xmp.committed);
         assert!(output_root.join("plain.jpg").exists());
         assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg")).is_none());
+
+        // --force must not destroy an earlier delivery when its replacement's
+        // sidecar fails validation after successful JPEG reconstruction.
+        std::fs::write(&output, b"previous JPEG delivery")?;
+        let delivered_xmp = output_root.join("camera.xmp");
+        let previous_xmp = std::fs::read(&delivered_xmp)?;
+        std::fs::write(&source_xmp, b"not valid XMP")?;
+        let error = restore_single_jpeg(&source, &input_root, &output_root, true)
+            .expect_err("invalid XMP must reject the replacement");
+        assert!(format!("{error:#}").contains("XMP"));
+        assert_eq!(std::fs::read(&output)?, b"previous JPEG delivery");
+        assert_eq!(std::fs::read(&delivered_xmp)?, previous_xmp);
+        assert!(source.exists());
         Ok(())
     }
 

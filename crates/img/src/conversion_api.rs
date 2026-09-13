@@ -422,22 +422,63 @@ fn finalize_conversion_output(
     output_path: &Path,
     temp_path: &Path,
 ) -> Result<ConversionOutput> {
-    let committed = if detection.format == DetectedFormat::JPEG {
-        foundation::conversion::commit_reconstructible_jxl_to_output_with_metadata(
-            temp_path,
-            output_path,
-            config.force(),
-            Some(input_path),
-        )
-    } else {
-        foundation::conversion::commit_temp_to_output_with_metadata(
-            temp_path,
-            output_path,
-            config.force(),
-            Some(input_path),
-        )
-    }
+    let mut size_rejected = false;
+    let mut jpeg_integrity = None;
+    let committed = foundation::conversion::commit_temp_to_output_with_metadata_checked(
+        temp_path,
+        output_path,
+        config.force(),
+        Some(input_path),
+        detection.format == DetectedFormat::JPEG,
+        detection.format == DetectedFormat::JPEG,
+        |candidate| {
+            if config.compress() {
+                let input_payload = foundation::image::static_payload::measure(input_path)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                let output_payload = foundation::image::static_payload::measure(candidate)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                if !config.size_policy().fits(output_payload, input_payload) {
+                    foundation::copy_on_skip_or_fail(
+                        input_path,
+                        config.output_dir.as_deref(),
+                        config.base_dir.as_deref(),
+                        false,
+                    )
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                    size_rejected = true;
+                    return Ok(false);
+                }
+            }
+            if detection.format == DetectedFormat::JPEG {
+                jpeg_integrity = Some(
+                    foundation::fast_img::verify_final_jxl_delivery_integrity(
+                        input_path, candidate,
+                    )
+                    .map_err(|error| {
+                        std::io::Error::other(format!(
+                            "Final JPEG reconstruction proof failed for {}: {error}",
+                            output_path.display()
+                        ))
+                    })?,
+                );
+            }
+            Ok(true)
+        },
+    )
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    if size_rejected {
+        return Ok(ConversionOutput {
+            original_path: detection.file_path.clone(),
+            output_path: input_path.display().to_string(),
+            skipped: true,
+            ignored: false,
+            message: "Skipped: encoded image payload is outside the active size policy".to_string(),
+            original_size: detection.file_size,
+            output_size: None,
+            size_reduction: None,
+            blake3: None,
+        });
+    }
     if !committed {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
@@ -472,51 +513,6 @@ fn finalize_conversion_output(
             })
         }
     });
-
-    // Compress mode uses the same pure-media policy as the encoder gate.
-    if config.compress() {
-        let input_payload = foundation::image::static_payload::measure(input_path)
-            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        let output_payload = foundation::image::static_payload::measure(output_path)
-            .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
-        if !config.size_policy().fits(output_payload, input_payload) {
-            cleanup_output_file(output_path, "oversized output in compress mode");
-            foundation::copy_on_skip_or_fail(
-                input_path,
-                config.output_dir.as_deref(),
-                config.base_dir.as_deref(),
-                false,
-            )
-            .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-            return Ok(ConversionOutput {
-                original_path: detection.file_path.clone(),
-                output_path: input_path.display().to_string(),
-                skipped: true,
-                ignored: false,
-                message: "Skipped: encoded image payload is outside the active size policy"
-                    .to_string(),
-                original_size: detection.file_size,
-                output_size: None,
-                size_reduction: None,
-                blake3: None,
-            });
-        }
-    }
-
-    let jpeg_integrity = if detection.format == DetectedFormat::JPEG {
-        match foundation::fast_img::verify_final_jxl_delivery_integrity(input_path, output_path) {
-            Ok(integrity) => Some(integrity),
-            Err(error) => {
-                cleanup_output_file(output_path, "failed final JPEG reconstruction proof");
-                return Err(ImgQualityError::ConversionError(format!(
-                    "Final JPEG reconstruction proof failed for {}: {error}",
-                    output_path.display()
-                )));
-            }
-        }
-    } else {
-        None
-    };
 
     if config.delete_original() {
         if let Some(integrity) = jpeg_integrity.as_ref() {
@@ -928,6 +924,45 @@ mod tests {
             let strategy = determine_strategy(&detection)?;
             assert_eq!(strategy.target, TargetFormat::NoConversion);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn size_rejection_keeps_previous_delivery() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let input = root.path().join("source.png");
+        let candidate = root.path().join("candidate.png");
+        let output = root.path().join("output.png");
+        image::RgbImage::from_pixel(16, 16, image::Rgb([10, 20, 30])).save(&input)?;
+        std::fs::copy(&input, &candidate)?;
+        std::fs::write(&output, b"previous delivery")?;
+        let detection = DetectionResult {
+            file_path: input.display().to_string(),
+            format: DetectedFormat::PNG,
+            image_type: ImageType::Static,
+            compression: CompressionType::Lossless,
+            width: 16,
+            height: 16,
+            bit_depth: Some(8),
+            has_alpha: false,
+            file_size: std::fs::metadata(&input)?.len(),
+            frame_count: None,
+            fps: None,
+            duration: None,
+            estimated_quality: None,
+            entropy: None,
+            precision: foundation::image_detection::PrecisionMetadata::default(),
+        };
+        let mut config = ConversionConfig::default();
+        config
+            .flags
+            .insert(ConfigFlags::FORCE | ConfigFlags::COMPRESS);
+        let result = finalize_conversion_output(&detection, &config, &input, &output, &candidate)?;
+        assert!(result.skipped);
+        assert!(result.message.contains("size policy"));
+        assert_eq!(std::fs::read(&output)?, b"previous delivery");
+        assert!(input.exists());
+        assert!(!candidate.exists());
         Ok(())
     }
 
