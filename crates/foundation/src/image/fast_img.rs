@@ -1691,8 +1691,10 @@ pub fn image_data_sha256(path: &Path) -> Result<String> {
 }
 
 /// Hash the stable codec/transform/HDR/gain-map report emitted by `avifdec`.
-/// File paths, progress text, and XMP presence are excluded because a
-/// metadata-only edit is expected to change only the latter.
+///
+/// File paths, progress text, and Exif/XMP presence are excluded: descriptive
+/// metadata has a separate preservation/clear-policy audit. Color, transforms,
+/// ICC, HDR and gain-map features remain part of this proof.
 pub fn avif_codec_feature_hash(path: &Path) -> Result<String> {
     let avifdec = crate::common_utils::resolve_tool_path("avifdec").ok_or_else(|| {
         ImgQualityError::AnalysisError(
@@ -1746,6 +1748,7 @@ pub fn avif_codec_feature_hash(path: &Path) -> Result<String> {
                 && !line.starts_with("Decoding with codec")
                 && !line.starts_with("Image decoded:")
                 && !line.starts_with("* XMP Metadata")
+                && !line.starts_with("* Exif Metadata")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -7760,6 +7763,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn photos_import_rejects_scrambled_library_bytes_before_checkpoint() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(

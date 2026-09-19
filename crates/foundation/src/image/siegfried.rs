@@ -45,9 +45,18 @@ impl SiegfriedMatch {
     /// A match backed only by the file extension carries no content evidence.
     #[must_use]
     pub fn is_extension_only(&self) -> bool {
-        (self.basis.contains("extension match") && !self.basis.contains("byte match"))
+        (self.basis.contains("extension match") && !has_content_evidence(&self.basis))
             || self.warning.to_ascii_lowercase().contains("extension only")
     }
+}
+
+/// Only explicit byte/container signature evidence confirms content. Missing
+/// fields, names and extensions must never be upgraded by exclusion.
+pub(super) fn has_content_evidence(basis: &str) -> bool {
+    basis.split(';').any(|part| {
+        let part = part.trim();
+        part.starts_with("byte match ") || part.starts_with("container match ")
+    })
 }
 
 /// Per-file report: every match, plus the `errors` field sf uses for scan
@@ -429,6 +438,15 @@ mod tests {
         assert!(m.is_extension_only());
         m.basis = "extension match jxl; byte match at 0, 2".to_string();
         assert!(!m.is_extension_only(), "byte evidence upgrades the match");
+        m.basis =
+            "extension match zip; container match with trigger and default extension".to_string();
+        assert!(
+            !m.is_extension_only(),
+            "container evidence is content evidence"
+        );
+        assert!(has_content_evidence(&m.basis));
+        assert!(!has_content_evidence("name match; no byte match found"));
+        assert!(!has_content_evidence(""));
         m.basis = String::new();
         m.warning = "match on extension only".to_string();
         assert!(m.is_extension_only());

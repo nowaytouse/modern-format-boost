@@ -14,7 +14,8 @@
 
 use super::format_detect::{FormatKind, detect_true_format};
 use super::siegfried::{
-    SiegfriedFileReport, SiegfriedMatch, SiegfriedProbe, identify_paths, puid_to_format_kind,
+    SiegfriedFileReport, SiegfriedMatch, SiegfriedProbe, has_content_evidence, identify_paths,
+    puid_to_format_kind,
 };
 use crate::unified_error::Result;
 use std::collections::BTreeMap;
@@ -50,6 +51,7 @@ pub enum DetectionConfidence {
 /// human-readable name is informational).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PronomIdentity {
+    pub namespace: String,
     pub puid: String,
     pub name: String,
     pub version: String,
@@ -62,6 +64,7 @@ pub struct PronomIdentity {
 impl PronomIdentity {
     fn from_match(m: &SiegfriedMatch) -> Self {
         Self {
+            namespace: m.ns.clone(),
             puid: m.id.clone(),
             name: m.format_name.clone(),
             version: m.version.clone(),
@@ -73,7 +76,7 @@ impl PronomIdentity {
     }
 
     fn is_extension_only(&self) -> bool {
-        (self.basis.contains("extension match") && !self.basis.contains("byte match"))
+        (self.basis.contains("extension match") && !has_content_evidence(&self.basis))
             || self.warning.to_ascii_lowercase().contains("extension only")
     }
 }
@@ -95,6 +98,9 @@ pub struct FormatIdentity {
     /// Every PRONOM candidate, in sidecar order. Ambiguous results are never
     /// collapsed to an arbitrary representative.
     pub pronom: Vec<PronomIdentity>,
+    /// Sidecar execution, missing-report or per-file scan failure. Rejected
+    /// candidates remain in `pronom` for diagnostics, never for promotion.
+    pub external_error: Option<String>,
 }
 
 /// Processing stance derived from identity — "identified" never implies
@@ -131,7 +137,9 @@ pub fn support_level(identity: &FormatIdentity) -> SupportLevel {
         }
         F::Mp4 | F::Mov | F::Mkv | F::Webm => SupportLevel::Unsupported,
         F::Unknown => {
-            if identity.pronom.iter().any(|item| !item.is_extension_only()) {
+            if identity.external_error.is_none()
+                && identity.pronom.iter().any(|item| !item.is_extension_only())
+            {
                 SupportLevel::DetectOnly
             } else {
                 SupportLevel::Unknown
@@ -172,20 +180,20 @@ fn extension_mismatches(family: FormatKind, hint: Option<&str>) -> bool {
 
 /// Classify external evidence into a confidence level. Multiple matches stay
 /// `Ambiguous`; extension-only matches stay `ExtensionOnly`.
-fn pronom_confidence(report: &SiegfriedFileReport) -> (DetectionConfidence, usize) {
-    let count = report.matches.len();
-    let confidence = match count {
-        0 => DetectionConfidence::Unknown,
-        1 => {
-            if report.matches[0].is_extension_only() {
+fn pronom_confidence(report: &SiegfriedFileReport) -> DetectionConfidence {
+    match report.matches.as_slice() {
+        [] => DetectionConfidence::Unknown,
+        [candidate] => {
+            if candidate.is_extension_only() {
                 DetectionConfidence::ExtensionOnly
-            } else {
+            } else if has_content_evidence(&candidate.basis) {
                 DetectionConfidence::Confirmed
+            } else {
+                DetectionConfidence::Likely
             }
         }
         _ => DetectionConfidence::Ambiguous,
-    };
-    (confidence, count)
+    }
 }
 
 /// Resolve the identity of `path`.
@@ -214,39 +222,55 @@ fn internal_identity(path: &Path) -> Result<FormatIdentity> {
         extension_hint: hint,
         extension_mismatch: internal_mismatch,
         pronom: Vec::new(),
+        external_error: None,
     })
 }
 
 fn merge_pronom_report(identity: &mut FormatIdentity, report: &SiegfriedFileReport) {
-    let (confidence, _) = pronom_confidence(report);
     identity.pronom = report
         .matches
         .iter()
         .map(PronomIdentity::from_match)
         .collect();
+    identity.external_error = (!report.errors.is_empty()).then(|| report.errors.clone());
+    if identity.external_error.is_some() {
+        return;
+    }
+    let confidence = pronom_confidence(report);
+    if identity.family == FormatKind::Unknown {
+        identity.confidence = confidence;
+        if !report.matches.is_empty() {
+            identity.source = DetectionSource::SiegfriedPronom;
+        }
+    }
     // Only one content-backed match is eligible to enrich the machine
-    // identity. Multiple matches remain Ambiguous and an extension-only match
-    // remains a diagnostic hint.
-    if report.matches.len() == 1 && !report.matches[0].is_extension_only() {
-        let m = &report.matches[0];
-        if identity.mime.is_none() && !m.mime.is_empty() {
+    // identity. Weak, ambiguous and extension-only evidence stays diagnostic.
+    if confidence != DetectionConfidence::Confirmed {
+        return;
+    }
+    let m = &report.matches[0];
+    // PUIDs are meaningful only inside their namespace, including when sf
+    // is configured with additional/custom signature identifiers.
+    let external_family = if m.ns == "pronom" {
+        puid_to_format_kind(&m.id)
+    } else {
+        None
+    };
+    if identity.family == FormatKind::Unknown {
+        if !m.mime.is_empty() {
             identity.mime = Some(m.mime.clone());
         }
-        if identity.family == FormatKind::Unknown
-            && let Some(family) = puid_to_format_kind(&m.id)
-        {
+        if let Some(family) = external_family {
             identity.family = family;
-            identity.source = DetectionSource::SiegfriedPronom;
-            identity.confidence = confidence;
+            identity.extension_mismatch =
+                extension_mismatches(family, identity.extension_hint.as_deref());
         }
     }
     // Internal magic evidence outranks PRONOM for known families; external
     // data is Combined only when it actually corroborates the same family.
     if identity.source == DetectionSource::InternalSignature
         && identity.family != FormatKind::Unknown
-        && report.matches.len() == 1
-        && !report.matches[0].is_extension_only()
-        && puid_to_format_kind(&report.matches[0].id) == Some(identity.family)
+        && external_family == Some(identity.family)
     {
         identity.source = DetectionSource::Combined;
     }
@@ -271,28 +295,45 @@ pub fn resolve_format_identities(paths: &[std::path::PathBuf]) -> Result<Vec<For
         return Ok(identities);
     }
 
-    match identify_paths(&external_paths)? {
-        SiegfriedProbe::Identified { files, .. } => {
-            let reports = files
-                .iter()
-                .map(|report| (report.filename.as_str(), report))
-                .collect::<BTreeMap<_, _>>();
-            for (path, identity) in paths.iter().zip(&mut identities) {
-                if identity.family != FormatKind::Unknown && !identity.extension_mismatch {
-                    continue;
-                }
-                if let Some(report) = reports.get(path.to_string_lossy().as_ref()) {
-                    merge_pronom_report(identity, report);
-                }
-            }
-        }
-        SiegfriedProbe::Unavailable { reason } => tracing::debug!(
-            target: "format_identity",
-            reason = %reason,
-            "external batch identification unavailable; internal results retained"
-        ),
-    }
+    merge_siegfried_probe(paths, &mut identities, &identify_paths(&external_paths)?);
     Ok(identities)
+}
+
+fn merge_siegfried_probe(
+    paths: &[std::path::PathBuf],
+    identities: &mut [FormatIdentity],
+    probe: &SiegfriedProbe,
+) {
+    let reports = match probe {
+        SiegfriedProbe::Identified { files, .. } => files
+            .iter()
+            .map(|report| (report.filename.as_str(), report))
+            .collect::<BTreeMap<_, _>>(),
+        SiegfriedProbe::Unavailable { .. } => BTreeMap::new(),
+    };
+    for (path, identity) in paths.iter().zip(identities) {
+        if identity.family != FormatKind::Unknown && !identity.extension_mismatch {
+            continue;
+        }
+        if let Some(report) = reports.get(path.to_string_lossy().as_ref()) {
+            merge_pronom_report(identity, report);
+        } else {
+            identity.external_error = Some(match probe {
+                SiegfriedProbe::Unavailable { reason } => reason.clone(),
+                SiegfriedProbe::Identified { .. } => {
+                    "sf produced no report entry for this path".to_string()
+                }
+            });
+        }
+        if let Some(reason) = &identity.external_error {
+            tracing::warn!(
+                target: "format_identity",
+                path = %path.display(),
+                reason = %reason,
+                "external identification failed; internal identity retained"
+            );
+        }
+    }
 }
 
 /// Resolve one path. Batch callers should use [`resolve_format_identities`] to
@@ -310,6 +351,7 @@ pub fn resolve_format_identity(path: &Path) -> Result<FormatIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::siegfried::SiegfriedMeta;
 
     const ONE_BY_ONE_RGBA_PNG: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
@@ -402,6 +444,7 @@ mod tests {
             extension_hint: Some("bmp".to_string()),
             extension_mismatch: false,
             pronom: Vec::new(),
+            external_error: None,
         };
         assert_eq!(support_level(&identity), SupportLevel::DetectOnly);
 
@@ -412,6 +455,7 @@ mod tests {
         // unsupported, never conflated with unknown-format.
         identity.family = FormatKind::Unknown;
         identity.pronom = vec![PronomIdentity {
+            namespace: "pronom".to_string(),
             puid: "fmt/999".to_string(),
             name: "Some Ancient Raster Format".to_string(),
             version: String::new(),
@@ -433,6 +477,7 @@ mod tests {
             extension_hint: Some("bin".to_string()),
             extension_mismatch: false,
             pronom: Vec::new(),
+            external_error: None,
         };
         let report = SiegfriedFileReport {
             filename: "ambiguous.bin".to_string(),
@@ -452,7 +497,8 @@ mod tests {
         };
         merge_pronom_report(&mut identity, &report);
         assert_eq!(identity.family, FormatKind::Unknown);
-        assert_eq!(identity.source, DetectionSource::InternalSignature);
+        assert_eq!(identity.source, DetectionSource::SiegfriedPronom);
+        assert_eq!(identity.confidence, DetectionConfidence::Ambiguous);
         assert_eq!(identity.pronom.len(), 2);
         assert_ne!(support_level(&identity), SupportLevel::FullySupported);
     }
@@ -467,6 +513,7 @@ mod tests {
             extension_hint: Some("jxl".to_string()),
             extension_mismatch: false,
             pronom: Vec::new(),
+            external_error: None,
         };
         let report = SiegfriedFileReport {
             filename: "hint.jxl".to_string(),
@@ -479,6 +526,245 @@ mod tests {
         };
         merge_pronom_report(&mut identity, &report);
         assert_eq!(identity.family, FormatKind::Unknown);
+        assert_eq!(identity.confidence, DetectionConfidence::ExtensionOnly);
         assert_eq!(support_level(&identity), SupportLevel::Unknown);
+    }
+
+    fn unknown_identity() -> FormatIdentity {
+        FormatIdentity {
+            family: FormatKind::Unknown,
+            source: DetectionSource::InternalSignature,
+            confidence: DetectionConfidence::Unknown,
+            mime: None,
+            extension_hint: Some("bin".to_string()),
+            extension_mismatch: false,
+            pronom: Vec::new(),
+            external_error: None,
+        }
+    }
+
+    #[test]
+    fn single_pronom_candidate_requires_positive_content_evidence() {
+        for (basis, expected_confidence, expected_family) in [
+            ("", DetectionConfidence::Likely, FormatKind::Unknown),
+            (
+                "name match",
+                DetectionConfidence::Likely,
+                FormatKind::Unknown,
+            ),
+            (
+                "byte match at 0, 8",
+                DetectionConfidence::Confirmed,
+                FormatKind::Png,
+            ),
+            (
+                "container match with PNG",
+                DetectionConfidence::Confirmed,
+                FormatKind::Png,
+            ),
+            (
+                "extension match png; container match with PNG",
+                DetectionConfidence::Confirmed,
+                FormatKind::Png,
+            ),
+        ] {
+            let mut identity = unknown_identity();
+            let report = SiegfriedFileReport {
+                matches: vec![SiegfriedMatch {
+                    ns: "pronom".to_string(),
+                    id: "fmt/11".to_string(),
+                    mime: "image/png".to_string(),
+                    basis: basis.to_string(),
+                    ..SiegfriedMatch::default()
+                }],
+                ..SiegfriedFileReport::default()
+            };
+            merge_pronom_report(&mut identity, &report);
+            assert_eq!(identity.confidence, expected_confidence, "basis: {basis}");
+            assert_eq!(identity.family, expected_family, "basis: {basis}");
+            if expected_family == FormatKind::Unknown {
+                assert!(identity.mime.is_none(), "weak evidence must not set MIME");
+            } else {
+                assert!(
+                    identity.extension_mismatch,
+                    "promoted family must recheck extension"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unmapped_pronom_identity_preserves_confidence_without_enabling_conversion() {
+        let mut identity = unknown_identity();
+        let report = SiegfriedFileReport {
+            matches: vec![SiegfriedMatch {
+                ns: "pronom".to_string(),
+                id: "fmt/999999".to_string(),
+                mime: "application/x-unknown-family".to_string(),
+                basis: "byte match at 0, 8".to_string(),
+                ..SiegfriedMatch::default()
+            }],
+            ..SiegfriedFileReport::default()
+        };
+        merge_pronom_report(&mut identity, &report);
+        assert_eq!(identity.confidence, DetectionConfidence::Confirmed);
+        assert_eq!(identity.source, DetectionSource::SiegfriedPronom);
+        assert_eq!(identity.family, FormatKind::Unknown);
+        assert_eq!(support_level(&identity), SupportLevel::DetectOnly);
+    }
+
+    #[test]
+    fn errored_pronom_report_cannot_promote_or_corroborate_identity() {
+        let report = SiegfriedFileReport {
+            errors: "failed to read the complete file".to_string(),
+            matches: vec![SiegfriedMatch {
+                ns: "pronom".to_string(),
+                id: "fmt/11".to_string(),
+                mime: "image/png".to_string(),
+                basis: "byte match at 0, 8".to_string(),
+                ..SiegfriedMatch::default()
+            }],
+            ..SiegfriedFileReport::default()
+        };
+        let mut identity = unknown_identity();
+        merge_pronom_report(&mut identity, &report);
+        assert_eq!(identity.family, FormatKind::Unknown);
+        assert_eq!(identity.confidence, DetectionConfidence::Unknown);
+        assert_eq!(support_level(&identity), SupportLevel::Unknown);
+        assert!(identity.mime.is_none());
+        assert_eq!(
+            identity.pronom.len(),
+            1,
+            "keep rejected evidence for diagnostics"
+        );
+        assert_eq!(
+            identity.external_error.as_deref(),
+            Some(report.errors.as_str())
+        );
+
+        identity.family = FormatKind::Png;
+        identity.source = DetectionSource::InternalSignature;
+        identity.confidence = DetectionConfidence::Confirmed;
+        identity.mime = Some("image/png".to_string());
+        merge_pronom_report(&mut identity, &report);
+        assert_eq!(identity.source, DetectionSource::InternalSignature);
+        assert_eq!(identity.family, FormatKind::Png);
+        assert_eq!(identity.confidence, DetectionConfidence::Confirmed);
+    }
+
+    #[test]
+    fn pronom_namespace_and_internal_signature_bound_promotion() {
+        for (namespace, basis, warning, id) in [
+            ("custom", "byte match at 0, 8", "", "fmt/11"),
+            ("", "byte match at 0, 8", "", "fmt/11"),
+            ("pronom", "name match", "", "fmt/11"),
+            (
+                "pronom",
+                "byte match at 0, 8",
+                "match on extension only",
+                "fmt/11",
+            ),
+        ] {
+            let report = SiegfriedFileReport {
+                matches: vec![SiegfriedMatch {
+                    ns: namespace.to_string(),
+                    id: id.to_string(),
+                    mime: "image/png".to_string(),
+                    basis: basis.to_string(),
+                    warning: warning.to_string(),
+                    ..SiegfriedMatch::default()
+                }],
+                ..SiegfriedFileReport::default()
+            };
+            let mut identity = unknown_identity();
+            merge_pronom_report(&mut identity, &report);
+            assert_eq!(identity.family, FormatKind::Unknown);
+            assert_eq!(identity.pronom[0].namespace, namespace);
+            identity.family = FormatKind::Png;
+            identity.source = DetectionSource::InternalSignature;
+            identity.confidence = DetectionConfidence::Confirmed;
+            identity.mime = Some("image/png".to_string());
+            merge_pronom_report(&mut identity, &report);
+            assert_eq!(identity.source, DetectionSource::InternalSignature);
+            assert_eq!(identity.confidence, DetectionConfidence::Confirmed);
+            assert_eq!(identity.mime.as_deref(), Some("image/png"));
+        }
+    }
+
+    #[test]
+    fn batch_failures_are_observable_without_changing_internal_fast_path() {
+        let paths = [
+            "unknown.bin".into(),
+            "mismatch.jpg".into(),
+            "normal.png".into(),
+        ];
+        let mut known = unknown_identity();
+        known.family = FormatKind::Png;
+        known.confidence = DetectionConfidence::Confirmed;
+        known.mime = Some("image/png".to_string());
+        known.extension_mismatch = true;
+        let mut normal = known.clone();
+        normal.extension_mismatch = false;
+        for probe in [
+            SiegfriedProbe::Unavailable {
+                reason: "sf timed out".to_string(),
+            },
+            SiegfriedProbe::Identified {
+                meta: SiegfriedMeta::default(),
+                files: Vec::new(),
+            },
+        ] {
+            let mut identities = [unknown_identity(), known.clone(), normal.clone()];
+            merge_siegfried_probe(&paths, &mut identities, &probe);
+            assert_eq!(identities[0].family, FormatKind::Unknown);
+            assert_eq!(support_level(&identities[0]), SupportLevel::Unknown);
+            assert_eq!(identities[1].family, known.family);
+            assert_eq!(identities[1].confidence, known.confidence);
+            assert_eq!(identities[1].source, known.source);
+            for identity in &identities[..2] {
+                let error = identity
+                    .external_error
+                    .as_deref()
+                    .expect("explicit diagnostic");
+                match &probe {
+                    SiegfriedProbe::Unavailable { reason } => assert_eq!(error, reason),
+                    SiegfriedProbe::Identified { .. } => assert!(error.contains("no report entry")),
+                }
+            }
+            assert_eq!(identities[2], normal, "normal fast path stays untouched");
+        }
+    }
+
+    #[test]
+    fn partial_batch_preserves_good_identity_and_failed_file_evidence() {
+        let paths = ["good.bin".into(), "bad.bin".into()];
+        let good = SiegfriedFileReport {
+            filename: "good.bin".to_string(),
+            matches: vec![SiegfriedMatch {
+                ns: "pronom".to_string(),
+                id: "fmt/11".to_string(),
+                basis: "byte match at 0, 8".to_string(),
+                ..SiegfriedMatch::default()
+            }],
+            ..SiegfriedFileReport::default()
+        };
+        let mut bad = good.clone();
+        bad.filename = "bad.bin".to_string();
+        bad.errors = "truncated read".to_string();
+        let probe = SiegfriedProbe::Identified {
+            meta: SiegfriedMeta::default(),
+            files: vec![good, bad],
+        };
+        let mut identities = [unknown_identity(), unknown_identity()];
+        merge_siegfried_probe(&paths, &mut identities, &probe);
+        assert_eq!(identities[0].family, FormatKind::Png);
+        assert!(identities[0].external_error.is_none());
+        assert_eq!(identities[1].family, FormatKind::Unknown);
+        assert_eq!(
+            identities[1].external_error.as_deref(),
+            Some("truncated read")
+        );
+        assert_eq!(identities[1].pronom.len(), 1);
+        assert_eq!(support_level(&identities[1]), SupportLevel::Unknown);
     }
 }

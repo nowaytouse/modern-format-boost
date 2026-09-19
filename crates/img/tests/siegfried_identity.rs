@@ -7,7 +7,8 @@
 
 use foundation::format_detect::FormatKind;
 use foundation::format_identity::{
-    DetectionSource, FormatIdentity, SupportLevel, resolve_format_identity, support_level,
+    DetectionConfidence, DetectionSource, SupportLevel, resolve_format_identities,
+    resolve_format_identity, support_level,
 };
 use foundation::siegfried::{SiegfriedProbe, identify_paths, siegfried_available};
 use std::process::{Command, Stdio};
@@ -49,6 +50,8 @@ fn content_wins_over_misleading_extensions() -> anyhow::Result<()> {
     assert_eq!(identity.family, FormatKind::Png, "content must win");
     assert!(identity.extension_mismatch);
     assert_eq!(identity.source, DetectionSource::Combined);
+    assert_eq!(identity.confidence, DetectionConfidence::Confirmed);
+    assert!(identity.external_error.is_none());
     let pronom = identity
         .pronom
         .first()
@@ -116,7 +119,8 @@ fn batch_identification_preserves_every_file() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let mut paths = Vec::new();
     for index in 0..3 {
-        let path = dir.path().join(format!("copy{index}.png"));
+        let extension = if index == 2 { "jpg" } else { "png" };
+        let path = dir.path().join(format!("copy{index}.{extension}"));
         std::fs::write(&path, ONE_BY_ONE_RGBA_PNG)?;
         paths.push(path);
     }
@@ -135,8 +139,24 @@ fn batch_identification_preserves_every_file() -> anyhow::Result<()> {
         );
     }
 
-    // Identity model stays consistent for a plain supported file.
-    let identity: FormatIdentity = resolve_format_identity(&paths[0])?;
-    assert_eq!(support_level(&identity), SupportLevel::FullySupported);
+    // A real mixed batch exercises both the internal fast path and sf fallback.
+    let identities = resolve_format_identities(&paths)?;
+    assert_eq!(identities.len(), paths.len());
+    for (index, identity) in identities.iter().enumerate() {
+        assert_eq!(identity.family, FormatKind::Png);
+        assert_eq!(identity.confidence, DetectionConfidence::Confirmed);
+        assert_eq!(support_level(identity), SupportLevel::FullySupported);
+        assert!(identity.external_error.is_none());
+        if index == 2 {
+            assert!(identity.extension_mismatch);
+            assert_eq!(identity.source, DetectionSource::Combined);
+            assert!(identity.pronom.iter().any(|candidate| {
+                candidate.namespace == "pronom" && candidate.puid == "fmt/11"
+            }));
+        } else {
+            assert_eq!(identity.source, DetectionSource::InternalSignature);
+            assert_eq!(identity.pronom, Vec::new());
+        }
+    }
     Ok(())
 }

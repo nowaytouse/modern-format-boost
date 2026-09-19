@@ -1,205 +1,777 @@
-# FFmpeg Advanced Setup Guide / FFmpeg 进阶安装指南
+# FFmpeg Full-Feature Setup on macOS
 
-This guide explains how to install a full-featured FFmpeg (with plugins like
-FDK-AAC, Chromaprint, and AI filters) on macOS using the
-[homebrew-ffmpeg](https://github.com/homebrew-ffmpeg/homebrew-ffmpeg) tap, while
-maintaining compatibility with system dependencies.
+This document describes the FFmpeg configuration used by **Modern Format Boost (MFB)** on macOS.
 
-本指南介绍如何在 macOS 上通过 `homebrew-ffmpeg` tap 安装全功能版 FFmpeg（包含 FDK-AAC、Chromaprint 及
-AI 滤镜），并确保系统依赖兼容。
+The goal is not to maintain a frozen list of optional libraries. Instead, the setup dynamically enables the **widest currently supported feature set exposed by `homebrew-ffmpeg`**, while excluding only options that:
+
+1. do not add media-processing capabilities;
+2. require external proprietary SDKs;
+3. are temporarily broken by an upstream compatibility issue; or
+4. change the selected FFmpeg release model.
+
+This makes the setup substantially more resistant to future changes in the Homebrew formula.
 
 ---
 
-## 📖 English
+## 1. Installation Strategy
 
-### The Tap-Owned FFmpeg Strategy
+For the full-feature macOS environment described here, use:
 
-Use the enhanced `homebrew-ffmpeg` formula as the one Homebrew-managed
-`ffmpeg` installation. Current tap guidance does not support keeping the core
-formula linked alongside it, so do not use `brew unlink`/`brew link --overwrite`
-as a switching mechanism. Resolve any pre-existing core installation before
-installing the tap formula.
+```text
+homebrew-ffmpeg/ffmpeg/ffmpeg
+```
 
-#### 1. Install the Full-Featured Tap Version
+as the single Homebrew-managed FFmpeg implementation.
 
-Install the enhanced version directly from the tap:
+Do **not** attempt to keep both:
+
+```text
+homebrew/core/ffmpeg
+```
+
+and:
+
+```text
+homebrew-ffmpeg/ffmpeg/ffmpeg
+```
+
+installed as interchangeable providers.
+
+Homebrew does not treat a third-party tap formula as a transparent replacement for a dependency declared on the core `ffmpeg` formula.
+
+The tap version therefore owns the normal commands:
+
+```text
+ffmpeg
+ffprobe
+ffplay
+```
+
+---
+
+## 2. Why Options Are Generated Dynamically
+
+Do not maintain a permanent command containing dozens of manually written options.
+
+The available feature set changes over time as the formula adds, removes, or renames dependencies.
+
+Instead, obtain the current option list directly from Homebrew:
+
+```bash
+brew options homebrew-ffmpeg/ffmpeg/ffmpeg
+```
+
+For scripting:
+
+```bash
+brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact
+```
+
+The installation command then enables everything except a small explicit blacklist.
+
+This has several advantages:
+
+- new optional features are automatically picked up;
+- removed options do not remain stale in this document;
+- renamed dependencies require less manual maintenance;
+- the actual installed configuration follows the current formula rather than an old snapshot;
+- the document does not need to duplicate the formula itself.
+
+---
+
+## 3. Prerequisites
+
+Install and tap the FFmpeg repository:
 
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
-brew install flite
-brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
-    --with-chromaprint \
-    --with-dvd \
-    --with-fdk-aac \
-    --with-game-music-emu \
-    --with-ggml \
-    --with-jack \
-    --with-jpeg-xl \
-    --with-libaribcaption \
-    --with-libmodplug \
-    --with-libopenmpt \
-    --with-libplacebo \
-    --with-librist \
-    --with-librsvg \
-    --with-libsoxr \
-    --with-libssh \
-    --with-tensorflow \
-    --with-tesseract \
-    --with-libvidstab \
-    --with-openal-soft \
-    --with-openapv \
-    --with-opencore-amr \
-    --with-openh264 \
-    --with-openjpeg \
-    --with-openvino \
-    --with-rav1e \
-    --with-rtmpdump \
-    --with-rubberband \
-    --with-two-lame \
-    --with-webp \
-    --with-whisper-cpp \
-    --with-xvid \
-    --with-zeromq \
-    --with-zimg \
-    --with-srt \
-    --with-libvmaf \
-    --with-libxml2 \
-    --with-libzvbi \
-    --with-aribb24 \
-    --with-libbluray \
-    --with-libbs2b \
-    --with-libcaca \
-    --with-libflite \
-    --with-libgsm \
-    --with-openssl@3 \
-    --with-speex
-
 ```
 
-_Note: `--with-dvd` is the tap's single DVD switch and enables both
-`libdvdnav` and `libdvdread`. `--with-decklink` is intentionally excluded
-because it needs the Blackmagic DeckLink SDK. The tap does not declare Flite
-as a dependency, so the command installs `flite` first before enabling
-`--with-libflite`. This adds text-to-speech support, not a media encoder used by
-MFB. `--with-alt-name` only changes command names
-and does not add codec capability. The current formula exposes `ggml` as an
-optional dependency, while `--with-whisper-cpp` is the switch that adds
-FFmpeg's `--enable-whisper`._
+Because this is a third-party Homebrew tap, explicitly trust the FFmpeg formula:
 
-This is the widest Homebrew-only feature set. DeckLink remains the only
-capability that requires a separately supplied SDK.
+```bash
+brew trust --formula homebrew-ffmpeg/ffmpeg/ffmpeg
+```
 
-#### 2. Verify the Installed Capability Set
+Formula-level trust is preferred over trusting the entire tap when only FFmpeg is required.
 
-`ffprobe` inspects media; encoder and filter availability belongs to `ffmpeg`.
-Verify the active binary rather than inferring capability from its package name:
+Install external prerequisites used by optional FFmpeg features:
+
+```bash
+brew install flite
+brew install tesseract-lang
+```
+
+`flite` is required for FFmpeg's Flite text-to-speech integration.
+
+`tesseract-lang` is not required to compile FFmpeg, but it installs the full Tesseract language dataset instead of the limited default language set.
+
+---
+
+## 4. Full-Feature Installation
+
+### Current blacklist
+
+The full-feature build intentionally excludes:
+
+```text
+--with-alt-name
+--with-decklink
+--with-openapv
+--HEAD
+```
+
+Their meanings are explained below.
+
+### Install
+
+```bash
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
+  $(brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact \
+    | tr ' ' '\n' \
+    | grep -vE '^(--with-alt-name|--with-decklink|--with-openapv|--HEAD)$' \
+    | xargs)
+```
+
+For an existing installation, use the same option-generation logic with `reinstall`:
+
+```bash
+brew reinstall homebrew-ffmpeg/ffmpeg/ffmpeg \
+  $(brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact \
+    | tr ' ' '\n' \
+    | grep -vE '^(--with-alt-name|--with-decklink|--with-openapv|--HEAD)$' \
+    | xargs)
+```
+
+This is the normal MFB FFmpeg configuration.
+
+---
+
+## 5. Why These Options Are Excluded
+
+### `--with-alt-name`
+
+This option changes the command names to variants such as:
+
+```text
+ffmpeg-alt
+ffprobe-alt
+ffplay-alt
+```
+
+It does not add codecs, filters, demuxers, encoders, decoders, or other media-processing functionality.
+
+It is therefore excluded.
+
+---
+
+### `--with-decklink`
+
+DeckLink support requires the separately distributed **Blackmagic DeckLink SDK**.
+
+This is relevant primarily for professional Blackmagic capture/output hardware and is not part of a normal Homebrew-only installation.
+
+MFB does not require DeckLink.
+
+If DeckLink hardware support is required in the future, install the appropriate Blackmagic SDK first and remove this option from the blacklist.
+
+---
+
+### `--with-openapv`
+
+**Temporary compatibility exclusion — September 2026.**
+
+OpenAPV changed the API signature of:
+
+```c
+oapvm_create()
+```
+
+from the interface expected by the FFmpeg OpenAPV integration.
+
+With the currently encountered combination:
+
+```text
+FFmpeg 9.0.2
+OpenAPV 1.1.1.0
+```
+
+FFmpeg fails while compiling:
+
+```text
+libavcodec/liboapvenc.c
+```
+
+with an error similar to:
+
+```text
+error: too few arguments to function call, expected 2, have 1
+```
+
+This is an upstream compatibility problem, not a macOS, Clang, Apple Silicon, or MFB configuration failure.
+
+The OpenAPV library integration (`liboapv`) is therefore temporarily disabled until FFmpeg and OpenAPV agree on the updated API. This does not imply that every native APV implementation is unavailable.
+
+See **Restoring OpenAPV** below.
+
+---
+
+### `--HEAD`
+
+`--HEAD` selects the latest FFmpeg Git development branch rather than the current packaged release.
+
+A full feature set and a development snapshot are separate concepts.
+
+MFB normally uses the latest stable FFmpeg release exposed by the tap, with the maximum usable feature set enabled.
+
+Therefore `--HEAD` is explicitly excluded from the dynamically generated option list.
+
+Use an FFmpeg HEAD build only when intentionally testing unreleased FFmpeg changes.
+
+---
+
+## 6. Current Observed Configuration
+
+Earlier setup notes recorded FFmpeg 9.0.2. A live inspection on **September 19, 2026** instead found the following installed development build:
+
+```text
+FFmpeg N-126655-gbfac54a03b
+Homebrew ffmpeg HEAD-bfac54a
+Apple Silicon
+macOS 27 Golden Gate
+homebrew-ffmpeg
+```
+
+The stable-release recipe above remains a separate installation policy; it does not describe this HEAD snapshot. The running binary's configuration reports capabilities such as:
+
+```text
+libaom
+dav1d
+SVT-AV1
+x264
+x265
+VideoToolbox
+AudioToolbox
+JPEG XL
+WebP
+JPEG 2000
+rav1e
+OpenH264
+OpenVINO
+TensorFlow
+Tesseract
+Whisper
+libplacebo
+VMAF
+zimg
+SVG
+DVD
+Blu-ray
+SRT
+RIST
+Chromaprint
+Rubber Band
+SoXR
+Xvid
+AMR
+OpenAL
+ZeroMQ
+```
+
+This list is illustrative rather than authoritative. Configuration and encoder/decoder enumeration establish availability, not successful processing of every media type. The snapshot also lists native `apv` decoding and `apv_vulkan` encoding, but has no `--enable-liboapv`; Vulkan hardware encoding has not been exercised by this audit.
+
+Always inspect the actual installed binary instead of relying on this document as a frozen capability list.
+
+---
+
+## 7. Whisper and GGML
+
+The formula exposes GGML support as part of the machine-learning feature set, while FFmpeg ultimately reports Whisper integration as:
+
+```text
+--enable-whisper
+```
+
+Do not expect the FFmpeg `configure` output to necessarily contain:
+
+```text
+--enable-ggml
+```
+
+simply because the Homebrew build option enabled the corresponding dependency.
+
+Verify the actual FFmpeg feature:
+
+```bash
+ffmpeg -hide_banner -buildconf | grep whisper
+```
+
+Expected output:
+
+```text
+--enable-whisper
+```
+
+Option names exposed by the Homebrew formula can also change over time.
+
+For that reason, the installation procedure deliberately obtains them dynamically from:
+
+```bash
+brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact
+```
+
+rather than hardcoding the Whisper option name in the main installation command.
+
+---
+
+## 8. FDK-AAC
+
+Do not hardcode:
+
+```text
+--with-fdk-aac
+```
+
+into this setup.
+
+Older versions of this document included it, but it is not part of the currently exposed option set used by this installation.
+
+If the tap adds or restores an optional codec in the future, the dynamic option-generation strategy will pick it up automatically unless it is explicitly blacklisted.
+
+This document should describe the installation policy rather than preserve historical option names indefinitely.
+
+---
+
+## 9. Verify the Installed FFmpeg
+
+Never infer capability from the package name alone.
+
+Inspect the actual binary.
+
+### Build configuration
+
+```bash
+ffmpeg -hide_banner -buildconf
+```
+
+### Encoders
+
+```bash
+ffmpeg -hide_banner -encoders
+```
+
+### Decoders
+
+```bash
+ffmpeg -hide_banner -decoders
+```
+
+### Filters
+
+```bash
+ffmpeg -hide_banner -filters
+```
+
+### Formats
+
+```bash
+ffmpeg -hide_banner -formats
+```
+
+### Probe version
+
+```bash
+ffprobe -version
+```
+
+### Important MFB-related features
+
+```bash
+ffmpeg -hide_banner -buildconf \
+  | grep -E 'jxl|webp|openvino|tensorflow|whisper|rav1e|vmaf|placebo|tesseract|zimg'
+```
+
+A validated build should contain entries including:
+
+```text
+--enable-libjxl
+--enable-libwebp
+--enable-libopenvino
+--enable-libtensorflow
+--enable-libtesseract
+--enable-libvmaf
+--enable-libplacebo
+--enable-librav1e
+--enable-libzimg
+--enable-whisper
+```
+
+Exact output can change as FFmpeg and the tap evolve.
+
+---
+
+## 10. Verify Dynamic Linking
+
+Check FFmpeg:
+
+```bash
+brew linkage --test ffmpeg
+```
+
+Check mpv:
+
+```bash
+brew linkage --test mpv
+```
+
+A report such as:
+
+```text
+Indirect dependencies with linkage:
+  cairo
+  glib
+  libpng
+  ...
+```
+
+does **not** by itself mean the installation is broken.
+
+The important failure condition is missing or unresolved libraries.
+
+For an explicit exit-code check:
+
+```bash
+brew linkage --test ffmpeg
+echo "ffmpeg linkage exit=$?"
+
+brew linkage --test mpv
+echo "mpv linkage exit=$?"
+```
+
+A successful linkage check should exit with status:
+
+```text
+0
+```
+
+The September 19 live check did **not** meet that gate: `brew linkage --test ffmpeg` exited 1 and listed indirect dependencies with linkage, without reporting missing libraries. `ffmpeg -version` exited 0. Record these as separate results; neither a clean linkage check nor a broken media pipeline follows from the startup check alone.
+
+---
+
+## 11. Dependency Upgrades
+
+Optional libraries can occasionally change ABI or library filenames independently of FFmpeg.
+
+Typical examples include machine-learning or image-processing dependencies.
+
+If FFmpeg stops launching after a dependency update, or:
+
+```bash
+brew linkage --test ffmpeg
+```
+
+reports a missing versioned library, rebuild FFmpeg using the same full-feature installation policy:
+
+```bash
+brew reinstall homebrew-ffmpeg/ffmpeg/ffmpeg \
+  $(brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact \
+    | tr ' ' '\n' \
+    | grep -vE '^(--with-alt-name|--with-decklink|--with-openapv|--HEAD)$' \
+    | xargs)
+```
+
+Then repeat the verification commands.
+
+Do not fix ABI mismatches by:
+
+- creating fake compatibility symlinks;
+- force-linking a different FFmpeg formula;
+- keeping core and tap FFmpeg installed as competing providers;
+- arbitrarily downgrading dependencies without first identifying the actual compatibility problem.
+
+A clean rebuild against the currently installed libraries is preferred.
+
+---
+
+# mpv and Homebrew Core FFmpeg
+
+## 12. Why mpv Can Conflict With This Setup
+
+Homebrew's core `mpv` formula depends on:
+
+```text
+ffmpeg
+```
+
+from Homebrew core.
+
+Homebrew does not allow a dependency of a core formula to be transparently replaced by a same-named formula from a third-party tap.
+
+Therefore this state:
+
+```text
+homebrew-ffmpeg/ffmpeg/ffmpeg installed
++
+brew upgrade mpv
+```
+
+can produce an error similar to:
+
+```text
+Error: ffmpeg is already installed from homebrew-ffmpeg/ffmpeg!
+Please `brew uninstall ffmpeg` first.
+```
+
+This does not mean either FFmpeg or mpv is damaged.
+
+It is a Homebrew dependency-provider conflict.
+
+---
+
+## 13. Updating mpv Safely
+
+When mpv requires an update and Homebrew insists on installing core FFmpeg, temporarily bridge through the core dependency.
+
+### Step 1 — Remove the tap FFmpeg
+
+```bash
+brew uninstall --ignore-dependencies homebrew-ffmpeg/ffmpeg/ffmpeg
+```
+
+### Step 2 — Upgrade mpv
+
+For an mpv HEAD installation:
+
+```bash
+brew upgrade mpv --fetch-HEAD
+```
+
+Homebrew may temporarily install core FFmpeg as an mpv dependency.
+
+### Step 3 — Remove core FFmpeg
+
+After mpv finishes installing:
+
+```bash
+brew uninstall --ignore-dependencies ffmpeg
+```
+
+Confirm:
+
+```bash
+brew list --versions ffmpeg
+```
+
+At this point there should be no core FFmpeg keg remaining.
+
+### Step 4 — Restore the full-feature tap FFmpeg
+
+```bash
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
+  $(brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact \
+    | tr ' ' '\n' \
+    | grep -vE '^(--with-alt-name|--with-decklink|--with-openapv|--HEAD)$' \
+    | xargs)
+```
+
+### Step 5 — Verify both packages
+
+```bash
+ffmpeg -version
+mpv --version
+
+brew linkage --test ffmpeg
+brew linkage --test mpv
+```
+
+---
+
+## 14. Topgrade
+
+Normal Homebrew upgrades can be run through Topgrade.
+
+However, when Topgrade reaches an mpv update, the Homebrew dependency conflict described above can reappear.
+
+Typical symptoms are:
+
+```text
+Error: ffmpeg is already installed from homebrew-ffmpeg/ffmpeg!
+```
+
+or Homebrew attempting to install:
+
+```text
+homebrew/core/ffmpeg
+```
+
+while the tap FFmpeg is already installed.
+
+Do **not** repeatedly retry the same Topgrade step.
+
+Exit the failed Homebrew upgrade and perform the manual mpv bridge procedure from the previous section.
+
+After the tap FFmpeg has been restored and linkage checks pass, normal package maintenance can continue.
+
+---
+
+# OpenAPV Recovery
+
+## 15. Restoring OpenAPV After the Upstream Fix
+
+OpenAPV should not remain permanently disabled.
+
+Periodically check whether the FFmpeg/OpenAPV compatibility issue has been resolved.
+
+Once the current OpenAPV release successfully builds with the current FFmpeg release, remove only:
+
+```text
+--with-openapv
+```
+
+from the blacklist.
+
+The normal blacklist then becomes:
+
+```text
+--with-alt-name
+--with-decklink
+--HEAD
+```
+
+Rebuild:
+
+```bash
+brew reinstall homebrew-ffmpeg/ffmpeg/ffmpeg \
+  $(brew options homebrew-ffmpeg/ffmpeg/ffmpeg --compact \
+    | tr ' ' '\n' \
+    | grep -vE '^(--with-alt-name|--with-decklink|--HEAD)$' \
+    | xargs)
+```
+
+Verify:
+
+```bash
+ffmpeg -hide_banner -buildconf | grep -i oapv
+```
+
+Only after the build succeeds should this document remove the OpenAPV compatibility warning.
+
+---
+
+# Maintenance Model
+
+## 16. What This Document Should Track
+
+This document should track:
+
+- the installation strategy;
+- intentional exclusions;
+- known compatibility exceptions;
+- package-manager conflicts;
+- verification procedures;
+- recovery procedures.
+
+It should **not** attempt to permanently mirror every optional dependency in the Homebrew formula.
+
+The formula itself is the authoritative source for the current option list:
+
+```bash
+brew options homebrew-ffmpeg/ffmpeg/ffmpeg
+```
+
+---
+
+## 17. Expected Long-Term State
+
+Normal target:
+
+```text
+homebrew-ffmpeg/ffmpeg/ffmpeg
+├── all currently usable Homebrew options
+├── stable FFmpeg release
+├── full Tesseract language data
+│
+├── alt-name     excluded: no additional capability
+├── DeckLink     excluded: external Blackmagic SDK required
+├── HEAD         excluded: development release, not a feature
+└── OpenAPV      temporary exclusion until upstream compatibility is restored
+```
+
+After the OpenAPV issue is resolved:
+
+```text
+homebrew-ffmpeg/ffmpeg/ffmpeg
+├── all currently usable Homebrew options
+├── OpenAPV enabled
+├── stable FFmpeg release
+├── full Tesseract language data
+│
+├── alt-name     excluded
+├── DeckLink     excluded unless Blackmagic hardware support is required
+└── HEAD         excluded unless explicitly testing FFmpeg master
+```
+
+That state represents the intended **maximum practical Homebrew feature set** for MFB.
+
+---
+
+## 18. Quick Health Check
+
+For routine maintenance:
+
+```bash
+ffmpeg -version
+ffprobe -version
+mpv --version
+
+ffmpeg -hide_banner -buildconf \
+  | grep -E 'jxl|webp|openvino|tensorflow|whisper|rav1e|vmaf|placebo|tesseract|zimg'
+
+brew linkage --test ffmpeg
+brew linkage --test mpv
+```
+
+For a deeper audit:
 
 ```bash
 ffmpeg -hide_banner -buildconf
 ffmpeg -hide_banner -encoders
 ffmpeg -hide_banner -decoders
 ffmpeg -hide_banner -filters
-ffprobe -version
-brew linkage --test ffmpeg
+ffmpeg -hide_banner -formats
 ```
-
-If `brew linkage --test ffmpeg` reports missing versioned libraries after an
-optional dependency upgrade (for example OpenVINO), rerun the same command from
-step 1 with `brew reinstall` in place of `brew install`, then repeat every
-verification command. Do not fabricate compatibility symlinks, downgrade the
-dependency, or link the core formula over this tap-owned installation.
 
 ---
 
-## 🇨🇳 简体中文
+## 19. Current Known Exception Summary
 
-### Tap 独占 FFmpeg 策略
+As of **2026-09-19**:
 
-将增强版 `homebrew-ffmpeg` 作为 Homebrew 管理的唯一 `ffmpeg` 安装。
-当前 tap 的说明不支持与 core 版同时保持链接，因此不要把
-`brew unlink` / `brew link --overwrite` 当作切换机制；若系统已有 core
-版，应先单独处理该冲突，再安装 tap 版。
+| Component | Status | Notes |
+|---|---|---|
+| FFmpeg HEAD-bfac54a | ✅ Starts successfully | Actual installed tap snapshot; media-path tests are separate |
+| JPEG XL | ✅ Enabled | `libjxl` |
+| WebP | ✅ Enabled | `libwebp` |
+| AV1 | ✅ Enabled | Multiple implementations available |
+| OpenVINO | ✅ Enabled | DNN backend |
+| TensorFlow | ✅ Enabled | DNN backend |
+| Whisper | ✅ Enabled | Speech recognition |
+| Tesseract | ✅ Enabled | Full language data installed separately |
+| VMAF | ✅ Enabled | Video quality analysis |
+| VideoToolbox | ✅ Enabled | Apple hardware acceleration |
+| AudioToolbox | ✅ Enabled | Apple audio framework |
+| mpv HEAD | ✅ Working | May require the core-FFmpeg bridge during upgrades |
+| OpenAPV library (`liboapv`) | ⏸ Not enabled | Stable-build API incompatibility; native APV entries are listed separately |
+| DeckLink | ⏭ Not installed | Requires Blackmagic DeckLink SDK |
+| FFmpeg stable-release recipe | Documented policy | Not the currently installed HEAD build |
+| Homebrew FFmpeg linkage audit | ⚠ Exit 1 | Indirect-dependency findings; no missing libraries reported |
 
-#### 1. 安装“终极全功能版”
+---
 
-直接从 `homebrew-ffmpeg` 安装增强版：
+## 20. Design Principle
 
-```bash
-brew tap homebrew-ffmpeg/ffmpeg
-brew install flite
-brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
-    --with-chromaprint \
-    --with-dvd \
-    --with-fdk-aac \
-    --with-game-music-emu \
-    --with-ggml \
-    --with-jack \
-    --with-jpeg-xl \
-    --with-libaribcaption \
-    --with-libmodplug \
-    --with-libopenmpt \
-    --with-libplacebo \
-    --with-librist \
-    --with-librsvg \
-    --with-libsoxr \
-    --with-libssh \
-    --with-tensorflow \
-    --with-tesseract \
-    --with-libvidstab \
-    --with-openal-soft \
-    --with-openapv \
-    --with-opencore-amr \
-    --with-openh264 \
-    --with-openjpeg \
-    --with-openvino \
-    --with-rav1e \
-    --with-rtmpdump \
-    --with-rubberband \
-    --with-two-lame \
-    --with-webp \
-    --with-whisper-cpp \
-    --with-xvid \
-    --with-zeromq \
-    --with-zimg \
-    --with-srt \
-    --with-libvmaf \
-    --with-libxml2 \
-    --with-libzvbi \
-    --with-aribb24 \
-    --with-libbluray \
-    --with-libbs2b \
-    --with-libcaca \
-    --with-libflite \
-    --with-libgsm \
-    --with-openssl@3 \
-    --with-speex
+The installation policy can be summarized as:
 
-```
+> Enable everything the current Homebrew FFmpeg formula can reliably build, and maintain only a small explicit list of justified exceptions.
 
-_注意：`--with-dvd` 是该 tap 唯一的 DVD 开关，会同时启用 `libdvdnav` 与
-`libdvdread`。`--with-decklink` 被有意排除，因为它需要 Blackmagic DeckLink
-SDK。该 tap 没有为 Flite 声明依赖，因此命令会先安装 `flite`，再启用
-`--with-libflite`。它增加文本转语音支持，不增加 MFB 使用的媒体编码器。
-`--with-alt-name` 只改变命令名，不增加编解码能力。当前 formula 将
-`ggml` 暴露为可选依赖；真正为 FFmpeg 添加 `--enable-whisper` 的开关是
-`--with-whisper-cpp`。_
-
-这就是 Homebrew 可提供的最宽功能集。DeckLink 仍是唯一必须另外提供 SDK 的能力。
-
-#### 2. 验证实际能力集
-
-`ffprobe` 负责探测媒体；编解码器和滤镜能力属于 `ffmpeg`。不要只根据包名推断，直接检查当前实际运行的二进制：
-
-```bash
-ffmpeg -hide_banner -buildconf
-ffmpeg -hide_banner -encoders
-ffmpeg -hide_banner -decoders
-ffmpeg -hide_banner -filters
-ffprobe -version
-brew linkage --test ffmpeg
-```
-
-如果升级可选依赖后（例如 OpenVINO）`brew linkage --test ffmpeg` 报告带版本号的动态库
-缺失，应把步骤 1 中同一条命令的 `brew install` 改为 `brew reinstall` 后完整重建，再
-重新执行全部验证命令。不要伪造兼容软链接、降级依赖，也不要把 core formula 强制
-链接到这套由 tap 管理的安装之上。
+This is preferable to maintaining a historical list of individual codecs and libraries because the Homebrew formula, FFmpeg, and their dependencies evolve independently.
