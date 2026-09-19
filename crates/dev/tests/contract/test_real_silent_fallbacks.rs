@@ -18357,6 +18357,55 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
 }
 
 #[test]
+fn shared_health_cache_does_not_restore_obsolete_build_graphs() {
+    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
+        .expect("ci-quality workflow must be readable");
+    let health = workflow
+        .split_once("\n  health-check:")
+        .and_then(|(_, tail)| tail.split_once("\n  security-audit:"))
+        .map(|(health, _)| health)
+        .expect("shared health job must exist");
+    let cache = health
+        .split_once("uses: actions/cache@")
+        .and_then(|(_, tail)| tail.split_once("\n      - name:"))
+        .map(|(cache, _)| cache)
+        .expect("shared health dependency cache must exist");
+    let paths = cache
+        .split_once("path: |")
+        .and_then(|(_, tail)| tail.split_once("\n          key:"))
+        .map(|(paths, _)| {
+            paths
+                .lines()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .expect("cache paths must precede the key");
+    assert_eq!(
+        paths,
+        [
+            "~/.cargo/registry/index",
+            "~/.cargo/registry/cache",
+            "~/.cargo/git/db"
+        ],
+        "cache dependency sources only: stale target graphs exhausted runner disk before coverage"
+    );
+    assert!(
+        cache.contains("-cargo-health-sources-v1-")
+            && cache
+                .lines()
+                .filter(|line| line.contains("-cargo-health-"))
+                .all(|line| line.contains("-cargo-health-sources-v1-")),
+        "source-only cache must not restore the previous build-output cache"
+    );
+    let env = health.split_once("\n    steps:").expect("health steps").0;
+    assert!(
+        env.contains("CARGO_INCREMENTAL: \"0\""),
+        "ephemeral health builds must not retain incremental graphs for every feature combination"
+    );
+}
+
+#[test]
 fn release_packaging_does_not_swallow_copy_failures() {
     let root = workspace_root();
     let release = fs::read_to_string(root.join(".github/workflows/cd-stable.yml"))

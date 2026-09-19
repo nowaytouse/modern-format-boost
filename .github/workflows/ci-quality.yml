@@ -414,6 +414,9 @@ jobs:
       # Match ClusterFuzzLite / fuzz: embedded libheif avoids libheif-sys build.rs PermissionDenied on runners.
       LIBHEIF_STATIC: "1"
       LIBHEIF_SYS_STATIC: "1"
+      # Feature, fuzz and coverage builds already use separate graphs. Do not
+      # retain incremental copies on an ephemeral runner as well.
+      CARGO_INCREMENTAL: "0"
       # Suppress Node 24 punycode deprecation noise from upload-artifact and other JS actions.
       NODE_OPTIONS: --no-deprecation
       RUSTDOCFLAGS: "-D warnings"
@@ -433,6 +436,8 @@ jobs:
         run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-08-09
 
       # Restore before the MPC downloader and just fix-gate compile the workspace.
+      # Cache sources only: a cross-lock target restore grew beyond 11 GB
+      # compressed and exhausted disk during the instrumented libheif build.
       - name: Cache Cargo dependencies
         uses: actions/cache@v5.0.5
         with:
@@ -440,10 +445,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            target
-          key: ${{ runner.os }}-cargo-health-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-health-sources-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-health-
+            ${{ runner.os }}-cargo-health-sources-v1-
 
       - name: Install just
         uses: extractions/setup-just@v4

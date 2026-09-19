@@ -2,7 +2,90 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-01
+## [Unreleased] - 2026-09-19
+
+### IMG identity, metadata proofs, and toolchain validation (2026-09-19)
+
+- Repair the shared-health runner's disk-exhaustion path observed in
+  [CI run 35434880803](https://github.com/nowaytouse/modern-format-boost/actions/runs/35434880803).
+  It restored an approximately 11 GB compressed cache containing old build
+  graphs, then failed to archive instrumented `libheif.a` with `No space left on
+  device`. Cache dependency sources only under a new key namespace and disable
+  incremental compilation for this ephemeral job. Keep every test, feature,
+  fuzz, coverage and rustdoc gate enabled; do not delete developer build caches.
+  The new cache contract fails against the old workflow and passes after the
+  change; all 394 hardening contracts and workflow lint pass locally. The failed
+  run's IMG/VID package and deep-audit jobs passed, but its skipped release job
+  is not a production acceptance result. A fresh remote run must validate this
+  runner-capacity repair before release sign-off.
+- Siegfried/PRONOM enrichment now requires positive byte or container evidence
+  before promoting an unknown format. Missing evidence remains tentative,
+  extension-only matches remain hints, and multiple matches remain ambiguous.
+  Preserve identifier namespaces, per-file failures, missing-report errors and
+  every rejected candidate for diagnostics. Internal content signatures retain
+  priority; normal, correctly named inputs still avoid the external probe.
+- AVIF codec/HDR/gain-map proofs now exclude the descriptive Exif-presence line,
+  as they already excluded XMP presence. Container-only metadata edits therefore
+  no longer falsely report a codec-feature change. Exact primary-image SHA-256,
+  color/ICC/transform/HDR/gain-map evidence and each route's metadata policy
+  remain independently enforced; existing AVIF Meme inputs are not re-encoded.
+- Serialize the scrambled-Photos-payload regression with the other tests that
+  change the shared state-root environment variable. Its unguarded temporary
+  root could disappear during another test's checkpoint write, causing the
+  September 18 shared-health CI failure. Keep the original custody assertions.
+- Preserve the updated dependency lock and Serena configuration. Rebuild and
+  test against the recorded `image`, `clap`, compression and platform dependency
+  revisions rather than assuming that an unchanged package version means an
+  unchanged Git dependency.
+- Verify current IMG CLI compatibility with JPEG XL 0.13.0 (`7741c8ce`), libavif
+  1.4.2, ExifTool 13.59 and ImageMagick 7.1.2-32 Beta. JPEG XL's new
+  `--strip_alpha` default preserves alpha for lossless encoding; do not force
+  alpha removal into the archive path. Existing direct encoder calls already
+  consume the installed tools without weakening reconstruction or pixel proofs.
+- Review upstream changes against the actual callers, not just version strings:
+  [libjxl's installed revision](https://github.com/libjxl/libjxl/blob/7741c8ce9998cbaffabec5cadd051b1b68afa3e2/tools/cjxl_main.cc)
+  keeps lossless alpha by default;
+  [libavif 1.4.2](https://github.com/AOMediaCodec/libavif/releases/tag/v1.4.2)
+  supplies decoder/gain-map fixes through the installed tools. Its new
+  `avifgainmaputil --jobs` option has no production caller here (that utility
+  only creates/probes synthetic regression fixtures), and the production AVIF
+  builder does not force the now-rejected mismatched Y4M depth override.
+  [ExifTool 13.59](https://exiftool.org/history.html) strengthens malformed-XMP
+  write failures; the existing merge path propagates unsuccessful tool exits.
+  No new conversion stage or metadata-error bypass is needed for these updates.
+- Correct the [FFmpeg setup snapshot](FFMPEG_SETUP.md#6-current-observed-configuration)
+  to the installed `N-126655-gbfac54a03b` HEAD build, distinct from the documented
+  stable-release recipe. Record the Homebrew linkage audit's indirect-dependency
+  findings separately from successful binary startup. Native APV enumeration is
+  not proof of exercised hardware encoding or enabled `liboapv` integration.
+- Local validation of code revision `3b8306f2`: 2,322 package tests passed with
+  five explicit skips; 393 hardening contracts, strict Clippy and the ARM64 IMG
+  release build passed. Twenty repeated runs of the two Photos checkpoint tests
+  passed. Debug and release CLI runs proved exact JPEG reconstruction and AVIF
+  metadata-only delivery with unchanged primary-image SHA-256; native lossy
+  WebP delivery was byte-identical. These are local results, not a declaration
+  that a new CI run, distribution artifact or every live Photos/iCloud path has
+  passed. No private media or system Photos library was used by these checks.
+
+### IMG archive and delivery follow-through (2026-09-09–2026-09-13)
+
+- Preserve native JPEG gain-map evidence and archive companions, including
+  conservative Live Photo pairing. Keep a lossless source or an uncertain
+  modern-container classification out of destructive Tier 2 cleanup.
+- Require byte-identical Photos custody for positively admitted lossy modern
+  originals in FastImg JXL Tier 2. AVIF Meme Mode retains its separate
+  no-reencode adoption or container-only metadata-cleanup contract.
+- Adapt IMG admission and Photos pacing to current resource pressure while
+  retaining capacity for every supported tier. Correct launcher archive-option
+  parity and native GUI sizing, option behavior, concise log filtering,
+  background refresh and interrupted-task recovery.
+- Stage and verify conversion candidates before replacing an existing delivery
+  across shared conversion, IMG APIs, lossless conversion and CLI paths. A
+  rejected candidate or failed metadata/size proof preserves the previous
+  destination; staging uses the existing audited tempfile gate.
+- Fix Live JPEG tests on case-sensitive filesystems and gain-map validation
+  builds without native JPEG XL support. Preserve the user-provided dependency
+  updates alongside these changes.
 
 ### IMG maintenance and CI warning fixes (2026-09-07)
 
