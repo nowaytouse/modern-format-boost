@@ -138,6 +138,204 @@ fn exact_jpeg_options(output_dir: &Path) -> ConvertOptions {
     options
 }
 
+#[test]
+fn lossless_delivery_rejects_sample_changes_before_replacing_output() -> Result<()> {
+    for tool in ["cjxl", "djxl", "exiftool"] {
+        if !tool_available(tool) {
+            eprintln!("SKIP lossless delivery sample audit: {tool} unavailable");
+            return Ok(());
+        }
+    }
+    let root = tempfile::tempdir()?;
+    for (name, changed) in [
+        ("alpha", [0x1200_u16, 0x3400, 0x5600, 0x7801]),
+        ("low-bit", [0x1201, 0x3400, 0x5600, 0x7800]),
+    ] {
+        let source = root.path().join(format!("{name}.png"));
+        let wrong_source = root.path().join(format!("{name}-wrong.png"));
+        let candidate = root.path().join(format!("{name}-candidate.jxl"));
+        let destination = root.path().join(format!("{name}.jxl"));
+        image::ImageBuffer::from_pixel(16, 16, image::Rgba([0x1200_u16, 0x3400, 0x5600, 0x7800]))
+            .save(&source)?;
+        image::ImageBuffer::from_pixel(16, 16, image::Rgba(changed)).save(&wrong_source)?;
+        let mut encode = Command::new(tool_path("cjxl")?);
+        encode
+            .arg(&wrong_source)
+            .arg(&candidate)
+            .args(["-d", "0", "-e", "1", "--num_threads=1"]);
+        run_status(
+            encode,
+            "encode deliberately incorrect lossless delivery candidate",
+        )?;
+        let source_before = fs::read(&source)?;
+        let previous_output = b"previous archive must not be replaced on failed proof";
+        fs::write(&destination, previous_output)?;
+        // Even a caller's earlier pixel check must not bypass proof of the
+        // final staged lossless archive after metadata has been applied.
+        let result = foundation::conversion::commit_temp_to_output_with_metadata_checked(
+            &candidate,
+            &destination,
+            true,
+            Some(&source),
+            true,
+            false,
+            |_| Ok(true),
+        );
+        ensure!(
+            result.is_err(),
+            "{name} drift passed the final lossless delivery gate"
+        );
+        ensure!(
+            fs::read(&source)? == source_before,
+            "rejection changed source"
+        );
+        ensure!(
+            fs::read(&destination)? == previous_output,
+            "rejection replaced existing archive"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn tiff_archive_retains_compound_and_associated_alpha_sources() -> Result<()> {
+    if !tool_available("magick") || !magick_supports_format("TIFF") {
+        eprintln!("SKIP TIFF archive boundary: ImageMagick TIFF support unavailable");
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    for kind in ["multipage", "associated-alpha", "cmyk"] {
+        let source = root.path().join(format!("{kind}.tiff"));
+        let mut fixture = Command::new(tool_path("magick")?);
+        fixture.args(["-size", "16x16", "xc:red"]);
+        match kind {
+            "multipage" => {
+                fixture.arg("xc:blue");
+            }
+            "associated-alpha" => {
+                fixture.args([
+                    "-alpha",
+                    "set",
+                    "-channel",
+                    "A",
+                    "-evaluate",
+                    "set",
+                    "50%",
+                    "+channel",
+                    "-define",
+                    "tiff:alpha=associated",
+                ]);
+            }
+            "cmyk" => {
+                fixture.args(["-colorspace", "CMYK"]);
+            }
+            _ => unreachable!(),
+        }
+        fixture.arg(&source);
+        run_status(fixture, "create TIFF semantic boundary fixture")?;
+        let before = fs::read(&source)?;
+        let options = ConvertOptions {
+            output_dir: Some(root.path().join("output")),
+            ..ConvertOptions::default()
+        };
+        ensure!(
+            foundation::image_formats::tiff_family::requires_original_archive(&source)?,
+            "{kind} was admitted as a single ordinary raster"
+        );
+        ensure!(
+            convert_to_jxl(&source, &options, 0.0, None).is_err(),
+            "{kind} must retain the original container"
+        );
+        ensure!(fs::read(&source)? == before, "{kind} source changed");
+        ensure!(
+            !root
+                .path()
+                .join("output")
+                .join(format!("{kind}.JXL"))
+                .exists(),
+            "{kind} published a flattened archive"
+        );
+        verify_original_archive_cli(&source, root.path())?;
+    }
+    Ok(())
+}
+
+fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
+    let destination = root.join("native-archive");
+    let before = fs::read(source)?;
+    let sidecar = source.with_extension("xmp");
+    fs::write(&sidecar, MATRIX_XMP)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_img"))
+        .arg("run")
+        .arg(source)
+        .arg("--output")
+        .arg(&destination)
+        .arg("--force")
+        .env("MFB_HOME_ROOT", root.join("isolated-home"))
+        .env("MFB_INVOKER", "test-harness")
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "native archive CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let delivered = destination.join(
+        source
+            .file_name()
+            .ok_or_else(|| anyhow!("fixture filename"))?,
+    );
+    ensure!(
+        fs::read(&delivered)? == before && fs::read(source)? == before,
+        "original-container archive changed bytes"
+    );
+    ensure!(
+        fs::read(delivered.with_extension("xmp"))? == MATRIX_XMP
+            && fs::read(sidecar)? == MATRIX_XMP,
+        "original-container archive lost its sidecar"
+    );
+    Ok(())
+}
+
+#[test]
+fn provenance_png_and_cursor_use_byte_preserving_archive_delivery() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let png = root.path().join("provenance.png");
+    image::RgbImage::from_pixel(16, 16, image::Rgb([12, 34, 56])).save(&png)?;
+    let mut bytes = fs::read(&png)?;
+    // A provenance-capable caBX chunk, not a fabricated valid signature.
+    // CRC32 covers the empty chunk's four-byte type.
+    bytes.splice(
+        33..33,
+        [0, 0, 0, 0, b'c', b'a', b'B', b'X', 0xe6, 0x3d, 0xd2, 0xa7],
+    );
+    fs::write(&png, bytes)?;
+    ensure!(
+        foundation::image_detection::open_image_with_limits(&png).is_ok(),
+        "provenance fixture must still decode"
+    );
+    verify_original_archive_cli(&png, root.path())?;
+
+    if tool_available("magick") && magick_supports_format("CUR") {
+        let cursor = root.path().join("hotspot.cur");
+        let mut command = Command::new(tool_path("magick")?);
+        command.args(["-size", "16x16", "xc:red"]).arg(&cursor);
+        run_status(command, "create cursor archive fixture")?;
+        let mut bytes = fs::read(&cursor)?;
+        ensure!(
+            bytes.len() >= 22 && matches!(bytes[2], 1 | 2) && bytes[3] == 0,
+            "invalid icon/cursor fixture"
+        );
+        bytes[2] = 2;
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[12..14].copy_from_slice(&5_u16.to_le_bytes());
+        fs::write(&cursor, bytes)?;
+        verify_original_archive_cli(&cursor, root.path())?;
+    } else {
+        eprintln!("CUR native archive fixture not executed: delegate unavailable");
+    }
+    Ok(())
+}
+
 fn write_jpeg_variant(path: &Path, variant: &str) -> Result<()> {
     let magick = tool_path("magick")?;
     let mut command = Command::new(magick);
@@ -1095,6 +1293,20 @@ fn create_lossless_raster_fixtures(root: &Path) -> Result<Vec<(PathBuf, FormatKi
     fs::write(png.with_extension("xmp"), MATRIX_XMP)?;
 
     let mut fixtures = vec![(png.clone(), FormatKind::Png)];
+    let gray_alpha = fixture_root.join("gray-alpha-16.png");
+    image::ImageBuffer::from_fn(16, 16, |x, y| {
+        image::LumaA([low_u16(x * 257 + y * 31 + 1), low_u16(x * 4093 + y * 17)])
+    })
+    .save(&gray_alpha)?;
+    fs::write(gray_alpha.with_extension("xmp"), MATRIX_XMP)?;
+    fixtures.push((gray_alpha, FormatKind::Png));
+    let transparent = fixture_root.join("hidden-rgb.png");
+    image::RgbaImage::from_fn(16, 16, |x, y| {
+        image::Rgba([(x * 13).to_le_bytes()[0], (y * 17).to_le_bytes()[0], 91, 0])
+    })
+    .save(&transparent)?;
+    fs::write(transparent.with_extension("xmp"), MATRIX_XMP)?;
+    fixtures.push((transparent, FormatKind::Png));
     let high_bit_depth =
         image::ImageBuffer::<image::Rgba<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
             let red = (x * 1021 + y * 4093 + 3) % 65_536;
@@ -1149,7 +1361,20 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
     options.flags.set(ConvertFlags::FORCE, true);
     options.flags.set(ConvertFlags::ULTIMATE, true);
 
-    let result = convert_to_jxl(source, &options, 0.0, None)?;
+    if format == FormatKind::Ico && source_before.get(2..4) == Some(&[2, 0]) {
+        ensure!(
+            foundation::image_formats::original_archive_reason(source)?.is_some(),
+            "cursor hotspot semantics require native retention"
+        );
+        ensure!(
+            convert_to_jxl(source, &options, 0.0, None).is_err(),
+            "cursor must not be flattened into JXL"
+        );
+        ensure!(fs::read(source)? == source_before, "cursor source changed");
+        return Ok(());
+    }
+    let result = convert_to_jxl(source, &options, 0.0, None)
+        .with_context(|| format!("lossless archive source {}", source.display()))?;
     ensure!(
         result.success && !result.skipped,
         "lossless {format:?} conversion did not complete: {}",
@@ -1207,8 +1432,10 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         let source_image = foundation::image_detection::open_image_with_limits(&source_decoded)?;
         let output_image = foundation::image_detection::open_image_with_limits(&output_decoded)?;
         ensure!(
-            source_image.color().bits_per_pixel() >= 64
-                && output_image.color().bits_per_pixel() >= 64,
+            source_image.color().bits_per_pixel()
+                >= u16::from(source_image.color().channel_count()) * 16
+                && output_image.color().bits_per_pixel()
+                    >= u16::from(output_image.color().channel_count()) * 16,
             "high-bit-depth {format:?}→JXL path reduced 16-bit RGBA precision"
         );
         ensure!(

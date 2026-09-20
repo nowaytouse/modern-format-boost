@@ -117,9 +117,13 @@ matrix covers:
 - real PNG/TIFF/WebP/GIF/AVIF/JXL/HEIC fixtures, static-versus-animated
   classification, authoritative decoder checks, dimensions and non-empty
   pixels;
-- real synthetic PNG/BMP/TIFF/TGA/ICO/CUR/NetPBM → containerized JXL encodes with RGBA16
+- real synthetic PNG/BMP/single-raster TIFF/TGA/single-image ICO/NetPBM → containerized JXL encodes with RGBA16
   pixel-exact comparison, source immutability, and validated XMP overlay
   extraction; and
+- post-metadata delivery rejection for alpha-only and 16-bit low-bit corruption,
+  float32 bit-pattern proof, GrayAlpha and invisible-RGB preservation; TIFF
+  multi-image/special-channel, real CUR hotspot and provenance-capable PNG
+  original-container retention with separate XMP custody;
 - malformed/truncated input, metadata overlay, output-count and empty-source
   cleanup contracts covered by the foundation and IMG suites.
 

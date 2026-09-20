@@ -5628,6 +5628,11 @@ fn prepare_input_for_cjxl(
     color_info: Option<&ColorInfo>,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     // Ensure we have color info for bit depth detection if not provided
+    if let Some(reason) = foundation::image_formats::original_archive_reason(input)? {
+        return Err(ImgQualityError::ConversionError(format!(
+            "{reason}; source retained"
+        )));
+    }
     let mut probed_color_info = foundation::ffprobe_json::ColorInfo::default();
     let color_info = foundation::media_conversion_gate::color_info_for_cjxl_prep(
         input,

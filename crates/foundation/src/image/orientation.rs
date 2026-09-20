@@ -208,6 +208,27 @@ pub fn verify_orientation_pixel_diff(
         );
         return Ok(PixelDiffResult::SkippedToolAbsent { tool: decoder_tool });
     };
+    let float_source = if diff_tolerance == DiffTolerance::Exact && fmt == FormatKind::Jxl {
+        match crate::image_detection::open_image_with_limits(source_image) {
+            Ok(image) => matches!(
+                image.color(),
+                image::ColorType::Rgb32F | image::ColorType::Rgba32F
+            ),
+            Err(error) => {
+                // Modern integer formats may require their official decoder.
+                // The subsequent reference decode must still succeed; this is
+                // only output representation selection, never a passed proof.
+                tracing::debug!(
+                    source = %source_image.display(),
+                    %error,
+                    "Native float probe unavailable; requiring authoritative reference decode"
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
     let decode_cmd = |inp: &Path, out: &Path| {
         let mut command = std::process::Command::new(&decoder_path);
         command.arg(inp);
@@ -222,7 +243,11 @@ pub fn verify_orientation_pixel_diff(
             "pixel-diff: unsupported decoded temp format for {fmt:?}"
         ))
     })?;
-    let mut tmp_decoded = orientation_decode_tempfile(primary_temp_suffix)?;
+    let mut tmp_decoded = orientation_decode_tempfile(if float_source {
+        ".pfm"
+    } else {
+        primary_temp_suffix
+    })?;
 
     let mut decode_output = decode_cmd(output, tmp_decoded.path()).map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-diff: {decoder_tool} spawn failed: {e}"))
@@ -466,7 +491,15 @@ fn verify_pixel_diff_against_decoded_image(
     tol: DiffTolerance,
 ) -> Result<PixelDiffResult> {
     let src_orient = read_exif_orientation(source_image)?;
-    let out_img = crate::image_detection::open_image_with_limits(decoded_output).map_err(|e| {
+    let out_img = if decoded_output
+        .extension()
+        .is_some_and(|extension| extension == "pfm")
+    {
+        read_float_pfm(decoded_output)
+    } else {
+        crate::image_detection::open_image_with_limits(decoded_output)
+    }
+    .map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-diff: cannot open decoded output: {e}"))
     })?;
 
@@ -476,6 +509,71 @@ fn verify_pixel_diff_against_decoded_image(
     };
 
     diff_orientation_images(&src_img_raw, src_orient, &out_img, tol, decoded_output)
+}
+
+// PFM is the djxl float output without EXR's linear-light conversion. Reject
+// unsupported scales/layouts rather than normalizing away float sample bits.
+fn read_float_pfm(path: &Path) -> Result<image::DynamicImage> {
+    let invalid =
+        || ImgQualityError::AnalysisError("pixel-diff: invalid or unsupported float PFM".into());
+    crate::common_utils::validate_file_size_limit(
+        path,
+        crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES,
+    )
+    .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
+    let bytes = std::fs::read(path)?;
+    let mut parts = bytes.splitn(4, |byte| *byte == b'\n');
+    let magic = parts.next().ok_or_else(invalid)?;
+    let dimensions =
+        std::str::from_utf8(parts.next().ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let mut dimensions = dimensions.split_whitespace().map(str::parse::<u32>);
+    let (Some(Ok(width)), Some(Ok(height)), None) =
+        (dimensions.next(), dimensions.next(), dimensions.next())
+    else {
+        return Err(invalid());
+    };
+    let scale = std::str::from_utf8(parts.next().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?
+        .trim();
+    let scale = scale.parse::<f32>().map_err(|_| invalid())?;
+    if !matches!(magic, b"PF" | b"Pf")
+        || scale.abs().to_bits() != 1.0_f32.to_bits()
+        || width == 0
+        || height == 0
+    {
+        return Err(invalid());
+    }
+    let channels = if magic == b"PF" { 3_u64 } else { 1 };
+    let expected = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(channels * 4))
+        .ok_or_else(invalid)?;
+    if u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .is_none_or(|allocation| allocation > crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES)
+    {
+        return Err(invalid());
+    }
+    let payload = parts.next().ok_or_else(invalid)?;
+    if expected != u64::try_from(payload.len()).map_err(|_| invalid())? {
+        return Err(invalid());
+    }
+    // Exact payload length above proves there is no trailing partial sample.
+    let samples = payload.as_chunks::<4>().0.iter().map(|bits| {
+        if scale.is_sign_negative() {
+            f32::from_le_bytes(*bits)
+        } else {
+            f32::from_be_bytes(*bits)
+        }
+    });
+    let rgb = if channels == 3 {
+        samples.collect::<Vec<_>>()
+    } else {
+        samples.flat_map(|value| [value; 3]).collect::<Vec<_>>()
+    };
+    let buffer = image::ImageBuffer::from_raw(width, height, rgb).ok_or_else(invalid)?;
+    Ok(image::DynamicImage::ImageRgb32F(buffer).flipv())
 }
 
 fn should_retry_jxl_decode_as_jpeg(fmt: FormatKind, stderr: &[u8]) -> bool {
@@ -619,6 +717,9 @@ fn diff_dynamic_images(
     if tol == DiffTolerance::LossyAvif {
         return diff_lossy_avif_structure(ref_img, out_img);
     }
+    if tol == DiffTolerance::Exact {
+        return diff_exact_samples(ref_img, out_img);
+    }
 
     let ref_bytes = ref_img.to_rgb8();
     let out_bytes = out_img.to_rgb8();
@@ -643,6 +744,59 @@ fn diff_dynamic_images(
         });
     }
 
+    Ok(PixelDiffResult::Match)
+}
+
+fn diff_exact_samples(
+    ref_img: &image::DynamicImage,
+    out_img: &image::DynamicImage,
+) -> Result<PixelDiffResult> {
+    let is_float = |image: &image::DynamicImage| {
+        matches!(
+            image.color(),
+            image::ColorType::Rgb32F | image::ColorType::Rgba32F
+        )
+    };
+    if is_float(ref_img) || is_float(out_img) {
+        if !is_float(ref_img) || !is_float(out_img) {
+            return Err(ImgQualityError::AnalysisError(
+                "pixel-diff: Exact comparison cannot quantize floating-point samples".to_string(),
+            ));
+        }
+        for (index, (reference, output)) in ref_img
+            .to_rgba32f()
+            .as_raw()
+            .iter()
+            .zip(out_img.to_rgba32f().as_raw())
+            .enumerate()
+        {
+            // Equality of floats alone would erase signed zero and NaN payloads.
+            if reference.to_bits() != output.to_bits() {
+                return Ok(PixelDiffResult::Mismatch {
+                    max_delta: u8::MAX,
+                    channel: crate::numeric_cast::usize_to_u8_sat(index % 4),
+                });
+            }
+        }
+        return Ok(PixelDiffResult::Match);
+    }
+
+    let ref_samples = ref_img.to_rgba16();
+    let out_samples = out_img.to_rgba16();
+    for (index, (reference, output)) in ref_samples
+        .as_raw()
+        .iter()
+        .zip(out_samples.as_raw().iter())
+        .enumerate()
+    {
+        let delta = reference.abs_diff(*output);
+        if delta != 0 {
+            return Ok(PixelDiffResult::Mismatch {
+                max_delta: u8::try_from(delta).unwrap_or(u8::MAX),
+                channel: crate::numeric_cast::usize_to_u8_sat(index % 4),
+            });
+        }
+    }
     Ok(PixelDiffResult::Match)
 }
 
@@ -936,7 +1090,7 @@ mod tests {
     };
     use crate::image::format_detect::FormatKind;
     use crate::unified_error::ImgQualityError;
-    use image::{DynamicImage, ImageBuffer, Rgb, Rgba};
+    use image::{DynamicImage, ImageBuffer, Luma, LumaA, Rgb, Rgba};
     use tempfile::NamedTempFile;
 
     fn rgb_image(pixel: [u8; 3]) -> DynamicImage {
@@ -1090,10 +1244,173 @@ mod tests {
         assert_eq!(
             result,
             PixelDiffResult::Mismatch {
+                max_delta: u8::MAX,
+                channel: 0
+            }
+        );
+    }
+
+    #[test]
+    fn exact_rejects_grayalpha_alpha_only_change() {
+        let ref_img = DynamicImage::ImageLumaA8(ImageBuffer::from_pixel(1, 1, LumaA([42, 0])));
+        let out_img = DynamicImage::ImageLumaA8(ImageBuffer::from_pixel(1, 1, LumaA([42, 1])));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::Exact,
+            std::path::Path::new("out.jxl"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            PixelDiffResult::Mismatch {
+                max_delta: u8::MAX,
+                channel: 3
+            }
+        );
+    }
+
+    #[test]
+    fn exact_rejects_rgba16_low_bit_change() {
+        let ref_img = DynamicImage::ImageRgba16(ImageBuffer::from_pixel(
+            1,
+            1,
+            Rgba([0x1200, 0x3400, 0x5600, u16::MAX]),
+        ));
+        let out_img = DynamicImage::ImageRgba16(ImageBuffer::from_pixel(
+            1,
+            1,
+            Rgba([0x1201, 0x3400, 0x5600, u16::MAX]),
+        ));
+
+        let result = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::Exact,
+            std::path::Path::new("out.jxl"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            PixelDiffResult::Mismatch {
                 max_delta: 1,
                 channel: 0
             }
         );
+    }
+
+    #[test]
+    fn exact_accepts_equivalent_gray_and_rgb_8_to_16_samples() {
+        let cases = [
+            (
+                DynamicImage::ImageLuma8(ImageBuffer::from_pixel(1, 1, Luma([42]))),
+                DynamicImage::ImageLuma16(ImageBuffer::from_pixel(1, 1, Luma([0x2a2a]))),
+            ),
+            (
+                DynamicImage::ImageRgb8(ImageBuffer::from_pixel(1, 1, Rgb([12, 34, 56]))),
+                DynamicImage::ImageRgb16(ImageBuffer::from_pixel(
+                    1,
+                    1,
+                    Rgb([0x0c0c, 0x2222, 0x3838]),
+                )),
+            ),
+        ];
+
+        for (ref_img, out_img) in cases {
+            assert_eq!(
+                diff_dynamic_images(
+                    &ref_img,
+                    &out_img,
+                    DiffTolerance::Exact,
+                    std::path::Path::new("out.jxl"),
+                )
+                .unwrap(),
+                PixelDiffResult::Match
+            );
+        }
+    }
+
+    #[test]
+    fn exact_preserves_float_bits_instead_of_quantizing_them() {
+        let ref_img =
+            DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(1, 1, Rgb([0.5, 0.0, 1.0])));
+        assert_eq!(
+            diff_dynamic_images(
+                &ref_img,
+                &ref_img,
+                DiffTolerance::Exact,
+                std::path::Path::new("out.jxl")
+            )
+            .unwrap(),
+            PixelDiffResult::Match
+        );
+        let negative_zero =
+            DynamicImage::ImageRgb32F(ImageBuffer::from_pixel(1, 1, Rgb([0.5, -0.0, 1.0])));
+        assert!(matches!(
+            diff_dynamic_images(
+                &ref_img,
+                &negative_zero,
+                DiffTolerance::Exact,
+                std::path::Path::new("out.jxl")
+            )
+            .unwrap(),
+            PixelDiffResult::Mismatch { channel: 1, .. }
+        ));
+        let out_img = DynamicImage::ImageRgb16(ref_img.to_rgb16());
+
+        let error = diff_dynamic_images(
+            &ref_img,
+            &out_img,
+            DiffTolerance::Exact,
+            std::path::Path::new("out.jxl"),
+        )
+        .expect_err("Exact must reject float samples rather than quantize them");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot quantize floating-point samples")
+        );
+    }
+
+    #[test]
+    fn float_pfm_proof_preserves_bits_and_rejects_invalid_layouts() {
+        let file = NamedTempFile::new().unwrap();
+        for little in [false, true] {
+            let mut bytes = format!("PF\n1 1\n{}1.0\n", if little { "-" } else { "" }).into_bytes();
+            for bits in [0x8000_0000_u32, 0x7fc0_0001, 0x3e00_0001] {
+                bytes.extend(if little {
+                    bits.to_le_bytes()
+                } else {
+                    bits.to_be_bytes()
+                });
+            }
+            std::fs::write(file.path(), &bytes).unwrap();
+            let decoded = super::read_float_pfm(file.path()).unwrap().to_rgb32f();
+            assert_eq!(
+                decoded
+                    .as_raw()
+                    .iter()
+                    .map(|sample| sample.to_bits())
+                    .collect::<Vec<_>>(),
+                [0x8000_0000, 0x7fc0_0001, 0x3e00_0001]
+            );
+            bytes.pop();
+            std::fs::write(file.path(), bytes).unwrap();
+            assert!(super::read_float_pfm(file.path()).is_err());
+        }
+        for invalid in [
+            b"PF\n1 1\nNaN\n".as_slice(),
+            b"PF\n1 1 1\n-1\n",
+            b"PF\n4294967295 4294967295\n-1\n",
+            b"PF\n1 1\n-2\n",
+        ] {
+            std::fs::write(file.path(), invalid).unwrap();
+            assert!(super::read_float_pfm(file.path()).is_err());
+        }
     }
 
     #[test]

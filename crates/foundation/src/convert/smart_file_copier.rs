@@ -137,6 +137,15 @@ pub fn smart_copy_with_structure(
     base_dir: Option<&Path>,
     verbose: bool,
 ) -> Result<PathBuf> {
+    let source_format = crate::image::format_detect::detect_true_format(source)?;
+    let immutable = source_format == crate::image::format_detect::FormatKind::Unknown
+        || crate::image_formats::original_archive_reason(source)?.is_some()
+        || crate::xmp_merger::protected_container_reason(source, source_format)?.is_some();
+    let original_hash = if immutable {
+        Some(crate::common_utils::calculate_blake3_hash(source)?)
+    } else {
+        None
+    };
     let requested_dest = if let Some(base) = base_dir {
         let rel_path =
             crate::media_conversion_gate::strip_prefix_or_self(source, base, "delivery_io_copy");
@@ -251,7 +260,24 @@ pub fn smart_copy_with_structure(
         ));
     }
 
-    crate::copy(source, staged.path()).with_context(|| {
+    let metadata_result = if immutable {
+        crate::metadata::preserve_filesystem_for_delivery(source, staged.path()).and_then(
+            |report| {
+                use crate::metadata::MetadataLayerOutcome::PartialAudit;
+                if matches!(report.xattr, PartialAudit) || matches!(report.timestamps, PartialAudit)
+                {
+                    Err(std::io::Error::other(
+                        "Incomplete filesystem metadata for immutable archive",
+                    ))
+                } else {
+                    crate::metadata::verify_exact_metadata_copy(source, staged.path()).map(|_| ())
+                }
+            },
+        )
+    } else {
+        crate::copy(source, staged.path())
+    };
+    metadata_result.with_context(|| {
         format!(
             "Staged {} for {} but failed to preserve metadata",
             source.display(),
@@ -259,8 +285,37 @@ pub fn smart_copy_with_structure(
         )
     })?;
 
+    // Reject a conflicting original before publishing any companion beside it.
     if destination_exists {
         verify_existing_archive_copy(staged.path(), &dest)?;
+    }
+
+    if let Some(expected) = original_hash {
+        if crate::common_utils::calculate_blake3_hash(source)? != expected
+            || crate::common_utils::calculate_blake3_hash(staged.path())? != expected
+        {
+            anyhow::bail!(
+                "Immutable archive source or staged payload changed: {}",
+                source.display()
+            );
+        }
+        // Preserve the sidecar as a separate asset, never write it into an
+        // opaque/signed container. The same no-clobber transaction protects it.
+        if !source
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
+            && let Some(sidecar) = crate::metadata::find_xmp_sidecar(source)
+            && !paths_alias(source, &sidecar)?
+        {
+            smart_copy_with_structure(&sidecar, output_dir, base_dir, verbose)?;
+        }
+        crate::io_utils::sync_committed_file_and_parent(staged.path())?;
+    }
+
+    if destination_exists {
+        if immutable {
+            crate::io_utils::sync_committed_file_and_parent(&dest)?;
+        }
         if verbose {
             crate::ui_stderr::line(
                 "⏭️",
@@ -283,6 +338,9 @@ pub fn smart_copy_with_structure(
                 error.error
             ));
         }
+    }
+    if immutable {
+        crate::io_utils::sync_committed_file_and_parent(&dest)?;
     }
 
     if verbose {
@@ -598,6 +656,7 @@ mod tests {
         fs::write(&source, b"source archive payload").unwrap_or_else(|e| panic!("error: {e:?}"));
         fs::write(&destination, b"unrelated existing payload")
             .unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(source.with_extension("xmp"), b"source sidecar").unwrap();
 
         let error = smart_copy_with_structure(&source, &output_dir, Some(&source_dir), false)
             .expect_err("a conflicting archive destination must fail closed");
@@ -607,6 +666,10 @@ mod tests {
         assert_eq!(
             fs::read(&destination).unwrap(),
             b"unrelated existing payload"
+        );
+        assert!(
+            !destination.with_extension("xmp").exists(),
+            "a rejected archive must not attach its sidecar to an unrelated existing file"
         );
     }
 

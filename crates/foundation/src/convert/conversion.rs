@@ -1899,6 +1899,9 @@ pub fn commit_temp_to_output_with_metadata_checked(
             prepare_reconstructible_jxl_candidate(source, candidate)?;
         } else {
             prepare_output_metadata(candidate, original, pixel_audit_already_done, false)?;
+            if let Some(source) = original {
+                audit_lossless_jxl_samples_for_delivery(source, candidate)?;
+            }
         }
         accept(candidate)
     })
@@ -2401,6 +2404,60 @@ fn strip_residual_orientation_tag_for_delivery(output: &Path) -> std::io::Result
             output.display()
         ))
     })
+}
+
+// An orientation check (or a caller's earlier pixel check) is not evidence that
+// every lossless sample survived the final metadata-mutated candidate.
+fn audit_lossless_jxl_samples_for_delivery(source: &Path, output: &Path) -> std::io::Result<()> {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+    use crate::image_detection::{CompressionType, DetectedFormat};
+
+    let audit = || -> crate::unified_error::Result<()> {
+        if detect_true_format(output)? != FormatKind::Jxl || !source.try_exists()? {
+            return Ok(());
+        }
+        let format = crate::image_detection::detect_format_from_bytes(source)?;
+        if let Some(reason) = crate::image_formats::original_archive_reason(source)? {
+            return Err(crate::unified_error::ImgQualityError::AnalysisError(
+                format!("{reason}; source retained"),
+            ));
+        }
+        if matches!(
+            format,
+            DetectedFormat::JPEG
+                | DetectedFormat::MP4
+                | DetectedFormat::MOV
+                | DetectedFormat::MKV
+                | DetectedFormat::WEBM
+        ) {
+            return Ok(());
+        }
+        // Do not reinterpret unproven compression as lossless. Modern native
+        // archival admission and HDR decoder-domain/color proofs are separate
+        // contracts; cross-decoder RGB rounding is not an exact sample oracle.
+        let lossless = matches!(format, DetectedFormat::PNG | DetectedFormat::Unknown(_))
+            || crate::image_detection::detect_compression(&format, source)?
+                == CompressionType::Lossless;
+        if lossless {
+            match crate::image::orientation::verify_orientation_pixel_diff(
+                source,
+                output,
+                FormatKind::Jxl,
+                crate::image::orientation::DiffTolerance::Exact,
+            )? {
+                crate::image::orientation::PixelDiffResult::Match => {}
+                result => {
+                    return Err(crate::unified_error::ImgQualityError::AnalysisError(
+                        format!(
+                            "Lossless JXL final sample proof failed: {result:?}; source retained"
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    };
+    audit().map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn audit_orientation_pixel_verification_for_delivery(

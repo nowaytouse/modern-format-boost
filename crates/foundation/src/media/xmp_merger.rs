@@ -301,7 +301,7 @@ fn isobmff_has_top_level_marker(
     Ok(false)
 }
 
-fn protected_container_reason(
+pub(crate) fn protected_container_reason(
     path: &Path,
     format: crate::image::format_detect::FormatKind,
 ) -> Result<Option<&'static str>> {

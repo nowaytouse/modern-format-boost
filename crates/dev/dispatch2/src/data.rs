@@ -202,6 +202,8 @@ mod tests {
 
         let pair2 = Arc::clone(&pair);
         let destructor = RcBlock::new(move || {
+            // Exercise delayed scheduling independently of the finalizer.
+            std::thread::sleep(Duration::from_millis(25));
             let (lock, cvar) = &*pair2;
             lock.lock().unwrap().has_run_destructor = true;
             cvar.notify_one();
@@ -229,7 +231,11 @@ mod tests {
         let lock = lock.lock().unwrap();
 
         // Verify the destructor hasn't run yet.
-        let (lock, res) = cvar.wait_timeout(lock, Duration::from_millis(10)).unwrap();
+        let (lock, res) = cvar
+            .wait_timeout_while(lock, Duration::from_millis(10), |state| {
+                !state.has_run_destructor && !state.has_run_finalizer
+            })
+            .unwrap();
         assert!(res.timed_out());
         assert!(!lock.has_run_destructor);
         assert!(!lock.has_run_finalizer);
@@ -238,7 +244,11 @@ mod tests {
         drop(data);
 
         // Still not yet, the second reference is still alive.
-        let (lock, res) = cvar.wait_timeout(lock, Duration::from_millis(10)).unwrap();
+        let (lock, res) = cvar
+            .wait_timeout_while(lock, Duration::from_millis(10), |state| {
+                !state.has_run_destructor && !state.has_run_finalizer
+            })
+            .unwrap();
         assert!(res.timed_out());
         assert!(!lock.has_run_destructor);
         assert!(!lock.has_run_finalizer);
@@ -247,17 +257,28 @@ mod tests {
         drop(data2);
 
         // Still not yet, the reference is kept alive by the new data.
-        let (lock, res) = cvar.wait_timeout(lock, Duration::from_millis(10)).unwrap();
+        let (lock, res) = cvar
+            .wait_timeout_while(lock, Duration::from_millis(10), |state| {
+                !state.has_run_destructor && !state.has_run_finalizer
+            })
+            .unwrap();
         assert!(res.timed_out());
         assert!(!lock.has_run_destructor);
         assert!(!lock.has_run_finalizer);
 
         drop(data3);
 
-        // Has run now!
-        let (lock, res) = cvar.wait_timeout(lock, Duration::from_millis(10)).unwrap();
+        // The destructor and finalizer can notify separately; one wakeup is
+        // not proof that both completed (and wakeups can be spurious).
+        let (lock, res) = cvar
+            .wait_timeout_while(lock, Duration::from_secs(5), |state| {
+                !state.has_run_destructor || !state.has_run_finalizer
+            })
+            .unwrap();
+        let completed = (lock.has_run_destructor, lock.has_run_finalizer);
+        // Do not poison a lock still needed by an FFI callback on test failure.
+        drop(lock);
         assert!(!res.timed_out());
-        assert!(lock.has_run_destructor);
-        assert!(lock.has_run_finalizer);
+        assert_eq!(completed, (true, true));
     }
 }

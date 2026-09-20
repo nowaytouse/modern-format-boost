@@ -3,6 +3,47 @@
 // All TIFF/DNG lossless detection uses tiff_family::is_lossless_tiff_family
 // (exiftool-based, with disciplined main-IFD selection).
 
+/// Known container semantics that a single pixel-encoded JXL cannot replace.
+/// JPEG is handled separately by its byte-identical reconstruction contract.
+///
+/// # Errors
+/// Returns an error if container identity or structural evidence is unreadable.
+pub fn original_archive_reason(
+    path: &std::path::Path,
+) -> crate::unified_error::Result<Option<&'static str>> {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+    use crate::unified_error::ImgQualityError;
+    use std::io::Read;
+
+    let format = detect_true_format(path)?;
+    if format == FormatKind::Jpeg {
+        return Ok(None);
+    }
+    if let Some(reason) = crate::xmp_merger::protected_container_reason(path, format)
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?
+    {
+        return Ok(Some(reason));
+    }
+    match format {
+        FormatKind::Tiff if tiff_family::requires_original_archive(path)? => Ok(Some(
+            "TIFF sample, channel or directory semantics require original-container archival",
+        )),
+        FormatKind::Ico => {
+            let mut header = [0_u8; 6];
+            std::fs::File::open(path)?.read_exact(&mut header)?;
+            let kind = u16::from_le_bytes([header[2], header[3]]);
+            let count = u16::from_le_bytes([header[4], header[5]]);
+            if header[..2] != [0, 0] || !matches!(kind, 1 | 2) || count == 0 {
+                return Err(ImgQualityError::AnalysisError(
+                    "Invalid ICO/CUR archive directory".into(),
+                ));
+            }
+            Ok((kind == 2 || count != 1).then_some("Cursor hotspot or multiple icon representations require original-container archival"))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub mod jpeg {
     use crate::unified_error::Result;
     use std::path::Path;
@@ -1018,6 +1059,20 @@ pub mod tiff_family {
     /// Traverse the classic TIFF or `BigTIFF` main-IFD chain and report whether
     /// it contains `wanted_tag`.
     pub(crate) fn contains_ifd_tag(path: &Path, wanted_tag: u16) -> Result<bool> {
+        probe_ifds(path, Some(wanted_tag))
+    }
+
+    /// Whether TIFF requires original-container archival.
+    ///
+    /// Only a single gray/RGB raster with optional straight alpha is eligible.
+    /// Unknown/private image tags are retained, not guessed to be metadata.
+    pub fn requires_original_archive(path: &Path) -> Result<bool> {
+        probe_ifds(path, None)
+    }
+
+    // Some(tag) keeps the existing provenance/RAW lookup; None audits the
+    // primary raster contract using the same bounded TIFF/BigTIFF traversal.
+    fn probe_ifds(path: &Path, wanted_tag: Option<u16>) -> Result<bool> {
         let mut file = std::fs::File::open(path)?;
         let file_len = file.metadata()?.len();
         let mut header = [0_u8; 8];
@@ -1064,6 +1119,11 @@ pub mod tiff_family {
             (2_u64, 12_u64, 4_u64)
         };
         let mut visited = std::collections::HashSet::new();
+        let mut photometric = None;
+        let mut samples = 1;
+        let mut bits = vec![1];
+        let mut sample_format = vec![1];
+        let mut extra_samples = Vec::new();
         while ifd_offset != 0 {
             if !visited.insert(ifd_offset) || visited.len() > 4096 {
                 return Err(ImgQualityError::AnalysisError(
@@ -1076,6 +1136,9 @@ pub mod tiff_family {
                     "TIFF: IFD offset is outside the file while probing protected provenance"
                         .to_string(),
                 ));
+            }
+            if wanted_tag.is_none() && visited.len() > 1 {
+                return Ok(true);
             }
             file.seek(SeekFrom::Start(ifd_offset))?;
             let entry_count = if big_tiff {
@@ -1101,11 +1164,90 @@ pub mod tiff_family {
                     "TIFF: truncated IFD while probing protected provenance".to_string(),
                 ));
             }
+            let mut archive_tags = std::collections::HashSet::new();
             for index in 0..entry_count {
                 let entry_offset = ifd_offset + count_size + index * entry_size;
                 file.seek(SeekFrom::Start(entry_offset))?;
-                if read_tiff_u16(&mut file, little_endian)? == wanted_tag {
-                    return Ok(true);
+                let tag = read_tiff_u16(&mut file, little_endian)?;
+                if let Some(wanted) = wanted_tag {
+                    if tag == wanted {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                if !archive_tags.insert(tag) {
+                    return Err(ImgQualityError::AnalysisError(
+                        "TIFF: duplicate archive descriptor".into(),
+                    ));
+                }
+                match tag {
+                    258 | 262 | 277 | 297 | 338 | 339 => {
+                        let field_type = read_tiff_u16(&mut file, little_endian)?;
+                        let count = if big_tiff {
+                            read_tiff_u64(&mut file, little_endian)?
+                        } else {
+                            u64::from(read_tiff_u32(&mut file, little_endian)?)
+                        };
+                        if field_type != 3 || !(1..=4).contains(&count) {
+                            return Ok(true);
+                        }
+                        let inline_size = if big_tiff { 8 } else { 4 };
+                        if count * 2 > inline_size {
+                            let offset = if big_tiff {
+                                read_tiff_u64(&mut file, little_endian)?
+                            } else {
+                                u64::from(read_tiff_u32(&mut file, little_endian)?)
+                            };
+                            if offset
+                                .checked_add(count * 2)
+                                .is_none_or(|end| end > file_len)
+                            {
+                                return Err(ImgQualityError::AnalysisError(
+                                    "TIFF: sample descriptor outside file".into(),
+                                ));
+                            }
+                            file.seek(SeekFrom::Start(offset))?;
+                        }
+                        let values = (0..count)
+                            .map(|_| read_tiff_u16(&mut file, little_endian))
+                            .collect::<Result<Vec<_>>>()?;
+                        match tag {
+                            258 => bits = values,
+                            262 if count == 1 => photometric = Some(values[0]),
+                            277 if count == 1 => samples = values[0],
+                            297 if values == [0, 1] => {}
+                            338 => extra_samples = values,
+                            339 => sample_format = values,
+                            _ => return Ok(true),
+                        }
+                    }
+                    // Encoding/layout fields plus metadata copied and audited by
+                    // the existing delivery contract. SubIFDs, masks, CFA, spot
+                    // colors, GeoTIFF, Photoshop layers and unknown tags stay native.
+                    256
+                    | 257
+                    | 259
+                    | 266
+                    | 269..=274
+                    | 278
+                    | 279
+                    | 282..=284
+                    | 286
+                    | 287
+                    | 296
+                    | 305
+                    | 306
+                    | 315..=319
+                    | 322..=325
+                    | 340
+                    | 341
+                    | 700
+                    | 33432
+                    | 33723
+                    | 34665
+                    | 34675
+                    | 34853 => {}
+                    _ => return Ok(true),
                 }
             }
             let next_offset = ifd_offset + count_size + entry_count * entry_size;
@@ -1116,7 +1258,25 @@ pub mod tiff_family {
                 u64::from(read_tiff_u32(&mut file, little_endian)?)
             };
         }
-        Ok(false)
+        if wanted_tag.is_some() {
+            return Ok(false);
+        }
+        let color_samples = match photometric {
+            Some(0 | 1) => 1,
+            Some(2) => 3,
+            _ => return Ok(true),
+        };
+        let has_alpha = samples == color_samples + 1 && extra_samples == [2];
+        let ordinary_channels = (samples == color_samples && extra_samples.is_empty()) || has_alpha;
+        let unsigned = sample_format.iter().all(|value| *value == 1)
+            && bits.iter().all(|value| matches!(value, 1 | 2 | 4 | 8 | 16));
+        let float32 =
+            sample_format.iter().all(|value| *value == 3) && bits.iter().all(|value| *value == 32);
+        Ok(visited.is_empty()
+            || !ordinary_channels
+            || !(unsigned || float32)
+            || !(bits.len() == 1 || bits.len() == usize::from(samples))
+            || !(sample_format.len() == 1 || sample_format.len() == usize::from(samples)))
     }
 
     /// Return whether a TIFF-family payload identifies itself as Digital Negative (DNG).
@@ -1553,6 +1713,97 @@ mod tests {
             crate::image_detection::CompressionType::JpegReconstruction,
             "jbrd must keep its own reconstruction semantics, not plain lossless"
         );
+    }
+
+    #[test]
+    fn tiff_archive_gate_distinguishes_samples_and_directory_topology() {
+        for big in [false, true] {
+            for little in [false, true] {
+                let short = |value: u16| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let long = |value: u32| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let long8 = |value: u64| {
+                    if little {
+                        value.to_le_bytes()
+                    } else {
+                        value.to_be_bytes()
+                    }
+                };
+                let fixture = |tags: &[(u16, u16)], next: bool| {
+                    let mut bytes = if little {
+                        b"II".to_vec()
+                    } else {
+                        b"MM".to_vec()
+                    };
+                    bytes.extend(short(if big { 43 } else { 42 }));
+                    if big {
+                        bytes.extend(short(8));
+                        bytes.extend(short(0));
+                        bytes.extend(long8(16));
+                        bytes.extend(long8(u64::try_from(tags.len()).unwrap()));
+                    } else {
+                        bytes.extend(long(8));
+                        bytes.extend(short(u16::try_from(tags.len()).unwrap()));
+                    }
+                    for (tag, value) in tags {
+                        bytes.extend(short(*tag));
+                        bytes.extend(short(3));
+                        if big {
+                            bytes.extend(long8(1));
+                        } else {
+                            bytes.extend(long(1));
+                        }
+                        bytes.extend(short(*value));
+                        bytes.extend(vec![0; if big { 6 } else { 2 }]);
+                    }
+                    if big {
+                        bytes.extend(long8(if next { 16 } else { 0 }));
+                    } else {
+                        bytes.extend(long(if next { 8 } else { 0 }));
+                    }
+                    bytes
+                };
+                let base = [(258, 16), (262, 2), (277, 3), (339, 1)];
+                let mut file = NamedTempFile::new().unwrap();
+                file.write_all(&fixture(&base, false)).unwrap();
+                assert!(!tiff_family::requires_original_archive(file.path()).unwrap());
+                for (tag, value) in [(262, 5), (339, 2), (330, 8), (65000, 1), (52545, 1)] {
+                    let mut tags = base.to_vec();
+                    tags.retain(|(existing, _)| *existing != tag);
+                    tags.push((tag, value));
+                    std::fs::write(file.path(), fixture(&tags, false)).unwrap();
+                    assert!(
+                        tiff_family::requires_original_archive(file.path()).unwrap(),
+                        "tag={tag} value={value}"
+                    );
+                }
+                for extra in [0, 1, 2] {
+                    let tags = [(258, 16), (262, 2), (277, 4), (338, extra), (339, 1)];
+                    std::fs::write(file.path(), fixture(&tags, false)).unwrap();
+                    assert_eq!(
+                        tiff_family::requires_original_archive(file.path()).unwrap(),
+                        extra != 2
+                    );
+                }
+                std::fs::write(file.path(), fixture(&base, true)).unwrap();
+                assert!(tiff_family::requires_original_archive(file.path()).is_err());
+                let mut truncated = fixture(&base, false);
+                truncated.pop();
+                std::fs::write(file.path(), truncated).unwrap();
+                assert!(tiff_family::requires_original_archive(file.path()).is_err());
+            }
+        }
     }
 
     #[test]

@@ -35,21 +35,32 @@ metadata:
 
 - true JPEG, including UltraHDR/MPF JPEG, enters reversible JXL only when the
   original JPEG bytes can be reconstructed exactly;
-- ordinary lossless raster sources such as PNG, BMP, TIFF, TGA, ICO/CUR,
+- ordinary lossless raster sources such as PNG, BMP, single-raster TIFF, TGA, single-image ICO,
   NetPBM/PAM, and confirmed single-frame GIF, plus modern WebP, AVIF,
   HEIC/HEIF, and JP2 sources with positive lossless evidence, enter
-  pixel-lossless JXL with decoded RGBA16 equality and metadata audit;
-- AVIF is decoded through the authoritative `avifdec` path only after an
-  explicit gain-map probe. A present or unprovable gain map retains the native
-  source instead of flattening HDR. HEIC/HEIF gain maps use the dedicated HDR
-  JXL path with verified auxiliary sidecars;
+  pixel-lossless JXL with final decoded RGBA16 equality and metadata audit;
+  supported float32 TIFF is compared by float sample bits, not quantized to RGB8/16;
+- AVIF admission uses the authoritative `avifdec` metadata probe before pixel
+  decoding, including the established high-precision HDR path. A present or unprovable gain map retains the native
+  source instead of flattening HDR. HEIC/HEIF without positive lossless evidence
+  remains native; a synthesized HDR image plus auxiliary PNGs is not an archive
+  replacement for the HEIF relationship graph;
 - an existing JXL and every lossy or semantically unknown modern container
-  remains byte-for-byte unchanged. Unknown archive structure is never inferred
-  to be disposable from primary-pixel equality alone;
+  remains native, without pixel re-encoding. Explicitly permitted XMP enrichment
+  is distinct from byte-identical whole-file custody. Unknown archive structure
+  is never inferred to be disposable from primary-pixel equality alone;
 - SVG/SVGZ and enumerated camera RAW inputs are accepted as archival originals
   but remain byte-for-byte. Raster JXL cannot prove preservation of vector
   semantics or RAW sensor/CFA/maker-note data, so decoder availability is not
   treated as permission to flatten them;
+- TIFF multi-IFD/SubIFD, signed/undefined samples, unmodelled extra channels,
+  associated alpha, non-gray/RGB photometric models, and unknown/private image
+  descriptors remain native. Ordinary unsigned gray/RGB and straight-alpha
+  rasters retain the existing conversion route. CUR hotspots and multi-image
+  ICO directories likewise require native-container custody;
+- non-JPEG provenance-capable containers use original-byte retention, not a
+  pixel re-encode. This reuses the C2PA/JUMBF structural probes; it is not a
+  cryptographic signature-validity or vendor-specific provenance claim;
 - a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains an IMG still. An
   animated instance is handed to VID. MP4/MOV/MKV/WebM enters IMG only when
   decoded-frame inventory proves exactly one video frame, no audio or other
@@ -63,6 +74,25 @@ without replacing an existing path. Reusing an existing destination requires
 both identical delivered bytes and the expected filesystem metadata (permissions,
 modification time and preserved extended attributes). A conflict returns failure
 without modifying that existing file or the source.
+
+For immutable/opaque native archives, the copy stage does not rewrite embedded
+metadata or merge XMP into the media. It copies filesystem metadata, verifies
+the source and staged BLAKE3 payload, and preserves the selected XMP sidecar
+as a separate no-clobber copy. This prevents both signed-media rewrite failures
+and silent byte changes to retained TIFF/CUR/RAW-like inputs. Native formats
+whose existing contract explicitly allows XMP enrichment keep that route.
+
+For confirmed lossless raster sources, the shared JXL delivery boundary verifies
+the final candidate after metadata work even when a caller already checked
+pixels. Orientation correlation is not an archive sample proof: alpha,
+invisible RGB and 16-bit low-order values
+must match; float samples require matching bit patterns in the supported float
+decode domain. An unavailable or lossy reference representation fails closed.
+Unproven modern compression is not relabelled lossless by this check; native
+archive admission and HDR decoder-domain/colour proofs retain their own contracts.
+These proofs do not certify arbitrary scientific channel roles, private vendor
+asset graphs, or Photos/iCloud resource migration. Unknown semantics must not
+be described as a completed cross-format archive merely because pixels match.
 
 All `cjxl` outputs explicitly request the JXL container so append-only metadata
 boxes remain available. Direct pixel encoding uses effort 7 normally and effort

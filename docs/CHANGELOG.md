@@ -2,7 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-19
+## [Unreleased] - 2026-09-20
+
+### IMG final-sample proof and native archive boundaries (2026-09-20)
+
+- Enforce an independent final JXL sample proof after metadata staging. The
+  previous orientation check could accept flat, equal-sized images with changed
+  alpha or 16-bit low-order samples. Regression fixtures reproduce that acceptance
+  and require failure before an existing output is replaced. Integer images use
+  exact canonical RGBA16, including invisible RGB; float32 images use bit-pattern
+  comparison through bounded float decoding, not integer quantization.
+- Reuse the TIFF/BigTIFF directory reader for a positive single-raster sample
+  boundary. Keep multi-page/SubIFD, associated-alpha, signed/undefined samples,
+  non-gray/RGB, unmodelled channels and private structural tags in their original
+  container. Preserve ordinary unsigned/float32 and straight-alpha conversion
+  paths. Keep actual CUR hotspots and multiple ICO representations native;
+  an ICO payload merely named `.cur` still follows its content identity.
+- Reuse C2PA/JUMBF probes at archive admission, not only during XMP rewriting.
+  Immutable or opaque archive copies now preserve and hash-check original bytes,
+  apply filesystem metadata without embedded rewrites, and deliver XMP separately.
+  Real CLI regressions caught both a retained TIFF being rewritten and a protected
+  PNG failing during attempted XMP merge. JPEG/JBRD reconstruction and AVIF Meme
+  Mode remain separate contracts.
+- Correct the stale claim that HEIC gain maps were delivered through a synthesized
+  HDR JXL plus auxiliary sidecars. Native HEIF retention is the boundary when
+  the complete auxiliary relationship graph cannot be proved. No new vendor
+  provenance marker or Photos/iCloud acceptance is claimed.
+- The preceding revision `63d5e061` completed all remote gates in
+  [CI run 35449667899](https://github.com/nowaytouse/modern-format-boost/actions/runs/35449667899),
+  resolving the September 19 disk-capacity acceptance item. That older success
+  is not remote acceptance of the changes in this section.
+- The later scheduled [run 35487778290](https://github.com/nowaytouse/modern-format-boost/actions/runs/35487778290)
+  passed IMG/shared/deep-audit gates but exposed a macOS `dispatch2` test race:
+  a single 10 ms condition-variable wake was mistaken for completion of both
+  destructor and finalizer. Wait on both predicates with a bounded deadline,
+  test delayed destruction, and release the guard before final assertions so a
+  failed test cannot poison the mutex used by the pending FFI callback.
+- Local validation: foundation/IMG/VID all-target suites passed 2,324 tests
+  (four existing corpus/live-library tests unexecuted), followed by affected
+  regression reruns, all 17 production-matrix tests, 395 contract checks, strict
+  package Clippy and formatting checks. The macOS dispatch suite passed 23 unit
+  and six documentation tests; its process-trapping test remains explicitly
+  ignored. Live Photos/iCloud acceptance and fresh remote CI are separate gates.
 
 ### IMG identity, metadata proofs, and toolchain validation (2026-09-19)
 

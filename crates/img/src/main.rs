@@ -1496,7 +1496,7 @@ fn archival_original_only_reason(input: &Path) -> anyhow::Result<Option<&'static
         {
             Ok(Some(RAW_ARCHIVE_REASON))
         } else {
-            Ok(None)
+            Ok(foundation::image_formats::original_archive_reason(input)?)
         };
     };
 
@@ -1633,18 +1633,7 @@ mod conversion_result_adapter_tests {
         );
 
         let ordinary_tiff = temp.path().join("ordinary.tiff");
-        std::fs::write(
-            &ordinary_tiff,
-            [
-                b'I', b'I', 42, 0, 8, 0, 0, 0, // classic TIFF header + IFD offset
-                1, 0, // one IFD entry
-                0, 1, // ImageWidth (0x0100), not DNGVersion
-                4, 0, // LONG
-                1, 0, 0, 0, // one value
-                1, 0, 0, 0, // width = 1
-                0, 0, 0, 0, // no next IFD
-            ],
-        )?;
+        image::ImageBuffer::from_pixel(2, 2, image::Rgb([12_u8, 34, 56])).save(&ordinary_tiff)?;
         assert!(
             archival_original_only_reason(&ordinary_tiff)?.is_none(),
             "an ordinary TIFF must remain an IMG conversion input"
