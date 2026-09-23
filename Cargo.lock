@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8542fea5f9bd1de89fcac7eeb5724b565743c6fb"
+source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8542fea5f9bd1de89fcac7eeb5724b565743c6fb"
+source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8542fea5f9bd1de89fcac7eeb5724b565743c6fb"
+source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.1"
-source = "git+https://github.com/clap-rs/clap#8542fea5f9bd1de89fcac7eeb5724b565743c6fb"
+source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
 
 [[package]]
 name = "cmake"
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "crc32fast"
 version = "1.5.2"
-source = "git+https://github.com/srijs/rust-crc32fast#92c03d6315fd43ea168441691ac42885dafbcafc"
+source = "git+https://github.com/srijs/rust-crc32fast#ad14266cf782ba6936d1af37fc9fd6382ef73b7c"
 dependencies = [
  "cfg-if",
 ]
@@ -920,6 +920,7 @@ dependencies = [
  "libheif-rs",
  "log",
  "pgvector",
+ "pkg-config",
  "postgres",
  "proptest",
  "quick-xml",
@@ -1220,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#92cf1ae5f47c4bc2fb83556aa96f021727082ccc"
+source = "git+https://github.com/console-rs/indicatif#b5a12ffb143f028eb21f7e4424a361c8aed4c982"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1320,7 +1321,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "jpegxl-rs"
 version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
+source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
 dependencies = [
  "bon",
  "byteorder",
@@ -1332,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
+source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
 dependencies = [
  "cmake",
 ]
@@ -1340,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#ede9a31d279caa98da477f46ca8bf57fb90d8d53"
+source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -1589,7 +1590,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f554864c5f34c7f285ff6acdcadb64bcc2a3de1609e9135cec702c5edc703864"
 dependencies = [
  "cfg-if",
- "cmake",
  "libc",
  "system-deps",
  "vcpkg",
@@ -1604,9 +1604,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.24"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6480ccc157a1389bb2e4891b24751b0f798ba640d22386f23143fbcc89da195a"
+checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
  "libc",
 ]
@@ -2116,7 +2116,7 @@ dependencies = [
  "hmac",
  "md-5",
  "memchr",
- "rand 0.10.2",
+ "rand 0.10.3",
  "sha2",
  "stringprep",
 ]
@@ -2204,7 +2204,7 @@ dependencies = [
  "bitflags",
  "core_detect",
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_chacha 0.10.0",
  "rand_xorshift",
  "regex-syntax",
@@ -2295,9 +2295,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -2827,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#5a306c7d0a8588caaaaa6a7567aeb25c1c10719b"
+source = "git+https://github.com/dtolnay/thiserror#2715388e8cc5787b3643251f7a7a637e89376688"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2835,7 +2835,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#5a306c7d0a8588caaaaa6a7567aeb25c1c10719b"
+source = "git+https://github.com/dtolnay/thiserror#2715388e8cc5787b3643251f7a7a637e89376688"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2934,7 +2934,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "rand 0.10.2",
+ "rand 0.10.3",
  "socket2",
  "tokio",
  "tokio-util",
@@ -3614,7 +3614,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#a06acb00ee50928fd15d7cac81bdeb692ba7a08a"
+source = "git+https://github.com/google/zerocopy#54aa994627b537d40d560af6296d42c424587c10"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3622,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#a06acb00ee50928fd15d7cac81bdeb692ba7a08a"
+source = "git+https://github.com/google/zerocopy#54aa994627b537d40d560af6296d42c424587c10"
 dependencies = [
  "proc-macro2",
  "quote",

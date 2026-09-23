@@ -18337,7 +18337,7 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
             && clippy_script.contains("\"--all-targets\"")
             && clippy_script.contains("\"--all-features\"")
             && clippy_script.contains("foundation/ci-static-build"),
-        "clippy_strict.rs must run strict clippy with CI embedded libheif on GITHUB_ACTIONS"
+        "clippy_strict.rs must run strict clippy with CI static libheif on GITHUB_ACTIONS"
     );
     assert!(
         clippy_script.contains("\"-D\"") && clippy_script.contains("\"warnings\""),
@@ -18353,6 +18353,71 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
             !workflow.contains(forbidden),
             "ci-quality workflow still contains softened clippy behavior: {forbidden}"
         );
+    }
+}
+
+#[test]
+fn nightly_publication_requires_all_production_gates() {
+    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
+        .expect("ci-quality workflow must be readable");
+    let release = workflow
+        .split_once("\n  nightly-release:")
+        .and_then(|(_, tail)| tail.split_once("\n  deep-audit:"))
+        .map(|(release, _)| release)
+        .expect("nightly release job must exist");
+    let needs = release
+        .split_once("\n    needs:")
+        .and_then(|(_, tail)| tail.split_once("\n    permissions:"))
+        .map(|(needs, _)| needs)
+        .expect("nightly release dependencies must exist");
+    for gate in [
+        "validation",
+        "package-quality",
+        "health-check",
+        "security-audit",
+        "dispatch2-macos",
+        "dispatch2-linux",
+        "deep-audit",
+    ] {
+        assert!(
+            needs.lines().any(|line| line.trim() == format!("- {gate}")),
+            "publication must wait for {gate}"
+        );
+        assert!(
+            release.contains(&format!("needs.{gate}.result == 'success'")),
+            "publication must reject unsuccessful {gate}"
+        );
+    }
+}
+
+#[test]
+fn libheif_builds_use_the_security_release_not_the_old_embedded_source() {
+    let root = workspace_root();
+    let foundation = fs::read_to_string(root.join("crates/foundation/Cargo.toml"))
+        .expect("foundation manifest must be readable");
+    assert!(
+        !foundation.contains("libheif-rs/embedded-libheif"),
+        "the current libheif-sys embeds insecure libheif 1.23.1"
+    );
+    let installer =
+        fs::read_to_string(root.join("crates/dev/src/bin/install_media_dependencies.rs"))
+            .expect("native installer must be readable");
+    assert!(installer.contains("libheif-1.23.5.tar.gz"));
+    assert!(installer.contains("fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a"));
+    assert!(installer.contains("-DBUILD_SHARED_LIBS=OFF"));
+    assert!(installer.contains("--atleast-version=1.23.5"));
+    let build = fs::read_to_string(root.join("crates/foundation/build.rs"))
+        .expect("foundation build script must be readable");
+    assert!(build.contains("atleast_version(\"1.23.5\")"));
+    let workflow = fs::read_to_string(root.join(".github/workflows/ci-quality.yml"))
+        .expect("CI workflow must be readable");
+    assert!(!workflow.contains("libheif-1.23.1"));
+    assert!(workflow.contains("MFB_LIBHEIF_ONLY"));
+    assert!(workflow.contains("SYSTEM_DEPS_LIBHEIF_LINK"));
+    for path in ["check_all.rs", "clippy_strict.rs"] {
+        let runner = fs::read_to_string(root.join("crates/dev/src/bin").join(path))
+            .expect("CI runner must be readable");
+        assert!(runner.contains("\"SYSTEM_DEPS_LIBHEIF_LINK\", \"static\""));
     }
 }
 

@@ -482,12 +482,6 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         }
     };
 
-    // Fail-fast if critical sub-tools are missing
-    if let Err(e) = foundation::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]) {
-        log_fatal!(foundation::infra::static_logs::messages::LABEL_TOOLS, &e);
-        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-    }
-
     foundation::progress_mode::configure_terminal_ux(plain);
     foundation::progress_mode::set_verbose_mode(verbose);
     foundation::progress_mode::maybe_log_inference_analytics_hint(verbose);
@@ -608,6 +602,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         flags: config_flags,
         child_threads: 0,
         cache,
+        tool_preflight: Arc::default(),
         error_mode: foundation::BatchErrorMode::current(),
     };
 
@@ -1138,6 +1133,7 @@ struct AutoConvertConfig {
     child_threads: usize,
 
     cache: Option<Arc<AnalysisCache>>,
+    tool_preflight: Arc<std::sync::OnceLock<Result<(), String>>>,
     error_mode: foundation::BatchErrorMode,
 }
 
@@ -1550,6 +1546,7 @@ mod conversion_result_adapter_tests {
         detected_format_is_outside_img_raster_scope, detected_format_is_video,
         fast_static_skip_or_ignore, image_batch_should_abort,
     };
+    use std::sync::Arc;
 
     #[test]
     fn failed_task_result_is_not_promoted_to_conversion_success() -> anyhow::Result<()> {
@@ -1698,6 +1695,7 @@ mod conversion_result_adapter_tests {
             flags: ConfigFlags::ARCHIVE_MODE | ConfigFlags::APPLE_COMPAT,
             child_threads: 1,
             cache: None,
+            tool_preflight: Arc::default(),
             error_mode: foundation::BatchErrorMode::FailFast,
         };
 
@@ -1740,6 +1738,7 @@ mod conversion_result_adapter_tests {
             flags: ConfigFlags::ARCHIVE_MODE,
             child_threads: 1,
             cache: None,
+            tool_preflight: Arc::default(),
             error_mode: foundation::BatchErrorMode::FailFast,
         };
 
@@ -1805,6 +1804,7 @@ mod conversion_result_adapter_tests {
             flags: ConfigFlags::empty(),
             child_threads: 1,
             cache: None,
+            tool_preflight: Arc::default(),
             error_mode: foundation::BatchErrorMode::FailFast,
         };
 
@@ -1849,6 +1849,13 @@ fn auto_convert_single_file(
         let file_size = foundation::io_utils::metadata_with_retry(input)
             .map_err(|error| anyhow::anyhow!("Failed to inspect {}: {error}", input.display()))?
             .len();
+        // Protected containers still belong to an asset pair. Preserve motion
+        // first so a collision cannot publish a seemingly complete still archive.
+        if config.output_dir.is_some() {
+            for companion in foundation::live_photo::find_live_companions(input)? {
+                copy_original_if_adjacent_mode(&companion, config)?;
+            }
+        }
         foundation::progress_mode::image_skipped(input, reason);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
@@ -1863,6 +1870,16 @@ fn auto_convert_single_file(
             blake3: None,
         });
     }
+
+    // Original-container custody above does not invoke codecs or rewrite
+    // metadata. Check once per run, shared across batch workers, only when a
+    // conversion needs it. Propagate failure so main flushes diagnostics.
+    config
+        .tool_preflight
+        .get_or_init(|| foundation::tools::require(&["cjxl", "djxl", "exiftool", "ffmpeg"]))
+        .clone()
+        .map_err(anyhow::Error::msg)
+        .context("IMG conversion tools unavailable")?;
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
     // When an output directory is configured the source tree must remain immutable:

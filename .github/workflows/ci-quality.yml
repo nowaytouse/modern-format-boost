@@ -113,6 +113,8 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -120,24 +122,14 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libssl-dev build-essential cmake git clang libblocksruntime-dev pkg-config ninja-build nasm meson
-          cd /tmp
-          curl -fsSL "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz" -o libheif-src.tar.gz
-          tar xzf libheif-src.tar.gz
-          cd libheif-1.23.1
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DCMAKE_WARN_DEPRECATED=OFF \
-            -DWITH_EXAMPLES=OFF \
-            -DBUILD_TESTING=OFF \
-            -DWITH_OPENH264=OFF \
-            > /tmp/libheif-cmake.log 2>&1
-          cmake --build build --parallel
-          sudo cmake --install build
-          sudo ldconfig
-          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          sudo apt-get install -y libssl-dev build-essential cmake git clang libblocksruntime-dev pkg-config ninja-build nasm meson libsharpyuv-dev libde265-dev libaom-dev libdav1d-dev
+
+      - name: Install pinned secure libheif
+        env:
+          MFB_LIBHEIF_ONLY: "1"
+        run: |
+          rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+          "$RUNNER_TEMP/install_media_dependencies"
 
       - name: Build libdispatch
         env:
@@ -178,6 +170,7 @@ jobs:
     env:
       LIBHEIF_STATIC: "1"
       LIBHEIF_SYS_STATIC: "1"
+      SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -190,7 +183,15 @@ jobs:
           sudo apt-get install -y \
             build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config \
             libavif-bin libimage-exiftool-perl libjxl-tools ffmpeg \
-            imagemagick libjpeg-turbo-progs webp unzip
+            imagemagick libjpeg-turbo-progs webp unzip \
+            libsharpyuv-dev libde265-dev libaom-dev libdav1d-dev
+
+      - name: Install pinned secure libheif
+        env:
+          MFB_LIBHEIF_ONLY: "1"
+        run: |
+          rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+          "$RUNNER_TEMP/install_media_dependencies"
 
       - name: Install pinned modern libjxl CLI tools for IMG
         if: matrix.package == 'img'
@@ -411,9 +412,10 @@ jobs:
     # instrumented dependencies and final gates even when the cache is absent.
     timeout-minutes: 360
     env:
-      # Match ClusterFuzzLite / fuzz: embedded libheif avoids libheif-sys build.rs PermissionDenied on runners.
+      # Link the installer's pinned security release, not libheif-sys's old embedded source.
       LIBHEIF_STATIC: "1"
       LIBHEIF_SYS_STATIC: "1"
+      SYSTEM_DEPS_LIBHEIF_LINK: static
       # Feature, fuzz and coverage builds already use separate graphs. Do not
       # retain incremental copies on an ephemeral runner as well.
       CARGO_INCREMENTAL: "0"
@@ -604,12 +606,21 @@ jobs:
 
   nightly-release:
     name: Build & Publish Nightly
-    if: github.ref == 'refs/heads/nightly' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.health-check.result == 'success' && needs.package-quality.result == 'success' && needs.security-audit.result == 'success' && needs.validation.result == 'success'
+    if: >-
+      github.ref == 'refs/heads/nightly' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.health-check.result == 'success' && needs.package-quality.result == 'success' &&
+      needs.security-audit.result == 'success' && needs.validation.result == 'success' &&
+      needs.dispatch2-macos.result == 'success' && needs.dispatch2-linux.result == 'success' &&
+      needs.deep-audit.result == 'success'
     needs:
       - validation
       - package-quality
       - health-check
       - security-audit
+      - dispatch2-macos
+      - dispatch2-linux
+      - deep-audit
     permissions:
       contents: write
       packages: write
@@ -622,6 +633,8 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2

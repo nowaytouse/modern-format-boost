@@ -82,6 +82,19 @@ as a separate no-clobber copy. This prevents both signed-media rewrite failures
 and silent byte changes to retained TIFF/CUR/RAW-like inputs. Native formats
 whose existing contract explicitly allows XMP enrichment keep that route.
 
+Original-only custody is independent of conversion-tool availability and version
+checks. IMG defers codec preflight until a file requires the conversion pipeline,
+shares its result across that run's batch workers, and propagates preflight errors
+through the normal diagnostic/flush path. This does not waive any proof needed
+for conversion, XMP enrichment, or source deletion.
+
+The original-only early return must still discover and deliver supported
+same-stem Live Photo companions, including protected HEIC/JXL stills requested
+as a single file. A conflicting MOV fails before the still is published; the
+source pair remains untouched. Existing XMP/AAE custody rules still apply.
+This conservative pair retention is not proof of native Photos playback or of
+complete migration of arbitrary vendor asset graphs.
+
 For confirmed lossless raster sources, the shared JXL delivery boundary verifies
 the final candidate after metadata work even when a caller already checked
 pixels. Orientation correlation is not an archive sample proof: alpha,

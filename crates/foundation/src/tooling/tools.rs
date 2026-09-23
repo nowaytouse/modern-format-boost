@@ -251,6 +251,11 @@ fn is_version_at_least(current_full: &str, required: &str) -> bool {
             } else if started && c == '.' {
                 result.push(c);
             } else if started {
+                // FFmpeg snapshots use a dotted qualifier, e.g. 8.0.git.
+                // Strip its separator, not a malformed trailing version dot.
+                if c.is_ascii_alphabetic() && result.ends_with('.') {
+                    result.truncate(result.len() - 1);
+                }
                 break;
             }
         }
@@ -320,6 +325,19 @@ mod tests {
         assert!(is_version_at_least("1.0.0", "0.9.0"));
         assert!(!is_version_at_least("0.8.0", "0.9.0"));
         assert!(!is_version_at_least("0.9.0", "0.10.0"));
+    }
+
+    #[test]
+    fn ffmpeg_git_snapshot_versions_keep_their_release_components() {
+        assert!(is_version_at_least(
+            "ffmpeg version 8.0.git Copyright (c) 2000-2026 the FFmpeg developers",
+            "6.1"
+        ));
+        assert!(is_version_at_least("ffmpeg version 6.1.git", "6.1"));
+        assert!(!is_version_at_least("ffmpeg version 6.0.git", "6.1"));
+        assert!(!is_version_at_least("ffmpeg version 6.1..git", "6.1"));
+        assert!(!is_version_at_least("ffmpeg version 6.1.", "6.1"));
+        assert!(!is_version_at_least("ffmpeg version 6.1. Copyright", "6.1"));
     }
 
     #[test]

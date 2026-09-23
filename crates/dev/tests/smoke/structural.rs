@@ -53,14 +53,11 @@ fn ci_health_reserves_cold_build_time_and_restores_cache_before_cargo() {
 
 #[test]
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
-    for source in [
-        include_str!("../../../../.github/workflows/ci-quality.yml"),
-        include_str!("../../src/bin/install_media_dependencies.rs"),
-    ] {
-        assert!(source.contains("libheif-1.23.1"));
-        assert!(!source.contains("libheif-1.21.0"));
-    }
+    let workflow = include_str!("../../../../.github/workflows/ci-quality.yml");
     let installer = include_str!("../../src/bin/install_media_dependencies.rs");
+    assert!(workflow.contains("MFB_LIBHEIF_ONLY"));
+    assert!(!workflow.contains("libheif-1.23.1"));
+    assert!(installer.contains("libheif-1.23.5"));
     assert!(installer.contains("\"libsharpyuv-dev\""));
     assert!(installer.contains("-DCMAKE_REQUIRE_FIND_PACKAGE_libsharpyuv=ON"));
 }

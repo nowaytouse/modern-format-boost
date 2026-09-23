@@ -2,7 +2,100 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-20
+## [Unreleased] - 2026-09-23
+
+### IMG compound custody and refreshed toolchain (2026-09-23)
+
+- Close a single-file archive gap for protected HEIC/JXL stills: the early
+  original-only return previously bypassed Live Photo companion delivery. Reuse
+  existing content-aware pairing and no-clobber copying, delivering the MOV before
+  the still. Regressions require byte-identical still/MOV/XMP/AAE delivery and
+  rejection of conflicting motion before publishing the still; all sources stay
+  unchanged. These are custody fixtures, not signature or Photos playback proof.
+- Recheck the completed [CI run 35684508246](https://github.com/nowaytouse/modern-format-boost/actions/runs/35684508246):
+  its HEAD is still `6d1efefb`; the deep audit repeats the FFmpeg `8.0.git`
+  preflight/native-archive failure addressed below. Package, shared-health,
+  dependency-security and both dispatch gates passed. This is not a run of the
+  uncommitted repair, and its skipped scheduled publication is not a release.
+- Preserve the user's updated dependency lock, including Git revisions of clap,
+  crc32fast, indicatif, jpegxl-rs, thiserror and zerocopy, and the rand/libredox
+  updates. Validate the recorded lock rather than upgrading dependencies again.
+- Snapshot the actual September 23 development environment: macOS 27.2
+  `26B5091g`, project-pinned Rust `1.99.0-nightly (771916f90)`, FFmpeg
+  `N-126779-gd26c080999`, cjxl `0.13.0 b8773895`, libavif `1.4.2` (`1f6ccf5`),
+  libheif `1.23.5`, ExifTool `13.59`, ImageMagick `7.1.2-32 Beta Q16-HDRI`,
+  WebP `1.6.0`, and osxphotos `0.77.0`. CLI libjxl is distinct from the Rust
+  jpegxl-sys/source dependency's embedded libjxl `0.12.0`.
+- Account for [libjxl's alpha-option change](https://github.com/libjxl/libjxl/commit/b87738951c):
+  explicit `--strip_alpha=1` now always strips and `2` strips only empty alpha;
+  the default still preserves lossless alpha. MFB sets neither numeric override;
+  keep sample/alpha regressions instead of introducing a version-sensitive flag.
+- The installed [libheif 1.23.5 security release](https://github.com/strukturag/libheif/releases/tag/v1.23.5)
+  checks coded-image dimensions against the container before decoding, alongside
+  memory-safety fixes. Local dynamic linkage uses the installed Homebrew library;
+  this does not prove another host's bundled/static version is updated. Keep
+  MFB's resource limits and native retention of unproved auxiliary graphs.
+- Follow-up of that linkage audit found CI still building native libheif 1.23.1,
+  including the copy embedded in the latest Rust binding. With explicit approval,
+  switch CI to the official SHA-256-pinned 1.23.5 static source build and stop
+  enabling the old embedded source. Share the installer with package/dispatch
+  bootstrap, health/deep audits and OSS-Fuzz; require a nonempty static archive,
+  checked pkg-config version, and explicit static linkage in CI. Unix builds
+  require native libheif >=1.23.5, and a test checks the library actually linked.
+  Nightly/stable macOS dependency setup upgrades stale libheif before compiling.
+  Rust binding versions remain unchanged; their version suffix is not evidence
+  of the external library's security level. Only the existing pkg-config crate
+  is added to foundation's build dependencies; no general dependency update.
+- Build OSS-Fuzz's native library during its instrumented build stage so its
+  compiler/sanitizer environment reaches CMake, not once in the Docker image.
+  Ordinary Rust sanitizer/coverage results alone are not native C++ coverage.
+  The Linux static and OSS-Fuzz container paths require their own remote/runtime
+  validation; this macOS session does not claim to have executed that container.
+- [osxphotos 0.77.0](https://pypi.org/project/osxphotos/0.77.0/) adds spatial-media
+  recognition and macOS 27 schema handling. Its
+  [UUID index in the export database](https://github.com/RhetTbull/osxphotos/blob/v0.77.0/osxphotos/export_db.py)
+  improves repeated `export --update` lookups; MFB's recovery export already uses
+  that mode. It is not evidence of faster MFB import: fast-img imports through
+  Photos AppleScript and uses osxphotos for post-import custody verification.
+  No real-library throughput benchmark or Photos/TCC/iCloud acceptance was run.
+  Spatial query support alone does not authorize flattening an asset graph.
+- Review the [current FFmpeg revision range](https://github.com/FFmpeg/FFmpeg/compare/586c392...d26c080)
+  against the actual callers; its mostly video/backend changes do not establish
+  an IMG or Photos import speedup. No source-preservation workaround is removed
+  on the strength of a newer version string or OS beta alone.
+- Local validation: foundation/IMG/VID all-target suites passed 2,328 tests,
+  including all 19 IMG production-matrix cases; four existing corpus/live-library
+  tests remain unexecuted. The affected dev suites passed 464 tests, including
+  396 hardening contracts. Strict Clippy passed for those packages and dev targets,
+  followed by focused regression reruns, Rust/Python formatting, workflow lint
+  and diff checks. Dynamic and CI-static feature tests verified the linked libheif
+  version; the official source archive matched its pinned digest and configured
+  successfully with the static-build flags. These macOS checks do not replace
+  fresh Linux CI, an actual OSS-Fuzz container build, or Photos/TCC/iCloud acceptance.
+
+### IMG archive preflight and production release gates (2026-09-21)
+
+- Fix the tool-version rejection behind the native-archive CLI failure in
+  [CI run 35526993936](https://github.com/nowaytouse/modern-format-boost/actions/runs/35526993936).
+  That runner installed FFmpeg `8.0.git`; the comparator extracted `8.0.` and
+  rejected the empty final component as an invalid version. Retain numeric
+  release components before a dotted build qualifier, still rejecting older
+  versions and malformed repeated separators. Unit and real CLI regressions
+  reproduce the old failure; the CLI fixture must reach the deliberately failing
+  encoder, report its exact error, and retain the JPEG source.
+- Do not require conversion tools for immutable original-only archive delivery.
+  Defer preflight to the shared conversion path and run it once per batch, not
+  once per file. Return errors through main's log flush instead of a silent
+  process exit. Unix native PNG/CUR/TIFF custody tests isolate codec overrides and
+  verify source, output and separate XMP bytes; failed subprocess diagnostics
+  now include exit status, stdout and stderr.
+- Require Deep Production Audit and macOS/Linux dispatch2 success before the
+  automatic Nightly release can build/publish. Previously those jobs could fail
+  while the release was published. Add a regression contract for all seven
+  required gates; no test or audit is disabled.
+- This repair requires fresh remote acceptance for its own commit. Earlier
+  publication does not certify it; live Photos/TCC/iCloud transactions remain
+  outside local synthetic-test sign-off.
 
 ### IMG final-sample proof and native archive boundaries (2026-09-20)
 

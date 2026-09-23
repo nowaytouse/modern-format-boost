@@ -256,6 +256,70 @@ fn install_gnu_mpc(workdir: &Path, workspace: &Path) -> Result<()> {
     prepend_media_paths()
 }
 
+fn verify_libheif_archive_digest(output: &str) -> Result<()> {
+    if output.split_whitespace().next()
+        != Some("fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a")
+    {
+        return Err(io::Error::other("libheif source archive SHA-256 mismatch").into());
+    }
+    Ok(())
+}
+
+fn install_libheif(workdir: &Path) -> Result<()> {
+    println!("--- Building libheif 1.23.5 security release ---");
+    let archive = workdir.join("libheif-src.tar.gz");
+    download(
+        "https://github.com/strukturag/libheif/releases/download/v1.23.5/libheif-1.23.5.tar.gz",
+        &archive,
+        workdir,
+    )?;
+    let digest = capture("sha256sum", [archive.as_os_str()])?;
+    verify_libheif_archive_digest(&digest)?;
+    run(
+        "tar",
+        [OsStr::new("xzf"), archive.as_os_str()],
+        Some(workdir),
+    )?;
+    run(
+        "cmake",
+        [
+            "-S",
+            "libheif-1.23.5",
+            "-B",
+            "libheif-build",
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_INSTALL_PREFIX=/usr/local",
+            "-DCMAKE_INSTALL_LIBDIR=lib",
+            "-DCMAKE_WARN_DEPRECATED=OFF",
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DENABLE_PLUGIN_LOADING=OFF",
+            "-DWITH_EXAMPLES=OFF",
+            "-DBUILD_TESTING=OFF",
+            "-DWITH_OpenH264_DECODER=OFF",
+            "-DCMAKE_REQUIRE_FIND_PACKAGE_libsharpyuv=ON",
+        ],
+        Some(workdir),
+    )?;
+    run(
+        "cmake",
+        ["--build", "libheif-build", "--parallel"],
+        Some(workdir),
+    )?;
+    run(
+        "sudo",
+        ["cmake", "--install", "libheif-build"],
+        Some(workdir),
+    )?;
+    run("sudo", ["ldconfig"], None)?;
+    if fs::metadata("/usr/local/lib/libheif.a")?.len() == 0 {
+        return Err(io::Error::other("installed libheif static archive is empty").into());
+    }
+    prepend_media_paths()?;
+    run("pkg-config", ["--atleast-version=1.23.5", "libheif"], None)
+}
+
 fn main() -> Result<()> {
     let workspace = env::var_os("GITHUB_WORKSPACE")
         .filter(|value| !value.is_empty())
@@ -266,6 +330,9 @@ fn main() -> Result<()> {
 
     if env::var("MFB_MPC_ONLY").unwrap_or_default() == "1" {
         return install_gnu_mpc(workdir, &workspace);
+    }
+    if env::var("MFB_LIBHEIF_ONLY").unwrap_or_default() == "1" {
+        return install_libheif(workdir);
     }
 
     println!("--- Installing System APT Dependencies ---");
@@ -404,48 +471,7 @@ fn main() -> Result<()> {
         require_output(&encoders, encoder, "ffmpeg -encoders")?;
     }
 
-    println!("--- Building libheif 1.23.1 ---");
-    let libheif_archive = workdir.join("libheif-src.tar.gz");
-    download(
-        "https://github.com/strukturag/libheif/releases/download/v1.23.1/libheif-1.23.1.tar.gz",
-        &libheif_archive,
-        workdir,
-    )?;
-    run(
-        "tar",
-        [OsStr::new("xzf"), libheif_archive.as_os_str()],
-        Some(workdir),
-    )?;
-    run(
-        "cmake",
-        [
-            "-S",
-            "libheif-1.23.1",
-            "-B",
-            "libheif-build",
-            "-G",
-            "Ninja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_INSTALL_PREFIX=/usr/local",
-            "-DCMAKE_WARN_DEPRECATED=OFF",
-            "-DWITH_EXAMPLES=OFF",
-            "-DBUILD_TESTING=OFF",
-            "-DWITH_OpenH264_DECODER=OFF",
-            "-DCMAKE_REQUIRE_FIND_PACKAGE_libsharpyuv=ON",
-        ],
-        Some(workdir),
-    )?;
-    run(
-        "cmake",
-        ["--build", "libheif-build", "--parallel"],
-        Some(workdir),
-    )?;
-    run(
-        "sudo",
-        ["cmake", "--install", "libheif-build"],
-        Some(workdir),
-    )?;
-    run("sudo", ["ldconfig"], None)?;
+    install_libheif(workdir)?;
 
     if env::var("MFB_SKIP_MPC_INSTALL").unwrap_or_default() == "1" {
         println!("Skipping GNU MPC installation until the CI downloader completes.");
@@ -455,4 +481,22 @@ fn main() -> Result<()> {
 
     println!("Media dependencies successfully installed.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn libheif_archive_requires_the_pinned_digest_before_extraction() {
+        let digest = "fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a";
+        assert!(
+            super::verify_libheif_archive_digest(&format!("{digest}  source.tar.gz\n")).is_ok()
+        );
+        for invalid in [
+            String::new(),
+            "bad-digest".to_string(),
+            format!("bad  {digest}"),
+        ] {
+            assert!(super::verify_libheif_archive_digest(&invalid).is_err());
+        }
+    }
 }

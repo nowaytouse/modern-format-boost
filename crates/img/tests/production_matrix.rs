@@ -260,12 +260,31 @@ fn tiff_archive_retains_compound_and_associated_alpha_sources() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn isolate_conversion_tools(command: &mut Command, root: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Unlike GNU true, this no-op has no --version output on either platform.
+    let no_op = root.join("versionless-conversion-tool");
+    fs::write(&no_op, "#!/bin/sh\nexit 0\n")?;
+    fs::set_permissions(&no_op, fs::Permissions::from_mode(0o700))?;
+    for tool in ["CJXL", "DJXL", "EXIFTOOL", "FFMPEG"] {
+        command.env(format!("MFB_TOOL_{tool}"), &no_op);
+    }
+    Ok(())
+}
+
 fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
     let destination = root.join("native-archive");
     let before = fs::read(source)?;
     let sidecar = source.with_extension("xmp");
     fs::write(&sidecar, MATRIX_XMP)?;
-    let output = Command::new(env!("CARGO_BIN_EXE_img"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_img"));
+    // Native custody needs no codec or metadata rewrite. A versionless no-op
+    // executable prevents host tool installations from hiding a codec preflight.
+    #[cfg(unix)]
+    isolate_conversion_tools(&mut command, root)?;
+    let output = command
         .arg("run")
         .arg(source)
         .arg("--output")
@@ -276,7 +295,10 @@ fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
         .output()?;
     ensure!(
         output.status.success(),
-        "native archive CLI failed: {}",
+        "native archive CLI failed for {} ({}):\nstdout: {}\nstderr: {}",
+        source.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let delivered = destination.join(
@@ -293,6 +315,98 @@ fn verify_original_archive_cli(source: &Path, root: &Path) -> Result<()> {
             && fs::read(sidecar)? == MATRIX_XMP,
         "original-container archive lost its sidecar"
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn conversion_preflight_failure_is_visible_and_preserves_source() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let source = root.path().join("ordinary.jpg");
+    let destination = root.path().join("output");
+    image::RgbImage::from_pixel(16, 16, image::Rgb([12, 34, 56])).save(&source)?;
+    let before = fs::read(&source)?;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_img"));
+    isolate_conversion_tools(&mut command, root.path())?;
+    let output = command
+        .arg("run")
+        .arg(&source)
+        .arg("--output")
+        .arg(&destination)
+        .arg("--force")
+        .env("MFB_HOME_ROOT", root.path().join("isolated-home"))
+        .env("MFB_INVOKER", "test-harness")
+        .output()?;
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        !output.status.success()
+            && diagnostic.contains("IMG conversion tools unavailable")
+            && diagnostic.contains("cjxl"),
+        "conversion preflight must fail with an actionable diagnostic: {diagnostic}"
+    );
+    ensure!(fs::read(&source)? == before, "preflight changed source");
+    ensure!(
+        !destination.exists(),
+        "failed preflight must not publish an output"
+    );
+    Ok(())
+}
+
+#[test]
+fn protected_native_still_delivers_live_companions_and_rejects_collision() -> Result<()> {
+    // Custody fixtures: recognizable protection markers, not valid signatures
+    // or evidence of native Live Photo playback support.
+    let mut heic = 16_u32.to_be_bytes().to_vec();
+    heic.extend_from_slice(b"ftypheic\0\0\0\0");
+    heic.extend_from_slice(&24_u32.to_be_bytes());
+    heic.extend_from_slice(b"uuid");
+    heic.extend_from_slice(&[
+        0xD8, 0xFE, 0xC3, 0xD6, 0x1B, 0x0E, 0x48, 0x3C, 0x92, 0x97, 0x58, 0x28, 0x87, 0x7E, 0xC4,
+        0x81,
+    ]);
+    let mut jxl = foundation::constants::JXL_CONTAINER_MAGIC.to_vec();
+    jxl.extend_from_slice(&8_u32.to_be_bytes());
+    jxl.extend_from_slice(b"jumb");
+    for (extension, payload) in [("HEIC", heic), ("JXL", jxl)] {
+        for collision in [false, true] {
+            let root = tempfile::tempdir()?;
+            let source = root.path().join(format!("IMG_0042.{extension}"));
+            let motion = root.path().join("IMG_0042.MOV");
+            let edits = root.path().join("IMG_0042.AAE");
+            let motion_bytes = b"retained Live Photo motion payload";
+            let edit_bytes = b"<plist><dict/></plist>";
+            fs::write(&source, &payload)?;
+            fs::write(&motion, motion_bytes)?;
+            fs::write(&edits, edit_bytes)?;
+            let destination = root.path().join("native-archive");
+            let delivered_motion = destination.join("IMG_0042.MOV");
+            if collision {
+                fs::create_dir(&destination)?;
+                fs::write(&delivered_motion, b"unrelated motion")?;
+            }
+
+            let result = verify_original_archive_cli(&source, root.path());
+            if collision {
+                ensure!(result.is_err(), "{extension} ignored its motion collision");
+                ensure!(fs::read(&delivered_motion)? == b"unrelated motion");
+                ensure!(
+                    !destination.join(format!("IMG_0042.{extension}")).exists(),
+                    "{extension} published the still before rejecting its motion collision"
+                );
+            } else {
+                result?;
+                ensure!(
+                    fs::read(&delivered_motion).context("missing protected Live Photo motion")?
+                        == motion_bytes
+                );
+                ensure!(fs::read(destination.join("IMG_0042.AAE"))? == edit_bytes);
+            }
+            ensure!(fs::read(&source)? == payload);
+            ensure!(fs::read(&motion)? == motion_bytes);
+            ensure!(fs::read(&edits)? == edit_bytes);
+            ensure!(fs::read(source.with_extension("xmp"))? == MATRIX_XMP);
+        }
+    }
     Ok(())
 }
 

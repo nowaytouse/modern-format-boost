@@ -4,6 +4,15 @@
 use super::*;
 
 #[test]
+fn linked_libheif_includes_the_security_release() {
+    let version = LibHeif::new().version();
+    assert!(
+        version >= [1, 23, 5],
+        "linked libheif is insecure: {version:?}"
+    );
+}
+
+#[test]
 fn smoke_is_heic_file() {
     use std::io::Write;
     use tempfile::Builder;
@@ -259,8 +268,7 @@ fn classify_heic_compression_requires_every_codec_configuration_to_be_lossy() {
 
     let all_lossy = synthetic_isobmff_with_hvccs(&[&lossy_420, &lossy_420]);
     assert_eq!(
-        classify_heic_compression(&all_lossy, std::path::Path::new("all-lossy.heic"))
-            .unwrap(),
+        classify_heic_compression(&all_lossy, std::path::Path::new("all-lossy.heic")).unwrap(),
         crate::image_detection::CompressionType::Lossy
     );
 }

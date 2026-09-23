@@ -70,6 +70,12 @@ jobs:
             echo "All required Homebrew formulas already installed."
           fi
 
+          if ! pkg-config --atleast-version=1.23.5 libheif; then
+            brew update
+            brew upgrade libheif
+          fi
+          pkg-config --atleast-version=1.23.5 libheif
+
           BREW_PREFIX=$(brew --prefix)
           {
             echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig"

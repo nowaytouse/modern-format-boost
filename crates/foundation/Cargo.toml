@@ -78,7 +78,11 @@ path = "src/bin/train_quality.rs"
 default = ["v1_21", "jpegxl-ffi", "high-precision"]
 v1_21 = ["libheif-rs/v1_21"]
 jpegxl-ffi = ["dep:jpegxl-rs"]
-ci-static-build = ["libheif-rs/embedded-libheif", "v1_21"]
+# CI installs the pinned security release; libheif-sys still embeds 1.23.1.
+ci-static-build = ["v1_21"]
 fuzzing = ["dep:arbitrary"]
 high-precision = ["dep:rug", "dep:gmp-mpfr-sys"]
 system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs"]
+
+[build-dependencies]
+pkg-config = ">= 0.3"

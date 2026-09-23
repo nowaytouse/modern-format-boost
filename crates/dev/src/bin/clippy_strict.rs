@@ -209,6 +209,7 @@ fn run_clippy(
     if github_actions {
         command.env("LIBHEIF_STATIC", "1");
         command.env("LIBHEIF_SYS_STATIC", "1");
+        command.env("SYSTEM_DEPS_LIBHEIF_LINK", "static");
     }
     let status = command.status().context("run cargo clippy")?;
     if !status.success() {

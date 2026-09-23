@@ -1,4 +1,16 @@
 fn main() -> Result<(), Box<dyn core::error::Error>> {
+    // Match libheif-sys's documentation-only build: no native linking or media I/O.
+    if std::env::var_os("DOCS_RS").is_some() {
+        return Ok(());
+    }
+    // The Rust bindings' API version is not the native library's security level.
+    // Reject stale system/static libraries before any media-processing build.
+    if std::env::var("CARGO_CFG_TARGET_OS")? != "windows" {
+        pkg_config::Config::new()
+            .atleast_version("1.23.5")
+            .cargo_metadata(false)
+            .probe("libheif")?;
+    }
     // macOS Homebrew and Linker Workarounds
     if cfg!(target_os = "macos") {
         let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
@@ -43,8 +55,8 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
         println!("cargo:rustc-link-lib=vvdec");
 
         // Homebrew openh264 2.6.0 currently publishes `-lstdc++` in its
-        // static pkg-config metadata even on Apple targets. libheif's embedded
-        // build consumes that metadata under `ci-static-build`; provide the
+        // static pkg-config metadata even on Apple targets. Static libheif
+        // consumes that metadata under `ci-static-build`; provide the
         // expected name as a private SDK stub without downgrading dependencies
         // or mutating the system/Homebrew installation.
         if std::env::var_os("CARGO_FEATURE_CI_STATIC_BUILD").is_some() {

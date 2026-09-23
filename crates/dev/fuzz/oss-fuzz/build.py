@@ -10,7 +10,7 @@ from pathlib import Path
 
 def main() -> int:
     """Build and copy fuzz targets."""
-    src_dir = Path(os.environ.get("SRC", "."))
+    src_dir = Path(os.environ.get("SRC", ".")).resolve()
     out_dir = Path(os.environ.get("OUT", "target/x86_64-unknown-linux-gnu/release"))
 
     fuzz_dir = src_dir / "modern-format-boost" / "crates" / "dev" / "fuzz"
@@ -23,6 +23,29 @@ def main() -> int:
     os.chdir(fuzz_dir)
 
     try:
+        # Build the pinned native library here, not in Docker's image layer:
+        # OSS-Fuzz's CC/CXX/CFLAGS/CXXFLAGS carry the selected sanitizer.
+        installer = src_dir / "install_media_dependencies"
+        subprocess.run(
+            [
+                "rustc",
+                "--edition",
+                "2024",
+                str(fuzz_dir.parent / "src/bin/install_media_dependencies.rs"),
+                "-o",
+                str(installer),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [str(installer)],
+            env={**os.environ, "MFB_LIBHEIF_ONLY": "1"},
+            check=True,
+        )
+        os.environ["PKG_CONFIG_PATH"] = "/usr/local/lib/pkgconfig:" + os.environ.get(
+            "PKG_CONFIG_PATH", ""
+        )
+        os.environ["SYSTEM_DEPS_LIBHEIF_LINK"] = "static"
         subprocess.run(
             ["cargo", "+nightly", "fuzz", "build", "--release", "--verbose"],
             check=True,

@@ -45,7 +45,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         let p = bin_dir.join("ffmpeg");
         fs::write(
             &p,
-            "#!/bin/sh\ncase \"$1\" in --version|-version|--help|-h) echo 'ffmpeg version 9.0.1'; exit 0;; esac\necho 'unexpected ffmpeg invocation in cjxl failure test' >&2\nexit 1\n",
+            "#!/bin/sh\ncase \"$1\" in --version|-version|--help|-h) echo 'ffmpeg version 8.0.git'; exit 0;; esac\necho 'unexpected ffmpeg invocation in cjxl failure test' >&2\nexit 1\n",
         )?;
         let mut perms = fs::metadata(&p)?.permissions();
         perms.set_mode(0o755);
@@ -58,7 +58,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         let p = bin_dir.join("ffmpeg.bat");
         fs::write(
             &p,
-            "@if \"%1\"==\"--version\" (echo ffmpeg version 9.0.1 & exit /b 0)\n@if \"%1\"==\"-version\" (echo ffmpeg version 9.0.1 & exit /b 0)\n@echo unexpected ffmpeg invocation in cjxl failure test 1>&2\n@exit /b 1\n",
+            "@if \"%1\"==\"--version\" (echo ffmpeg version 8.0.git & exit /b 0)\n@if \"%1\"==\"-version\" (echo ffmpeg version 8.0.git & exit /b 0)\n@echo unexpected ffmpeg invocation in cjxl failure test 1>&2\n@exit /b 1\n",
         )?;
         p
     };
@@ -79,6 +79,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         .arg("--force")
         .env("MFB_TOOL_CJXL", &cjxl_path)
         .env("MFB_TOOL_FFMPEG", &ffmpeg_path)
+        .env("MFB_HOME_ROOT", td.path().join("isolated-home"))
         .env("MFB_INVOKER", "test-harness")
         .output()?;
     let diagnostics = format!(
@@ -91,7 +92,7 @@ fn cjxl_failure_marks_conversion_error() -> anyhow::Result<()> {
         "conversion unexpectedly succeeded"
     );
     assert!(
-        diagnostics.contains("cjxl") || diagnostics.contains("Error while decoding"),
+        diagnostics.contains("Error while decoding the JPEG image"),
         "unexpected error message: {diagnostics}"
     );
     assert!(

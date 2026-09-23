@@ -797,6 +797,7 @@ fn apply_ci_runner_env() {
             "LIBHEIF_SYS_STATIC",
             std::env::var("LIBHEIF_SYS_STATIC").unwrap_or_else(|_| "1".to_string()),
         );
+        std::env::set_var("SYSTEM_DEPS_LIBHEIF_LINK", "static");
         std::env::set_var(
             "NODE_OPTIONS",
             std::env::var("NODE_OPTIONS").unwrap_or_else(|_| "--no-deprecation".to_string()),

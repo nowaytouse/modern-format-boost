@@ -156,6 +156,11 @@ profile; `--ci` remains workspace-only. GitHub exposes the same boundaries as
 independent `IMG package quality` and `VID package quality` jobs, so a video
 failure cannot be mistaken for an IMG result.
 
+Automatic Nightly publication also waits for the Deep Production Audit and both
+platforms' dispatch2 gates, in addition to package, shared-health, dependency and
+workflow validation. Publication of an older revision is not acceptance of a newer
+commit; live Photos/TCC/iCloud acceptance remains a separate environment gate.
+
 External-tool cases are explicitly tool-gated and report an unavailable
 encoder/decoder; they never claim that an unexecuted branch was verified.
 This is strong local production-candidate evidence, not a promise that every
@@ -646,12 +651,12 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 | Tool                 |  Required?  | Purpose                                              | Install Command                                                                             |
 | :------------------- | :---------: | :--------------------------------------------------- | :------------------------------------------------------------------------------------------ |
 | **Rust** (nightly)   |     ✅      | Build & Install                                      | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
-| **FFmpeg** (5.0+)    |     ✅      | Video processing & Metrics                           | `brew install ffmpeg` / `apt install ffmpeg`                                                |
+| **FFmpeg** (6.1+)    |     ✅      | Video processing & Metrics                           | `brew install ffmpeg` / `apt install ffmpeg`                                                |
 | **libjxl**           |     ✅      | JXL encoding core                                    | `brew install jpeg-xl`                                                                      |
 | **ExifTool**         |     ✅      | Metadata preservation                                | `brew install exiftool`                                                                     |
 | **ImageMagick**      |     ✅      | Image detour pathway                                 | `brew install imagemagick`                                                                  |
 | **libwebp**          |     ✅      | WebP native decoding                                 | `brew install webp`                                                                         |
-| **libheif**          |     ✅      | HEIC/HEIF decode                                     | `brew install libheif`                                                                      |
+| **libheif >=1.23.5**  |     ✅      | HEIC/HEIF decode; security-release minimum            | `brew install libheif`                                                                      |
 | **PostgreSQL** (12+) | Conditional | Vid, training, cache and optional quality heuristics | `brew install postgresql pgvector` / `apt install postgresql`                               |
 | **dovi_tool**        |  Optional   | Dolby Vision RPU extraction                          | `cargo install dovi_tool`                                                                   |
 | **hdr10plus_tool**   |  Optional   | HDR10+ metadata extraction                           | `cargo install hdr10plus_tool`                                                              |
@@ -671,6 +676,13 @@ brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif postgresql pgvecto
 > installing a full-featured version without breaking system dependencies.
 
 #### Linux (Ubuntu/Debian)
+
+The native libheif library must be at least 1.23.5; older distro packages are
+insufficient even when the Rust bindings compile against their API. Unix builds
+check this requirement. CI uses the checksum-pinned source build in
+[`install_media_dependencies.rs`](crates/dev/src/bin/install_media_dependencies.rs),
+with explicit static linkage; it does not use the Rust binding's older embedded
+source. Upgrade an existing Homebrew libheif installation if necessary as well.
 
 ```bash
 sudo apt update && sudo apt install ffmpeg libimage-exiftool-perl imagemagick \

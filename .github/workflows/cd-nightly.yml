@@ -57,6 +57,12 @@ jobs:
             echo "All required Homebrew formulas already installed."
           fi
 
+          if ! pkg-config --atleast-version=1.23.5 libheif; then
+            brew update
+            brew upgrade libheif
+          fi
+          pkg-config --atleast-version=1.23.5 libheif
+
           BREW_PREFIX=$(brew --prefix)
           BREW_LIBS="${BREW_PREFIX}/lib"
           for pkg in x264 vvdec vvenc; do
