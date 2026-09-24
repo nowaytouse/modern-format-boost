@@ -11,7 +11,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
   RELEASE_TARGET: aarch64-apple-darwin
   RELEASE_ARCHIVE: modern-format-boost-aarch64-apple-darwin.tar.gz
   MIGRATED_RUST_BINS: "backfill_directory_scores cache_cleaner check_all collect_optimized create_live_photo database_manager generate_test_media icloud_import install_deps mfb_rust_toolchain normalize_stale_embed_measurement_slots post_training_closure run_training sandbox_validate session_audit setup_private_db start_training_four training_pipeline delivery_heatmap corpus_thresholds smart_build"
@@ -19,7 +18,7 @@ env:
 jobs:
   build-macos:
     name: Build (macOS arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -35,10 +34,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /usr/local/Homebrew/Library/Taps/hashicorp \
-                 /usr/local/Homebrew/Library/Taps/aws \
-                 /opt/homebrew/Library/Taps/hashicorp \
-                 /opt/homebrew/Library/Taps/aws
+          BREW_PREFIX=$(brew --prefix)
+          # The hosted image installs an OpenSSL 1.1 shim outside brew link.
+          # Preserve only that known shim before OpenSSL 3 claims the command.
+          OPENSSL_SHIM="${BREW_PREFIX}/bin/openssl"
+          if [[ -L "$OPENSSL_SHIM" && "$(readlink "$OPENSSL_SHIM")" == "${BREW_PREFIX}/opt/openssl@1.1/bin/openssl" ]]; then
+            OPENSSL_BACKUP=$(mktemp -d "${RUNNER_TEMP}/mfb-openssl-shim.XXXXXX")
+            mv "$OPENSSL_SHIM" "$OPENSSL_BACKUP/openssl"
+            echo "Preserved legacy OpenSSL shim in $OPENSSL_BACKUP"
+          fi
 
           BREW_FORMULAS=(
             ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
@@ -46,8 +50,9 @@ jobs:
           )
           MISSING=()
           for formula in "${BREW_FORMULAS[@]}"; do
-            if ! brew list --formula "${formula}" &>/dev/null; then
-              MISSING+=("${formula}")
+            # Only official formulas: no global trust bypass or third-party taps.
+            if ! brew list --formula "homebrew/core/${formula}" &>/dev/null; then
+              MISSING+=("homebrew/core/${formula}")
             fi
           done
           if ((${#MISSING[@]} > 0)); then
@@ -59,11 +64,10 @@ jobs:
 
           if ! pkg-config --atleast-version=1.23.5 libheif; then
             brew update
-            brew upgrade libheif
+            brew upgrade homebrew/core/libheif
           fi
           pkg-config --atleast-version=1.23.5 libheif
 
-          BREW_PREFIX=$(brew --prefix)
           BREW_LIBS="${BREW_PREFIX}/lib"
           for pkg in x264 vvdec vvenc; do
             if [ -d "${BREW_PREFIX}/opt/${pkg}/lib" ]; then
@@ -124,7 +128,7 @@ jobs:
   publish:
     name: Publish Nightly Release
     needs: build-macos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout

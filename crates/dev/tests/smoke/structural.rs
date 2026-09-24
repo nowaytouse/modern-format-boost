@@ -150,6 +150,103 @@ fn product_release_workflows_publish_only_macos_arm64() {
 }
 
 #[test]
+fn ci_runners_and_homebrew_keep_explicit_supported_boundaries() {
+    for source in [
+        include_str!("../../../../.github/workflows/ci-quality.yml"),
+        include_str!("../../../../.github/workflows/cd-nightly.yml"),
+        include_str!("../../../../.github/workflows/cd-stable.yml"),
+    ] {
+        assert!(!source.contains("HOMEBREW_NO_REQUIRE_TAP_TRUST"));
+        for runner in source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("runs-on: "))
+        {
+            assert!(
+                matches!(runner, "ubuntu-24.04" | "macos-15"),
+                "unexpected runner: {runner}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn release_openssl_shim_migration_preserves_only_the_known_legacy_link() {
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+
+    for source in [
+        include_str!("../../../../.github/workflows/cd-nightly.yml"),
+        include_str!("../../../../.github/workflows/cd-stable.yml"),
+    ] {
+        let block = source
+            .split_once("          OPENSSL_SHIM=")
+            .expect("release must handle the runner's legacy OpenSSL shim")
+            .1
+            .split_once("\n\n")
+            .unwrap()
+            .0;
+        let script = format!("set -euo pipefail\nOPENSSL_SHIM={block}");
+        for case in [
+            "missing", "legacy", "dangling", "current", "foreign", "regular",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let prefix = temp.path().join("brew prefix");
+            let backup_root = temp.path().join("runner temp");
+            std::fs::create_dir_all(prefix.join("bin")).unwrap();
+            std::fs::create_dir(&backup_root).unwrap();
+            let shim = prefix.join("bin/openssl");
+            let target = match case {
+                "legacy" | "dangling" => prefix.join("opt/openssl@1.1/bin/openssl"),
+                "current" => prefix.join("opt/openssl@3/bin/openssl"),
+                _ => prefix.join("foreign/openssl"),
+            };
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            if case != "dangling" {
+                std::fs::write(&target, b"preserve target").unwrap();
+            }
+            match case {
+                "missing" => (),
+                "regular" => std::fs::write(&shim, b"not a symlink").unwrap(),
+                _ => symlink(&target, &shim).unwrap(),
+            }
+            // Re-running setup must not overwrite or duplicate a previous backup.
+            for _ in 0..2 {
+                let output = Command::new("bash")
+                    .args(["-c", &script])
+                    .env("BREW_PREFIX", &prefix)
+                    .env("RUNNER_TEMP", &backup_root)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{case}: {output:?}");
+            }
+            let backups = std::fs::read_dir(&backup_root)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            if matches!(case, "legacy" | "dangling") {
+                assert!(std::fs::symlink_metadata(&shim).is_err());
+                assert_eq!(backups.len(), 1);
+                assert_eq!(
+                    std::fs::read_link(backups[0].path().join("openssl")).unwrap(),
+                    target
+                );
+            } else {
+                assert!(backups.is_empty());
+                match case {
+                    "missing" => assert!(std::fs::symlink_metadata(&shim).is_err()),
+                    "regular" => assert_eq!(std::fs::read(&shim).unwrap(), b"not a symlink"),
+                    _ => assert_eq!(std::fs::read_link(&shim).unwrap(), target),
+                }
+            }
+            if case != "dangling" {
+                assert_eq!(std::fs::read(&target).unwrap(), b"preserve target");
+            }
+        }
+    }
+}
+
+#[test]
 fn nightly_release_excludes_unrelated_ci_artifacts() {
     let source = include_str!("../../../../.github/workflows/cd-nightly.yml");
     assert!(source.contains("uses: softprops/action-gh-release@v3."));

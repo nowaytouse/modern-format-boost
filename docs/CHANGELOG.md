@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-24
 
+### CI runner and Homebrew warning repair (2026-09-24)
+
+- Confirm `d6950671` passed all ten jobs in
+  [run 35954502875](https://github.com/nowaytouse/modern-format-boost/actions/runs/35954502875),
+  including Deep Production Audit and Apple Silicon Nightly publication at
+  2026-09-24 09:06 UTC. The `nightly-latest` tag and current ARM64 archive match
+  that commit. This completes that revision's defined IMG core release gates,
+  not live Photos/TCC/iCloud acceptance or a Stable release.
+- Pin Linux quality and release jobs to Ubuntu 24.04, preserving the tested base
+  instead of silently following the announced `ubuntu-latest` migration to 26.04.
+  Move macOS dispatch and both release builds to the explicit ARM64 `macos-15`
+  image: macOS 14 is no longer supported by Homebrew. Namespace the Stable build
+  cache by that OS version to avoid restoring objects from a different SDK.
+- Remove the deprecated global Homebrew tap-trust bypass. Release installation
+  requests only fully qualified `homebrew/core` formulas, which are officially
+  trusted; it neither grants broad third-party trust nor deletes runner taps.
+  See [Homebrew's tap-trust policy](https://docs.brew.sh/Tap-Trust) and
+  [supported macOS versions](https://docs.brew.sh/Support-Tiers).
+- The overwritten file in the completed build was `/opt/homebrew/bin/openssl`.
+  GitHub's image installer creates an OpenSSL 1.1 shim there outside Homebrew's
+  link management. Before installation, move only that exact legacy symlink to
+  a uniquely named runner-temp backup; leave its target, ordinary files, current
+  OpenSSL links and foreign links untouched. Regression cases execute both
+  workflows' actual shell block, including dangling links and repeat execution.
+- Local validation: all 13 structural smoke tests, strict Clippy for their test
+  target, actionlint (including shell checks), Rust formatting and diff checks
+  passed. The OpenSSL cases use disposable directories, never the host's real
+  Homebrew prefix. No warning filtering or relaxed release gates were introduced.
+- These changes affect CI/build infrastructure, not IMG conversion or archive
+  semantics; Cargo.lock is unchanged. New macOS 15 builds require fresh CI
+  validation, and this migration does not certify their binaries on macOS 14.
+  The previous successful release remains the accepted artifact until replacement.
+
 ### Toolchain compatibility and Apple CTLC scope (2026-09-24)
 
 - Preserve the user's Cargo update: indicatif `ccb0d811`, thiserror/thiserror-impl

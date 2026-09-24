@@ -24,7 +24,6 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
 
 jobs:
   # Prerequisites fail closed; independent quality checks collect every reachable
@@ -32,7 +31,7 @@ jobs:
 
   validation:
     name: "1 · Configuration & Workflow Validation"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -94,7 +93,7 @@ jobs:
     name: "1b · dispatch2 (macOS / libdispatch)"
     needs: validation
     if: ${{ !cancelled() }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -111,7 +110,7 @@ jobs:
     name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
     needs: validation
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       SYSTEM_DEPS_LIBHEIF_LINK: static
@@ -165,7 +164,7 @@ jobs:
             name: "2a · IMG package quality"
           - package: vid
             name: "2b · VID package quality"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       LIBHEIF_STATIC: "1"
@@ -407,7 +406,7 @@ jobs:
     name: "2c · Shared Repository Health Check"
     needs: validation
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Cold bench/fuzz builds reached coverage after 176 minutes. Leave time for
     # instrumented dependencies and final gates even when the cache is absent.
     timeout-minutes: 360
@@ -587,7 +586,7 @@ jobs:
     name: "3 · Dependency Security Audit"
     needs: health-check
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -631,7 +630,7 @@ jobs:
     name: Deep Production Audit
     needs: security-audit
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       SYSTEM_DEPS_LIBHEIF_LINK: static

@@ -175,6 +175,11 @@ and local conversion paths, but Apple Photos custody, TCC and iCloud checks are
 macOS-only and non-Apple production coverage is currently less mature. Keep an
 independent backup for irreplaceable archives on every platform.
 
+The Apple Silicon release workflows build on the explicit `macos-15` runner;
+Linux quality gates use `ubuntu-24.04`. New release binaries and their Homebrew
+dependencies are not certified for macOS 14 by these jobs. A green release run
+does not replace the separate live Photos/TCC/iCloud acceptance gate.
+
 ### Why this project exists
 
 Most one-shot converters apply one quality, effort and speed policy to every
