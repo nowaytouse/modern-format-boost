@@ -373,7 +373,11 @@ fn protected_native_still_delivers_live_companions_and_rejects_collision() -> Re
             let source = root.path().join(format!("IMG_0042.{extension}"));
             let motion = root.path().join("IMG_0042.MOV");
             let edits = root.path().join("IMG_0042.AAE");
-            let motion_bytes = b"retained Live Photo motion payload";
+            // Opaque custody fixture, not a playable MOV: moov/trak/udta/ctlc,
+            // version 0, immersive-audio flag 2, device-capture content type 1.
+            // Copying the companion must preserve track boxes without requiring
+            // a GPAC parser or inventing loudness metadata for the still image.
+            let motion_bytes = b"\x00\x00\x00\x25moov\x00\x00\x00\x1dtrak\x00\x00\x00\x15udta\x00\x00\x00\x0dctlc\x00\x00\x00\x02\x01";
             let edit_bytes = b"<plist><dict/></plist>";
             fs::write(&source, &payload)?;
             fs::write(&motion, motion_bytes)?;

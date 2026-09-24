@@ -1221,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#b5a12ffb143f028eb21f7e4424a361c8aed4c982"
+source = "git+https://github.com/console-rs/indicatif#ccb0d811751d343e428bb2ca6729dd5aa50906ea"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2826,16 +2826,16 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#2715388e8cc5787b3643251f7a7a637e89376688"
+version = "2.0.21"
+source = "git+https://github.com/dtolnay/thiserror#40e87c524be1d48c1580274a677d25eb2c49862f"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
-source = "git+https://github.com/dtolnay/thiserror#2715388e8cc5787b3643251f7a7a637e89376688"
+version = "2.0.21"
+source = "git+https://github.com/dtolnay/thiserror#40e87c524be1d48c1580274a677d25eb2c49862f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3613,16 +3613,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#54aa994627b537d40d560af6296d42c424587c10"
+version = "0.8.58"
+source = "git+https://github.com/google/zerocopy#22cdcb9d6a019ff15eff45eb8078f97a3954a95a"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.57"
-source = "git+https://github.com/google/zerocopy#54aa994627b537d40d560af6296d42c424587c10"
+version = "0.8.58"
+source = "git+https://github.com/google/zerocopy#22cdcb9d6a019ff15eff45eb8078f97a3954a95a"
 dependencies = [
  "proc-macro2",
  "quote",

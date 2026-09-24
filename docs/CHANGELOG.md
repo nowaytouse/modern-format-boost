@@ -2,7 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-23
+## [Unreleased] - 2026-09-24
+
+### Toolchain compatibility and Apple CTLC scope (2026-09-24)
+
+- Preserve the user's Cargo update: indicatif `ccb0d811`, thiserror/thiserror-impl
+  2.0.21 (`40e87c52`), and zerocopy/zerocopy-derive 0.8.58 (`22cdcb9d`).
+  The indicatif change only updates its upstream lock; thiserror fixes nested
+  turbofish parsing and raises its minimum Rust version to 1.77, below MFB's
+  pinned compiler. Zerocopy's prefix/suffix genericization is internal, not a
+  required public-API migration. Do not update the project toolchain or re-resolve
+  other dependencies merely because the host's default nightly changed.
+- Verify GPAC `26.08-DEV-rev131-gb4f20f76a` against
+  [Apple's Content Type for Loudness Control specification](https://developer.apple.com/download/files/Content-Type-Loudness-Specification.pdf).
+  `ctlc` belongs to `moov/trak/udta` and describes audio playback loudness policy;
+  it is not still-image HDR, gain-map or color metadata. MFB does not invoke GPAC,
+  so its new box writer and ABI do not require an IMG runtime dependency or flag.
+- Extend the existing protected HEIC/JXL companion-custody regression with a
+  nested CTLC payload. Full-byte assertions cover its flags/content type and
+  collision refusal without depending on GPAC. This fixture is not a playable MOV.
+  Separately generate a disposable video/audio MOV with FFmpeg and GPAC, verify
+  `ctlc` version 0 / flags 2 / content type 1, and run the actual IMG archive CLI:
+  GPAC reads the same CTLC values in the delivered MOV. Ordinary MOV/JPEG copy
+  delivery enriches embedded metadata, so these real outputs are not whole-file
+  byte-identical; do not confuse this route with immutable-container custody.
+- The same isolated MOV loses CTLC when remuxed by FFmpeg
+  `N-126819-g59913ff570` with `-map 0 -c copy -map_metadata 0`. Thus GPAC's new
+  support does not establish CTLC preservation by VID re-encoding/remuxing;
+  those paths must not be advertised as complete track-box archives. This audit
+  does not add a VID CTLC remux implementation or certify Photos playback.
+- Close the previous commit's remote acceptance: `7e5f6175` passed all gates in
+  [run 35863563725](https://github.com/nowaytouse/modern-format-boost/actions/runs/35863563725),
+  including Deep Production Audit and Nightly publication. That result belongs
+  to the prior lockfile, not to this new dependency snapshot.
+- Local validation with the updated lock and installed media tools passed 2,328
+  foundation/IMG/VID tests (four existing tests ignored), all 19 production-matrix
+  cases and strict package Clippy. The strengthened CTLC custody regression,
+  focused Clippy, formatting and diff checks also passed. No GPAC runtime
+  dependency, blanket remux stage, or speculative encoder flag was added.
 
 ### IMG compound custody and refreshed toolchain (2026-09-23)
 
