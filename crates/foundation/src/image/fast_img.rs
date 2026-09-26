@@ -7419,6 +7419,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn photos_resume_reconciles_uncheckpointed_asset_before_reimport() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -7561,6 +7564,9 @@ mod tests {
     #[serial_test::serial]
     fn photos_import_failed_window_leaves_entries_pending_without_partial_checkpoint() -> Result<()>
     {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -7668,6 +7674,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn photos_import_normal_mode_continues_after_one_unverified_file() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -7765,6 +7774,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn photos_import_rejects_scrambled_library_bytes_before_checkpoint() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -7838,6 +7850,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn photos_import_one_file_transactions_bind_each_checkpoint_to_its_identifier() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,
@@ -7949,6 +7964,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn photos_import_fast_path_skips_initial_warmup() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
         let temp_dir = tempfile::TempDir::new().unwrap();
         let _home_guard = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_MFB_HOME_ROOT,

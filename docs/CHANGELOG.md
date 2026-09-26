@@ -2,7 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-24
+## [Unreleased] - 2026-09-26
+
+### JPEG metadata audit, native GUI, and CI repair (2026-09-26)
+
+- Fix the shared JPEG-to-JXL embedded-metadata audit: JPEG APP13 IPTC/Photoshop
+  fields need not appear as native JXL tags when a fresh, complete JPEG
+  reconstruction is byte-exact. Only absent APP13 fields use this proof; native
+  EXIF/XMP, sidecars, conflicting output values and metadata-clear policies stay
+  strict. The regression first failed on missing IPTC caption/application version
+  and Photoshop digest, then passed through Gate 1 with the repair. Pixel-only
+  JXL, wrong-source reconstruction and native-tag loss remain rejected.
+- Read-only metadata revalidation of the reported real batch passed all 393
+  source/output pairs, with no missing outputs and unchanged source/output hashes.
+  This is metadata-custody evidence, not a new Photos import, source deletion or
+  iCloud acceptance run; no private media or filenames are committed.
+- Replace the native GUI's drifting option grid with three equal-width aligned
+  columns. Show CLI flags, remember options per operation, and default to verbose,
+  archive and fresh runs; FastImg defaults to Photos import. Fresh/resume are
+  radio choices, retry selects resume, and fast-img's resume/retry alias stays
+  synchronized. Force/overwrite is a separate output policy, not a recovery mode.
+  Ultimate remains the launcher's existing enforced policy, not a false toggle.
+- Persist developer mode and hide advanced collection/comparison/diagnostics,
+  cache/database/iCloud operations and command copying outside it. Folder watch
+  is both hidden and disabled outside developer mode. Native self-tests use an
+  isolated preferences suite and check reopening, mode switching, command flags,
+  alignment, clipping and overlaps in English, Chinese and Japanese.
+- Isolate all 19 foundation tests that mutate `MFB_HOME_ROOT` into single-test
+  subprocesses. Serializing only writers did not protect parallel pixel decoders:
+  a reader could create scratch files under another test's soon-deleted root.
+  The previous push run [36103847903](https://github.com/nowaytouse/modern-format-boost/actions/runs/36103847903)
+  failed with a missing decoded file in the pixel-custody regression. The same
+  pre-fix SHA `de2bb997` later passed the scheduled
+  [run 36216492678](https://github.com/nowaytouse/modern-format-boost/actions/runs/36216492678),
+  but publication was skipped; neither run validates this new revision.
+- Repair the CI-built VMAF prediction warning at its source: upstream `86da14d0`
+  may read an uninitialized score/index if a correction feature is missing. A
+  checked, idempotent source patch returns `EINVAL` instead of manufacturing a
+  score, includes missing-feature regression cases, and rejects incompatible
+  upstream drift. This does not upgrade dependencies or suppress compiler warnings.
+- Preserve the user's entire existing dependency update, including cc 1.5.1,
+  find-msvc-tools 0.1.14, siphasher 1.0.4, wasm-bindgen 0.2.129 and zerocopy 0.8.59
+  (`41f5b37a`). No additional dependency resolution or downgrade was performed.
+  Current host tools: FFmpeg `N-126872-g8864fd0aec`, cjxl `0.13.0 b8773895`,
+  libheif 1.23.5, libavif 1.4.2, ExifTool 13.59, GPAC `rev132-g1b09ef3dd` and
+  osxphotos 0.77.1. [osxphotos 0.77.1](https://github.com/RhetTbull/osxphotos/releases/tag/v0.77.1)
+  fixes macOS 27 search mappings and a startup framework warning; it does not
+  establish faster Photos import or waive per-asset custody verification.
+- Local validation: 1,958 foundation tests (four existing tests ignored), 94 IMG
+  tests, 396 hardening contracts, three numeric contracts, 42 smoke tests, the
+  comprehensive weakness audit, two bootstrapper tests, and strict Clippy passed.
+  The VMAF missing-feature regression failed before the guard and passed after it;
+  all 24 upstream test executables then passed in a disposable local build.
+  Existing upstream C-test prototype and Meson future-default notices remain
+  visible; this is not a zero-warning claim for all third-party source code.
+  Fresh remote CI and publication remain required for this revision's promotion.
 
 ### CI runner and Homebrew warning repair (2026-09-24)
 

@@ -1201,6 +1201,31 @@ pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }
 
+/// Run environment-mutating tests alone, without redirecting parallel readers
+/// into a temporary state directory that disappears when this test finishes.
+/// Returns true in the parent after the child has passed; the parent must return.
+#[cfg(test)]
+pub(crate) fn isolated_test_process() -> bool {
+    const CHILD_TEST: &str = "MFB_ISOLATED_TEST";
+    let thread = std::thread::current();
+    let name = thread.name().expect("libtest supplies the test name");
+    if std::env::var_os(CHILD_TEST).as_deref() == Some(std::ffi::OsStr::new(name)) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD_TEST, name)
+        .output()
+        .expect("spawn isolated environment test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("running 1 test"),
+        "isolated test {name} failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 /// A RAII guard that sets an environment variable and restores its original
 /// value when dropped. Useful for thread-safe (serial) unit tests that modify
 /// global environment state.

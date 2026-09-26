@@ -320,6 +320,41 @@ fn install_libheif(workdir: &Path) -> Result<()> {
     run("pkg-config", ["--atleast-version=1.23.5", "libheif"], None)
 }
 
+// Upstream 86da14d0 can use an uninitialized score/index when a model omits
+// either correction feature. Fail closed, not zero-initialize a fabricated score.
+fn apply_vmaf_feature_guard(workdir: &Path) -> Result<()> {
+    let patch = workdir.join("vmaf-feature-guard.patch");
+    fs::write(
+        &patch,
+        include_str!("../../patches/vmaf-feature-guard.patch"),
+    )?;
+    let source = workdir.join("vmaf");
+    let already_applied = Command::new("git")
+        .args(["apply", "--reverse", "--check"])
+        .arg(&patch)
+        .current_dir(&source)
+        .output()?;
+    if already_applied.status.success() {
+        println!("VMAF missing-feature guard already present.");
+        return Ok(());
+    }
+    // Reject upstream drift instead of silently dropping the safety repair.
+    run(
+        "git",
+        [
+            OsStr::new("apply"),
+            OsStr::new("--check"),
+            patch.as_os_str(),
+        ],
+        Some(&source),
+    )?;
+    run(
+        "git",
+        [OsStr::new("apply"), patch.as_os_str()],
+        Some(&source),
+    )
+}
+
 fn main() -> Result<()> {
     let workspace = env::var_os("GITHUB_WORKSPACE")
         .filter(|value| !value.is_empty())
@@ -357,6 +392,7 @@ fn main() -> Result<()> {
         ],
         Some(workdir),
     )?;
+    apply_vmaf_feature_guard(workdir)?;
     run(
         "meson",
         [
@@ -366,11 +402,22 @@ fn main() -> Result<()> {
             "--prefix=/usr/local",
             "--buildtype=release",
             "-Denable_docs=false",
-            "-Denable_tests=false",
+            "-Denable_tests=true",
         ],
         Some(workdir),
     )?;
     run("ninja", ["-C", "vmaf-build"], Some(workdir))?;
+    run(
+        "meson",
+        [
+            "test",
+            "-C",
+            "vmaf-build",
+            "test_predict",
+            "--print-errorlogs",
+        ],
+        Some(workdir),
+    )?;
     run(
         "sudo",
         ["ninja", "-C", "vmaf-build", "install"],
@@ -485,6 +532,34 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vmaf_feature_guard_is_checked_idempotent_and_rejects_drift() {
+        let temp = super::TempDir::create().unwrap();
+        let source = temp.path().join("vmaf/libvmaf/src");
+        super::fs::create_dir_all(&source).unwrap();
+        let predict = source.join("predict.c");
+        let tests = temp.path().join("vmaf/libvmaf/test");
+        super::fs::create_dir_all(&tests).unwrap();
+        super::fs::write(tests.join("test_predict.c"), "    return NULL;\n}\n\nchar *run_tests()\n{\n    mu_run_test(test_predict_score_at_index);\n    mu_run_test(test_find_linear_function_parameters);\n    mu_run_test(test_piecewise_linear_mapping);\n}\n").unwrap();
+        let original = "        }\n    }\n\n    double corrected_guided_score =\n        (-correction_parameter * guiding_score) + correction_parameter;\n    err = normalize(model, model->feature[guided_idx].slope,\n";
+        super::fs::write(&predict, original).unwrap();
+        super::apply_vmaf_feature_guard(temp.path()).unwrap();
+        let guarded = super::fs::read_to_string(&predict).unwrap();
+        assert!(
+            guarded.contains(
+                "if (!found_guiding_score || !found_guided_score)\n        return -EINVAL;"
+            )
+        );
+        super::apply_vmaf_feature_guard(temp.path()).unwrap();
+        assert_eq!(super::fs::read_to_string(&predict).unwrap(), guarded);
+        super::fs::write(&predict, "upstream layout changed\n").unwrap();
+        assert!(super::apply_vmaf_feature_guard(temp.path()).is_err());
+        assert_eq!(
+            super::fs::read_to_string(&predict).unwrap(),
+            "upstream layout changed\n"
+        );
+    }
+
     #[test]
     fn libheif_archive_requires_the_pinned_digest_before_extraction() {
         let digest = "fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a";

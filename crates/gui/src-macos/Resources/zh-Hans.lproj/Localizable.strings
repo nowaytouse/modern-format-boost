@@ -52,6 +52,7 @@
 "option.plain" = "纯文本输出";
 "option.in_place" = "替换原文件";
 "option.watch" = "监视文件夹";
+"option.developer" = "开发者模式";
 "option.ultimate.help" = "启动器对支持的操作始终使用最高质量处理，此处不能关闭。";
 "option.verbose.help" = "显示全部后端消息；关闭时只显示关键步骤。";
 "option.shortest_path.help" = "导入“照片”并核验图库原件后才清理本地来源；无法确认安全的项目会保留。";

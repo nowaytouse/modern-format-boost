@@ -2688,6 +2688,9 @@ mod working_copy_tests {
     #[test]
     #[serial]
     fn working_copy_collision_resumes_with_marker_in_optimized_dir() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(
@@ -2706,6 +2709,9 @@ mod working_copy_tests {
     #[test]
     #[serial]
     fn fresh_working_copy_never_reuses_a_marked_directory() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(
@@ -2726,6 +2732,9 @@ mod working_copy_tests {
     #[test]
     #[serial]
     fn marker_write_is_readable_after_atomic_rename() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(
@@ -2768,6 +2777,9 @@ mod working_copy_tests {
     #[cfg(unix)]
     #[serial]
     fn marker_io_rejects_tampered_paths() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(
@@ -2828,6 +2840,9 @@ mod working_copy_tests {
     #[test]
     #[serial]
     fn marker_write_does_not_create_metadata_inside_source_tree() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(
@@ -2853,6 +2868,9 @@ mod working_copy_tests {
     #[test]
     #[serial]
     fn legacy_output_marker_is_migrated_out_of_media_tree() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
         let state = TempDir::new().unwrap();
         let _home_guard = EnvGuard::set(

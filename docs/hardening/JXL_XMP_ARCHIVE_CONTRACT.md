@@ -28,6 +28,14 @@ cases, a zero exit status is insufficient: positive reconstruction output,
 non-empty JPEG, no pixel fallback, JPEG health, and the outer BLAKE3/byte proof
 remain mandatory.
 
+The shared embedded-metadata audit distinguishes native JXL metadata from JPEG
+APP13 reconstruction custody. Absent `IPTC:*` and `Photoshop:*` tags are accepted
+only for content-detected JPEG-to-JXL pairs after freshly reconstructing the
+delivered JXL and matching the original JPEG's complete BLAKE3. This is not an
+IPTC ignore list: changed tags exposed by the output still fail, as do missing
+native EXIF/XMP, conflicting sidecars, pixel-only JXL, and mismatched source
+pairings. Metadata-clear mode and other format pairs retain their existing rules.
+
 ## Archival source routing
 
 The default IMG route protects functional archive value, not only visible

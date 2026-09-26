@@ -9,6 +9,7 @@ private let maxProcessLogBatchBytes = 256 * 1024
 private let maxProcessLogBatchEntries = 256
 private let languagePreferenceKey = "MFBGuiLanguage"
 private let appearancePreferenceKey = "MFBGuiAppearance"
+private let developerPreferenceKey = "MFBGuiDeveloperMode"
 private let mainWindowContentSize = NSSize(width: 980, height: 720)
 private let mainWindowStyleMask: NSWindow.StyleMask = [
     .titled, .closable, .miniaturizable, .fullSizeContentView,
@@ -130,6 +131,10 @@ private enum OperationMode: String, CaseIterable {
     case diagnostic
     case cacheClean
     case databaseManager
+
+    var developerOnly: Bool {
+        [.collect, .compare, .iCloudImport, .diagnostic, .cacheClean, .databaseManager].contains(self)
+    }
 
     var backendMode: String? {
         switch self {
@@ -1002,6 +1007,7 @@ private final class NativeDropView: NSVisualEffectView {
 @MainActor
 private final class AppController: NSObject, NSWindowDelegate {
     private let host = NativeHost()
+    private let preferences: UserDefaults
     private let window: NSWindow
     private let titleLabel = NSTextField(labelWithString: "Modern Format Boost")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -1018,6 +1024,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let operationPopup = NSPopUpButton()
     private let languagePopup = NSPopUpButton()
     private let appearancePopup = NSPopUpButton()
+    private let developerCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let ultimateCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let verboseCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let shortestPathCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -1051,7 +1058,44 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var refreshTimer: Timer?
     private var processingActivity: NSObjectProtocol?
 
-    override init() {
+    private var developerMode: Bool { developerCheck.state == .on }
+
+    private var optionControls: [(NSButton, String)] { [
+        (verboseCheck, "verbose"), (shortestPathCheck, "shortestPath"),
+        (resumeCheck, "resume"), (freshCheck, "fresh"),
+        (archiveCheck, "archive"), (retryCheck, "retry"),
+        (forceCheck, "force"), (dryRunCheck, "dryRun"),
+        (plainCheck, "plain"), (inPlaceCheck, "inPlace"), (watchCheck, "watch"),
+    ] }
+
+    private func optionKey(_ name: String, for operation: OperationMode) -> String {
+        "MFBGuiOption.\(operation.rawValue).\(name)"
+    }
+
+    private func restoreOptions(for operation: OperationMode) {
+        for (control, name) in optionControls {
+            let saved = preferences.object(forKey: optionKey(name, for: operation)) as? Bool
+            let enabledByDefault = name == "verbose" || name == "archive"
+                || (name == "fresh" && operation.capabilities.supportsResume)
+                || (name == "shortestPath" && operation.backendMode == "fast-img")
+            control.state = (saved ?? enabledByDefault) ? .on : .off
+        }
+        if operation.capabilities.supportsResume {
+            let resuming = freshCheck.state != .on
+                && (resumeCheck.state == .on || retryCheck.state == .on)
+            resumeCheck.state = resuming ? .on : .off
+            freshCheck.state = resuming ? .off : .on
+            if !resuming { retryCheck.state = .off }
+        }
+    }
+
+    private func saveOption(_ control: NSButton) {
+        guard let name = optionControls.first(where: { $0.0 === control })?.1 else { return }
+        preferences.set(control.state == .on, forKey: optionKey(name, for: selectedOperation))
+    }
+
+    init(preferences: UserDefaults = .standard) {
+        self.preferences = preferences
         window = NSWindow(
             contentRect: NSRect(
                 x: 0,
@@ -1141,9 +1185,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         languagePopup.action = #selector(languageChanged)
         appearancePopup.target = self
         appearancePopup.action = #selector(appearanceChanged)
+        developerCheck.target = self
+        developerCheck.action = #selector(developerModeChanged)
         let preferenceGrid = NSGridView(views: [
             [languageLabel, languagePopup],
             [appearanceLabel, appearancePopup],
+            [NSView(), developerCheck],
         ])
         preferenceGrid.rowSpacing = 5
         preferenceGrid.columnSpacing = 8
@@ -1187,7 +1234,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         processingPopup.target = self
         processingPopup.action = #selector(configurationChanged)
         operationPopup.target = self
-        operationPopup.action = #selector(configurationChanged)
+        operationPopup.action = #selector(operationChanged)
         let grid = NSGridView(views: [
             [mediaLabel, processingPopup],
             [operationLabel, operationPopup],
@@ -1215,26 +1262,35 @@ private final class AppController: NSObject, NSWindowDelegate {
         metadataSafetyLabel.textColor = .secondaryLabelColor
         metadataSafetyLabel.maximumNumberOfLines = 3
 
-        ultimateCheck.state = .on
         for control in [
             ultimateCheck, verboseCheck, shortestPathCheck, archiveCheck,
             forceCheck, dryRunCheck, plainCheck, inPlaceCheck, watchCheck,
         ] {
             control.target = self
-            control.action = #selector(configurationChanged)
+            control.action = #selector(optionChanged(_:))
         }
         for control in [resumeCheck, freshCheck, retryCheck] {
             control.target = self
             control.action = #selector(resumeChoiceChanged(_:))
         }
-        let options = NSGridView(views: [
-            [ultimateCheck, shortestPathCheck, verboseCheck, dryRunCheck],
-            [resumeCheck, freshCheck, archiveCheck, retryCheck],
-            [forceCheck, plainCheck, inPlaceCheck, watchCheck],
-        ])
-        options.rowSpacing = 5
-        options.columnSpacing = 12
-        for column in 0 ..< 4 { options.column(at: column).xPlacement = .leading }
+        resumeCheck.setButtonType(.radio)
+        freshCheck.setButtonType(.radio)
+        let columns = [
+            [ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
+            [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
+            [verboseCheck, archiveCheck, retryCheck, watchCheck],
+        ].map { controls -> NSStackView in
+            let column = NSStackView(views: controls)
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 5
+            return column
+        }
+        let options = NSStackView(views: columns)
+        options.orientation = .horizontal
+        options.distribution = .fillEqually
+        options.alignment = .top
+        options.spacing = 12
 
         commandField.isEditable = false
         commandField.isSelectable = true
@@ -1265,7 +1321,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         logScroll.documentView = logView
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .bezelBorder
-        logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
@@ -1302,6 +1358,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         ])
         applyLocalization()
         selectSavedPreferences()
+        restoreOptions(for: .adjacent)
         configurationChanged()
     }
 
@@ -1414,20 +1471,40 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    @objc private func optionChanged(_ sender: NSButton) {
+        saveOption(sender)
+        configurationChanged()
+    }
+
+    @objc private func operationChanged() {
+        restoreOptions(for: selectedOperation)
+        configurationChanged()
+    }
+
+    @objc private func developerModeChanged() {
+        preferences.set(developerMode, forKey: developerPreferenceKey)
+        refreshOperationPopup()
+        watchCheck.state = developerMode
+            && (preferences.object(forKey: optionKey("watch", for: selectedOperation)) as? Bool ?? false)
+            ? .on : .off
+        configurationChanged()
+    }
+
     @objc private func resumeChoiceChanged(_ sender: NSButton) {
-        if selectedOperation.backendMode == "fast-img", sender !== freshCheck {
-            // The fast-img backend aliases resume and retry; show both effective flags.
-            resumeCheck.state = sender.state
-            retryCheck.state = sender.state
+        if sender === freshCheck {
+            freshCheck.state = .on
+            resumeCheck.state = .off
+            retryCheck.state = .off
+        } else if sender === resumeCheck || sender.state == .on {
+            resumeCheck.state = .on
+            freshCheck.state = .off
+            if selectedOperation.backendMode == "fast-img" { retryCheck.state = .on }
+        } else if selectedOperation.backendMode == "fast-img" {
+            // Fast-img aliases resume/retry; disabling retry selects a fresh run.
+            resumeCheck.state = .off
+            freshCheck.state = .on
         }
-        if sender.state == .on {
-            if sender === freshCheck {
-                resumeCheck.state = .off
-                retryCheck.state = .off
-            } else {
-                freshCheck.state = .off
-            }
-        }
+        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
         configurationChanged()
     }
 
@@ -1463,7 +1540,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private var selectedOperation: OperationMode {
-        OperationMode.allCases[safe: operationPopup.indexOfSelectedItem] ?? .adjacent
+        operationPopup.selectedItem?.representedObject
+            .flatMap { OperationMode(rawValue: $0 as? String ?? "") } ?? .adjacent
     }
 
     private func applyCapabilityState() {
@@ -1490,7 +1568,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             control.isEnabled = configurationControlsEnabled && capabilities.supportsStandardOptions
         }
         dryRunCheck.isEnabled = configurationControlsEnabled
-        watchCheck.isEnabled = configurationControlsEnabled
+        watchCheck.isHidden = !developerMode
+        watchCheck.isEnabled = configurationControlsEnabled && developerMode
+        if !developerMode { watchCheck.state = .off }
+        copyButton.isHidden = !developerMode
         let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
         backupButton.isEnabled = configurationControlsEnabled && backupAvailable
@@ -1577,6 +1658,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         resumeCheck.state = request.resume ? .on : .off
         freshCheck.state = request.fresh ? .on : .off
         retryCheck.state = request.retry ? .on : .off
+        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
@@ -1636,6 +1718,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
         appearance.apply()
+        developerCheck.state = preferences.bool(forKey: developerPreferenceKey) ? .on : .off
+        refreshOperationPopup()
     }
 
     private func replaceTitles(_ popup: NSPopUpButton, with titles: [String]) {
@@ -1655,23 +1739,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         photosScopeLabel.stringValue = localized("field.photos_scope")
         languageLabel.stringValue = localized("field.language")
         appearanceLabel.stringValue = localized("field.appearance")
+        developerCheck.title = localized("option.developer")
         chooseButton.title = localized("button.choose")
         backupButton.title = localized("button.choose")
         openButton.title = localized("button.open_terminal")
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
-        ultimateCheck.title = localized("option.ultimate")
-        verboseCheck.title = localized("option.verbose")
-        shortestPathCheck.title = localized("option.shortest_path")
-        resumeCheck.title = localized("option.resume")
-        freshCheck.title = localized("option.fresh")
-        archiveCheck.title = localized("option.archive")
-        retryCheck.title = localized("option.retry")
-        forceCheck.title = localized("option.force")
-        dryRunCheck.title = localized("option.dry_run")
-        plainCheck.title = localized("option.plain")
-        inPlaceCheck.title = localized("option.in_place")
-        watchCheck.title = localized("option.watch")
+        for (control, key, flag) in [
+            (ultimateCheck, "option.ultimate", "--ultimate"),
+            (verboseCheck, "option.verbose", "--verbose"),
+            (shortestPathCheck, "option.shortest_path", "--shortest-path"),
+            (resumeCheck, "option.resume", "--resume"),
+            (freshCheck, "option.fresh", "--no-resume"),
+            (archiveCheck, "option.archive", "--archive"),
+            (retryCheck, "option.retry", "--retry"),
+            (forceCheck, "option.force", "--force"),
+            (dryRunCheck, "option.dry_run", "--dry-run"),
+            (plainCheck, "option.plain", "--plain"),
+            (inPlaceCheck, "option.in_place", "--in-place"),
+            (watchCheck, "option.watch", "--watch"),
+        ] { control.title = "\(localized(key)) (\(flag))" }
         for (control, key) in [
             (ultimateCheck, "option.ultimate.help"), (verboseCheck, "option.verbose.help"),
             (shortestPathCheck, "option.shortest_path.help"), (resumeCheck, "option.resume.help"),
@@ -1684,24 +1771,36 @@ private final class AppController: NSObject, NSWindowDelegate {
         replaceTitles(processingPopup, with: [
             localized("media.both"), localized("media.images"), localized("media.videos"),
         ])
-        replaceTitles(operationPopup, with: [
-            localized("operation.adjacent"), localized("operation.fast_jxl"),
-            localized("operation.fast_avif"), localized("operation.fast_video"),
-            localized("operation.restore_jpeg"), localized("operation.collect"), localized("operation.compare"),
-            localized("operation.merge_xmp"), localized("operation.icloud_import"),
-            localized("operation.diagnostic"), localized("operation.cache_clean"),
-            localized("operation.database"),
-        ])
+        refreshOperationPopup()
         replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
         replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
         refreshProcessingStatus()
+    }
+
+    private func refreshOperationPopup() {
+        let selected = selectedOperation
+        let keys = [
+            "adjacent", "fast_jxl", "fast_avif", "fast_video", "restore_jpeg", "collect",
+            "compare", "merge_xmp", "icloud_import", "diagnostic", "cache_clean", "database",
+        ]
+        operationPopup.removeAllItems()
+        for (operation, key) in zip(OperationMode.allCases, keys)
+            where developerMode || !operation.developerOnly {
+            operationPopup.addItem(withTitle: localized("operation.\(key)"))
+            operationPopup.lastItem?.representedObject = operation.rawValue
+        }
+        let retained = operationPopup.itemArray.first {
+            ($0.representedObject as? String) == selected.rawValue
+        }
+        operationPopup.select(retained ?? operationPopup.itemArray.first)
+        if selectedOperation != selected { restoreOptions(for: selectedOperation) }
     }
 
     private func setProcessing(_ processing: Bool) {
         configurationControlsEnabled = !processing
         (window.contentView as? NativeDropView)?.acceptsDrops = !processing
         for control in [
-            chooseButton, backupButton, operationPopup, openButton, copyButton, runButton,
+            chooseButton, backupButton, operationPopup, developerCheck, openButton, copyButton, runButton,
         ] {
             control.isEnabled = !processing
         }
@@ -1732,7 +1831,50 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func validateInterfaceForSelfTest() throws {
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        guard !developerMode, copyButton.isHidden, watchCheck.isHidden,
+              !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
+              verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
+              verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
+        else { throw HostError(message: "Default options or developer gating failed") }
+        content.layoutSubtreeIfNeeded()
+        for controls in [[ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
+                         [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
+                         [verboseCheck, archiveCheck, retryCheck]] {
+            let x = controls[0].convert(controls[0].bounds, to: content).minX
+            guard controls.allSatisfy({ abs($0.convert($0.bounds, to: content).minX - x) < 1 }) else {
+                throw HostError(message: "Option column alignment drifted")
+            }
+        }
+        developerCheck.state = .on
+        developerModeChanged()
+        guard operationPopup.itemArray.count == OperationMode.allCases.count,
+              !copyButton.isHidden, !watchCheck.isHidden, watchCheck.isEnabled,
+              preferences.bool(forKey: developerPreferenceKey)
+        else { throw HostError(message: "Developer mode did not reveal advanced controls") }
+        content.layoutSubtreeIfNeeded()
+        let buttons = [ultimateCheck] + optionControls.map { $0.0 }
+        for (index, button) in buttons.enumerated() where !button.isHidden {
+            let rect = button.convert(button.bounds, to: content)
+            guard content.bounds.contains(rect),
+                  button.bounds.width + 1 >= button.intrinsicContentSize.width,
+                  buttons.dropFirst(index + 1).filter({ !$0.isHidden }).allSatisfy({
+                      !rect.intersects($0.convert($0.bounds, to: content))
+                  })
+            else { throw HostError(message: "Option clipped or overlapped: \(button.title)") }
+        }
+        developerCheck.state = .off
+        developerModeChanged()
+        guard operationPopup.itemArray.count == 6, watchCheck.isHidden, !watchCheck.isEnabled else {
+            throw HostError(message: "Developer mode did not hide advanced controls")
+        }
+        targetField.stringValue = "/tmp/media"
+        let defaultArguments = try ProcessorCommand.arguments(from: request())
+        guard defaultArguments.contains("--verbose"), defaultArguments.contains("--archive"),
+              defaultArguments.contains("--no-resume"), !defaultArguments.contains("--watch")
+        else { throw HostError(message: "Default checkbox flags disagree with the command") }
         let originalFrame = window.frame
+        developerCheck.state = .on
+        developerModeChanged()
         let longPath = "/tmp/" + String(repeating: "long folder name/", count: 160)
         targetField.stringValue = longPath + "test.photoslibrary"
         backupField.stringValue = longPath + "backup"
@@ -1760,12 +1902,18 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
 
+        developerCheck.state = .off
+        developerModeChanged()
         operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
-        applyCapabilityState()
+        operationChanged()
         guard ultimateCheck.state == .on, !ultimateCheck.isEnabled,
               archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
-              verboseCheck.state == .off
+              verboseCheck.state == .on, archiveCheck.state == .on,
+              shortestPathCheck.state == .on, freshCheck.state == .on
         else { throw HostError(message: "Incorrect option capabilities or defaults") }
+        guard try ProcessorCommand.arguments(from: request()).contains("--shortest-path") else {
+            throw HostError(message: "Fast-img Photos import default was not forwarded")
+        }
         retryCheck.state = .on
         freshCheck.state = .on
         resumeChoiceChanged(freshCheck)
@@ -1789,8 +1937,33 @@ private final class AppController: NSObject, NSWindowDelegate {
         else { throw HostError(message: "Resume recovery decision changed retry policy") }
         retryCheck.state = .off
         resumeChoiceChanged(retryCheck)
-        guard resumeCheck.state == .off, retryCheck.state == .off else {
+        guard resumeCheck.state == .off, retryCheck.state == .off, freshCheck.state == .on else {
             throw HostError(message: "Fast-img resume alias stayed active after deselection")
+        }
+        operationPopup.selectItem(at: 0)
+        operationChanged()
+        guard freshCheck.state == .on, verboseCheck.state == .on else {
+            throw HostError(message: "Saved options were lost after switching modes")
+        }
+        verboseCheck.state = .off
+        optionChanged(verboseCheck)
+        operationPopup.selectItem(at: 1)
+        operationChanged()
+        shortestPathCheck.state = .off
+        optionChanged(shortestPathCheck)
+        developerCheck.state = .on
+        developerModeChanged()
+        watchCheck.state = .on
+        optionChanged(watchCheck)
+        let reopened = AppController(preferences: preferences)
+        guard reopened.developerMode, !reopened.copyButton.isHidden,
+              reopened.verboseCheck.state == .off else {
+            throw HostError(message: "Developer mode or options did not persist")
+        }
+        reopened.operationPopup.selectItem(at: 1)
+        reopened.operationChanged()
+        guard reopened.shortestPathCheck.state == .off, reopened.watchCheck.state == .on else {
+            throw HostError(message: "Fast-img options did not persist")
         }
         setProcessing(true)
         defer { setProcessing(false) }
@@ -2079,7 +2252,10 @@ private func runSelfTest() -> Int32 {
         }
         try MainActor.assumeIsolated {
             _ = NSApplication.shared
-            try AppController().validateInterfaceForSelfTest()
+            let suite = "MFBGuiSelfTest.\(UUID().uuidString)"
+            let preferences = UserDefaults(suiteName: suite)!
+            defer { preferences.removePersistentDomain(forName: suite) }
+            try AppController(preferences: preferences).validateInterfaceForSelfTest()
         }
         print("native-host self-test passed")
         return 0

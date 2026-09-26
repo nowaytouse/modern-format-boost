@@ -1774,6 +1774,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn unified_log_dir_rejects_workspace_logs_path() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let _lock = ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -1798,6 +1801,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn unified_log_dir_uses_home_root_not_workspace_logs() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let _lock = ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -1814,6 +1820,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn unified_log_dir_rejects_workspace_home_root_logs() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let _lock = ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| panic!("error: {e:?}"));

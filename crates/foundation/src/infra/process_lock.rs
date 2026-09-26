@@ -315,6 +315,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_get_mfb_root() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         unsafe {
             std::env::set_var("MFB_HOME_ROOT", temp.path());
@@ -329,6 +332,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn mfb_root_uses_system_temp_without_home() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let saved_root = std::env::var_os("MFB_HOME_ROOT");
         let saved_home = std::env::var_os("HOME");
         let saved_profile = std::env::var_os("USERPROFILE");
@@ -404,6 +410,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_acquire_dir_lock() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         let dir_to_lock = temp.path();
 
@@ -433,6 +442,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_acquire_dir_lock_releases_on_drop() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         let dir_to_lock = temp.path();
 

@@ -52,6 +52,7 @@
 "option.plain" = "プレーン出力";
 "option.in_place" = "元ファイルを置換";
 "option.watch" = "フォルダを監視";
+"option.developer" = "開発者モード";
 "option.ultimate.help" = "対応する操作では常に最高品質で処理します。ここでは無効にできません。";
 "option.verbose.help" = "主要な手順だけでなく、バックエンドの全メッセージを表示します。";
 "option.shortest_path.help" = "写真に読み込み、ライブラリのオリジナルを検証してからローカルの元ファイルを削除します。安全を確認できない項目は残します。";

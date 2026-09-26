@@ -139,6 +139,7 @@ pub fn verify_output_embedded_metadata(
             let mut src_tags = preservable_tag_map(src)?;
             merge_source_sidecar_metadata_into(&mut src_tags, src)?;
             let dst_tags = preservable_tag_map(dst)?;
+            verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
             let mut mismatches = preserve_mismatches(&src_tags, &dst_tags);
             mismatches.extend(output_sidecar_mismatches(src, dst)?);
             mismatches
@@ -147,6 +148,7 @@ pub fn verify_output_embedded_metadata(
             let mut src_tags = preservable_tag_map(src)?;
             merge_source_sidecar_metadata_into(&mut src_tags, src)?;
             let dst_tags = preservable_tag_map(dst)?;
+            verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
             let mut mismatches = preserve_source_mismatches(&src_tags, &dst_tags);
             mismatches.extend(output_sidecar_mismatches(src, dst)?);
             mismatches
@@ -210,6 +212,53 @@ pub fn verify_output_embedded_metadata(
             audit.mismatches.join("; ")
         )))
     }
+}
+
+/// JPEG APP13 is not a native JXL metadata channel. Only absent IPTC/Photoshop
+/// tags may use exact reconstruction custody; native EXIF/XMP, sidecars, and
+/// contradictory tags exposed by the output still require direct agreement.
+fn verify_reconstruction_only_metadata(
+    src: &Path,
+    dst: &Path,
+    src_tags: &mut BTreeMap<String, String>,
+    dst_tags: &BTreeMap<String, String>,
+) -> io::Result<()> {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+
+    let reconstruction_tags = src_tags
+        .keys()
+        .filter(|key| {
+            (key.starts_with("IPTC:") || key.starts_with("Photoshop:"))
+                && !dst_tags.contains_key(*key)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if reconstruction_tags.is_empty() {
+        return Ok(());
+    }
+    if detect_true_format(src).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jpeg
+        || detect_true_format(dst).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jxl
+    {
+        return Ok(());
+    }
+    // Neither a filename nor an advertised JBRD box is proof. Reconstruct the
+    // current delivered file and compare it with the actual paired source.
+    crate::image::fast_img::verify_jxl_roundtrip_integrity(src, dst).map_err(|error| {
+        io::Error::other(format!(
+            "JPEG-only metadata requires exact source reconstruction: {error}"
+        ))
+    })?;
+    tracing::info!(
+        target: "mfb.metadata",
+        source = %src.display(),
+        output = %dst.display(),
+        tags = ?reconstruction_tags,
+        "JPEG APP13 metadata preserved via verified byte-exact JPEG reconstruction"
+    );
+    for key in reconstruction_tags {
+        src_tags.remove(&key);
+    }
+    Ok(())
 }
 
 fn preserve_mismatches(
@@ -707,6 +756,112 @@ mod tests {
             "0.3127 0.3290",
             "0.3000 0.3200"
         ));
+    }
+
+    #[test]
+    fn preserve_jpeg_app13_via_exact_jxl_reconstruction() {
+        use crate::pipeline::verification::VerificationGate as _;
+
+        if !crate::CjxlBuilder::check_available() || !crate::DjxlBuilder::check_available() {
+            eprintln!("SKIP: cjxl/djxl unavailable for JPEG APP13 reconstruction regression");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let working_copy = temp.path().join("delivery");
+        std::fs::create_dir(&working_copy).unwrap();
+        let dst = working_copy.join("archive.jxl");
+        write_minimal_jpeg(&src);
+        write_metadata_tag(&src, "-IPTC:Caption-Abstract=archival caption");
+        write_metadata_tag(
+            &src,
+            "-Photoshop:IPTCDigest=d41d8cd98f00b204e9800998ecf8427e",
+        );
+        write_metadata_tag(&src, "-EXIF:Artist=source artist");
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        crate::fast_img::verify_jxl_roundtrip_integrity(&src, &dst).unwrap();
+        let src_tags = preservable_tag_map(&src).unwrap();
+        let dst_tags = preservable_tag_map(&dst).unwrap();
+        assert!(src_tags.contains_key("Photoshop:IPTCDigest"));
+        assert!(!dst_tags.contains_key("Photoshop:IPTCDigest"));
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
+            .expect("APP13 retained by exact JPEG reconstruction must pass metadata gate");
+        crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();
+        let ctx = crate::pipeline::verification::PipelineCtx {
+            working_copy,
+            src_dir: temp.path().to_path_buf(),
+            blake3_log: BTreeMap::from([(
+                "source.jpg".into(),
+                crate::pipeline::verification::Blake3Entry {
+                    out_rel: Some("archive.jxl".into()),
+                    src: crate::common_utils::calculate_blake3_hash(&src).unwrap(),
+                    out: crate::common_utils::calculate_blake3_hash(&dst).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 1,
+            library_handle: None,
+            output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+        };
+        let gate = crate::pipeline::verification::Gate1Local.run(&ctx);
+        assert!(gate.passed, "{gate:?}");
+
+        // Source-only cross-container audits must use the same proof boundary.
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::PreserveSource).unwrap();
+        let mut missing_native = src_tags.clone();
+        let mut native_output = dst_tags.clone();
+        native_output.remove("IFD0:Artist");
+        verify_reconstruction_only_metadata(&src, &dst, &mut missing_native, &native_output)
+            .unwrap();
+        assert!(
+            preserve_mismatches(&missing_native, &native_output)
+                .iter()
+                .any(|m| m.contains("Artist"))
+        );
+        let mut contradictory = dst_tags;
+        contradictory.insert("Photoshop:IPTCDigest".into(), "different".into());
+        let mut expected = src_tags;
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory).unwrap();
+        assert!(
+            preserve_mismatches(&expected, &contradictory)
+                .iter()
+                .any(|m| m.contains("wrong-source"))
+        );
+
+        let pixel_only = temp.path().join("pixel-only.jxl");
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&pixel_only)
+            .lossless_jpeg(true)
+            .allow_jpeg_reconstruction(false)
+            .build()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            verify_output_embedded_metadata(&src, &pixel_only, MetadataOutputPolicy::Preserve)
+                .is_err()
+        );
+
+        // Same pixels but different APP13 source is not acceptable reconstruction.
+        write_metadata_tag(&src, "-IPTC:Caption-Abstract=another source");
+        let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("roundtrip hash mismatch"),
+            "{error}"
+        );
     }
 
     #[test]

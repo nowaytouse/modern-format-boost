@@ -52,6 +52,7 @@
 "option.plain" = "Plain output";
 "option.in_place" = "Replace originals";
 "option.watch" = "Watch folder";
+"option.developer" = "Developer mode";
 "option.ultimate.help" = "The launcher always uses highest-quality processing for supported operations; this cannot be switched off here.";
 "option.verbose.help" = "Show every backend message instead of key steps only.";
 "option.shortest_path.help" = "Import into Photos and remove local sources only after the imported originals are verified. Uncertain items are kept.";
