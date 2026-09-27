@@ -582,6 +582,9 @@ fn run_fast_gif(
     apple_compat: bool,
     strategy: &str,
 ) -> anyhow::Result<()> {
+    // Fast GIF moves originals only after all conversions/imports; keep that
+    // delivery sequence intact before honoring a GUI pause or cancellation.
+    let _batch_transaction = foundation::batch_control::begin_transaction()?;
     let effective_strategy = fast_gif_effective_strategy(apple_compat, strategy);
     let delivery_label = fast_gif_delivery_label(effective_strategy);
     let required_tools = fast_gif_required_tools(effective_strategy);

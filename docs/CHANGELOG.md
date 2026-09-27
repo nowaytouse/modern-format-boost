@@ -2,7 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-26
+## [Unreleased] - 2026-09-27
+
+### Native GUI batch experience and Photos import throughput (2026-09-27)
+
+- Keep one Photos import call per asset to bind each returned UUID unambiguously,
+  then group up to ten UUIDs into one fresh library query, byte-hash proof and
+  durable checkpoint. The isolated 150-file regression reduces queries from 150
+  to 15; this is not a tenfold real-Photos throughput claim. Failed verification
+  remains fail-closed; recoverable per-item failures retain their sources while
+  verified peers progress. Interrupted windows reconcile before re-import.
+  Pressure pacing, bounded session recovery and source-deletion gates remain.
+- Add GUI-only cooperative Pause/Continue/Stop, with token-matched acknowledgment
+  only after active transactions finish. Parallel IMG/VID workers and FastImg
+  encoding preserve durable progress before stopping; ordinary CLI behavior is
+  unchanged without a control file. Closing/quitting waits for safe shutdown,
+  including cancellation during Photos permission preflight. Compound operations
+  may finish their current operation before acknowledging the request.
+- Enforce detailed logs, disable configuration controls during processing, clear
+  the visible log on each new batch without deleting persisted logs, and expose
+  the backend-resolved history directory. Terminal launch and command preview are
+  developer-only. Compact aligned controls enlarge the scroll area within the
+  fixed 980×720 window; native rounded/system fonts require no bundled font files.
+- Show the bundle version in the title and add clickable-logo/About access to the
+  project license and existing cargo-about license snapshot. Both license files
+  are packaged and refreshed during incremental bundle synchronization.
+- Preserve the user's pre-existing Cargo.lock updates for clap, insta and proptest;
+  no additional dependency update or new dependency is introduced.
+- Local acceptance: 1,961 foundation tests (four explicitly ignored), 155 IMG
+  CLI tests, 16 VID CLI tests, 17 launcher tests, 22 build/bundle tests and two
+  watch-mode tests passed. All 396 hardening contracts and strict Clippy for the
+  affected four packages passed. Native GUI self-tests passed in English, Chinese
+  and Japanese with Swift warnings treated as errors. Four cooperative-control
+  regressions also passed after the final acknowledgment-file safety repair.
+- A separate, explicitly enabled real Photos smoke test passed in an isolated
+  copy of the authorized debug library: two JXL assets were imported and verified
+  together, checkpointed/uncheckpointed resumes added no duplicates, and a Tier-2
+  original retained its complete payload including XMP. This does not validate
+  iCloud upload completion or large-library end-to-end performance. New-revision
+  remote CI and release publication remain separate acceptance evidence.
 
 ### JPEG metadata audit, native GUI, and CI repair (2026-09-26)
 

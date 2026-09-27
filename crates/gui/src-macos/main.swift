@@ -15,6 +15,36 @@ private let mainWindowStyleMask: NSWindow.StyleMask = [
     .titled, .closable, .miniaturizable, .fullSizeContentView,
 ]
 
+private var appVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+}
+
+private var historyDirectory: URL {
+    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".modern_format_boost", isDirectory: true)
+}
+
+private func bundledLicenseText() throws -> String {
+    guard let project = Bundle.main.url(forResource: "LICENSE", withExtension: nil),
+          let thirdParty = Bundle.main.url(forResource: "LICENSES", withExtension: "json") else {
+        throw HostError(message: localized("error.licenses_missing"))
+    }
+    let data = try Data(contentsOf: thirdParty)
+    guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let licenses = document["licenses"] as? [[String: Any]], !licenses.isEmpty else {
+        throw HostError(message: localized("error.licenses_missing"))
+    }
+    var sections = ["Modern Format Boost · \(appVersion)", try String(contentsOf: project, encoding: .utf8)]
+    for license in licenses {
+        guard let name = license["name"] as? String, let text = license["text"] as? String,
+              let users = license["used_by"] as? [[String: Any]] else {
+            throw HostError(message: localized("error.licenses_missing"))
+        }
+        let crates = users.compactMap { ($0["crate"] as? [String: Any])?["name"] as? String }.sorted()
+        sections.append("\(name)\n\(crates.joined(separator: ", "))\n\n\(text)")
+    }
+    return sections.joined(separator: "\n\n────────────────────────\n\n")
+}
+
 private enum AppLanguage: String, CaseIterable {
     case system
     case english
@@ -668,10 +698,41 @@ private final class NativeHost {
     var onLog: ((String) -> Void)?
     var onCompletion: ((Result<String, Error>) -> Void)?
     private var activeProcess: Process?
+    private var pendingLaunch = false
+    private var launchGeneration = UUID()
+    private var controlFile: URL?
+    private var controlToken = UUID().uuidString
+    private(set) var controlState = "running"
+    private(set) var lastExitStatus: Int32?
     private let processLogs = ProcessLogBackpressure()
     private var pendingProcessCompletion: (() -> Void)?
 
-    var isRunning: Bool { activeProcess != nil }
+    var isRunning: Bool { activeProcess != nil || pendingLaunch }
+    var canPause: Bool { activeProcess != nil && controlState != "cancelled" }
+
+    var isPaused: Bool {
+        guard controlState == "paused", let controlFile else { return false }
+        return (try? String(contentsOf: controlFile.appendingPathExtension("ack"), encoding: .utf8))
+            == "paused\n\(controlToken)"
+    }
+
+    func setControlState(_ state: String) throws {
+        guard ["running", "paused", "cancelled"].contains(state) else {
+            throw HostError(message: "Invalid batch control state")
+        }
+        let token = UUID().uuidString
+        if let controlFile {
+            try Data("\(state)\n\(token)".utf8).write(to: controlFile, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: controlFile.path)
+        }
+        controlState = state
+        controlToken = token
+        if state == "cancelled", pendingLaunch {
+            pendingLaunch = false
+            launchGeneration = UUID()
+            completeProcessingAfterLogs(status: 130)
+        }
+    }
 
     func loadPhotosAuditContainers(
         library: String,
@@ -740,7 +801,7 @@ private final class NativeHost {
     }
 
     func startProcessing(_ request: ProcessorRequest, photosAutomationAuthorized: Bool = false) {
-        guard activeProcess == nil else {
+        guard !isRunning else {
             onCompletion?(.failure(HostError(message: localized("error.task_running"))))
             return
         }
@@ -748,9 +809,15 @@ private final class NativeHost {
             onCompletion?(.failure(HostError(message: ProcessorLocator.missingError())))
             return
         }
+        controlState = "running"
+        lastExitStatus = nil
         if processingRequiresPhotosAutomation(request), !photosAutomationAuthorized {
+            pendingLaunch = true
+            launchGeneration = UUID()
+            let generation = launchGeneration
             requestPhotosAutomationPermission { [weak self] result in
-                guard let self else { return }
+                guard let self, self.pendingLaunch, self.launchGeneration == generation else { return }
+                self.pendingLaunch = false
                 switch result {
                 case .success:
                     self.startProcessing(request, photosAutomationAuthorized: true)
@@ -779,14 +846,24 @@ private final class NativeHost {
         environment["FROM_APP"] = "1"
         environment["LC_ALL"] = "en_US.UTF-8"
         environment["LANG"] = "en_US.UTF-8"
-        process.environment = environment
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
         onLog?(localized("log.backend_start", binary.path))
-        do { try process.run() }
+        do {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mfb-gui-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            controlFile = directory.appendingPathComponent("control")
+            try setControlState("running")
+            environment["MFB_BATCH_CONTROL_FILE"] = controlFile!.path
+            process.environment = environment
+            try process.run()
+        }
         catch {
+            removeControlFile()
             onCompletion?(.failure(HostError(message: localized("error.backend_start", error.localizedDescription))))
             return
         }
@@ -861,8 +938,39 @@ private final class NativeHost {
         throw HostError(message: localized("error.no_terminal"))
     }
 
-    func terminateActiveProcess() {
-        if let process = activeProcess, process.isRunning { process.terminate() }
+    private func removeControlFile() {
+        guard let controlFile else { return }
+        do { try FileManager.default.removeItem(at: controlFile.deletingLastPathComponent()) }
+        catch { onLog?(localized("error.control_cleanup", error.localizedDescription)) }
+        self.controlFile = nil
+    }
+
+    func validateControlForSelfTest() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-control-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        controlFile = directory.appendingPathComponent("control")
+        defer { removeControlFile() }
+        try setControlState("paused")
+        let desired = try String(contentsOf: controlFile!, encoding: .utf8)
+        guard desired == "paused\n\(controlToken)", !isPaused else {
+            throw HostError(message: "Pause was acknowledged before reaching a safe boundary")
+        }
+        try Data(desired.utf8).write(to: controlFile!.appendingPathExtension("ack"), options: .atomic)
+        guard isPaused else { throw HostError(message: "Valid pause acknowledgment was ignored") }
+        try setControlState("running")
+        try setControlState("paused")
+        guard !isPaused else { throw HostError(message: "Stale acknowledgment paused a new transaction") }
+        try setControlState("cancelled")
+        guard controlState == "cancelled", !isPaused else { throw HostError(message: "Cancel state failed") }
+        removeControlFile()
+        pendingLaunch = true
+        var completions = 0
+        onCompletion = { _ in completions += 1 }
+        try setControlState("cancelled")
+        guard !isRunning, completions == 1 else {
+            throw HostError(message: "Preflight cancellation could launch a late child")
+        }
     }
 
     private func requestPhotosAutomationPermission(
@@ -930,6 +1038,9 @@ private final class NativeHost {
         let finish = { [weak self] in
             guard let self else { return }
             self.activeProcess = nil
+            self.pendingLaunch = false
+            self.lastExitStatus = status
+            self.removeControlFile()
             if status == 0 {
                 self.onCompletion?(.success(localized("status.completed")))
             } else {
@@ -1039,6 +1150,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let watchCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let commandField = NSTextField()
     private let logView = NSTextView()
+    private let logScroll = NSScrollView()
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
@@ -1049,6 +1161,12 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let openButton = NSButton(title: "", target: nil, action: nil)
     private let copyButton = NSButton(title: "", target: nil, action: nil)
     private let runButton = NSButton(title: "", target: nil, action: nil)
+    private let historyButton = NSButton(title: "", target: nil, action: nil)
+    private var resolvedHistoryDirectory = historyDirectory
+    private let pauseButton = NSButton(title: "", target: nil, action: nil)
+    private let stopButton = NSButton(title: "", target: nil, action: nil)
+    private var aboutWindow: NSWindow?
+    private var closeWhenFinished = false
     private var lastRequest: ProcessorRequest?
     private var sawResumeDecision = false
     private var configurationControlsEnabled = true
@@ -1080,6 +1198,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 || (name == "shortestPath" && operation.backendMode == "fast-img")
             control.state = (saved ?? enabledByDefault) ? .on : .off
         }
+        verboseCheck.state = .on
         if operation.capabilities.supportsResume {
             let resuming = freshCheck.state != .on
                 && (resumeCheck.state == .on || retryCheck.state == .on)
@@ -1128,10 +1247,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
-    func windowWillClose(_ notification: Notification) {
-        host.terminateActiveProcess()
-        setProcessing(false)
-        NSApp.terminate(nil)
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        requestClose()
+    }
+
+    func requestClose() -> Bool {
+        guard !host.isRunning else {
+            closeWhenFinished = true
+            stopProcessing()
+            return false
+        }
+        return true
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -1140,12 +1266,21 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func refreshProcessingStatus() {
         guard let startedAt = processingStartedAt else { return }
+        pauseButton.isEnabled = host.canPause
+        if host.controlState == "cancelled" {
+            statusLabel.stringValue = localized("status.stopping")
+            return
+        }
+        if host.controlState == "paused" {
+            statusLabel.stringValue = localized(host.isPaused ? "status.paused" : "status.pausing")
+            return
+        }
         let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt))
         statusLabel.stringValue = localized("status.running_elapsed", elapsed / 60, elapsed % 60)
     }
 
     private func configureWindow() {
-        window.title = "Modern Format Boost"
+        window.title = "Modern Format Boost · \(appVersion)"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.setContentSize(mainWindowContentSize)
@@ -1162,15 +1297,22 @@ private final class AppController: NSObject, NSWindowDelegate {
         root.onDrop = { [weak self] path in self?.acceptTarget(path) }
         window.contentView = root
 
-        let icon = NSImageView()
+        let icon = NSButton()
+        icon.isBordered = false
+        icon.target = self
+        icon.action = #selector(showAbout)
+        icon.toolTip = localized("menu.about")
+        icon.setAccessibilityLabel(localized("menu.about"))
         icon.image = NSImage(
             systemSymbolName: "photo.stack.fill",
             accessibilityDescription: "Modern Format Boost",
         )
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 30, weight: .medium)
+        icon.image = icon.image?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 28, weight: .medium))
         icon.contentTintColor = .controlAccentColor
         icon.setContentHuggingPriority(.required, for: .horizontal)
-        titleLabel.font = .systemFont(ofSize: 26, weight: .bold)
+        let heading = NSFont.systemFont(ofSize: 23, weight: .semibold)
+        titleLabel.font = heading.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 23) } ?? heading
+        subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
         let titleStack = NSStackView(views: [titleLabel, subtitleLabel])
         titleStack.orientation = .vertical
@@ -1211,6 +1353,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         chooseButton.action = #selector(chooseTarget)
         let targetRow = NSStackView(views: [targetField, chooseButton])
         targetRow.orientation = .horizontal
+        targetRow.alignment = .centerY
         targetRow.spacing = 8
         targetField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
@@ -1239,10 +1382,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             [mediaLabel, processingPopup],
             [operationLabel, operationPopup],
         ])
-        grid.rowSpacing = 8
+        grid.rowSpacing = 5
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .fill
+        mediaLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        operationLabel.widthAnchor.constraint(equalTo: mediaLabel.widthAnchor).isActive = true
 
         photosScopeButton.target = self
         photosScopeButton.action = #selector(choosePhotosScope)
@@ -1306,22 +1451,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.target = self
         runButton.action = #selector(runHere)
         runButton.keyEquivalent = "\r"
+        historyButton.target = self
+        historyButton.action = #selector(openHistory)
+        pauseButton.target = self
+        pauseButton.action = #selector(togglePause)
+        stopButton.target = self
+        stopButton.action = #selector(stopProcessing)
+        pauseButton.isEnabled = false
+        stopButton.isEnabled = false
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actionRow = NSStackView(views: [openButton, copyButton, spacer, runButton])
+        let actionRow = NSStackView(views: [historyButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
         actionRow.orientation = .horizontal
+        actionRow.alignment = .centerY
         actionRow.spacing = 8
 
         logView.isEditable = false
         logView.isSelectable = true
-        logView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         logView.textContainerInset = NSSize(width: 8, height: 8)
         logView.backgroundColor = .textBackgroundColor.withAlphaComponent(0.72)
-        let logScroll = NSScrollView()
         logScroll.documentView = logView
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .bezelBorder
-        logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+        logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
@@ -1341,7 +1494,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
@@ -1353,8 +1506,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
         ])
         applyLocalization()
         selectSavedPreferences()
@@ -1509,6 +1662,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openInTerminal() {
+        guard developerMode, configurationControlsEnabled else { return }
         do { statusLabel.stringValue = try host.openInTerminal(request()) }
         catch { present(error) }
     }
@@ -1522,16 +1676,77 @@ private final class AppController: NSObject, NSWindowDelegate {
         } catch { present(error) }
     }
 
+    private func clearBatchLog() {
+        logView.string = ""
+        appendLog(localized("log.history", resolvedHistoryDirectory.path))
+    }
+
+    @objc private func openHistory() {
+        do {
+            if !NSWorkspace.shared.open(resolvedHistoryDirectory) {
+                throw HostError(message: localized("error.open_history", resolvedHistoryDirectory.path))
+            }
+        } catch { present(error) }
+    }
+
+    @objc private func togglePause() {
+        guard host.canPause else { return }
+        do {
+            try host.setControlState(host.controlState == "paused" ? "running" : "paused")
+            pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
+            refreshProcessingStatus()
+            appendLog(statusLabel.stringValue)
+        } catch { present(error) }
+    }
+
+    @objc private func stopProcessing() {
+        guard host.isRunning else { return }
+        do {
+            try host.setControlState("cancelled")
+            pauseButton.isEnabled = false
+            stopButton.isEnabled = false
+            refreshProcessingStatus()
+            appendLog(statusLabel.stringValue)
+        } catch { present(error) }
+    }
+
+    @objc func showAbout() {
+        do {
+            let text = try bundledLicenseText()
+            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
+                                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            panel.isReleasedWhenClosed = false
+            panel.title = "\(localized("menu.about")) · \(appVersion)"
+            let scroll = NSScrollView(frame: panel.contentView!.bounds)
+            scroll.autoresizingMask = [.width, .height]
+            scroll.hasVerticalScroller = true
+            let textView = NSTextView(frame: scroll.bounds)
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.font = .systemFont(ofSize: 13)
+            textView.textContainerInset = NSSize(width: 20, height: 16)
+            textView.autoresizingMask = [.width]
+            textView.textContainer?.widthTracksTextView = true
+            textView.string = text
+            scroll.documentView = textView
+            panel.contentView?.addSubview(scroll)
+            aboutWindow?.close()
+            aboutWindow = panel
+            panel.center()
+            panel.makeKeyAndOrderFront(nil)
+        } catch { present(error) }
+    }
+
     @objc private func runHere() {
         guard !host.isRunning else { return }
         do {
             let request = try request()
             lastRequest = request
             sawResumeDecision = false
+            clearBatchLog()
+            try host.setControlState("running")
             setProcessing(true)
-            appendLog(verboseCheck.state == .on
-                ? "▶︎ \(try host.terminalCommand(for: request))"
-                : "▶︎ \(localized("log.task_start"))")
+            appendLog("▶︎ \(try host.terminalCommand(for: request))")
             host.startProcessing(request)
         } catch {
             setProcessing(false)
@@ -1556,6 +1771,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         // Show the effective policy instead of an off switch it cannot honor.
         ultimateCheck.isEnabled = false
         ultimateCheck.state = capabilities.supportsUltimate ? .on : .off
+        verboseCheck.state = .on
+        verboseCheck.isEnabled = false
         shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
         resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
         freshCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
@@ -1572,6 +1789,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         watchCheck.isEnabled = configurationControlsEnabled && developerMode
         if !developerMode { watchCheck.state = .off }
         copyButton.isHidden = !developerMode
+        openButton.isHidden = !developerMode
+        commandField.isHidden = !developerMode
         let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
         backupButton.isEnabled = configurationControlsEnabled && backupAvailable
@@ -1627,7 +1846,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             backupPath: selectedOperation == .collect || selectedOperation == .compare
                 ? backupField.stringValue : nil,
             ultimate: ultimateCheck.state == .on,
-            verbose: verboseCheck.state == .on,
+            verbose: true,
             shortestPath: shortestPathCheck.state == .on,
             resume: resumeCheck.state == .on,
             fresh: freshCheck.state == .on,
@@ -1643,8 +1862,15 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func appendLog(_ text: String) {
+        for line in text.split(separator: "\n") where line.hasPrefix("MFB_LOG_DIRECTORY=") {
+            let encoded = Data(line.dropFirst("MFB_LOG_DIRECTORY=".count).utf8)
+            if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
+                resolvedHistoryDirectory = URL(fileURLWithPath: path, isDirectory: true)
+                historyButton.toolTip = path
+            }
+        }
         if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
-        guard let visible = verboseCheck.state == .on ? text : conciseProcessLog(text) else { return }
+        let visible = text
         let next = logView.string.isEmpty ? visible : "\(logView.string)\n\(visible)"
         let lines = next.split(separator: "\n", omittingEmptySubsequences: false)
         logView.string = lines.count > 3_000 ? lines.suffix(3_000).joined(separator: "\n") : next
@@ -1662,6 +1888,17 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        if host.controlState == "cancelled", host.lastExitStatus == 130 {
+            setProcessing(false)
+            if var retry = lastRequest, retry.operationMode.capabilities.supportsResume {
+                applyResumeDecision(fresh: false, to: &retry)
+                lastRequest = retry
+            }
+            statusLabel.stringValue = localized("status.stopped")
+            appendLog(localized("status.stopped"))
+            if closeWhenFinished { NSApp.terminate(nil) }
+            return
+        }
         switch result {
         case let .success(message):
             setProcessing(false)
@@ -1745,6 +1982,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         openButton.title = localized("button.open_terminal")
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
+        historyButton.title = localized("button.history")
+        historyButton.toolTip = resolvedHistoryDirectory.path
+        pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
+        stopButton.title = localized("button.stop")
         for (control, key, flag) in [
             (ultimateCheck, "option.ultimate", "--ultimate"),
             (verboseCheck, "option.verbose", "--verbose"),
@@ -1801,10 +2042,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         (window.contentView as? NativeDropView)?.acceptsDrops = !processing
         for control in [
             chooseButton, backupButton, operationPopup, developerCheck, openButton, copyButton, runButton,
+            languagePopup, appearancePopup,
         ] {
             control.isEnabled = !processing
         }
         applyCapabilityState()
+        pauseButton.isEnabled = processing && host.controlState != "cancelled"
+        stopButton.isEnabled = processing && host.controlState != "cancelled"
+        pauseButton.title = localized("button.pause")
         if processing {
             if processingStartedAt == nil {
                 processingStartedAt = ProcessInfo.processInfo.systemUptime
@@ -1831,12 +2076,31 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func validateInterfaceForSelfTest() throws {
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
-        guard !developerMode, copyButton.isHidden, watchCheck.isHidden,
+        guard !developerMode, copyButton.isHidden, openButton.isHidden, commandField.isHidden, watchCheck.isHidden,
               !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
+              !verboseCheck.isEnabled,
               verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
               verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Default options or developer gating failed") }
         content.layoutSubtreeIfNeeded()
+        guard logScroll.frame.height >= 260,
+              window.title.contains(appVersion) else {
+            throw HostError(message: "Log area or visible version regressed")
+        }
+        appendLog("previous batch sentinel")
+        clearBatchLog()
+        guard !logView.string.contains("previous batch sentinel"), logView.string.contains(historyDirectory.path) else {
+            throw HostError(message: "Batch logs were not cleared with a history location")
+        }
+        appendLog("MFB_LOG_DIRECTORY=\"/tmp/backend-resolved-logs\"")
+        guard resolvedHistoryDirectory.path == "/tmp/backend-resolved-logs",
+              historyButton.toolTip == "/tmp/backend-resolved-logs" else {
+            throw HostError(message: "History folder ignored the backend's resolved directory")
+        }
+        let attribution = try bundledLicenseText()
+        guard attribution.contains("Modern Format Boost"), attribution.contains("Apache") else {
+            throw HostError(message: "Bundled attribution is incomplete")
+        }
         for controls in [[ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
                          [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
                          [verboseCheck, archiveCheck, retryCheck]] {
@@ -1848,7 +2112,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerCheck.state = .on
         developerModeChanged()
         guard operationPopup.itemArray.count == OperationMode.allCases.count,
-              !copyButton.isHidden, !watchCheck.isHidden, watchCheck.isEnabled,
+              !copyButton.isHidden, !openButton.isHidden, !watchCheck.isHidden, watchCheck.isEnabled,
               preferences.bool(forKey: developerPreferenceKey)
         else { throw HostError(message: "Developer mode did not reveal advanced controls") }
         content.layoutSubtreeIfNeeded()
@@ -1947,6 +2211,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         verboseCheck.state = .off
         optionChanged(verboseCheck)
+        guard verboseCheck.state == .on, !verboseCheck.isEnabled, try request().verbose else {
+            throw HostError(message: "GUI verbose policy could be disabled")
+        }
         operationPopup.selectItem(at: 1)
         operationChanged()
         shortestPathCheck.state = .off
@@ -1957,7 +2224,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         optionChanged(watchCheck)
         let reopened = AppController(preferences: preferences)
         guard reopened.developerMode, !reopened.copyButton.isHidden,
-              reopened.verboseCheck.state == .off else {
+              reopened.verboseCheck.state == .on, !reopened.verboseCheck.isEnabled else {
             throw HostError(message: "Developer mode or options did not persist")
         }
         reopened.operationPopup.selectItem(at: 1)
@@ -1978,7 +2245,9 @@ private final class AppController: NSObject, NSWindowDelegate {
               runningStatus == localized("status.running_elapsed", 1, 5),
               targetField.stringValue == runningTarget,
               (window.contentView as? NativeDropView)?.acceptsDrops == false,
-              verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled
+              !verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled,
+              !languagePopup.isEnabled, !appearancePopup.isEnabled,
+              optionControls.allSatisfy({ !$0.0.isEnabled })
         else { throw HostError(message: "Background status or running controls lost their state") }
     }
 
@@ -2008,11 +2277,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        controller?.requestClose() == false ? .terminateCancel : .terminateNow
+    }
+
+    @objc private func showAbout() { controller?.showAbout() }
+
     func configureMenus() {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: localized("menu.about"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let about = appMenu.addItem(withTitle: localized("menu.about"), action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: localized("menu.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -2255,6 +2531,8 @@ private func runSelfTest() -> Int32 {
             let suite = "MFBGuiSelfTest.\(UUID().uuidString)"
             let preferences = UserDefaults(suiteName: suite)!
             defer { preferences.removePersistentDomain(forName: suite) }
+            let controlHost = NativeHost()
+            try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
         }
         print("native-host self-test passed")

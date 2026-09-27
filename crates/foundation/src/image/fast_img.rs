@@ -1260,8 +1260,13 @@ struct PhotosCheckpointImportReport {
 }
 
 enum PhotosImportBatchOutcome {
-    Imported(Vec<LibraryAssetRecord>),
-    DeferredItem { source_rel: String, detail: String },
+    Imported(Vec<(String, String)>),
+    #[cfg_attr(any(not(target_os = "macos"), test), allow(dead_code))]
+    Recovered(Vec<LibraryAssetRecord>),
+    DeferredItem {
+        source_rel: String,
+        detail: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3130,22 +3135,17 @@ where
         .collect::<Vec<_>>();
     let mut poisoned_attempts = 0usize;
     loop {
-        let attempt_result = (|| {
+        let attempt_result: Result<Vec<(String, String)>> = (|| {
             let stdout = run_import_batch(&manifest_entries)?;
             let report_pairs = fast_img_pairs_from_photos_import_ids(
                 &output_paths,
                 stdout.as_bytes(),
                 batch_entries.len(),
             )?;
-            library_records_from_pending_import(
-                batch_entries,
-                &report_pairs,
-                query_assets,
-                is_quarantined,
-            )
+            Ok(report_pairs)
         })();
         match attempt_result {
-            Ok(batch_assets) => return Ok(PhotosImportBatchOutcome::Imported(batch_assets)),
+            Ok(report_pairs) => return Ok(PhotosImportBatchOutcome::Imported(report_pairs)),
             Err(err) => {
                 let detail = err.to_string();
                 if fail_fast {
@@ -3190,13 +3190,13 @@ where
                         query_assets,
                         is_quarantined,
                     )? {
-                        return Ok(PhotosImportBatchOutcome::Imported(recovered_assets));
+                        return Ok(PhotosImportBatchOutcome::Recovered(recovered_assets));
                     }
                     // Non-macOS/test builds never take the marker-based
                     // recovery branch above; the parameter exists for the
                     // contract shared with those builds.
                     #[cfg(any(not(target_os = "macos"), test))]
-                    let _ = marker;
+                    let _ = (&marker, &query_assets, &is_quarantined);
                     continue;
                 }
                 if batch_entries.len() == 1 && photos_import_controllable_item_failure(&detail) {
@@ -3213,6 +3213,78 @@ where
             }
         }
     }
+}
+
+fn checkpoint_verified_photos_group<Q, P>(
+    marker: &mut WorkingCopyMarker,
+    entries: &[PhotosImportPendingEntry],
+    report_pairs: &[(String, String)],
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+) -> Result<Vec<LibraryAssetRecord>>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+{
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let assets =
+        library_records_from_pending_import(entries, report_pairs, query_assets, is_quarantined)?;
+    checkpoint_photos_import_window(marker, entries, &assets)?;
+    Ok(assets)
+}
+
+fn flush_photos_verification_group<Q, P>(
+    marker: &mut WorkingCopyMarker,
+    entries: &[PhotosImportPendingEntry],
+    report_pairs: &[(String, String)],
+    fail_fast: bool,
+    query_assets: &mut Q,
+    is_quarantined: &mut P,
+    imported_assets: &mut Vec<LibraryAssetRecord>,
+    deferred_item_failures: &mut Vec<(String, String)>,
+) -> Result<()>
+where
+    Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    P: FnMut(&Path) -> Result<bool>,
+{
+    if entries.len() != report_pairs.len() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Photos verification window has {} entries but {} import identifiers",
+            entries.len(),
+            report_pairs.len()
+        )));
+    }
+    match checkpoint_verified_photos_group(
+        marker,
+        entries,
+        report_pairs,
+        query_assets,
+        is_quarantined,
+    ) {
+        Ok(mut assets) => imported_assets.append(&mut assets),
+        Err(err) if !fail_fast && photos_import_controllable_item_failure(&err.to_string()) => {
+            // One missing upload proof must not strand the other verified imports.
+            for (entry, pair) in entries.iter().zip(report_pairs) {
+                match checkpoint_verified_photos_group(
+                    marker,
+                    std::slice::from_ref(entry),
+                    std::slice::from_ref(pair),
+                    query_assets,
+                    is_quarantined,
+                ) {
+                    Ok(mut assets) => imported_assets.append(&mut assets),
+                    Err(err) if photos_import_controllable_item_failure(&err.to_string()) => {
+                        deferred_item_failures.push((entry.source_rel.clone(), err.to_string()));
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        Err(err) => return Err(err),
+    }
+    Ok(())
 }
 
 fn import_pending_media_entries_with_checkpoint<Q, P, R>(
@@ -3299,37 +3371,97 @@ where
                 batch_files = batch_entries.len(),
                 "Starting Photos import batch"
             );
-            let mut batch_assets = match import_photos_batch_with_recovery(
+            let _transaction = crate::batch_control::begin_transaction().map_err(|err| {
+                ImgQualityError::AnalysisError(format!(
+                    "Photos import stopped before the next verification window: {err}"
+                ))
+            })?;
+            let mut unverified_entries = Vec::with_capacity(batch_entries.len());
+            let mut unverified_pairs = Vec::with_capacity(batch_entries.len());
+            for (entry_index, entry) in batch_entries.iter().enumerate() {
+                let result = import_photos_batch_with_recovery(
+                    marker,
+                    std::slice::from_ref(entry),
+                    fail_fast,
+                    window.start,
+                    batch_number,
+                    batch_count,
+                    query_assets,
+                    is_quarantined,
+                    run_import_batch,
+                );
+                match result {
+                    Ok(PhotosImportBatchOutcome::Imported(mut pair)) => {
+                        unverified_entries.push(entry.clone());
+                        unverified_pairs.append(&mut pair);
+                    }
+                    Ok(PhotosImportBatchOutcome::Recovered(mut assets)) => {
+                        flush_photos_verification_group(
+                            marker,
+                            &unverified_entries,
+                            &unverified_pairs,
+                            fail_fast,
+                            query_assets,
+                            is_quarantined,
+                            &mut imported_assets,
+                            &mut deferred_item_failures,
+                        )?;
+                        unverified_entries.clear();
+                        unverified_pairs.clear();
+                        imported_assets.append(&mut assets);
+                    }
+                    Ok(PhotosImportBatchOutcome::DeferredItem { source_rel, detail }) => {
+                        flush_photos_verification_group(
+                            marker,
+                            &unverified_entries,
+                            &unverified_pairs,
+                            fail_fast,
+                            query_assets,
+                            is_quarantined,
+                            &mut imported_assets,
+                            &mut deferred_item_failures,
+                        )?;
+                        unverified_entries.clear();
+                        unverified_pairs.clear();
+                        deferred_item_failures.push((source_rel, detail));
+                    }
+                    Err(err) => {
+                        // Persist only independently proved successes; the failed item
+                        // remains pending for the existing interrupted-import reconcile.
+                        flush_photos_verification_group(
+                            marker,
+                            &unverified_entries,
+                            &unverified_pairs,
+                            fail_fast,
+                            query_assets,
+                            is_quarantined,
+                            &mut imported_assets,
+                            &mut deferred_item_failures,
+                        )?;
+                        return Err(err);
+                    }
+                }
+                // Preserve per-asset pressure pacing even though proof queries are grouped.
+                let pause = crate::performance_schedule::photos_import_transaction_pause(
+                    window.start + offset + entry_index + 1,
+                    pending_entries.len(),
+                    crate::performance_schedule::current_perf_tier(),
+                );
+                if !cfg!(test) && !pause.is_zero() {
+                    std::thread::sleep(pause);
+                }
+            }
+            flush_photos_verification_group(
                 marker,
-                batch_entries,
+                &unverified_entries,
+                &unverified_pairs,
                 fail_fast,
-                window.start,
-                batch_number,
-                batch_count,
                 query_assets,
                 is_quarantined,
-                run_import_batch,
-            )? {
-                PhotosImportBatchOutcome::Imported(batch_assets) => batch_assets,
-                PhotosImportBatchOutcome::DeferredItem { source_rel, detail } => {
-                    deferred_item_failures.push((source_rel, detail));
-                    offset = end;
-                    continue;
-                }
-            };
-            checkpoint_photos_import_window(marker, batch_entries, &batch_assets)?;
-            imported_assets.append(&mut batch_assets);
+                &mut imported_assets,
+                &mut deferred_item_failures,
+            )?;
             offset = end;
-            let completed_transactions = window.start + end;
-            let perf_tier = crate::performance_schedule::current_perf_tier();
-            let pause = crate::performance_schedule::photos_import_transaction_pause(
-                completed_transactions,
-                pending_entries.len(),
-                perf_tier,
-            );
-            if !cfg!(test) && !pause.is_zero() {
-                std::thread::sleep(pause);
-            }
         }
         if !cfg!(test) {
             let pause = crate::performance_schedule::photos_import_window_pause(
@@ -4692,7 +4824,15 @@ fn photos_import_candidate_manifest_entries(
 }
 
 fn photos_import_batch_sizes(total: usize) -> Vec<usize> {
-    vec![1; total]
+    std::iter::repeat_n(
+        FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE,
+        total / FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE,
+    )
+    .chain(
+        (!total.is_multiple_of(FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE))
+            .then_some(total % FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE),
+    )
+    .collect()
 }
 
 const fn photos_import_strategy(total: usize) -> PhotosImportStrategy {
@@ -7418,7 +7558,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn photos_resume_reconciles_uncheckpointed_asset_before_reimport() -> Result<()> {
+    fn photos_resume_reconciles_uncheckpointed_window_before_reimport() -> Result<()> {
         if crate::common_utils::isolated_test_process() {
             return Ok(());
         }
@@ -7431,15 +7571,27 @@ mod tests {
         let wc = temp_dir.path().join("Batch_optimized");
         std::fs::create_dir_all(&wc).unwrap();
         let output = wc.join("a.AVIF");
+        let output_b = wc.join("b.AVIF");
         std::fs::write(&output, b"avif-a").unwrap();
+        std::fs::write(&output_b, b"avif-b").unwrap();
         let hash = crate::common_utils::calculate_blake3_hash(&output)?;
-        let mut marker = WorkingCopyMarker::new(src_root, wc, 1);
+        let hash_b = crate::common_utils::calculate_blake3_hash(&output_b)?;
+        let mut marker = WorkingCopyMarker::new(src_root, wc, 2);
         marker.blake3_log.insert(
             "a.jpg".to_string(),
             Blake3Entry {
                 out_rel: Some("a.AVIF".to_string()),
                 src: "src-a".to_string(),
                 out: hash.clone(),
+                library_asset: None,
+            },
+        );
+        marker.blake3_log.insert(
+            "b.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some("b.AVIF".to_string()),
+                src: "src-b".to_string(),
+                out: hash_b.clone(),
                 library_asset: None,
             },
         );
@@ -7450,37 +7602,53 @@ mod tests {
             &mut marker,
             &pending,
             &mut |uuids: &[String]| {
-                assert_eq!(uuids, ["UUID-A"]);
-                Ok(vec![FastImgLibraryAssetProbe {
-                    uuid: "UUID-A".to_string(),
-                    path: output.clone(),
-                    iscloudasset: false,
-                    incloud: Some(false),
-                    ismissing: false,
-                }])
+                assert_eq!(uuids, ["UUID-A", "UUID-B"]);
+                Ok(vec![
+                    FastImgLibraryAssetProbe {
+                        uuid: "UUID-B".to_string(),
+                        path: output_b.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    },
+                    FastImgLibraryAssetProbe {
+                        uuid: "UUID-A".to_string(),
+                        path: output.clone(),
+                        iscloudasset: false,
+                        incloud: Some(false),
+                        ismissing: false,
+                    },
+                ])
             },
             &mut is_quarantined,
             &mut |manifest_entries: &[(PathBuf, String)]| {
                 import_called = true;
-                assert_eq!(manifest_entries.len(), 1);
-                Ok("UUID-A/L0/001\n".to_string())
+                assert_eq!(manifest_entries.len(), 2);
+                Ok("UUID-A/L0/001\nUUID-B/L0/002\n".to_string())
             },
         )?;
 
         assert!(import_called);
-        assert_eq!(recovered, 1);
+        assert_eq!(recovered, 2);
         assert!(
             photos_import_checkpoint_plan(&marker, &mut is_quarantined)?
                 .pending_entries
                 .is_empty()
         );
-        assert_eq!(marker.photos_imported_assets.len(), 1);
+        assert_eq!(marker.photos_imported_assets.len(), 2);
         assert_eq!(
             marker
                 .blake3_log
                 .get("a.jpg")
                 .and_then(|entry| entry.library_asset.as_deref()),
             Some(hash.as_str())
+        );
+        assert_eq!(
+            marker
+                .blake3_log
+                .get("b.jpg")
+                .and_then(|entry| entry.library_asset.as_deref()),
+            Some(hash_b.as_str())
         );
         Ok(())
     }
@@ -7716,7 +7884,9 @@ mod tests {
             import_calls.push(stem.clone());
             Ok(format!("UUID-{stem}\n"))
         };
+        let mut query_calls = Vec::new();
         let mut query_assets = |uuids: &[String]| {
+            query_calls.push(uuids.to_vec());
             uuids
                 .iter()
                 .filter(|uuid| uuid.as_str() != "UUID-b")
@@ -7744,7 +7914,8 @@ mod tests {
             &mut run_import_batch,
         )?;
 
-        assert_eq!(import_calls, ["a", "b", "b", "b", "b", "b", "c"]);
+        assert_eq!(import_calls, ["a", "b", "c"]);
+        assert_eq!(query_calls[0], ["UUID-a", "UUID-b", "UUID-c"]);
         assert_eq!(report.imported_assets.len(), 2);
         assert_eq!(report.failed_count, 1);
         assert!(
@@ -7849,7 +8020,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn photos_import_one_file_transactions_bind_each_checkpoint_to_its_identifier() -> Result<()> {
+    fn photos_import_one_file_calls_bind_each_checkpoint_to_its_identifier() -> Result<()> {
         if crate::common_utils::isolated_test_process() {
             return Ok(());
         }
@@ -7893,24 +8064,26 @@ mod tests {
             },
         );
 
+        let mut query_calls = 0usize;
         let mut query_assets = |uuids: &[String]| {
-            assert_eq!(uuids.len(), 1);
-            let (uuid, path) = match uuids[0].as_str() {
-                "UUID-A" => ("UUID-A", library_a.clone()),
-                "UUID-B" => ("UUID-B", library_b.clone()),
-                other => {
-                    return Err(ImgQualityError::AnalysisError(format!(
-                        "unexpected test UUID: {other}"
-                    )));
-                }
-            };
-            Ok(vec![FastImgLibraryAssetProbe {
-                uuid: uuid.to_string(),
-                path,
-                iscloudasset: false,
-                incloud: Some(false),
-                ismissing: false,
-            }])
+            query_calls += 1;
+            assert_eq!(uuids, ["UUID-A", "UUID-B"]);
+            Ok(vec![
+                FastImgLibraryAssetProbe {
+                    uuid: "UUID-B".to_string(),
+                    path: library_b.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                },
+                FastImgLibraryAssetProbe {
+                    uuid: "UUID-A".to_string(),
+                    path: library_a.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                },
+            ])
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
@@ -7938,6 +8111,7 @@ mod tests {
         let records = &report.imported_assets;
 
         assert_eq!(records.len(), 2);
+        assert_eq!(query_calls, 1);
         assert_eq!(records[0].rel_path, "a.JXL");
         assert_eq!(records[0].blake3, hash_a);
         assert_eq!(records[0].photos_uuid.as_deref(), Some("UUID-A"));
@@ -7999,6 +8173,8 @@ mod tests {
             Ok(())
         };
         let mut run_batch_sizes = Vec::new();
+        let mut query_calls = 0usize;
+        let started = std::time::Instant::now();
         let mut run_import_batch = |batch_entries: &[(PathBuf, String)]| -> Result<String> {
             run_batch_sizes.push(batch_entries.len());
             Ok(batch_entries
@@ -8015,6 +8191,7 @@ mod tests {
                 .join("\n"))
         };
         let mut query_assets = |uuids: &[String]| {
+            query_calls += 1;
             uuids
                 .iter()
                 .map(|uuid| {
@@ -8045,8 +8222,14 @@ mod tests {
             prepare_calls.is_empty(),
             "small pending set must avoid relaunch warmup overhead"
         );
-        assert_eq!(run_batch_sizes.len(), total);
-        assert!(run_batch_sizes.iter().all(|batch_size| *batch_size == 1));
+        eprintln!(
+            "Photos 150-file import: {} sessions, {} queries, {:?}",
+            run_batch_sizes.len(),
+            query_calls,
+            started.elapsed()
+        );
+        assert_eq!(run_batch_sizes, vec![1; total]);
+        assert_eq!(query_calls, total / FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE);
         assert_eq!(report.imported_assets.len(), total);
         assert_eq!(report.failed_count, 0);
         Ok(())
@@ -8070,8 +8253,13 @@ mod tests {
             vec![FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP, 51]
         );
         let batch_sizes = photos_import_batch_sizes(windows[0].len);
-        assert_eq!(batch_sizes.len(), FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP);
-        assert!(batch_sizes.iter().all(|batch_size| *batch_size == 1));
+        assert_eq!(
+            batch_sizes,
+            vec![
+                FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE;
+                FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP / FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE
+            ]
+        );
         Ok(())
     }
 
@@ -8248,7 +8436,7 @@ mod tests {
     }
 
     #[test]
-    fn photos_import_batch_sizes_use_one_file_transactions() {
+    fn photos_import_batch_sizes_bound_verification_windows() {
         for total in [
             0,
             1,
@@ -8258,12 +8446,12 @@ mod tests {
             FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP,
             FAST_IMG_PHOTOS_IMPORT_FAST_PATH_FILE_CAP + 1,
         ] {
-            assert_eq!(
-                photos_import_batch_sizes(total),
-                vec![1; total],
-                "every Photos import path must checkpoint one file at a time"
-            );
+            let sizes = photos_import_batch_sizes(total);
+            assert_eq!(sizes.iter().sum::<usize>(), total);
+            assert!(sizes.iter().all(|&size| (1..=10).contains(&size)));
+            assert_eq!(sizes.len(), total.div_ceil(10));
         }
+        assert_eq!(photos_import_batch_sizes(21), [10, 10, 1]);
     }
 
     #[test]
@@ -8429,7 +8617,31 @@ mod tests {
             String::from_utf8_lossy(&encoded.stderr)
         );
         verify_jxl_roundtrip_integrity(&jpeg, &input)?;
-        let mut marker = WorkingCopyMarker::new(source_root, working_copy, 1);
+        let second_jpeg = source_root.join("second.jpg");
+        let second_name = format!("second-{input_name}");
+        let second_input = working_copy.join(&second_name);
+        image::RgbImage::from_pixel(64, 96, image::Rgb([31, 127, 211]))
+            .save_with_format(&second_jpeg, image::ImageFormat::Jpeg)?;
+        let encoded = run_fast_img_command_with_timeout(
+            std::process::Command::new(crate::common_utils::resolve_tool_path("cjxl").unwrap())
+                .arg(&second_jpeg)
+                .arg(&second_input)
+                .args(["--distance=0", "--effort=1"]),
+            Duration::from_secs(60),
+            "encode second live Photos JXL fixture",
+        )?;
+        anyhow::ensure!(encoded.status.success(), "second fixture encoding failed");
+        verify_jxl_roundtrip_integrity(&second_jpeg, &second_input)?;
+        let mut marker = WorkingCopyMarker::new(source_root, working_copy, 2);
+        marker.blake3_log.insert(
+            "second.jpg".to_string(),
+            Blake3Entry {
+                out_rel: Some(second_name),
+                src: crate::common_utils::calculate_blake3_hash(&second_jpeg)?,
+                out: crate::common_utils::calculate_blake3_hash(&second_input)?,
+                library_asset: None,
+            },
+        );
         marker.blake3_log.insert(
             "source.jpg".to_string(),
             Blake3Entry {
@@ -8454,13 +8666,21 @@ mod tests {
             )?;
             assert_debug_library_active()?;
             assert_eq!(handle.import_error_count, 0);
-            assert_eq!(handle.imported_assets.len(), 1);
+            assert_eq!(handle.imported_assets.len(), 2);
             assert_eq!(
                 handle.photos_library_path.as_deref(),
                 Some(library.as_path())
             );
-            let uuid = handle.imported_assets[0].photos_uuid.clone().unwrap();
-            assert_ne!(uuid, "");
+            let uuid = handle
+                .imported_assets
+                .iter()
+                .map(|asset| asset.photos_uuid.clone().unwrap())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                uuid.len(),
+                2,
+                "separate inputs must retain separate UUID custody"
+            );
             if let Some(expected) = &imported_uuid {
                 assert_eq!(
                     &uuid, expected,
@@ -8474,7 +8694,7 @@ mod tests {
             }
             assert_eq!(
                 count_assets()?,
-                before + 1,
+                before + 2,
                 "duplicate import must not add an asset"
             );
             eprintln!("debug Photos {operation}: UUID and original-payload custody verified");
@@ -8542,7 +8762,7 @@ mod tests {
             }
             assert_eq!(
                 count_assets()?,
-                before + 2,
+                before + 3,
                 "Tier-2 reconciliation duplicated the asset"
             );
             reverify_modern_lossy_static_photos_custody(&handle)?;

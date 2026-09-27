@@ -13,6 +13,8 @@ pub mod cli_runner;
 
 pub mod batch;
 
+pub mod batch_control;
+
 pub mod media_passthrough;
 
 pub mod media_penetration;

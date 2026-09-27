@@ -2214,6 +2214,22 @@ impl ImageBatchWorker<'_> {
     }
 
     fn process(&self, path: &Path, child_threads: usize) {
+        // The guard spans conversion, delivery, and the resume checkpoint.
+        let _batch_transaction = match foundation::batch_control::begin_transaction() {
+            Ok(guard) => guard,
+            Err(error) => {
+                if !self.abort_requested.swap(true, Ordering::SeqCst) {
+                    *foundation::media_conversion_gate::mutex_guard_or_recover(
+                        "img_batch_abort_reason",
+                        self.abort_reason.lock(),
+                    ) = Some(format!("batch control at {}: {error}", path.display()));
+                }
+                return;
+            }
+        };
+        if self.abort_requested.load(Ordering::SeqCst) {
+            return;
+        }
         let file_name = foundation::media_conversion_gate::path_file_name_for_log(path);
         let span = tracing::info_span!("image_processing", file = %path.display());
         let _enter = span.enter();
@@ -2591,6 +2607,9 @@ impl ImageBatchFinalization<'_> {
         if !post_run_errors.is_empty() {
             anyhow::bail!(post_run_errors.join(" | "));
         }
+        if let Some(reason) = self.abort_reason {
+            anyhow::bail!("Batch aborted by error policy after {reason}");
+        }
         if failed_count == 0 {
             return Ok(());
         }
@@ -2603,9 +2622,6 @@ impl ImageBatchFinalization<'_> {
             foundation::log_auto_error!("Failed file", "{}: {}", path.display(), reason);
         }
         drop(paths);
-        if let Some(reason) = self.abort_reason {
-            anyhow::bail!("Batch aborted by error policy after {reason}");
-        }
         anyhow::bail!("Batch completed with {failed_count} failed file(s)");
     }
 }
@@ -2807,6 +2823,15 @@ fn auto_convert_directory(
         total,
     };
     process_image_batch(&pool, &files, max_threads, &worker);
+
+    if let Err(error) = foundation::batch_control::checkpoint()
+        && !abort_requested.swap(true, Ordering::SeqCst)
+    {
+        *foundation::media_conversion_gate::mutex_guard_or_recover(
+            "img_batch_abort_reason",
+            abort_reason.lock(),
+        ) = Some(format!("batch control after image batch: {error}"));
+    }
 
     progress_bar.finish();
     foundation::progress_mode::disable_quiet_mode();
@@ -3482,6 +3507,7 @@ fn fast_img_prepare_retry_plan(
 }
 
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
+    foundation::batch_control::checkpoint()?;
     validate_fast_img_options(&options);
     let FastImgRunOptions {
         input,
@@ -9250,42 +9276,67 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             )
             .build()
             .map_err(|err| anyhow::anyhow!("fast-img encode thread pool init failed: {err}"))?;
-        let results = pool.install(|| {
-            jobs.par_iter()
-                .map(|job| {
-                    let permit = admission
-                        .acquire(foundation::thread_manager::WorkloadType::Image, || false)
-                        .ok_or_else(|| FastImgTranscodeError {
-                            rel_key: job.rel_key.clone(),
-                            out_rel_key: job.out_rel_key.clone(),
-                            src_hash: job.src_hash.clone(),
-                            reason: "encode admission unexpectedly cancelled".to_owned(),
-                        })?;
-                    let result = fast_img_run_encode_job(
-                        job,
-                        src_dir,
-                        working_copy,
-                        permit.child_threads,
-                        archive.0,
-                        allow_expert_options.0,
-                        strategy,
-                    );
-                    if result.is_ok() {
-                        let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                        println!("[{encode_label}] {done}/{pending} {}", job.source.display());
-                    }
-                    result
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let summary = fast_img_apply_encode_results(
-            marker,
-            results,
-            completed_from_resume,
-            src_dir,
-            working_copy,
-        )?;
+        let mut summary = FastImgEncodeResultSummary {
+            encoded: completed_from_resume,
+            session_converted: 0,
+            session_source_bytes: 0,
+            session_output_bytes: 0,
+            session_failed: 0,
+            session_skipped: 0,
+        };
+        // Bounded waves persist verified work before acknowledging pause/stop.
+        // A whole-batch collect would otherwise lose all checkpoint progress on exit.
+        for wave in jobs.chunks(pool.current_num_threads()) {
+            let _transaction = foundation::batch_control::begin_transaction()?;
+            let results = pool.install(|| {
+                wave.par_iter()
+                    .map(|job| {
+                        let permit = admission
+                            .acquire(foundation::thread_manager::WorkloadType::Image, || false)
+                            .ok_or_else(|| FastImgTranscodeError {
+                                rel_key: job.rel_key.clone(),
+                                out_rel_key: job.out_rel_key.clone(),
+                                src_hash: job.src_hash.clone(),
+                                reason: "encode admission unexpectedly cancelled".to_owned(),
+                            })?;
+                        let result = fast_img_run_encode_job(
+                            job,
+                            src_dir,
+                            working_copy,
+                            permit.child_threads,
+                            archive.0,
+                            allow_expert_options.0,
+                            strategy,
+                        );
+                        if result.is_ok() {
+                            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                            println!("[{encode_label}] {done}/{pending} {}", job.source.display());
+                        }
+                        result
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let wave_summary = fast_img_apply_encode_results(
+                marker,
+                results,
+                summary.encoded,
+                src_dir,
+                working_copy,
+            )?;
+            summary.encoded = wave_summary.encoded;
+            summary.session_converted += wave_summary.session_converted;
+            summary.session_source_bytes = summary
+                .session_source_bytes
+                .checked_add(wave_summary.session_source_bytes)
+                .context("source byte accumulation overflowed u64")?;
+            summary.session_output_bytes = summary
+                .session_output_bytes
+                .checked_add(wave_summary.session_output_bytes)
+                .context("output byte accumulation overflowed u64")?;
+            summary.session_failed += wave_summary.session_failed;
+            summary.session_skipped += wave_summary.session_skipped;
+        }
+        foundation::batch_control::checkpoint()?;
         print_fast_img_session_size_summary(
             summary.session_converted,
             summary.session_source_bytes,
@@ -9452,6 +9503,7 @@ struct FastImgDeliveryContext<'a> {
 fn fast_img_run_verification_and_delivery_pipeline(
     context: FastImgDeliveryContext<'_>,
 ) -> anyhow::Result<()> {
+    foundation::batch_control::checkpoint()?;
     let FastImgDeliveryContext {
         marker,
         source_jpegs,
@@ -9532,6 +9584,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     if fast_img_post_gate1_policy(shortest_path) == FastImgPostGate1Policy::LocalOnlyDelivery {
+        foundation::batch_control::checkpoint()?;
         if retry_failed_sources_from_cleanup.0 {
             fast_img_validate_cleanup_retry_jxl_only_delivery_exit(
                 marker,
@@ -9587,6 +9640,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     let import_candidates = build_fast_img_output_import_candidates(marker)?;
+    foundation::batch_control::checkpoint()?;
     let mut library_handle = if import_complete_or_later(&marker.stage) {
         let library_handle = if fast_img_marker_has_complete_import_proof(marker) {
             let library_handle = reverify_media_outputs_in_library(
@@ -9654,6 +9708,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
     write_marker_atomic(marker)?;
 
     if !gate2_complete_or_later(&marker.stage) {
+        foundation::batch_control::checkpoint()?;
         print_photos_verifier_proof_summary(&library_handle, expected_count);
         println!("[GATE 2  ] verifying Photos import");
         let gate2 = Gate2Import.run(&fast_img_pipeline_ctx(
@@ -9700,6 +9755,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         }
     }
 
+    foundation::batch_control::checkpoint()?;
     fast_img_strip_non_target_files(working_copy, strategy)?;
     foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
         .with_context(|| {
@@ -11101,6 +11157,58 @@ mod fast_img_hardening_tests {
             !output.exists(),
             "zero-work fast-img must not leave an output or enter Photos delivery"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn gui_cancelled_fast_img_preserves_input_before_output_preparation() -> anyhow::Result<()> {
+        if std::env::var_os("MFB_GUI_CANCEL_TEST_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", "fast_img_hardening_tests::gui_cancelled_fast_img_preserves_input_before_output_preparation", "--nocapture"])
+                .env("MFB_GUI_CANCEL_TEST_CHILD", "1")
+                .status()?;
+            assert!(
+                status.success(),
+                "isolated GUI cancellation regression failed"
+            );
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))?;
+        }
+        let control = root.path().join("control");
+        std::fs::write(&control, "cancelled\ngui-test")?;
+        // This entire test runs in an isolated child process.
+        unsafe { std::env::set_var("MFB_BATCH_CONTROL_FILE", &control) };
+        let input = root.path().join("input");
+        std::fs::create_dir(&input)?;
+        let source = input.join("original.jpg");
+        std::fs::write(&source, b"original bytes must remain untouched")?;
+        let output = root.path().join("output");
+        let result = run_fast_img(FastImgRunOptions {
+            input: &input,
+            output_dir: Some(&output),
+            delete_source: DeleteSourceFlag(false),
+            dry_run: DryRunFlag(false),
+            recursive: RecursiveFlag(true),
+            shortest_path: ShortestPathFlag(true),
+            retry: RetryFlag(false),
+            fresh: FreshFlag(false),
+            archive: false,
+            allow_expert_options: false,
+            strategy: "jxl",
+            extreme_precision: false,
+        });
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert_eq!(
+            std::fs::read(&source)?,
+            b"original bytes must remain untouched"
+        );
+        assert!(!output.exists());
         Ok(())
     }
 

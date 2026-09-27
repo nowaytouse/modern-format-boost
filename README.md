@@ -364,6 +364,22 @@ the system by default with explicit light/dark choices. Linux and Windows
 retain the CLI for now; future GUI ports should use their own native platform
 adapter.
 
+The GUI always enables detailed logs and starts each batch with a clean log
+view. **Log History** opens the backend's resolved log directory (normally under
+`~/.modern_format_boost`); clearing the view does not delete stored logs.
+**Pause / Continue / Stop** cooperate with the Rust backend at safe boundaries:
+active file work finishes and verified progress is saved first. FastImg encoding
+uses bounded waves, and Photos verification uses windows of at most ten assets.
+The GUI says **Pausing** until the backend acknowledges that work is quiescent;
+it does not suspend encoder processes or bypass custody checks. Maintenance and
+compound delivery operations finish their current operation before stopping.
+After Stop, supported modes select Resume; a new batch can still explicitly
+select Start fresh. Closing the window or quitting also waits for safe shutdown.
+Terminal launch, command display/copy and advanced operations require developer
+mode. The title shows the bundled version; the logo and About menu open the
+project license and bundled cargo-about notices. Native system fonts are used
+without redistributing font files.
+
 ## Delivery strategies
 
 Rust SSOT: [`delivery_codec_strategy.rs`](crates/foundation/src/convert/delivery_codec_strategy.rs).

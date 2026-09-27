@@ -399,6 +399,17 @@ where
             if pause_controller.is_paused() || abort_requested.load(Ordering::SeqCst) {
                 return;
             }
+            // Keep the transaction active through delivery and its durable checkpoint.
+            let _batch_transaction = match crate::batch_control::begin_transaction() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    request_abort(file, &format!("batch control: {error}"));
+                    return;
+                }
+            };
+            if abort_requested.load(Ordering::SeqCst) {
+                return;
+            }
 
             let display_name =
                 std::borrow::Cow::Owned(crate::media_conversion_gate::path_file_name_for_log(file));
@@ -835,6 +846,10 @@ where
         });
     });
 
+    if let Err(error) = crate::batch_control::checkpoint() {
+        request_abort(input, &format!("batch control after video batch: {error}"));
+    }
+
     let mut batch_result = Summary::new();
     batch_result.succeeded = succeeded.load(Ordering::Relaxed);
     batch_result.failed = failed.load(Ordering::Relaxed);
@@ -1084,6 +1099,7 @@ where
     F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
 {
+    let _batch_transaction = crate::batch_control::begin_transaction()?;
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(&config.input) {
         anyhow::bail!("{e}");

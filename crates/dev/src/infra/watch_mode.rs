@@ -83,7 +83,13 @@ where
 
     let debounce = Duration::from_millis(debounce_ms);
 
-    while let Ok(res) = rx.recv() {
+    loop {
+        foundation::batch_control::checkpoint()?;
+        let res = match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(res) => res,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        };
         let Ok(event) = res else {
             continue;
         };
@@ -94,6 +100,7 @@ where
         let mut deadline = Some(Instant::now() + debounce);
 
         while let Some(target) = deadline {
+            foundation::batch_control::checkpoint()?;
             let remaining = target.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
@@ -113,7 +120,6 @@ where
             on_event(event);
         }
     }
-    Ok(())
 }
 
 fn is_relevant_watch_event(event: &Event) -> bool {

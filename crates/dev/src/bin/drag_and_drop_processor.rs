@@ -423,6 +423,7 @@ impl LaunchCommand {
         if dry_run {
             return Ok(ProcessorStats::default());
         }
+        foundation::batch_control::checkpoint()?;
         if self.program.components().count() > 1 && !self.program.is_file() {
             bail!(
                 "Rust CLI binary missing: {}. Build it with `cargo build -p {}` first.",
@@ -551,6 +552,8 @@ impl LaunchCommand {
                 sess.append_line(&sess.verbose_log, &error_event)?;
             }
         }
+        // The delegated child has finished its own file/checkpoint boundary.
+        foundation::batch_control::checkpoint()?;
         if stats.exit_code != 0 && bail_on_failure {
             bail!(
                 "command failed with exit {}: {}",
@@ -1612,6 +1615,7 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    foundation::batch_control::checkpoint()?;
     if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
         anyhow::ensure!(
             args.mode == LaunchMode::RestoreJpeg && args.inputs.len() == 1,
@@ -2671,6 +2675,10 @@ fn main() -> Result<()> {
     resize_terminal_for_gui(35, 110);
     let args = apply_mode_overrides(Args::parse());
     let mut session = DragDropSession::start()?;
+    println!(
+        "MFB_LOG_DIRECTORY={}",
+        serde_json::to_string(&session.log_dir.to_string_lossy())?
+    );
     let mut dir_lock = None;
 
     // ALWAYS show interactive menu when terminal (matches Python's unconditional
@@ -2693,10 +2701,18 @@ fn main() -> Result<()> {
     let run_result = run_drag_drop(&args, Some(&session), dir_lock.as_ref());
     if args.watch {
         if run_result.is_err() {
+            if foundation::batch_control::is_cancelled()? {
+                std::process::exit(130);
+            }
             report_drag_drop_failure(&run_result);
             return run_result;
         }
-        run_watch_loop(&args, &session)?;
+        if let Err(error) = run_watch_loop(&args, &session) {
+            if foundation::batch_control::is_cancelled()? {
+                std::process::exit(130);
+            }
+            return Err(error);
+        }
         return Ok(());
     }
 
@@ -2717,6 +2733,10 @@ fn main() -> Result<()> {
         }
     }
     if run_result.is_err() {
+        if foundation::batch_control::is_cancelled()? {
+            eprintln!("Batch cancelled after active media work reached a safe boundary.");
+            std::process::exit(130);
+        }
         report_drag_drop_failure(&run_result);
     }
     run_result

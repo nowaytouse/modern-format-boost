@@ -40,6 +40,10 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
     "icloud_import",
     "drag_and_drop_processor",
 ];
+const NATIVE_APP_BUNDLE_RESOURCES: &[(&str, &str)] = &[
+    ("docs/LICENSES.json", "LICENSES.json"),
+    ("LICENSE", "LICENSE"),
+];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
 const GUI_SOURCE_EXTENSIONS: &[&str] = &["icns", "plist", "sh", "strings", "swift"];
 const IGNORED_SOURCE_DIRECTORIES: &[&str] = &[
@@ -514,6 +518,10 @@ fn get_newest_binary_source_mtime(
 fn gui_needs_rebuild(project_root: &Path) -> bool {
     let newest_input =
         newest_source_mtime_in_dir(&native_gui_dir(project_root), GUI_SOURCE_EXTENSIONS);
+    let newest_input = NATIVE_APP_BUNDLE_RESOURCES
+        .iter()
+        .map(|(source, _)| get_mtime(&project_root.join(source)))
+        .fold(newest_input, f64::max);
     let bundle_binary = native_app_bundle_path(project_root)
         .join("Contents")
         .join("MacOS")
@@ -1283,7 +1291,8 @@ fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()
             }
         }
     }
-    if changed_bins.is_empty() && !foundation_changed {
+    let resources_changed = sync_native_app_bundle_resources(project_root, &app_res_dir)?;
+    if changed_bins.is_empty() && !foundation_changed && !resources_changed {
         println!("{}App Bundle already current.{}", style.dim, style.reset);
         return Ok(());
     }
@@ -1306,6 +1315,23 @@ fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()
     sign_app_bundle(project_root, style, &changed_bins)?;
 
     Ok(())
+}
+
+fn sync_native_app_bundle_resources(project_root: &Path, resources_dir: &Path) -> Result<bool> {
+    let mut changed = false;
+    for (source, name) in NATIVE_APP_BUNDLE_RESOURCES {
+        let src = project_root.join(source);
+        let dest = resources_dir.join(name);
+        if !src.is_file() {
+            anyhow::bail!("required App bundle resource is missing: {}", src.display());
+        }
+        if bundle_file_needs_sync(&src, &dest) {
+            fs::copy(&src, &dest)
+                .with_context(|| format!("copy {} to App bundle", src.display()))?;
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 fn sign_app_bundle(project_root: &Path, style: &Style, changed_bins: &[&str]) -> Result<()> {
@@ -1477,6 +1503,8 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
             localized_resources.display()
         );
     }
+
+    sync_native_app_bundle_resources(project_root, &resources_dir)?;
 
     // Validate plists
     for plist in [&info_dst, &native_dir.join("entitlements.plist")] {
@@ -2151,6 +2179,30 @@ mod tests {
                 .join("macos")
                 .join("Modern Format Boost.app")
         );
+    }
+
+    #[test]
+    fn native_app_bundle_copies_license_resources() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        fs::create_dir_all(root.join("docs"))?;
+        fs::create_dir_all(root.join("Resources"))?;
+        fs::write(root.join("docs/LICENSES.json"), r#"{"licenses":[]}"#)?;
+        fs::write(root.join("LICENSE"), "Project license")?;
+
+        assert!(sync_native_app_bundle_resources(
+            root,
+            &root.join("Resources")
+        )?);
+        assert_eq!(
+            fs::read_to_string(root.join("Resources/LICENSES.json"))?,
+            r#"{"licenses":[]}"#
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Resources/LICENSE"))?,
+            "Project license"
+        );
+        Ok(())
     }
 
     #[test]

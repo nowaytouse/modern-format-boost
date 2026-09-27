@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
+source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
+source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
+source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.1"
-source = "git+https://github.com/clap-rs/clap#8ab46fe22b4aa5c3bd09cc0e6c3fe9a75fc178a8"
+source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
 
 [[package]]
 name = "cmake"
@@ -1262,7 +1262,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.48.0"
-source = "git+https://github.com/mitsuhiko/insta#08b67d940a363501c2c94d7246a2073210e7e03d"
+source = "git+https://github.com/mitsuhiko/insta#064742e9b7b2f3eaabb4724069e739ddf23d8227"
 dependencies = [
  "console",
  "once_cell",
@@ -2197,7 +2197,7 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.11.0"
-source = "git+https://github.com/proptest-rs/proptest#a6f033cf83adfd55557b86e6065e6f4df054ec70"
+source = "git+https://github.com/proptest-rs/proptest#0d1cc6623fcff0f127a95000a93f277d6867ca05"
 dependencies = [
  "bit-set",
  "bit-vec",
