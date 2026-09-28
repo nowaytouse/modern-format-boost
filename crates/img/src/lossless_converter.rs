@@ -16,6 +16,7 @@ use foundation::ToolBuilder;
 use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
+use foundation::infra::runtime_config::{self, FallbackPolicy, ToolPolicy};
 use foundation::jxl_effort_policy::JxlEffortPlan;
 use std::collections::BTreeSet;
 use std::fs;
@@ -432,9 +433,13 @@ fn perform_icc_d50_retry(
     effort_plan: &[JxlEffortPlan],
     original_result: std::result::Result<std::process::Output, JxlDirectEncodeError>,
 ) -> std::result::Result<std::process::Output, JxlDirectEncodeError> {
+    use console::style;
+
+    if !jpeg_repair_allowed() {
+        return original_result;
+    }
     // Robustness: cjxl rejected the ICC profile (likely Capture One D50 rounding
     // deviation). Re-extract with D50 patch applied and retry once.
-    use console::style;
     foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
         "icc_d50_retry",
         input,
@@ -523,7 +528,7 @@ fn try_pipeline_recovery_fallbacks(context: JxlRecoveryFallbackContext<'_>) -> F
         stderr,
         original_result,
     } = context;
-    if !options.allow_expert_options() {
+    if !options.allow_expert_options() || !jpeg_repair_allowed() || !alternate_tools_allowed() {
         foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
             "cjxl_external_recovery_disabled",
             input,
@@ -1691,6 +1696,28 @@ fn cjxl_timeout() -> anyhow::Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
+fn same_semantics_retry_allowed() -> bool {
+    fallback_allows_same_semantics(
+        runtime_config::active().map(|config| config.img.fallback_policy),
+    )
+}
+
+fn jpeg_repair_allowed() -> bool {
+    fallback_allows_repair(runtime_config::active().map(|config| config.img.fallback_policy))
+}
+
+fn fallback_allows_same_semantics(policy: Option<FallbackPolicy>) -> bool {
+    policy != Some(FallbackPolicy::Strict)
+}
+
+fn fallback_allows_repair(policy: Option<FallbackPolicy>) -> bool {
+    policy.is_none_or(|policy| policy == FallbackPolicy::Repair)
+}
+
+fn alternate_tools_allowed() -> bool {
+    runtime_config::active().is_none_or(|config| config.tools.policy == ToolPolicy::Fallback)
+}
+
 fn run_cjxl_jpeg_encode_with_effort(
     input: &Path,
     temp_output: &Path,
@@ -1725,9 +1752,27 @@ fn run_cjxl_jpeg_encode_with_effort(
         )
     };
 
+    run_cjxl_jpeg_encode_attempts(
+        input,
+        temp_output,
+        effort,
+        options.allow_expert_options(),
+        options.apple_compat(),
+        same_semantics_retry_allowed(),
+        run,
+    )
+}
+
+fn run_cjxl_jpeg_encode_attempts(
+    input: &Path,
+    temp_output: &Path,
+    effort: u8,
+    mut allow_expert: bool,
+    mut apple_compat: bool,
+    allow_same_semantics: bool,
+    mut run: impl FnMut(u8, bool, bool) -> anyhow::Result<foundation::process_runner::ProcessOutput>,
+) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let mut selected_effort = effort;
-    let mut allow_expert = options.allow_expert_options();
-    let mut apple_compat = options.apple_compat();
     loop {
         let output = run(selected_effort, allow_expert, apple_compat)?;
         if output.status.success() {
@@ -1735,7 +1780,7 @@ fn run_cjxl_jpeg_encode_with_effort(
         }
         // Lossless-JPEG e11 itself requires the expert switch in CjxlBuilder,
         // even when the broader expert-options flag is off.
-        if cjxl_rejected_expert_option(selected_effort, &output.stderr) {
+        if allow_same_semantics && cjxl_rejected_expert_option(selected_effort, &output.stderr) {
             foundation::media_conversion_gate::delivery_remove_file_or_audit(
                 "cjxl_expert_compat_retry",
                 temp_output,
@@ -1753,7 +1798,8 @@ fn run_cjxl_jpeg_encode_with_effort(
             allow_expert = false;
             continue;
         }
-        if apple_compat && cjxl_rejected_apple_compat_option(&output.stderr) {
+        if allow_same_semantics && apple_compat && cjxl_rejected_apple_compat_option(&output.stderr)
+        {
             foundation::media_conversion_gate::delivery_remove_file_or_audit(
                 "cjxl_apple_compat_retry",
                 temp_output,
@@ -1826,10 +1872,10 @@ fn jpeg_lossless_encode_plan(
     }
 }
 
-const fn jpeg_aggressive_lossless_enabled(_options: &ConvertOptions) -> bool {
-    // JPEG bitstream transcode gets the dedicated e11 attempt in every mode;
-    // direct pixel encoding remains on the bounded e7/e10 policy.
-    true
+fn jpeg_aggressive_lossless_enabled(_options: &ConvertOptions) -> bool {
+    runtime_config::active().is_none_or(|config| {
+        config.img.jpeg_effort == foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+    })
 }
 
 fn run_cjxl_jpeg_encode_with_plan_mode(
@@ -2077,6 +2123,10 @@ fn run_standard_jpeg_lossless_fallback(
     }
     cleanup_temp_output(temp_output, input);
 
+    if !jpeg_repair_allowed() {
+        return None;
+    }
+
     let primary_stderr = primary.as_ref().map_or("", |out| out.stderr.as_str());
     if !is_jpeg_reconstruction_cjxl_error(primary_stderr) {
         return None;
@@ -2200,7 +2250,9 @@ fn handle_irreversible_jpeg_encode_failure(
     TaskResult::failed(
         input,
         input_size,
-        "Failed: JPEG cannot be byte-identically reconstructed; source remains unmodified",
+        &format!(
+            "Failed: JPEG cannot be byte-identically reconstructed; source remains unmodified; {failure}"
+        ),
         JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON,
     )
 }
@@ -2459,14 +2511,14 @@ pub fn convert_jpeg_to_jxl(
     let input_bytes = fs::read(input)?;
 
     // Missing EOI means reversible JPEG bitstream reconstruction is impossible.
-    // Route through the irreversible-media policy so fast delivery can record a
-    // skip and standard img mode can attempt the documented direct-encode path.
+    // Report a failed task through the shared policy without invoking an encoder
+    // or manufacturing a successful skip for an incomplete source.
     if !is_jpeg_complete(&input_bytes) {
         return Ok(handle_irreversible_jpeg_encode_failure(
             input,
             input_size,
             options,
-            "JPEG lossless transcode preflight rejected source before cjxl: JPEG is truncated or missing EOI",
+            "Incomplete JPEG container: encoding was not started because the end-of-image marker is missing",
         ));
     }
 
@@ -2505,7 +2557,7 @@ pub fn convert_jpeg_to_jxl(
 
     let output_cmd = match result {
         Ok(out) => out,
-        Err(e) if aggressive_e11 => {
+        Err(e) if aggressive_e11 && same_semantics_retry_allowed() => {
             let failure =
                 format!("cjxl aggressive e11 JPEG lossless transcode process failed: {e}");
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
@@ -2550,6 +2602,28 @@ pub fn convert_jpeg_to_jxl(
     let stderr = output_cmd.stderr.clone();
     let primary_failure = cjxl_failure_summary("primary JPEG lossless", &output_cmd);
     cleanup_temp_output(&temp_output, input);
+
+    if !jpeg_repair_allowed() {
+        if aggressive_e11
+            && same_semantics_retry_allowed()
+            && let Some(fallback) = run_standard_jpeg_lossless_fallback(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                options,
+                max_threads,
+            )
+        {
+            return fallback;
+        }
+        return Ok(handle_irreversible_jpeg_encode_failure(
+            input,
+            input_size,
+            options,
+            &primary_failure,
+        ));
+    }
 
     if is_jpeg_reconstruction_cjxl_error(&stderr) {
         // 1) Fix: strip trailing data after JPEG EOI so cjxl can use bitstream reconstruction
@@ -2645,6 +2719,27 @@ pub fn convert_jpeg_to_jxl(
         }
         return Ok(handle_irreversible_jpeg_encode_failure(
             input, input_size, options, &failure,
+        ));
+    }
+
+    if !alternate_tools_allowed() {
+        if aggressive_e11
+            && let Some(fallback) = run_standard_jpeg_lossless_fallback(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                options,
+                max_threads,
+            )
+        {
+            return fallback;
+        }
+        return Ok(handle_irreversible_jpeg_encode_failure(
+            input,
+            input_size,
+            options,
+            &primary_failure,
         ));
     }
 
@@ -5848,6 +5943,8 @@ mod tests {
     )]
     use super::*;
     use std::cell::Cell;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
     use tempfile::tempdir;
     use vid::animated_image::is_high_quality_animated;
@@ -6589,6 +6686,7 @@ mod tests {
             "raw EOI probe failure must not be the user-facing batch result: {}",
             result.message
         );
+        assert!(result.message.contains("encoding was not started"));
     }
 
     #[test]
@@ -6754,6 +6852,96 @@ mod tests {
     }
 
     #[test]
+    fn fallback_policy_bounds_jpeg_retries() {
+        assert!(fallback_allows_same_semantics(None));
+        assert!(fallback_allows_repair(None));
+        assert!(!fallback_allows_same_semantics(Some(
+            FallbackPolicy::Strict
+        )));
+        assert!(!fallback_allows_repair(Some(FallbackPolicy::Strict)));
+        assert!(fallback_allows_same_semantics(Some(
+            FallbackPolicy::SameSemantics
+        )));
+        assert!(!fallback_allows_repair(Some(FallbackPolicy::SameSemantics)));
+        assert!(fallback_allows_repair(Some(FallbackPolicy::Repair)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn jpeg_command_attempts_obey_retry_policy() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("source.jpg");
+        let output = dir.path().join("candidate.jxl");
+        let failed = || foundation::process_runner::ProcessOutput {
+            status: ExitStatus::from_raw(1 << 8),
+            stdout: String::new(),
+            stderr: "unknown argument --allow_expert_options".into(),
+            command_line: "cjxl".into(),
+        };
+        let mut strict_attempts = Vec::new();
+        let strict = run_cjxl_jpeg_encode_attempts(
+            &input,
+            &output,
+            11,
+            true,
+            false,
+            false,
+            |effort, expert, apple| {
+                strict_attempts.push((effort, expert, apple));
+                Ok(failed())
+            },
+        )
+        .unwrap();
+        assert!(!strict.status.success());
+        assert_eq!(strict_attempts, vec![(11, true, false)]);
+
+        let mut compatible_attempts = Vec::new();
+        let compatible = run_cjxl_jpeg_encode_attempts(
+            &input,
+            &output,
+            11,
+            true,
+            false,
+            true,
+            |effort, expert, apple| {
+                compatible_attempts.push((effort, expert, apple));
+                if effort == 11 {
+                    Ok(failed())
+                } else {
+                    Ok(foundation::process_runner::ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        command_line: "cjxl".into(),
+                    })
+                }
+            },
+        )
+        .unwrap();
+        assert!(compatible.status.success());
+        assert_eq!(
+            compatible_attempts,
+            vec![(11, true, false), (10, false, false)]
+        );
+
+        let mut configured_attempts = Vec::new();
+        run_cjxl_jpeg_encode_attempts(
+            &input,
+            &output,
+            7,
+            false,
+            false,
+            false,
+            |effort, expert, apple| {
+                configured_attempts.push((effort, expert, apple));
+                Ok(failed())
+            },
+        )
+        .unwrap();
+        assert_eq!(configured_attempts, vec![(7, false, false)]);
+    }
+
+    #[test]
     fn aggressive_e11_process_error_reaches_standard_fallback_branch() {
         let source = include_str!("lossless_converter.rs");
         let start = source
@@ -6768,7 +6956,7 @@ mod tests {
         let branch = &source[start..end];
 
         assert!(
-            branch.contains("Err(e) if aggressive_e11 =>"),
+            branch.contains("Err(e) if aggressive_e11 && same_semantics_retry_allowed() =>"),
             "aggressive e11 process errors must not bypass Phase 2"
         );
         assert!(

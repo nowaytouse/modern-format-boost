@@ -414,6 +414,45 @@ private func conciseProcessLog(_ text: String) -> String? {
     return kept.isEmpty ? nil : kept.joined(separator: "\n")
 }
 
+private func countStatusValue(in line: String) -> String? {
+    guard let range = line.range(of: #"^\s*(?:ERR:\s*)?Count status:\s*\S+"#, options: [.regularExpression, .caseInsensitive]) else {
+        return nil
+    }
+    return line[range].split(separator: ":").last?
+        .trimmingCharacters(in: .whitespaces)
+}
+
+private enum LogTone: Equatable {
+    case muted, normal, stage, result, warning, failure
+
+    static func classify(_ line: String) -> Self {
+        if let count = countStatusValue(in: line) { return count.uppercased() == "MATCH" ? .result : .failure }
+        if line.range(of: #"(?i)(?:\[ERROR\s*\]|\[FAIL(?:ED)?\s*\]|✗|^\s*ERR:(?!\s*\[)|\bfailed=[1-9]\d*|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b))"#, options: .regularExpression) != nil {
+            return .failure
+        }
+        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\]|⚠|\bwarning:)"#, options: .regularExpression) != nil { return .warning }
+        if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
+        if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS)\s*\])"#, options: .regularExpression) != nil { return .stage }
+        if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
+        return .normal
+    }
+
+    var color: NSColor {
+        switch self {
+        case .muted: .tertiaryLabelColor
+        case .normal: .labelColor
+        case .stage: .controlAccentColor
+        case .result: .systemTeal
+        case .warning: .systemOrange
+        case .failure: .systemRed
+        }
+    }
+
+    var font: NSFont {
+        .monospacedSystemFont(ofSize: 12, weight: self == .normal || self == .muted ? .regular : .semibold)
+    }
+}
+
 private func isPhotosLibraryPath(_ path: String) -> Bool {
     URL(fileURLWithPath: path)
         .resolvingSymlinksInPath()
@@ -1151,6 +1190,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let commandField = NSTextField()
     private let logView = NSTextView()
     private let logScroll = NSScrollView()
+    private let countStatusLabel = NSTextField(labelWithString: "")
+    private var countStatus: String?
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
@@ -1476,6 +1517,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         logScroll.borderType = .bezelBorder
         logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
+        countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        countStatusLabel.isHidden = true
+        countStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1490,7 +1535,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.spacing = 8
         let stack = NSStackView(views: [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            logScroll, statusRow,
+            countStatusLabel, logScroll, statusRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -1498,7 +1543,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            logScroll, statusRow,
+            countStatusLabel, logScroll, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -1636,6 +1681,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func developerModeChanged() {
         preferences.set(developerMode, forKey: developerPreferenceKey)
+        updateOptionTitles()
         refreshOperationPopup()
         watchCheck.state = developerMode
             && (preferences.object(forKey: optionKey("watch", for: selectedOperation)) as? Bool ?? false)
@@ -1678,6 +1724,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func clearBatchLog() {
         logView.string = ""
+        countStatus = nil
+        countStatusLabel.isHidden = true
         appendLog(localized("log.history", resolvedHistoryDirectory.path))
     }
 
@@ -1870,11 +1918,40 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
-        let visible = text
-        let next = logView.string.isEmpty ? visible : "\(logView.string)\n\(visible)"
-        let lines = next.split(separator: "\n", omittingEmptySubsequences: false)
-        logView.string = lines.count > 3_000 ? lines.suffix(3_000).joined(separator: "\n") : next
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if let value = countStatusValue(in: String(line)) {
+                countStatus = value
+                refreshCountStatus()
+            }
+        }
+        let storage = logView.textStorage!
+        if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
+        storage.append(styledLog(text))
+        let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > 3_000 {
+            let retained = lines.suffix(3_000).joined(separator: "\n")
+            storage.setAttributedString(styledLog(retained))
+        }
         logView.scrollToEndOfDocument(nil)
+    }
+
+    private func styledLog(_ text: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "")
+        for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if index > 0 { result.append(NSAttributedString(string: "\n")) }
+            let tone = LogTone.classify(String(line))
+            result.append(NSAttributedString(string: String(line), attributes: [
+                .foregroundColor: tone.color, .font: tone.font,
+            ]))
+        }
+        return result
+    }
+
+    private func refreshCountStatus() {
+        guard let countStatus else { countStatusLabel.isHidden = true; return }
+        countStatusLabel.stringValue = localized("status.count", countStatus)
+        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal : .systemRed
+        countStatusLabel.isHidden = false
     }
 
     private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest) {
@@ -1956,6 +2033,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
         appearance.apply()
         developerCheck.state = preferences.bool(forKey: developerPreferenceKey) ? .on : .off
+        updateOptionTitles()
         refreshOperationPopup()
     }
 
@@ -1986,6 +2064,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         historyButton.toolTip = resolvedHistoryDirectory.path
         pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
         stopButton.title = localized("button.stop")
+        updateOptionTitles()
+        commandField.placeholderString = localized("command.placeholder")
+        replaceTitles(processingPopup, with: [
+            localized("media.both"), localized("media.images"), localized("media.videos"),
+        ])
+        refreshOperationPopup()
+        replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
+        replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
+        refreshCountStatus()
+        refreshProcessingStatus()
+    }
+
+    private func updateOptionTitles() {
         for (control, key, flag) in [
             (ultimateCheck, "option.ultimate", "--ultimate"),
             (verboseCheck, "option.verbose", "--verbose"),
@@ -1999,7 +2090,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             (plainCheck, "option.plain", "--plain"),
             (inPlaceCheck, "option.in_place", "--in-place"),
             (watchCheck, "option.watch", "--watch"),
-        ] { control.title = "\(localized(key)) (\(flag))" }
+        ] { control.title = localized(key) + (developerMode ? " (\(flag))" : "") }
         for (control, key) in [
             (ultimateCheck, "option.ultimate.help"), (verboseCheck, "option.verbose.help"),
             (shortestPathCheck, "option.shortest_path.help"), (resumeCheck, "option.resume.help"),
@@ -2008,14 +2099,6 @@ private final class AppController: NSObject, NSWindowDelegate {
             (dryRunCheck, "option.dry_run.help"), (plainCheck, "option.plain.help"),
             (inPlaceCheck, "option.in_place.help"), (watchCheck, "option.watch.help"),
         ] { control.toolTip = localized(key) }
-        commandField.placeholderString = localized("command.placeholder")
-        replaceTitles(processingPopup, with: [
-            localized("media.both"), localized("media.images"), localized("media.videos"),
-        ])
-        refreshOperationPopup()
-        replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
-        replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
-        refreshProcessingStatus()
     }
 
     private func refreshOperationPopup() {
@@ -2080,7 +2163,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
               !verboseCheck.isEnabled,
               verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
-              verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
+              !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Default options or developer gating failed") }
         content.layoutSubtreeIfNeeded()
         guard logScroll.frame.height >= 260,
@@ -2096,6 +2179,37 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard resolvedHistoryDirectory.path == "/tmp/backend-resolved-logs",
               historyButton.toolTip == "/tmp/backend-resolved-logs" else {
             throw HostError(message: "History folder ignored the backend's resolved directory")
+        }
+        appendLog("INF routine detail\n[CHECK] Integrity summary\n    Count status:    MATCH\n[Summary] succeeded=4 failed=0")
+        guard countStatusLabel.stringValue == localized("status.count", "MATCH"),
+              countStatusLabel.textColor == .systemTeal,
+              !countStatusLabel.isHidden,
+              logView.string.contains("INF routine detail"),
+              logView.string.contains("[Summary] succeeded=4 failed=0"),
+              LogTone.classify("INF routine detail") == .muted,
+              LogTone.classify("[CHECK] Integrity summary") == .stage,
+              LogTone.classify("ERR: [VERIFY  ] original custody") == .stage,
+              LogTone.classify("ERR: Count status: MATCH") == .result,
+              LogTone.classify("Integrity: CLEAN") == .result,
+              LogTone.classify("[Summary] succeeded=4 failed=0") == .result,
+              LogTone.classify("ERR: Permission denied") == .failure
+        else { throw HostError(message: "Log priority or MATCH status presentation failed") }
+        let summaryOffset = (logView.string as NSString).range(of: "[Summary] succeeded=4 failed=0").location
+        guard summaryOffset != NSNotFound,
+              logView.textStorage?.attribute(.foregroundColor, at: summaryOffset, effectiveRange: nil) as? NSColor
+                  == .systemTeal else {
+            throw HostError(message: "Summary log color was not rendered")
+        }
+        appendLog("ERR: Permission denied\n    Count status:    MISMATCH\n[Summary] succeeded=3 failed=1")
+        guard countStatusLabel.stringValue == localized("status.count", "MISMATCH"),
+              countStatusLabel.textColor == .systemRed,
+              LogTone.classify("[Summary] succeeded=3 failed=1") == .failure,
+              logView.string.contains("ERR: Permission denied"),
+              logView.string.contains("    Count status:    MATCH")
+        else { throw HostError(message: "Non-MATCH status hid preceding diagnostics") }
+        clearBatchLog()
+        guard countStatusLabel.isHidden, countStatus == nil else {
+            throw HostError(message: "Previous batch count status leaked into the next batch")
         }
         let attribution = try bundledLicenseText()
         guard attribution.contains("Modern Format Boost"), attribution.contains("Apache") else {
@@ -2113,7 +2227,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerModeChanged()
         guard operationPopup.itemArray.count == OperationMode.allCases.count,
               !copyButton.isHidden, !openButton.isHidden, !watchCheck.isHidden, watchCheck.isEnabled,
-              preferences.bool(forKey: developerPreferenceKey)
+              preferences.bool(forKey: developerPreferenceKey),
+              verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Developer mode did not reveal advanced controls") }
         content.layoutSubtreeIfNeeded()
         let buttons = [ultimateCheck] + optionControls.map { $0.0 }
@@ -2128,7 +2243,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         developerCheck.state = .off
         developerModeChanged()
-        guard operationPopup.itemArray.count == 6, watchCheck.isHidden, !watchCheck.isEnabled else {
+        guard operationPopup.itemArray.count == 6, watchCheck.isHidden, !watchCheck.isEnabled,
+              !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume") else {
             throw HostError(message: "Developer mode did not hide advanced controls")
         }
         targetField.stringValue = "/tmp/media"
@@ -2466,7 +2582,9 @@ private func runSelfTest() -> Int32 {
             guard let path = Bundle.main.path(forResource: localization, ofType: "lproj"),
                   let bundle = Bundle(path: path),
                   bundle.localizedString(forKey: "button.run", value: "button.run", table: nil)
-                      != "button.run"
+                      != "button.run",
+                  bundle.localizedString(forKey: "status.count", value: "status.count", table: nil)
+                      .contains("%@")
             else {
                 fputs("native-host self-test missing localization: \(localization)\n", stderr)
                 return 1

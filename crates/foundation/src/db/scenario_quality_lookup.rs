@@ -88,24 +88,6 @@ fn log_branch(pipeline: &'static str, branch: ScenarioQualityBranch) {
     );
 }
 
-fn quality_db_disabled() -> bool {
-    fn disable_flag(key: &str) -> bool {
-        match std::env::var(key) {
-            Ok(value) => value == "1" || value.eq_ignore_ascii_case("true"),
-            Err(std::env::VarError::NotPresent) => false,
-            Err(e) => {
-                crate::media_conversion_gate::delivery_db_batch_audit(
-                    "scenario_quality_env",
-                    format!("failed to read disable flag {key}: {e}; treating as disabled"),
-                );
-                false
-            }
-        }
-    }
-    disable_flag(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
-        || disable_flag(crate::constants::ENV_DISABLE_DB_FEEDBACK)
-}
-
 fn scenario_corpus_mature(conn: &mut Client, scenario: ScenarioType) -> bool {
     let min_total = crate::algorithm_runtime::min_quality_samples_total();
     match crate::multi_scenario_db::sample_count(conn, scenario) {
@@ -377,7 +359,7 @@ fn lookup_with_pipeline(
     heuristic: f64,
     embedding: Option<pgvector::Vector>,
 ) -> Option<QualityScore> {
-    if quality_db_disabled() {
+    if !crate::algorithm_runtime::quality_db_stack_globally_enabled() {
         log_branch(pipeline, ScenarioQualityBranch::DbDisabledHeuristic);
         crate::media_conversion_gate::delivery_db_batch_audit(
             "scenario_quality_db_disabled",

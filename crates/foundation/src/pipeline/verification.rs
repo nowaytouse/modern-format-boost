@@ -1983,6 +1983,9 @@ pub struct WorkingCopyMarker {
     /// Canonical Photos library selected for this marker's import custody proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub photos_library_path: Option<PathBuf>,
+    /// Naming policy bound before Photos import, so resume cannot change destinations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photos_import_naming_policy: Option<String>,
     pub error: Option<String>,
     /// Fast-img strategy: "jxl" (default) or "avif" (Meme Mode表情包模式).
     #[serde(default = "default_strategy")]
@@ -2060,6 +2063,7 @@ impl WorkingCopyMarker {
             tier2_in_progress: false,
             photos_imported_assets: Vec::new(),
             photos_library_path: None,
+            photos_import_naming_policy: None,
             error: None,
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,

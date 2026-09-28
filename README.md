@@ -758,7 +758,37 @@ _Note: The application automatically initializes the required schemas, tables, a
 
 ## ⚙️ Environment Variables & Tuning
 
-Customize execution parameters by setting the following environment variables:
+### Image Runtime Configuration
+
+Image operations support versioned JSON preferences, including GUI-launched
+`img` operations. Start with the [configuration example](docs/dev/config/mfb.example.json).
+The default user file is `~/.config/modern-format-boost/config.json`, or
+`$XDG_CONFIG_HOME/modern-format-boost/config.json` when XDG is set.
+
+Priority is defaults < recognized legacy environment < user file < `mfb.json`
+in the process working directory < `--config` file < explicit CLI flags.
+Each file requires `"config_version": 1`; malformed or unsupported settings
+stop startup. `--no-config` skips files, not environment settings or CLI flags.
+
+```sh
+img config show --effective
+img --config /path/to/preferences.json config show --effective
+img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+```
+
+Configure database/quality inference, JPEG effort and recovery policy, tool
+paths, Photos backend and batches, folder/album names and subfolder preservation.
+JPEG retries now default to `strict`; `same-semantics` permits original-byte
+compatibility retries, and `repair` enables existing guarded recovery paths.
+No preference disables exact reconstruction, metadata checks or Photos custody
+verification. A resume must retain the checkpoint's Photos naming policy.
+See [runtime configuration](docs/dev/config/RUNTIME_CONFIG.md) for all flags,
+legacy compatibility and native-backend limitations. Credentials remain in the
+existing private database configuration; this does not migrate `vid` settings.
+
+### Environment Overrides
+
+The following environment variables remain available:
 
 | Variable             | Default Value                                | Description                                                                |
 | :------------------- | :------------------------------------------- | :------------------------------------------------------------------------- |
@@ -847,13 +877,18 @@ working copy. State handling is explicit:
 
 ### Detailed Options
 
+Persistent image preferences use a versioned JSON config, with explicit CLI
+overrides and `img config show --effective` for values and their sources.
+See [runtime configuration](docs/dev/config/RUNTIME_CONFIG.md) for database,
+heuristic, fallback, tool-path and Photos naming/backend settings.
+
 - `img run --ultimate`: enables the ultimate JXL exploration/verification tier
   and selects production JXL effort 10. It costs substantially more CPU time.
 - `img run --archive`: expresses maximum-compression intent. Direct pixel
   encoding remains bounded at effort 7 normally and effort 10 for
-  ultimate/archive. JPEG bitstream transcode uses its dedicated effort-11 path;
-  an unsupported expert switch or failed attempt falls back to effort 10, and
-  exact JPEG reconstruction still decides delivery.
+  ultimate/archive. JPEG bitstream transcode defaults to effort 11 with strict
+  failure handling. `--fallback-policy same-semantics` explicitly permits
+  compatibility retries at effort 10; exact reconstruction still decides delivery.
 - `img run --apple-compat`: enabled by default; selects Apple-safe JXL box
   handling and Apple-aware metadata policy. `--no-apple-compat` disables those
   encoding choices; AAE edit sidecars remain preserved as archive data.
@@ -932,6 +967,11 @@ specific revision, not a claim that maintenance debt can never exist:
 - **CI Verification**: GitHub workflows run formatting, Clippy, tests,
   dependency/security audit and platform-specific checks. Local targeted checks
   should match the code being changed; repository-wide gates remain CI-owned.
+- **Revision Evidence**: Check the commit SHA on the
+  [quality workflow run](https://github.com/nowaytouse/modern-format-boost/actions/workflows/ci-quality.yml).
+  A previous green run does not cover uncommitted work or a newer push. Nightly
+  publication is gated separately; neither CI nor publication proves live
+  Photos/TCC behavior or 1K/10K/50K throughput.
 - **Test Hardening & Stability**: "Fail Fast" is disabled in CI to collect comprehensive diagnostic information across all platforms. Critical paths (e.g., JPEG recovery proofs) are instrumented with deep context capture for error states.
 
 ### Core Structure
@@ -1023,8 +1063,9 @@ imports positively proven lossy modern originals without re-encoding them.
 exploration/verification tier. `--archive` expresses maximum-compression
 product intent. Direct pixel encoding uses effort 10 in both modes and remains
 bounded because effort 11 can become impractically slow there. JPEG bitstream
-transcode is a different workload: it uses effort 11 by default and falls back
-to effort 10 when the installed encoder rejects or cannot complete that path.
+transcode is a different workload: it uses effort 11 by default. An effort-10
+retry requires `--fallback-policy same-semantics` or `repair`; `strict` retains
+the failure. `--jpeg-effort` can select a different initial JPEG effort.
 No effort bypasses exact reconstruction, pixel, metadata or delivery proof.
 
 **6. Does a fast AVIF/JXL locator decide the final quality at another speed or effort?**

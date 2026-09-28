@@ -1475,6 +1475,43 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         anyhow::bail!("Swift native host compilation failed");
     }
 
+    let photos_helper = bundle.join("Contents/Helpers/MFB Photos Import.app");
+    let helper_macos = photos_helper.join("Contents/MacOS");
+    fs::create_dir_all(&helper_macos)?;
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-parse-as-library",
+            "-swift-version",
+            "5",
+            "-warnings-as-errors",
+            "-O",
+            "-target",
+            &target_triple,
+            "-framework",
+            "Photos",
+        ])
+        .arg(native_dir.join("PhotosImportHelper.swift"))
+        .arg("-o")
+        .arg(helper_macos.join("mfb-photos-import"))
+        .status()
+        .context("compile PhotoKit helper")?;
+    if !status.success() {
+        anyhow::bail!("PhotoKit helper compilation failed");
+    }
+    fs::copy(
+        native_dir.join("PhotosImportHelper-Info.plist"),
+        photos_helper.join("Contents/Info.plist"),
+    )?;
+    let status = Command::new("codesign")
+        .args(["--force", "--sign"])
+        .arg(app_bundle_codesign_identity()?)
+        .arg(&photos_helper)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("PhotoKit helper signing failed");
+    }
+
     // Copy bundle resources
     let info_src = native_dir.join("Info.plist");
     let info_dst = bundle.join("Contents").join("Info.plist");

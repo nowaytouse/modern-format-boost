@@ -228,7 +228,12 @@ fn verify_reconstruction_only_metadata(
     let reconstruction_tags = src_tags
         .keys()
         .filter(|key| {
-            (key.starts_with("IPTC:") || key.starts_with("Photoshop:"))
+            (key.starts_with("Photoshop:")
+                || key.strip_prefix("IPTC").is_some_and(|rest| {
+                    rest.split_once(':').is_some_and(|(instance, _)| {
+                        instance.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                }))
                 && !dst_tags.contains_key(*key)
         })
         .cloned()
@@ -778,6 +783,29 @@ mod tests {
             "-Photoshop:IPTCDigest=d41d8cd98f00b204e9800998ecf8427e",
         );
         write_metadata_tag(&src, "-EXIF:Artist=source artist");
+        // Reproduce an actual second APP13/IPTC instance, not just a fabricated
+        // comparison map. ExifTool names its group IPTC2 for these input bytes.
+        let jpeg = std::fs::read(&src).unwrap();
+        let mut offset = 2;
+        let mut app13 = None;
+        while offset + 4 <= jpeg.len() && jpeg[offset] == 0xff {
+            let marker = jpeg[offset + 1];
+            if marker == 0xda || marker == 0xd9 {
+                break;
+            }
+            let length = usize::from(u16::from_be_bytes([jpeg[offset + 2], jpeg[offset + 3]]));
+            assert!(length >= 2 && offset + 2 + length <= jpeg.len());
+            if marker == 0xed {
+                app13 = Some(jpeg[offset..offset + 2 + length].to_vec());
+                break;
+            }
+            offset += length + 2;
+        }
+        let app13 = app13.expect("fixture must contain JPEG APP13");
+        let mut repeated_jpeg = jpeg[..2].to_vec();
+        repeated_jpeg.extend_from_slice(&app13);
+        repeated_jpeg.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&src, repeated_jpeg).unwrap();
         let output = crate::CjxlBuilder::new()
             .input(&src)
             .output(&dst)
@@ -794,7 +822,31 @@ mod tests {
         let src_tags = preservable_tag_map(&src).unwrap();
         let dst_tags = preservable_tag_map(&dst).unwrap();
         assert!(src_tags.contains_key("Photoshop:IPTCDigest"));
+        assert!(
+            src_tags.keys().any(|tag| tag.starts_with("IPTC2:")),
+            "{src_tags:?}"
+        );
         assert!(!dst_tags.contains_key("Photoshop:IPTCDigest"));
+        let mut repeated_iptc = BTreeMap::from([
+            ("IPTC2:ApplicationRecordVersion".into(), "2".into()),
+            ("IPTC2:CodedCharacterSet".into(), "\u{1b}%G".into()),
+            ("IPTC2:ObjectName".into(), "未命名作品".into()),
+        ]);
+        verify_reconstruction_only_metadata(&src, &dst, &mut repeated_iptc, &dst_tags).unwrap();
+        assert!(
+            preserve_source_mismatches(&repeated_iptc, &dst_tags).is_empty(),
+            "reconstruction-owned second IPTC instance must pass"
+        );
+        let mut contradictory_iptc = dst_tags.clone();
+        contradictory_iptc.insert("IPTC2:ObjectName".into(), "different".into());
+        let mut expected_iptc = BTreeMap::from([("IPTC2:ObjectName".into(), "未命名作品".into())]);
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected_iptc, &contradictory_iptc)
+            .unwrap();
+        assert!(
+            preserve_mismatches(&expected_iptc, &contradictory_iptc)
+                .iter()
+                .any(|mismatch| mismatch.contains("wrong-source"))
+        );
         verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .expect("APP13 retained by exact JPEG reconstruction must pass metadata gate");
         crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();

@@ -1,4 +1,5 @@
 use anyhow::Context;
+mod runtime_cli;
 use clap::{Parser, Subcommand};
 use img::Rational;
 use img::lossless_converter::{
@@ -50,12 +51,19 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[command(name = "img")]
 #[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
 struct Cli {
+    #[command(flatten)]
+    policy: runtime_cli::RuntimeArgs,
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Inspect persistent runtime preferences without accessing media or databases.
+    Config {
+        #[command(subcommand)]
+        command: runtime_cli::ConfigCommand,
+    },
     #[command(name = "run")]
     Run {
         #[arg(short, long)]
@@ -225,7 +233,7 @@ enum Commands {
         #[arg(long = "shortest-path", default_value_t = false)]
         shortest_path: bool,
 
-        /// Archive mode: direct JXL encoding uses effort 10; JPEG bitstream transcode uses effort 11 with an effort 10 compatibility fallback.
+        /// Archive mode: direct JXL encoding uses effort 10; JPEG effort and retries follow runtime configuration.
         #[arg(long, default_value_t = false)]
         archive: bool,
 
@@ -300,7 +308,8 @@ fn command_requires_database(command: &Commands) -> bool {
     match command {
         Commands::Run { .. } => foundation::static_quality_db_lookup_enabled(),
         Commands::CacheStats | Commands::IngestSamples { .. } | Commands::DbHealth => true,
-        Commands::Verify { .. }
+        Commands::Config { .. }
+        | Commands::Verify { .. }
         | Commands::RestoreTimestamps { .. }
         | Commands::LockCheck { .. }
         | Commands::PathHash { .. }
@@ -628,12 +637,51 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
+    let mut cli = Cli::parse();
+    let legacy_expert = matches!(
+        &cli.command,
+        Commands::Run {
+            allow_expert_options: true,
+            ..
+        } | Commands::FastImg {
+            allow_expert_options: true,
+            ..
+        }
+    );
+    let resolved = cli.policy.resolve(legacy_expert)?;
+    if matches!(cli.command, Commands::Config { .. }) {
+        println!("{}", resolved.to_json(true)?);
+        return Ok(());
+    }
+    let configuration_log = resolved.to_json(false)?;
+    let allow_recovery = resolved.config.img.fallback_policy
+        == foundation::infra::runtime_config::FallbackPolicy::Repair
+        && resolved.config.tools.policy == foundation::infra::runtime_config::ToolPolicy::Fallback;
+    match &mut cli.command {
+        Commands::Run {
+            allow_expert_options,
+            ..
+        }
+        | Commands::FastImg {
+            allow_expert_options,
+            ..
+        } => *allow_expert_options = allow_recovery,
+        _ => {}
+    }
+    foundation::infra::runtime_config::install(resolved.config)?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
     foundation::logging::init("img", &foundation::logging::LogConfig::default())
         .map_err(|e| e.context("Failed to initialize img logging"))?;
+    tracing::info!(target: "runtime_config", resolved = %configuration_log, "Effective runtime configuration");
+    if resolved
+        .sources
+        .values()
+        .any(|source| source.starts_with("env:") || source.starts_with("legacy"))
+    {
+        tracing::warn!(target: "runtime_config", "Legacy environment preferences are active; inspect img config show --effective and migrate them to config/flags");
+    }
 
-    let cli = Cli::parse();
     validate_command_strategy(&cli.command)?;
 
     // Initialize Ctrl+C guard for long-running batch operations
@@ -643,6 +691,7 @@ fn main_inner() -> anyhow::Result<()> {
     let _lock_guard = acquire_command_lock(&cli.command);
 
     match cli.command {
+        Commands::Config { .. } => unreachable!("configuration inspection returned before startup"),
         command @ Commands::Run { .. } => {
             run_img_command(command, cache)?;
         }
@@ -4996,6 +5045,23 @@ fn fast_img_prepare_existing_avif(
     .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
+fn fast_img_encoded_output(result: &foundation::TaskResult) -> anyhow::Result<&Path> {
+    anyhow::ensure!(
+        result.success,
+        "encode failed for {}: {} [{}]",
+        result.input_path,
+        result.message,
+        result.skip_reason.as_deref().unwrap_or("unspecified")
+    );
+    result.output_path.as_deref().map(Path::new).ok_or_else(|| {
+        anyhow::anyhow!(
+            "encoder reported success without an output path for {}: {}",
+            result.input_path,
+            result.message
+        )
+    })
+}
+
 fn fast_img_run_encode_job_inner(
     job: &FastImgTranscodeJob,
     src_dir: &Path,
@@ -5158,12 +5224,7 @@ fn fast_img_run_encode_job_inner(
             },
         ));
     }
-    let out_path = result.output_path.as_ref().map(Path::new).ok_or_else(|| {
-        anyhow::anyhow!(
-            "encode produced no output path for {}",
-            job.source.display()
-        )
-    })?;
+    let out_path = fast_img_encoded_output(&result)?;
 
     let is_avif_output = strategy == "avif";
     if is_avif_output {
@@ -6110,7 +6171,10 @@ fn fast_img_checked_rel_path(rel: &str) -> anyhow::Result<PathBuf> {
 
 fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<WorkingCopyMarker>> {
     match read_marker(working_copy) {
-        Ok(marker) => Ok(Some(marker)),
+        Ok(marker) => {
+            foundation::fast_img::validate_photos_import_naming_policy(&marker)?;
+            Ok(Some(marker))
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(anyhow::anyhow!(
             "fast-img marker at {} is unreadable/corrupt; refusing to overwrite resume state: {err}",
@@ -11757,6 +11821,22 @@ mod fast_img_hardening_tests {
             "fast-img JXL encodes must enable Apple compatibility before delivery validation"
         );
         Ok(())
+    }
+
+    #[test]
+    fn fast_img_failed_encode_preserves_actual_failure_reason() {
+        let failure = foundation::TaskResult::failed(
+            Path::new("input.jpg"),
+            12,
+            "cjxl e11 failed: EncodeImageJXL() failed",
+            "jpeg_lossless_encode_unavailable",
+        );
+        let detail = super::fast_img_encoded_output(&failure)
+            .unwrap_err()
+            .to_string();
+        assert!(detail.contains("EncodeImageJXL() failed"));
+        assert!(detail.contains("jpeg_lossless_encode_unavailable"));
+        assert!(!detail.contains("no output path"));
     }
 
     #[test]

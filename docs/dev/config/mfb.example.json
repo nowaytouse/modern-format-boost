@@ -1,0 +1,21 @@
+{
+  "config_version": 1,
+  "img": {
+    "allow_database": false,
+    "quality_heuristic": false,
+    "jpeg_effort": 11,
+    "fallback_policy": "strict"
+  },
+  "photos": {
+    "backend": "auto",
+    "import_root": null,
+    "album_name": null,
+    "preserve_folder_structure": true,
+    "native_batch_size": 100,
+    "import_batch_size": 50
+  },
+  "tools": {
+    "policy": "fallback",
+    "paths": {}
+  }
+}

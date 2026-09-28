@@ -84,6 +84,7 @@
 "status.checking_processor" = "プロセッサーを確認しています…";
 "status.command_copied" = "コマンドをコピーしました";
 "status.completed" = "正常に完了しました";
+"status.count" = "照合件数：%@";
 "status.processor_ready" = "Rust プロセッサーの準備完了";
 "status.processor_failed" = "プロセッサーのセルフチェックに失敗しました";
 "status.processor_unavailable" = "プロセッサーを利用できません。drag_and_drop_processor を先にビルドしてください";

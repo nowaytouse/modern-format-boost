@@ -83,9 +83,15 @@ pub fn effort_plan_for_mode(
 pub fn effort_plan(kind: JxlEffortContext, ultimate: bool) -> Vec<JxlEffortPlan> {
     let effort = match kind {
         JxlEffortContext::DirectEncode => encoder_effort(ultimate),
-        JxlEffortContext::JpegLosslessTranscode => constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
+        JxlEffortContext::JpegLosslessTranscode => jpeg_transcode_effort(
+            crate::infra::runtime_config::active().map(|config| config.img.jpeg_effort),
+        ),
     };
     vec![JxlEffortPlan::Single(effort)]
+}
+
+fn jpeg_transcode_effort(configured: Option<u8>) -> u8 {
+    configured.unwrap_or(constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT)
 }
 
 #[cfg(test)]
@@ -158,5 +164,13 @@ mod tests {
             )),
             vec![constants::JXL_ULTIMATE_EFFORT]
         );
+    }
+
+    #[test]
+    fn jpeg_effort_uses_configured_value_or_legacy_default() {
+        assert_eq!(jpeg_transcode_effort(None), 11);
+        assert_eq!(jpeg_transcode_effort(Some(1)), 1);
+        assert_eq!(jpeg_transcode_effort(Some(9)), 9);
+        assert_eq!(jpeg_transcode_effort(Some(10)), 10);
     }
 }

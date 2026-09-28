@@ -874,7 +874,11 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     // GUI-launched macOS apps often miss shell PATH. An explicit developer
     // override and an explicitly selected PATH entry take priority over fixed
     // install locations, so nightly or locally built tools can be used safely.
-    let explicit_override = std::env::var_os(tool_override_env_name(name));
+    let configured_override = crate::runtime_config::active()
+        .and_then(|config| config.tools.paths.get(name))
+        .map(|path| path.as_os_str().to_os_string());
+    let explicit_override =
+        configured_override.or_else(|| std::env::var_os(tool_override_env_name(name)));
     let mut fallbacks = Vec::new();
     let mut home_error = None;
     if let Some(path) = explicit_override.as_ref() {

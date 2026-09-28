@@ -1146,6 +1146,7 @@ pub fn apply_tier2_library_assets_to_marker(
     marker: &mut crate::pipeline::verification::WorkingCopyMarker,
     library: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
+    bind_photos_import_naming_policy(marker)?;
     bind_photos_library_proof(marker, library.photos_library_path.as_deref())?;
     for asset in &library.imported_assets {
         marker
@@ -1295,6 +1296,20 @@ fn photos_import_fail_fast_enabled() -> bool {
     BatchErrorMode::current().is_fail_fast()
 }
 
+fn require_applescript_only_import_backend() -> Result<()> {
+    let native = crate::infra::runtime_config::active().map_or_else(
+        || std::env::var("MFB_PHOTOS_IMPORT_BACKEND").is_ok_and(|value| value == "photokit"),
+        |config| config.photos.backend == crate::infra::runtime_config::PhotosBackend::Native,
+    );
+    if native {
+        return Err(ImgQualityError::AnalysisError(
+            "native PhotoKit backend is unavailable for this Photos import path; sources retained"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn selected_photos_library(bound: Option<&Path>) -> Result<Option<PathBuf>> {
     let explicit = crate::common_utils::explicit_photos_library_path()?;
     let bound = bound
@@ -1344,13 +1359,34 @@ fn require_active_photos_library(selected: Option<&Path>) -> Result<()> {
     let text = std::str::from_utf8(&output.stdout).map_err(|error| {
         ImgQualityError::AnalysisError(format!("Photos database path is not UTF-8: {error}"))
     })?;
-    let databases = text
+    let mut databases = text
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
         .filter(|path| path.ends_with(".photoslibrary/database/Photos.sqlite"))
         .map(|path| Path::new(path).canonicalize())
         .collect::<std::io::Result<BTreeSet<_>>>()?;
+    if let Some(home) = std::env::var_os("HOME") {
+        remove_photos_system_side_database(&mut databases, Path::new(&home))?;
+    }
     require_selected_photos_database(selected, &databases)
+}
+
+fn remove_photos_system_side_database(
+    databases: &mut BTreeSet<PathBuf>,
+    home: &Path,
+) -> std::io::Result<()> {
+    // Photos also opens this OS-managed Shared-with-You database. Do not exempt
+    // an arbitrary user library merely because it has the same filename.
+    let side_database =
+        home.join("Library/Photos/Libraries/Syndication.photoslibrary/database/Photos.sqlite");
+    match side_database.canonicalize() {
+        Ok(path) => {
+            databases.remove(&path);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 fn bind_photos_library_proof(
@@ -1368,10 +1404,54 @@ fn bind_photos_library_proof(
     Ok(())
 }
 
+fn bind_photos_import_naming_policy(marker: &mut WorkingCopyMarker) -> Result<bool> {
+    let photos = crate::infra::runtime_config::active().map(|config| &config.photos);
+    bind_photos_import_naming_policy_with(marker, photos)
+}
+
+/// Check resume policy without Photos access or marker writes.
+pub fn validate_photos_import_naming_policy(marker: &WorkingCopyMarker) -> Result<()> {
+    bind_photos_import_naming_policy(&mut marker.clone()).map(|_| ())
+}
+
+fn bind_photos_import_naming_policy_with(
+    marker: &mut WorkingCopyMarker,
+    photos: Option<&crate::infra::runtime_config::PhotosPolicy>,
+) -> Result<bool> {
+    let root = photos.and_then(|config| config.import_root.as_deref());
+    let album = photos.and_then(|config| config.album_name.as_deref());
+    let preserve = photos.is_none_or(|config| config.preserve_folder_structure);
+    let policy = serde_json::json!([root, album, preserve]).to_string();
+    let legacy = root.is_none() && album.is_none() && preserve;
+    match marker.photos_import_naming_policy.as_deref() {
+        Some(bound) if bound != policy => Err(ImgQualityError::AnalysisError(
+            "Photos import naming policy changed during resume; checkpoint and sources retained"
+                .into(),
+        )),
+        None if !legacy
+            && (!marker.photos_imported_assets.is_empty()
+                || !marker.tier2_imported_assets.is_empty()
+                || marker.tier2_in_progress) =>
+        {
+            Err(ImgQualityError::AnalysisError(
+                "Legacy Photos proof has no naming policy; restore legacy names before resume"
+                    .into(),
+            ))
+        }
+        Some(_) => Ok(false),
+        None => {
+            marker.photos_import_naming_policy = Some(policy);
+            Ok(true)
+        }
+    }
+}
+
 /// Bind a legacy marker only after its existing custody is proved in the selected library.
 pub fn bind_marker_to_selected_photos_library(marker: &mut WorkingCopyMarker) -> Result<()> {
+    require_applescript_only_import_backend()?;
     let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
-    if marker.photos_library_path == selected {
+    let naming_bound = bind_photos_import_naming_policy(marker)?;
+    if marker.photos_library_path == selected && !naming_bound {
         return Ok(());
     }
     if !marker.photos_imported_assets.is_empty() {
@@ -1475,6 +1555,7 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
 pub fn import_media_outputs_with_library_verifier(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
+    require_applescript_only_import_backend()?;
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(None)?;
     require_active_photos_library(selected.as_deref())?;
@@ -1599,37 +1680,13 @@ pub fn build_modern_lossy_static_import_candidates(
     src_dir: &Path,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
 ) -> Vec<PhotosImportCandidate> {
-    let folder_name = src_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Imported");
-    let cleaned = fast_img_strip_optimized_import_suffixes(folder_name);
-    let inner_root = if cleaned.is_empty() {
-        "✨Imported".to_string()
-    } else if !cleaned.starts_with('✨') {
-        format!("✨{cleaned}")
-    } else {
-        cleaned
-    };
-
     candidates
         .iter()
-        .map(|candidate| {
-            let rel_parent = Path::new(&candidate.rel_path)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .and_then(|parent| parent.to_str());
-            let album_name = if let Some(sub) = rel_parent {
-                format!("✨/{inner_root}/{sub}")
-            } else {
-                format!("✨/{inner_root}")
-            };
-            PhotosImportCandidate {
-                rel_path: candidate.rel_path.clone(),
-                path: candidate.path.clone(),
-                blake3: candidate.blake3.clone(),
-                album_name,
-            }
+        .map(|candidate| PhotosImportCandidate {
+            rel_path: candidate.rel_path.clone(),
+            path: candidate.path.clone(),
+            blake3: candidate.blake3.clone(),
+            album_name: photos_import_album_name(src_dir, &candidate.rel_path),
         })
         .collect()
 }
@@ -1892,6 +1949,7 @@ pub fn import_modern_lossy_static_tier_in_library(
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
     bound_library: Option<&Path>,
 ) -> Result<LibraryHandle> {
+    require_applescript_only_import_backend()?;
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(bound_library)?;
     if candidates.is_empty() {
@@ -2179,6 +2237,7 @@ fn apply_tier2_enriched_delivery_proofs(
 pub fn import_or_reconcile_verified_media_candidates(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
+    require_applescript_only_import_backend()?;
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(None)?;
     require_active_photos_library(selected.as_deref())?;
@@ -2189,6 +2248,7 @@ fn import_or_reconcile_modern_lossy_static_candidates(
     candidates: &[PhotosImportCandidate],
     selected_library: Option<&Path>,
 ) -> Result<LibraryHandle> {
+    require_applescript_only_import_backend()?;
     validate_photos_import_candidates(candidates)?;
     let mut imported_assets = Vec::new();
     let mut failed_count = 0usize;
@@ -2432,7 +2492,16 @@ on run argv
     if ((count of manifestLines) mod 2) is not 0 then
         error "Photos import manifest expected path/album line pairs"
     end if
-    if operationMode is "reconcile_all" then
+    if operationMode is "prepare_albums" then
+        set albumIds to {}
+        repeat with lineIndex from 1 to (count of manifestLines) by 2
+            set albumName to item (lineIndex + 1) of manifestLines
+            set end of albumIds to my mfbEnsureAlbumIdForPath(contents of albumName)
+        end repeat
+        set resultText to albumIds as text
+        set AppleScript's text item delimiters to oldDelimiters
+        return resultText
+    else if operationMode is "reconcile_all" then
         set reconciledIds to {}
         repeat with lineIndex from 1 to (count of manifestLines) by 2
             set rawPath to item lineIndex of manifestLines
@@ -2684,6 +2753,7 @@ where
     let mut checkpoint_marker = marker.clone();
     let new_binding = checkpoint_marker.photos_library_path.is_none() && selected_library.is_some();
     bind_photos_library_proof(&mut checkpoint_marker, selected_library)?;
+    let naming_bound = bind_photos_import_naming_policy(&mut checkpoint_marker)?;
     let mut plan = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
     if reconcile_existing || new_binding {
         reverify_checkpointed_photos_assets(
@@ -2693,11 +2763,21 @@ where
             &mut is_quarantined,
         )?;
     }
-    if new_binding {
+    if new_binding || naming_bound {
         if let Some(handle) = library_handle_from_marker_tier2_proof(&checkpoint_marker) {
             reverify_modern_lossy_static_photos_custody(&handle)?;
         }
         write_marker_atomic(&checkpoint_marker)?;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(handle) = native_checkpoint::try_import(
+        &mut checkpoint_marker,
+        &plan,
+        &mut query_assets,
+        &mut is_quarantined,
+        selected_library,
+    )? {
+        return Ok(handle);
     }
     if reconcile_existing {
         let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
@@ -2732,7 +2812,8 @@ where
             selected_library,
         )
     };
-    let mut pending_report = import_pending_media_entries_with_checkpoint(
+    let profile = super::photos_import_metrics::Profile::start();
+    let pending_result = import_pending_media_entries_with_checkpoint(
         &mut checkpoint_marker,
         &pending_entries,
         photos_import_fail_fast_enabled(),
@@ -2740,7 +2821,14 @@ where
         &mut is_quarantined,
         &mut prepare_import_session,
         &mut run_import_batch,
-    )?;
+    );
+    profile.report(
+        pending_result
+            .as_ref()
+            .map_or(0, |report| report.imported_assets.len()),
+        pending_result.is_ok(),
+    );
+    let mut pending_report = pending_result?;
     imported_assets.append(&mut pending_report.imported_assets);
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     if imported_assets
@@ -3229,6 +3317,7 @@ where
     if entries.is_empty() {
         return Ok(Vec::new());
     }
+    let _timing = super::photos_import_metrics::timer("verification_window");
     let assets =
         library_records_from_pending_import(entries, report_pairs, query_assets, is_quarantined)?;
     checkpoint_photos_import_window(marker, entries, &assets)?;
@@ -3552,6 +3641,7 @@ where
 fn verified_library_probes_from_query(
     probes: BTreeMap<String, FastImgLibraryAssetProbe>,
 ) -> Result<Vec<VerifiedLibraryProbe>> {
+    let _timing = super::photos_import_metrics::timer("original_hash_verification");
     probes
         .into_iter()
         .map(|(report_rel_path, probe)| {
@@ -3620,6 +3710,7 @@ fn checkpoint_photos_import_window(
     entries: &[PhotosImportPendingEntry],
     assets: &[LibraryAssetRecord],
 ) -> Result<()> {
+    let _timing = super::photos_import_metrics::timer("checkpoint");
     let asset_index = assets
         .iter()
         .map(|asset| (asset.rel_path.as_str(), asset))
@@ -3786,6 +3877,7 @@ fn run_photos_import_applescript_session_mode_in_library(
     if manifest_entries.is_empty() {
         return Ok(String::new());
     }
+    let _timing = super::photos_import_metrics::timer("import_session");
 
     let chunks: Vec<&[(PathBuf, String)]> = manifest_entries
         .chunks(FAST_IMG_PHOTOS_IMPORT_WINDOW_FILE_CAP)
@@ -3849,6 +3941,8 @@ fn run_photos_import_applescript_session_mode_in_library(
             selected_library,
             |library| require_active_photos_library(Some(library)),
             || {
+                let _process_timing =
+                    super::photos_import_metrics::timer("osascript_process_and_import");
                 crate::process_runner::ManagedProcess::spawn(&mut command)
             .and_then(|process| {
                 process.wait_liveness_timeout(timeout, timeout, "Photos AppleScript import chunk")
@@ -3944,6 +4038,7 @@ fn photos_import_session_timeout(batch_count: usize) -> Result<Duration> {
 }
 
 fn log_photos_resource_state(chunk_number: usize, phase: &str) {
+    let _timing = super::photos_import_metrics::timer("resource_probes");
     match get_photos_pid() {
         Ok(Some(pid)) => {
             let mut command = std::process::Command::new(MACOS_PS_PATH);
@@ -4940,8 +5035,23 @@ fn index_photos_probes_by_uuid(
 }
 
 fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &str) -> String {
-    let folder_name = marker
-        .working_copy
+    photos_import_album_name(&marker.working_copy, rel_path)
+}
+
+fn photos_import_album_name(base: &Path, rel_path: &str) -> String {
+    photos_import_album_name_with_policy(
+        base,
+        rel_path,
+        crate::infra::runtime_config::active().map(|config| &config.photos),
+    )
+}
+
+fn photos_import_album_name_with_policy(
+    base: &Path,
+    rel_path: &str,
+    config: Option<&crate::infra::runtime_config::PhotosPolicy>,
+) -> String {
+    let folder_name = base
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Imported");
@@ -4954,15 +5064,23 @@ fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &s
         cleaned
     };
 
+    let root = config
+        .and_then(|config| config.import_root.as_deref())
+        .unwrap_or("✨");
+    let album = config
+        .and_then(|config| config.album_name.as_deref())
+        .unwrap_or(&inner_root);
     let rel_parent = Path::new(rel_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .and_then(|parent| parent.to_str());
 
-    if let Some(sub) = rel_parent {
-        format!("✨/{inner_root}/{sub}")
+    if config.is_none_or(|config| config.preserve_folder_structure)
+        && let Some(sub) = rel_parent
+    {
+        format!("{root}/{album}/{sub}")
     } else {
-        format!("✨/{inner_root}")
+        format!("{root}/{album}")
     }
 }
 
@@ -5735,6 +5853,9 @@ fn fast_img_photos_import_timeout() -> Duration {
 }
 
 fn fast_img_photos_import_batch_size() -> usize {
+    if let Some(config) = crate::infra::runtime_config::active() {
+        return config.photos.import_batch_size;
+    }
     fast_img_positive_usize_env(
         FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE_ENV,
         FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE_DEFAULT,
@@ -5816,7 +5937,11 @@ where
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
-            let queried = match query_assets(&query_uuids) {
+            let query_result = {
+                let _timing = super::photos_import_metrics::timer("library_query");
+                query_assets(&query_uuids)
+            };
+            let queried = match query_result {
                 Ok(probes) => probes,
                 Err(err)
                     if attempt < attempts
@@ -6189,6 +6314,14 @@ pub fn prompt_user_confirm(message: &str) -> Result<bool> {
     };
     Ok(matches!(line.trim(), "y" | "Y"))
 }
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "photos_import_bench.rs"]
+mod photos_import_bench;
+
+#[cfg(target_os = "macos")]
+#[path = "photos_native_checkpoint.rs"]
+mod native_checkpoint;
 
 #[cfg(test)]
 mod tests {
@@ -6664,6 +6797,49 @@ mod tests {
             fast_img_optimized_import_album_name(&marker, "root.JXL"),
             "✨/✨Batch"
         );
+    }
+
+    #[test]
+    fn configured_photos_names_and_resume_policy_are_bound() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut marker = WorkingCopyMarker::new(
+            temp_dir.path().join("src"),
+            temp_dir.path().join("Batch_optimized"),
+            0,
+        );
+        let mut custom = crate::infra::runtime_config::PhotosPolicy {
+            import_root: Some("Archive".into()),
+            album_name: Some("Selected".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            photos_import_album_name_with_policy(
+                &marker.working_copy,
+                "nested/photo.JXL",
+                Some(&custom),
+            ),
+            "Archive/Selected/nested"
+        );
+        custom.preserve_folder_structure = false;
+        assert_eq!(
+            photos_import_album_name_with_policy(
+                &marker.working_copy,
+                "nested/photo.JXL",
+                Some(&custom),
+            ),
+            "Archive/Selected"
+        );
+        marker.tier2_in_progress = true;
+        assert!(bind_photos_import_naming_policy_with(&mut marker, Some(&custom)).is_err());
+        assert!(bind_photos_import_naming_policy_with(&mut marker, None).unwrap());
+        let saved = serde_json::to_string(&marker).unwrap();
+        let mut restored: WorkingCopyMarker = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            restored.photos_import_naming_policy,
+            marker.photos_import_naming_policy
+        );
+        assert!(bind_photos_import_naming_policy_with(&mut restored, Some(&custom)).is_err());
+        assert!(bind_photos_import_naming_policy_with(&mut marker, Some(&custom)).is_err());
     }
 
     #[test]
@@ -8868,6 +9044,21 @@ mod tests {
         std::fs::write(selected.join("database/Photos.sqlite"), b"test database")?;
         let selected = selected.canonicalize()?;
         let selected_db = selected.join("database/Photos.sqlite").canonicalize()?;
+        let side_db = root
+            .path()
+            .join("Library/Photos/Libraries/Syndication.photoslibrary/database/Photos.sqlite");
+        std::fs::create_dir_all(side_db.parent().unwrap())?;
+        std::fs::write(&side_db, b"system side database")?;
+        let mut active_databases = BTreeSet::from([selected_db.clone(), side_db.canonicalize()?]);
+        assert!(require_selected_photos_database(&selected, &active_databases).is_err());
+        remove_photos_system_side_database(&mut active_databases, root.path())?;
+        require_selected_photos_database(&selected, &active_databases)?;
+        active_databases.insert(
+            root.path()
+                .join("Syndication.photoslibrary/database/Photos.sqlite"),
+        );
+        remove_photos_system_side_database(&mut active_databases, root.path())?;
+        assert!(require_selected_photos_database(&selected, &active_databases).is_err());
         let other = root.path().join("other.photoslibrary");
         let wrong_databases = BTreeSet::from([other.join("database/Photos.sqlite")]);
         for operation in ["import", "reconcile", "reconcile_all"] {

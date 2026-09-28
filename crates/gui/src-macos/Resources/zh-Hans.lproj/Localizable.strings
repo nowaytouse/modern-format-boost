@@ -84,6 +84,7 @@
 "status.checking_processor" = "正在检查处理器…";
 "status.command_copied" = "命令已复制";
 "status.completed" = "处理成功完成";
+"status.count" = "核验数量：%@";
 "status.processor_ready" = "Rust 处理器已就绪";
 "status.processor_failed" = "处理器自检失败";
 "status.processor_unavailable" = "处理器不可用——请先构建 drag_and_drop_processor";

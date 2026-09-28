@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.modernformatboost.photos-import</string>
+<key>CFBundleName</key><string>MFB Photos Import</string>
+<key>CFBundleExecutable</key><string>mfb-photos-import</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSUIElement</key><true/>
+<key>NSPhotoLibraryUsageDescription</key><string>MFB imports your selected originals into Photos and verifies their local asset identities before cleanup.</string>
+</dict></plist>

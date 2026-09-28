@@ -2,7 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-09-27
+## [Unreleased] - 2026-09-28
+
+### Configurable image policies and native Photos import groundwork (2026-09-28)
+
+- Add versioned JSON image preferences with observable precedence: defaults,
+  recognized legacy environment settings, user config, working-directory
+  `mfb.json`, explicit `--config`, then CLI flags. `img config show --effective`
+  reports values and sources without database initialization or media work.
+  Invalid fields, versions, names, paths and ranges fail startup explicitly.
+- Configure optional database and quality-heuristic access, JPEG effort,
+  strict/same-semantics/repair fallback, tool executable paths and single/fallback
+  tool policy. The default JPEG policy is strict; compatibility retries and
+  guarded intermediate recovery are explicit opt-ins. Exact JPEG reconstruction,
+  metadata verification and source-retention gates remain mandatory. Tool
+  recovery ordering is unchanged, and `vid` preferences are outside this layer.
+- Configure Photos backend, native/AppleScript batch sizes, root folder, album
+  name and subfolder preservation. Bind naming policy to durable checkpoints;
+  changed names cannot reuse existing custody proofs. Explicit native selection
+  rejects importer paths that only support AppleScript before any import.
+- Continue the native PhotoKit importer with a bundled single-writer helper,
+  durable transaction journals and entry-ID-to-asset mapping. Reconcile pending
+  intents before new imports, including resumes with no remaining pending
+  entries. Verification still checks fresh UUID/original-byte custody before
+  source deletion. Include opt-in synthetic debug-library benchmarking and
+  measured import timings; no large-library speedup is claimed yet.
+- Preserve repeated JPEG APP13/IPTC metadata through byte-exact reconstruction.
+  Keep the actual encoding failure visible instead of replacing it with a later
+  missing-output error. In the native GUI, distinguish log severity and show the
+  count-verification result; CLI option names are limited to developer mode.
+- Local configuration acceptance: 12 targeted tests, strict Clippy for all IMG
+  targets, Rust formatting, diff checks and Photos-helper Swift typechecking
+  passed. Expanded validation found and repaired the incomplete-JPEG failure
+  summary without weakening source-retention checks; all 96 IMG library tests
+  passed on rerun, alongside 158 CLI and 27 integration tests. Native GUI
+  self-tests passed in English, Chinese and Japanese from a temporary bundle;
+  macOS still emitted a sandbox-extension warning for that temporary app, so
+  this is not signed-package or TCC acceptance. The APP13 regression used
+  installed cjxl/djxl/ExifTool and was not skipped.
+  See [runtime configuration](dev/config/RUNTIME_CONFIG.md) for setup,
+  the example file and the exact acceptance boundary. No dependency or lockfile
+  changes were introduced.
+- The Photos throughput task remains partial: 1K/10K/50K comparisons with manual
+  Photos and AppleScript, live TCC/GUI acceptance and real crash/restart recovery
+  are still pending. Local checks are not remote CI or real-library acceptance;
+  only a CI run matching the pushed commit can validate that revision.
 
 ### Native GUI batch experience and Photos import throughput (2026-09-27)
 

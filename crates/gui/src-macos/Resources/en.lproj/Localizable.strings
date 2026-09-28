@@ -84,6 +84,7 @@
 "status.checking_processor" = "Checking processor…";
 "status.command_copied" = "Command copied";
 "status.completed" = "Completed successfully";
+"status.count" = "Verification count: %@";
 "status.processor_ready" = "Rust processor ready";
 "status.processor_failed" = "Processor self-check failed";
 "status.processor_unavailable" = "Processor unavailable — build drag_and_drop_processor before running";

@@ -1434,7 +1434,14 @@ pub fn lookup_image_quality_with_path(
     analysis: &ImageAnalysis,
     path: Option<&Path>,
 ) -> Option<QualityScore> {
-    if !crate::algorithm_runtime::image_quality_heuristic_enabled() {
+    if !crate::algorithm_runtime::quality_db_stack_globally_enabled() {
+        if crate::algorithm_runtime::image_quality_heuristic_enabled() {
+            log_static_quality_branch(StaticQualityDbBranch::DbDisabledHeuristic);
+            return refuse_static_quality_heuristic(
+                "static_quality_db_disabled",
+                "quality DB disabled; refusing heuristic score",
+            );
+        }
         return None;
     }
     if analysis.is_animated {
@@ -1459,16 +1466,6 @@ fn lookup_static_image_quality(
     analysis: &ImageAnalysis,
     path: Option<&Path>,
 ) -> Option<QualityScore> {
-    let disable_db = static_quality_env_truthy(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
-        || static_quality_env_truthy(crate::constants::ENV_DISABLE_DB_FEEDBACK);
-    if disable_db {
-        log_static_quality_branch(StaticQualityDbBranch::DbDisabledHeuristic);
-        return refuse_static_quality_heuristic(
-            "static_quality_db_disabled",
-            "quality DB disabled; refusing heuristic score",
-        );
-    }
-
     let force_knn = static_quality_env_truthy(crate::constants::ENV_FORCE_QUALITY_KNN);
     if force_knn {
         log_static_quality_branch(StaticQualityDbBranch::ForceKnnEnvRefused);

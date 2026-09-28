@@ -42,6 +42,11 @@ pub mod candidate_comparator;
 
 pub mod fast_img;
 
+mod photos_import_metrics;
+
+#[cfg(target_os = "macos")]
+mod photos_native;
+
 pub mod format_detect;
 
 pub mod format_identity;

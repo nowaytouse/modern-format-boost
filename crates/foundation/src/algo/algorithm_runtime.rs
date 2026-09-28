@@ -313,10 +313,17 @@ pub(crate) fn quality_inference_log_heuristic_fallbacks_enabled() -> bool {
 }
 
 #[inline]
-fn quality_db_stack_globally_enabled() -> bool {
+pub(crate) fn quality_db_stack_globally_enabled() -> bool {
+    if let Some(config) = crate::runtime_config::active() {
+        return configured_quality_db_enabled(config);
+    }
     image_quality_heuristic_enabled()
         && !env_truthy(crate::constants::ENV_DISABLE_DB_FEEDBACK)
         && !env_truthy(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
+}
+
+const fn configured_quality_db_enabled(config: &crate::runtime_config::RuntimeConfig) -> bool {
+    config.img.quality_heuristic && config.img.allow_database
 }
 
 /// Fuse DB quality scores into detection outputs when heuristic quality is
@@ -369,6 +376,9 @@ pub fn static_quality_db_lookup_enabled() -> bool {
 /// Returns `true` when the image quality heuristic score is explicitly enabled.
 #[must_use]
 pub fn image_quality_heuristic_enabled() -> bool {
+    if let Some(config) = crate::runtime_config::active() {
+        return config.img.quality_heuristic;
+    }
     env_truthy(crate::constants::HEURISTIC_QUALITY_ENV_KEY)
 }
 
@@ -515,6 +525,18 @@ mod tests {
     use super::*;
     use crate::common_utils::EnvGuard;
     use serial_test::serial;
+
+    #[test]
+    fn configured_quality_database_requires_both_switches() {
+        let mut config = crate::runtime_config::RuntimeConfig::default();
+        assert!(!configured_quality_db_enabled(&config));
+        config.img.quality_heuristic = true;
+        assert!(!configured_quality_db_enabled(&config));
+        config.img.allow_database = true;
+        assert!(configured_quality_db_enabled(&config));
+        config.img.quality_heuristic = false;
+        assert!(!configured_quality_db_enabled(&config));
+    }
 
     #[test]
     #[serial]
