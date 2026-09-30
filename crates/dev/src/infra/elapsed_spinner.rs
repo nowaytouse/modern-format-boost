@@ -2,7 +2,7 @@
 //! Mirrors `_fmt_elapsed()` and `spinner_run()` from
 //! drag_and_drop_processor.py.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -46,8 +46,7 @@ pub fn update_terminal_title_direct(_elapsed: Duration) {
     #[cfg(target_os = "macos")]
     {
         let formatted = format_elapsed(_elapsed);
-        print!("\x1B]0;{}\x07", formatted);
-        let _ = std::io::stdout().flush();
+        terminal_control(&format!("\x1B]0;{formatted}\x07"));
     }
 }
 
@@ -89,8 +88,7 @@ impl ElapsedSpinner {
             let _ = handle.join();
             #[cfg(target_os = "macos")]
             {
-                print!("\x1B]0;\x07");
-                let _ = std::io::stdout().flush();
+                terminal_control("\x1B]0;\x07");
             }
         }
     }
@@ -103,21 +101,44 @@ impl Drop for ElapsedSpinner {
 }
 
 pub fn hide_cursor() {
-    print!("\x1B[?25l");
-    let _ = std::io::stdout().flush();
+    terminal_control("\x1B[?25l");
 }
 
 pub fn show_cursor() {
-    print!("\x1B[?25h");
-    let _ = std::io::stdout().flush();
+    terminal_control("\x1B[?25h");
 }
 
 pub fn clear_screen() {
-    print!("\x1B[2J\x1B[H");
-    let _ = std::io::stdout().flush();
+    terminal_control("\x1B[2J\x1B[H");
 }
 
 pub fn resize_terminal(rows: u16, cols: u16) {
-    print!("\x1B[8;{};{}t", rows, cols);
-    let _ = std::io::stdout().flush();
+    terminal_control(&format!("\x1B[8;{rows};{cols}t"));
+}
+
+fn terminal_control(sequence: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let is_terminal = stdout.is_terminal();
+    write_terminal_control(&mut stdout, is_terminal, sequence);
+}
+
+fn write_terminal_control(output: &mut impl Write, is_terminal: bool, sequence: &str) {
+    // GUI pipes and machine result lines must never contain terminal controls.
+    if is_terminal {
+        let _ = output.write_all(sequence.as_bytes());
+        let _ = output.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn terminal_controls_never_prefix_piped_results() {
+        let sequence = "\x1b]0;01s\x07";
+        let mut output = Vec::new();
+        super::write_terminal_control(&mut output, false, sequence);
+        assert!(output.is_empty());
+        super::write_terminal_control(&mut output, true, sequence);
+        assert_eq!(output, sequence.as_bytes());
+    }
 }

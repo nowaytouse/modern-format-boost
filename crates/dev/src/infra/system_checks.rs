@@ -105,10 +105,16 @@ fn get_disk_free_space(path: &Path) -> Result<u64> {
         if ret != 0 {
             bail!("statvfs failed");
         }
-        (stat.f_bavail as u64)
-            .checked_mul(stat.f_frsize as u64)
-            .ok_or_else(|| anyhow!("statvfs available-byte count overflow"))
+        statvfs_available_bytes(&stat)
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[allow(clippy::unnecessary_cast)] // libc field widths vary across supported platforms.
+fn statvfs_available_bytes(stat: &libc::statvfs) -> Result<u64> {
+    (stat.f_bavail as u64)
+        .checked_mul(stat.f_frsize as u64)
+        .ok_or_else(|| anyhow!("statvfs available-byte count overflow"))
 }
 
 #[cfg(target_os = "linux")]
@@ -182,20 +188,18 @@ fn get_cpu_percent_cached() -> Result<f64> {
     Ok(0.0)
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
-    use super::get_disk_free_space;
+    use super::{get_disk_free_space, statvfs_available_bytes};
 
     #[test]
     fn disk_free_space_uses_statvfs_fragment_size() {
-        let path = std::env::temp_dir();
-        let path_cstr = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
-        let expected = unsafe {
-            let mut stat: libc::statvfs = std::mem::zeroed();
-            assert_eq!(libc::statvfs(path_cstr.as_ptr(), &mut stat), 0);
-            (stat.f_bavail as u64) * (stat.f_frsize as u64)
-        };
-
-        assert_eq!(get_disk_free_space(&path).unwrap(), expected);
+        // Two live filesystem probes race with unrelated disk writes.
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        stat.f_bavail = 3;
+        stat.f_frsize = 1024;
+        stat.f_bsize = 4096;
+        assert_eq!(statvfs_available_bytes(&stat).unwrap(), 3072);
+        assert!(get_disk_free_space(&std::env::temp_dir()).is_ok());
     }
 }

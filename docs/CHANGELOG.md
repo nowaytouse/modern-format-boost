@@ -24,13 +24,21 @@ All notable changes to this project will be documented in this file.
 - Report actual dispositions from single-file IMG/VID entry points as well as
   directory summaries. Known recoverable file failures remain distinct from
   fatal or unclassified exits; continuing a batch never hides its failure exit.
+- Keep terminal control sequences out of GUI pipes so they cannot prefix and
+  hide machine result events. Label each processing phase by its actual media
+  executable, not its position in a two-command batch.
 - Record the completed 1K AppleScript production baseline: import 792.249 s,
   resume 1578.553 s, unchanged resumed asset count and retained originals.
   The observed native comparison is fixture-specific, not a universal speedup.
-- Local validation: 158 IMG tests, 82 launcher/stream tests, 396 source contracts,
+- Local validation: 158 IMG tests, 83 launcher/stream tests, 396 source contracts,
   14 report tests and 5 shared CLI tests passed. Native settings and result-state
   self-tests passed in English, Simplified Chinese and Japanese; formatting and
   strict Clippy checks passed for the affected Rust libraries and binaries.
+- A real launcher run with a scoped injected encoder failure verified one failed
+  image followed by one successful image, a nonzero batch exit and byte-identical
+  retained sources; failed files were not counted as skipped.
+- Make the free-space regression deterministic by testing one fixed filesystem
+  snapshot; separate live probes may legitimately differ during concurrent writes.
 
 ### Native Photos pipeline completion (2026-09-30)
 

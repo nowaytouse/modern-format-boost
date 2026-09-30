@@ -1844,18 +1844,16 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
     }
 }
 
-fn command_phase_label(program: &Path, index: usize, total: usize) -> String {
+fn command_phase_label(program: &Path) -> String {
     let name = program
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("worker");
-    if total == 2 && index == 0 {
-        return format!("Processing Images ({name})");
+    match name {
+        "img" => format!("Processing Images ({name})"),
+        "vid" => format!("Processing Videos ({name})"),
+        _ => format!("Processing ({name})"),
     }
-    if total == 2 && index == 1 {
-        return format!("Processing Videos ({name})");
-    }
-    format!("Processing ({name})")
 }
 
 struct CursorGuard;
@@ -1964,7 +1962,6 @@ fn run_drag_drop(
 
     let mut first_error: Option<anyhow::Error> = None;
     let mut summary = PipelineSummary::default();
-    let total_cmds = commands.len();
 
     dev::infra::elapsed_spinner::resize_terminal(45, 223);
     dev::infra::elapsed_spinner::hide_cursor();
@@ -2106,9 +2103,9 @@ fn run_drag_drop(
             }
         }
     } else {
-        for (idx, command) in commands.into_iter().enumerate() {
+        for command in commands {
             update_terminal_title(started.elapsed());
-            draw_separator(&command_phase_label(&command.program, idx, total_cmds));
+            draw_separator(&command_phase_label(&command.program));
             let command_error_mode = media_error_mode(args, command.pipeline_label(), error_mode);
             match command.run_collecting(args.dry_run, session, false) {
                 Ok(stats) => {
@@ -3180,6 +3177,14 @@ mod tests {
 
     #[test]
     fn batch_results_preserve_unknown_and_failure_semantics() {
+        assert_eq!(
+            command_phase_label(Path::new("/bin/img")),
+            "Processing Images (img)"
+        );
+        assert_eq!(
+            command_phase_label(Path::new("/bin/vid")),
+            "Processing Videos (vid)"
+        );
         let stats = ProcessorStats {
             succeeded: 3,
             skipped: 2,
