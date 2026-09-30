@@ -53,6 +53,7 @@ The backend-only fixture and production-pipeline fixture are distinct scopes.
 | Native backend, 10K, batch 500 | 20 | 304.148 s | 10,000 distinct UUIDs and original hashes |
 | Production native 1K before xattr/album fix, 500/250 | 2 | 101.073 s including preparation | Resume 88.765 s; no duplicate imports |
 | Production native 1K after xattr/album fix, 500/250 | 2 | 22.586 s including preparation | Resume 8.515 s; no duplicate imports |
+| Production AppleScript 1K, batch 10 | 100 | 792.249 s including preparation | Resume 1578.553 s; no duplicate imports |
 
 The final 1K import is about 4.48x faster than the preceding production run.
 Within the measured native profile, verification windows fell from 48.889 s
@@ -61,6 +62,13 @@ The measured bottleneck was per-file xattr process startup plus repeated album
 change requests, not BLAKE3 hashing (0.038 s in the improved run).
 All source/output files were retained by the benchmark; no cleanup timing is
 claimed. The 1K pipeline fixture includes an embedded XMP overlay.
+
+The completed AppleScript baseline retained all 1,000 source files, returned
+1,000 distinct UUIDs, and left the library count unchanged on resume. Its total
+import/resume run took 2372.264 s. The observed native import was about 35.1x
+faster for this small synthetic fixture, but the runs were not simultaneous
+controlled trials: library history and concurrent build activity differed.
+This is not a general speedup claim for real photos or a manual Photos baseline.
 
 Live debug smoke also verified AppleScript import and both resume forms, native
 post-commit verification interruption, retained sources, unchanged recovered
@@ -92,7 +100,7 @@ inputs and journals. Run one live Photos test at a time.
 
 Keep these evidence gaps open until executed; unit tests or CI cannot close them:
 
-1. Same-input manual Photos/AppleScript/native comparisons across 1K/10K/50K,
+1. Controlled repeated manual Photos/AppleScript/native comparisons across 1K/10K/50K,
    full 100K production stress, batch sweep, adaptive calibration and repeated
    long-run RSS/Photos-daemon measurements. Harness support is not a passed run.
 2. OS-kill/timeout and actual PhotoKit partial-result experiments, denied/revoked

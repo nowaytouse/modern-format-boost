@@ -11,6 +11,35 @@ use std::time::Duration;
 /// Display width between vertical box borders (U9).
 const REPORT_INNER_WIDTH: usize = 76;
 
+fn single_file_counts(outcome: crate::conversion::Outcome) -> [usize; 4] {
+    use crate::conversion::Outcome;
+    [
+        usize::from(outcome == Outcome::Converted),
+        usize::from(outcome == Outcome::Skipped),
+        usize::from(outcome == Outcome::Ignored),
+        usize::from(outcome == Outcome::Failed),
+    ]
+}
+
+/// Report the real single-file disposition to command-line launchers.
+pub fn print_single_file_outcome(outcome: crate::conversion::Outcome) {
+    let [succeeded, skipped, ignored, failed] = single_file_counts(outcome);
+    println!("Succeeded: {succeeded}\nSkipped: {skipped}\nIgnored: {ignored}\nFailed: {failed}");
+}
+
+/// Unknown and fatal errors deliberately have no recoverable-file summary.
+pub fn print_recoverable_single_file_error(error: &anyhow::Error) {
+    if is_recoverable_single_file_error(error) {
+        print_single_file_outcome(crate::conversion::Outcome::Failed);
+    }
+}
+
+fn is_recoverable_single_file_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::UnifiedError>()
+        .is_some_and(|error| error.category() == crate::unified_error::ErrorCategory::Recoverable)
+}
+
 /// Shared before/after size comparison for batch, single-file, and wrapper
 /// summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,20 +332,18 @@ fn print_file_stats(result: &Summary) {
             result.skipped
         ));
     }
-    if result.ignored > 0 {
-        let ghost = crate::media_conversion_gate::ui_icon_pick("👻", "[ignored]");
-        if style.plain {
-            style.emit_row(&format!(
-                "{ghost} Ignored:             {:>10}",
-                result.ignored
-            ));
-        } else {
-            style.emit_row(&format!(
-                "{}{ghost} Ignored:             {:>10}{RESET}",
-                crate::modern_ui::colors::MFB_YELLOW,
-                result.ignored
-            ));
-        }
+    let ghost = crate::media_conversion_gate::ui_icon_pick("👻", "[ignored]");
+    if style.plain {
+        style.emit_row(&format!(
+            "{ghost} Ignored:             {:>10}",
+            result.ignored
+        ));
+    } else {
+        style.emit_row(&format!(
+            "{}{ghost} Ignored:             {:>10}{RESET}",
+            crate::modern_ui::colors::MFB_YELLOW,
+            result.ignored
+        ));
     }
     if result.paused {
         let pause = crate::media_conversion_gate::ui_icon_pick("⏸️", "[paused]");
@@ -554,6 +581,20 @@ pub fn summary_health_rate_pct(passed: usize, failed: usize, warnings: usize) ->
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn single_file_reporting_separates_all_dispositions_and_unknown_errors() {
+        use crate::conversion::Outcome;
+        assert_eq!(super::single_file_counts(Outcome::Converted), [1, 0, 0, 0]);
+        assert_eq!(super::single_file_counts(Outcome::Skipped), [0, 1, 0, 0]);
+        assert_eq!(super::single_file_counts(Outcome::Ignored), [0, 0, 1, 0]);
+        assert_eq!(super::single_file_counts(Outcome::Failed), [0, 0, 0, 1]);
+        let recoverable = anyhow::Error::new(crate::UnifiedError::analysis_error("bad input"))
+            .context("single-file conversion");
+        assert!(super::is_recoverable_single_file_error(&recoverable));
+        assert!(!super::is_recoverable_single_file_error(&anyhow::anyhow!(
+            "unclassified system failure"
+        )));
+    }
     use super::*;
 
     #[test]

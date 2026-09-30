@@ -364,12 +364,32 @@ the system by default with explicit light/dark choices. Linux and Windows
 retain the CLI for now; future GUI ports should use their own native platform
 adapter.
 
+The gear button opens separate **Images** and **Videos** settings tabs. Images
+can override the runtime JSON file, JPEG effort, encoding fallback, database
+access, quality heuristic and per-file error policy. Videos have an independent
+codec and per-file error policy. Each field initially inherits existing runtime
+settings; resetting a tab removes only that media type's GUI overrides. The JSON
+file is never rewritten. Video AV1 explicitly disables Apple compatibility;
+unsupported video quality/preset controls are not advertised.
+Video settings apply to standard processing, not Fast Video's fixed GIF path;
+the settings button is unavailable in operations without configurable encoding.
+Image file-error policy is also standard-mode-only. FastImg keeps its established
+checkpointed failure handling; its encoding settings remain configurable.
+
+**Encoding fallback** and **On file failure** are independent. A strict JPEG
+attempt can fail while the batch continues; the source is retained and counted
+as failed, never skipped. Fatal errors still stop processing. The GUI shows
+separate succeeded/skipped/failed/ignored counts from versioned launcher results,
+and uses **unknown** when a child did not report a count. A nonzero child exit
+or a reported file failure cannot become an all-success completion message.
+
 The GUI always enables detailed logs and starts each batch with a clean log
 view. **Log History** opens the backend's resolved log directory (normally under
 `~/.modern_format_boost`); clearing the view does not delete stored logs.
 **Pause / Continue / Stop** cooperate with the Rust backend at safe boundaries:
 active file work finishes and verified progress is saved first. FastImg encoding
-uses bounded waves, and Photos verification uses windows of at most ten assets.
+uses bounded waves. Native Photos uses configurable verification windows;
+the AppleScript compatibility path retains windows of at most ten assets.
 The GUI says **Pausing** until the backend acknowledges that work is quiescent;
 it does not suspend encoder processes or bypass custody checks. Maintenance and
 compound delivery operations finish their current operation before stopping.

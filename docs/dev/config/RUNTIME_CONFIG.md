@@ -42,6 +42,48 @@ explicit `=false`, so a saved opt-in can be disabled for one run.
 
 ## Policy Fields
 
+### Native GUI Overrides
+
+The gear button opens separate Images and Videos tabs. Image overrides include
+the JSON file, JPEG effort (1 through 11), fallback policy, quality heuristic,
+database access and per-file error mode. Video overrides include the existing
+HEVC/AV1 codec selector and an independent per-file error mode. AV1 disables
+Apple compatibility; video quality and preset are not exposed by the current
+CLI and therefore are not editable controls.
+Video settings apply only to standard `vid run` processing. Fast Video uses
+`vid fast-gif`, which supports neither option; explicit launcher options there
+are rejected and the GUI disables the settings button for that operation.
+The image file-error override also belongs to standard processing. FastImg
+retains its existing checkpointed per-file failure handling; the launcher rejects
+an explicit error-mode override there rather than pretending it controls the
+FastImg encoding waves. Its fallback, effort and other image preferences still apply.
+
+All controls start inherited. Overrides are saved in native GUI preferences,
+passed as explicit launcher options, and only forwarded to the matching media
+pipeline. Reset This Tab removes that tab's overrides, not the other tab or
+the runtime JSON. Invalid saved overrides and unreadable explicit files fail
+visibly instead of silently reverting to defaults. JSON schema validation
+remains owned by `img`. Tools, Photos names and other advanced settings remain
+available through the selected JSON file.
+
+The launcher accepts `--img-config`, `--img-fallback-policy`,
+`--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
+`--img-allow-database=true|false`, `--img-error-mode`, `--vid-codec`, and
+`--vid-error-mode`. Error modes are `log-and-continue` and `fail-fast`; overrides
+apply only to the child process, including PTY launches, without mutating the
+launcher's global environment. Encoding options are not sent to verification,
+restore or maintenance tools.
+
+Fallback selects permitted attempts; error mode selects whether a recoverable
+file failure stops processing. Strict fallback is not fail-fast. Failed files
+retain their sources and count separately from intentional skips; fatal errors
+still stop. Versioned `MFB_BATCH_RESULT` events report each completed media
+child's exit and known counts. Missing counts are JSON `null`, not fabricated
+zeroes; the GUI retains that uncertainty when aggregating results. Error logs
+and nonzero exits are preserved even when a count summary is unavailable.
+
+### Runtime JSON
+
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
@@ -156,4 +198,5 @@ separate, as listed in that record.
 
 Tool selection currently exposes executable paths and single/fallback policy.
 The established recovery ordering is retained; arbitrary per-format tool
-reordering and a GUI preferences editor are not implemented by this increment.
+reordering is not implemented. The September 30 GUI editor adds per-media
+overrides above; it does not rewrite runtime JSON or change tool ordering.

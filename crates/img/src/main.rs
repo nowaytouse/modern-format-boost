@@ -621,7 +621,16 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     config.child_threads = thread_config.child_threads;
 
     if input.is_file() {
-        auto_convert_single_file(&input, &config)?;
+        let result = auto_convert_single_file(&input, &config)
+            .inspect_err(foundation::report::print_recoverable_single_file_error)?;
+        let outcome = if result.ignored {
+            foundation::conversion::Outcome::Ignored
+        } else if result.skipped {
+            foundation::conversion::Outcome::Skipped
+        } else {
+            foundation::conversion::Outcome::Converted
+        };
+        foundation::report::print_single_file_outcome(outcome);
     } else if input.is_dir() {
         auto_convert_directory(&input, &config, recursive, resume)?;
     } else {
@@ -1483,7 +1492,7 @@ fn conversion_output_ignored(input: &Path, reason: String, original_size: u64) -
 
 fn convert_result_to_output(result: foundation::TaskResult) -> anyhow::Result<ConversionOutput> {
     if !result.success && !result.ignored {
-        anyhow::bail!(result.message);
+        return Err(foundation::UnifiedError::conversion_error(result.message).into());
     }
     let input_path = result.input_path.clone();
     let output_path = if let Some(v) = result.output_path.clone() {
@@ -1610,7 +1619,16 @@ mod conversion_result_adapter_tests {
         )?;
 
         let error = convert_result_to_output(result).expect_err("failed task must remain failed");
-        assert_eq!(error.to_string(), "decode failed");
+        assert!(error.to_string().contains("decode failed"));
+        assert!(!image_batch_should_abort(
+            foundation::BatchErrorMode::LogAndContinue,
+            &error
+        ));
+        assert!(image_batch_should_abort(
+            foundation::BatchErrorMode::FailFast,
+            &error
+        ));
+        assert_eq!(std::fs::read(&input)?, b"corrupt");
         Ok(())
     }
 

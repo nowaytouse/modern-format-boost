@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Per-media GUI settings and explicit batch outcomes (2026-09-30)
+
+- Add native Images/Videos settings tabs with independent persistent overrides
+  and per-tab reset. Expose the existing image JSON file, JPEG effort, fallback,
+  heuristic, database gates and file-error mode; expose video codec and its
+  independent error mode. Inherited configuration remains intact.
+- Route only applicable options to media children, including scoped PTY child
+  environments. Keep AV1's explicit non-Apple-compatible semantics and reject
+  options that cannot apply to the selected operation.
+- Defer image database initialization to `img` after full configuration
+  resolution, instead of a launcher environment-only preflight that could
+  contradict a GUI or JSON override. Image-only auto scans do not invoke the
+  video database preflight; dry runs do not connect to the database.
+- Separate failed files from intentional skips and unreported counts in the
+  GUI. Versioned child result events use null for unknown counters; a reported
+  failure or nonzero exit cannot display as a clean all-success completion.
+  Strict encoding fallback remains independent of fail-fast batch handling.
+- Report actual dispositions from single-file IMG/VID entry points as well as
+  directory summaries. Known recoverable file failures remain distinct from
+  fatal or unclassified exits; continuing a batch never hides its failure exit.
+- Record the completed 1K AppleScript production baseline: import 792.249 s,
+  resume 1578.553 s, unchanged resumed asset count and retained originals.
+  The observed native comparison is fixture-specific, not a universal speedup.
+- Local validation: 158 IMG tests, 82 launcher/stream tests, 396 source contracts,
+  14 report tests and 5 shared CLI tests passed. Native settings and result-state
+  self-tests passed in English, Simplified Chinese and Japanese; formatting and
+  strict Clippy checks passed for the affected Rust libraries and binaries.
+
 ### Native Photos pipeline completion (2026-09-30)
 
 - Overlap one PhotoKit transaction with the previous verification/checkpoint

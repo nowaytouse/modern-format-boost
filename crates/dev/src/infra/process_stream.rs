@@ -16,6 +16,8 @@ pub struct ProcessorStats {
     pub ignored: usize,
     pub failed: usize,
     pub exit_code: i32,
+    /// Observed counters in succeeded, skipped, ignored, failed order.
+    pub reported: [bool; 4],
 }
 
 impl ProcessorStats {
@@ -35,17 +37,43 @@ fn parse_stats_count(token: &str) -> Option<usize> {
     }
 }
 
-/// Parse a single stats line; returns true if line was consumed.
+/// Accept bare counters or the exact report decoration, never a filename/message substring.
 pub fn ingest_stats_line(stats: &mut ProcessorStats, line: &str) {
-    let parts: Vec<&str> = line.split_whitespace().collect();
+    let clean = strip_ansi_escapes(line);
+    let mut text = clean.trim();
+    if let Some(body) = text.strip_prefix('|').or_else(|| text.strip_prefix('│')) {
+        text = body.trim();
+    }
+    for prefix in ["[OK]", "[X]", "[skip]", "[ignored]", "✅", "❌", "⏭️", "👻"] {
+        if let Some(body) = text.strip_prefix(prefix) {
+            text = body.trim();
+            break;
+        }
+    }
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() > 3 || (parts.len() == 3 && !matches!(parts[2], "|" | "│")) {
+        return;
+    }
     if parts.len() >= 2 {
         let is_target = matches!(parts[0], "Succeeded:" | "Skipped:" | "Ignored:" | "Failed:");
         if is_target && let Some(n) = parse_stats_count(parts[1]) {
             match parts[0] {
-                "Succeeded:" => stats.succeeded = n,
-                "Skipped:" => stats.skipped = n,
-                "Ignored:" => stats.ignored = n,
-                "Failed:" => stats.failed = n,
+                "Succeeded:" => {
+                    stats.succeeded = n;
+                    stats.reported[0] = true;
+                }
+                "Skipped:" => {
+                    stats.skipped = n;
+                    stats.reported[1] = true;
+                }
+                "Ignored:" => {
+                    stats.ignored = n;
+                    stats.reported[2] = true;
+                }
+                "Failed:" => {
+                    stats.failed = n;
+                    stats.reported[3] = true;
+                }
                 _ => {}
             }
         }
@@ -213,6 +241,7 @@ fn pty_read_error_is_end_of_stream(error: &std::io::Error) -> bool {
 fn stream_process_with_pty_unix<F, H>(
     cmd: &[String],
     log_path: Option<&Path>,
+    env_overrides: &[(&str, Option<&str>)],
     mut line_handler: F,
     mut heartbeat_cb: H,
 ) -> Result<ProcessorStats>
@@ -251,7 +280,9 @@ where
     let stdout = unsafe { Stdio::from_raw_fd(slave_fd) };
     let stderr = unsafe { Stdio::from_raw_fd(stderr_fd) };
 
-    let mut child = Command::new(&cmd[0])
+    let mut command = Command::new(&cmd[0]);
+    apply_env_overrides(&mut command, env_overrides);
+    let mut child = command
         .args(&cmd[1..])
         .stdout(stdout)
         .stderr(stderr)
@@ -360,6 +391,7 @@ where
 fn stream_process_with_pty_unix<F, H>(
     cmd: &[String],
     _log_path: Option<&Path>,
+    _env_overrides: &[(&str, Option<&str>)],
     _line_handler: F,
     _heartbeat_cb: H,
 ) -> Result<ProcessorStats>
@@ -378,6 +410,31 @@ where
 pub fn stream_process_with_pty<F, H>(
     cmd: &[String],
     log_path: Option<&Path>,
+    line_handler: F,
+    heartbeat_cb: H,
+) -> Result<ProcessorStats>
+where
+    F: FnMut(&str),
+    H: FnMut(),
+{
+    stream_process_with_pty_with_env(cmd, log_path, &[], line_handler, heartbeat_cb)
+}
+
+fn apply_env_overrides(command: &mut Command, env_overrides: &[(&str, Option<&str>)]) {
+    for (name, value) in env_overrides {
+        if let Some(value) = value {
+            command.env(name, value);
+        } else {
+            command.env_remove(name);
+        }
+    }
+}
+
+/// Stream a child with environment changes confined to that child process.
+pub fn stream_process_with_pty_with_env<F, H>(
+    cmd: &[String],
+    log_path: Option<&Path>,
+    env_overrides: &[(&str, Option<&str>)],
     mut line_handler: F,
     heartbeat_cb: H,
 ) -> Result<ProcessorStats>
@@ -386,9 +443,17 @@ where
     H: FnMut(),
 {
     if pty_available() {
-        return stream_process_with_pty_unix(cmd, log_path, line_handler, heartbeat_cb);
+        return stream_process_with_pty_unix(
+            cmd,
+            log_path,
+            env_overrides,
+            line_handler,
+            heartbeat_cb,
+        );
     }
-    let child = Command::new(&cmd[0])
+    let mut command = Command::new(&cmd[0]);
+    apply_env_overrides(&mut command, env_overrides);
+    let child = command
         .args(&cmd[1..])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -425,6 +490,37 @@ mod tests {
         assert_eq!(stats.skipped, 2);
         assert_eq!(stats.ignored, 3);
         assert_eq!(stats.failed, 1);
+        assert_eq!(stats.reported, [true; 4]);
+    }
+
+    #[test]
+    fn report_counters_keep_missing_values_unknown_and_skip_distinct() {
+        let stats = parse_stats_from_output(
+            "\x1b[32m│ ✅ Succeeded: 7 │\x1b[0m\n| [X] Failed: 0 |\n│ ⏭️ Skipped: 2 │\nfilename Failed: 99\nFailed: 8.jpg\nFailed: 4 invalid message",
+        );
+        assert_eq!((stats.succeeded, stats.skipped, stats.failed), (7, 2, 0));
+        assert_eq!(stats.reported, [true, true, false, true]);
+        let empty = parse_stats_from_output("[ENCODE] no summary available");
+        assert_eq!(empty.reported, [false; 4]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_environment_overrides_do_not_leak_to_parent() -> Result<()> {
+        let key = "MFB_TEST_SCOPED_STREAM_ENV";
+        let original = std::env::var_os(key);
+        let command = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "printf 'Succeeded: %s\\n' \"$MFB_TEST_SCOPED_STREAM_ENV\"".to_owned(),
+        ];
+        let stats =
+            stream_process_with_pty_with_env(&command, None, &[(key, Some("7"))], |_| {}, || {})?;
+        assert_eq!(stats.succeeded, 7);
+        assert!(stats.reported[0]);
+        assert_eq!(stats.exit_code, 0);
+        assert_eq!(std::env::var_os(key), original);
+        Ok(())
     }
 
     #[test]

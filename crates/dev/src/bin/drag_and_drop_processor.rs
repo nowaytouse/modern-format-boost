@@ -23,7 +23,7 @@ use dev::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
     format_session_stamp,
 };
-use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty};
+use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_critical_error_panel, print_menu_hint, print_menu_row,
@@ -45,6 +45,7 @@ use dev::media::scope::{
     report_handoff_preserve_gaps_from_paths,
 };
 use foundation::BatchErrorMode;
+use foundation::infra::runtime_config::FallbackPolicy;
 use foundation::process_lock::DirLock;
 use std::fs;
 use std::io::{self, Write};
@@ -72,6 +73,43 @@ enum LaunchMode {
     Diagnostic,
     CacheClean,
     DatabaseManager,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ErrorModeOption {
+    LogAndContinue,
+    FailFast,
+}
+
+impl ErrorModeOption {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::LogAndContinue => "log-and-continue",
+            Self::FailFast => "fail-fast",
+        }
+    }
+
+    const fn batch_mode(self) -> BatchErrorMode {
+        match self {
+            Self::LogAndContinue => BatchErrorMode::LogAndContinue,
+            Self::FailFast => BatchErrorMode::FailFast,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum VideoCodecOption {
+    Hevc,
+    Av1,
+}
+
+impl VideoCodecOption {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -145,6 +183,38 @@ struct Args {
     #[arg(long)]
     pub strategy: Option<String>,
 
+    /// Image runtime JSON overlay; the file is not modified.
+    #[arg(long, value_name = "PATH")]
+    img_config: Option<PathBuf>,
+
+    /// Permitted image encoding attempts, independent of batch failure handling.
+    #[arg(long, value_enum)]
+    img_fallback_policy: Option<FallbackPolicy>,
+
+    /// JPEG reversible recompression effort, from 1 through 11.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
+    img_jpeg_effort: Option<u8>,
+
+    /// Override image quality inference without affecting video settings.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_quality_heuristic: Option<bool>,
+
+    /// Permit or deny optional image database access, not database credentials.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_allow_database: Option<bool>,
+
+    /// Standard image batch policy; FastImg retains its checkpointed handling.
+    #[arg(long, value_enum)]
+    img_error_mode: Option<ErrorModeOption>,
+
+    /// Standard video batch policy; not applicable to Fast Video/GIF.
+    #[arg(long, value_enum)]
+    vid_error_mode: Option<ErrorModeOption>,
+
+    /// Standard video codec; AV1 explicitly disables Apple compatibility.
+    #[arg(long, value_enum)]
+    vid_codec: Option<VideoCodecOption>,
+
     /// Restrict restore-jpeg to one native Photos album UUID.
     #[arg(long, conflicts_with = "photos_folder_id")]
     photos_album_id: Option<String>,
@@ -158,6 +228,7 @@ struct Args {
 struct LaunchCommand {
     program: PathBuf,
     args: Vec<String>,
+    env_overrides: Vec<(String, Option<String>)>,
 }
 
 struct DragDropSession {
@@ -382,7 +453,22 @@ impl LaunchCommand {
         Ok(Self {
             program: PathBuf::from(program),
             args: iter.collect(),
+            env_overrides: Vec::new(),
         })
+    }
+
+    fn with_error_mode(mut self, mode: Option<ErrorModeOption>) -> Self {
+        if let Some(mode) = mode {
+            self.env_overrides.push((
+                foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
+                Some(mode.as_str().to_owned()),
+            ));
+            self.env_overrides.push((
+                foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
+                None,
+            ));
+        }
+        self
     }
 
     fn display(&self) -> String {
@@ -420,6 +506,15 @@ impl LaunchCommand {
         bail_on_failure: bool,
     ) -> Result<ProcessorStats> {
         println!("+ {}", self.display());
+        if self.args.first().is_some_and(|arg| arg == "run") {
+            for (name, value) in &self.env_overrides {
+                if name == foundation::constants::ENV_MFB_ERROR_MODE
+                    && let Some(value) = value
+                {
+                    println!("[POLICY] {} file_error_mode={value}", self.pipeline_label());
+                }
+            }
+        }
         if dry_run {
             return Ok(ProcessorStats::default());
         }
@@ -447,6 +542,13 @@ impl LaunchCommand {
 
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
+        for (name, value) in &self.env_overrides {
+            if let Some(value) = value {
+                cmd.env(name, value);
+            } else {
+                cmd.env_remove(name);
+            }
+        }
         cmd.env("COLUMNS", "223");
         cmd.env("LINES", "45");
         let stats = if let Some(sess) = session {
@@ -457,10 +559,16 @@ impl LaunchCommand {
             let pipeline_label = self.pipeline_label().to_string();
             let pipeline_started_at = Instant::now();
             let argv = self.argv();
+            let env_overrides = self
+                .env_overrides
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_deref()))
+                .collect::<Vec<_>>();
             set_child_active(true);
-            let result = stream_process_with_pty(
+            let result = stream_process_with_pty_with_env(
                 &argv,
                 Some(&verbose),
+                &env_overrides,
                 |line| {
                     println!("{line}");
                     let _ = io::stdout().flush();
@@ -729,11 +837,13 @@ const fn mode_needs_img_vid_binaries(mode: &LaunchMode) -> bool {
     )
 }
 
-fn mode_needs_db_health(mode: &LaunchMode) -> bool {
+const fn mode_needs_db_health(mode: &LaunchMode) -> bool {
     match mode {
-        LaunchMode::Images => foundation::static_quality_db_lookup_enabled(),
         LaunchMode::Auto | LaunchMode::Videos => true,
-        LaunchMode::FastImg
+        // img resolves JSON, environment and explicit flags before its own database setup.
+        // A launcher-only environment probe cannot determine the effective image policy.
+        LaunchMode::Images
+        | LaunchMode::FastImg
         | LaunchMode::RestoreJpeg
         | LaunchMode::FastVid
         | LaunchMode::Collect
@@ -992,6 +1102,107 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
     )
 }
 
+fn validate_media_options(args: &Args) -> Result<()> {
+    let image_options = args.img_config.is_some()
+        || args.img_fallback_policy.is_some()
+        || args.img_jpeg_effort.is_some()
+        || args.img_quality_heuristic.is_some()
+        || args.img_allow_database.is_some()
+        || args.img_error_mode.is_some();
+    anyhow::ensure!(
+        !image_options
+            || matches!(
+                args.mode,
+                LaunchMode::Auto | LaunchMode::Images | LaunchMode::FastImg
+            ),
+        "image settings require --mode auto, images, or fast-img"
+    );
+    anyhow::ensure!(
+        (args.vid_error_mode.is_none() && args.vid_codec.is_none())
+            || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
+        "video settings require --mode auto or videos"
+    );
+    anyhow::ensure!(
+        args.img_error_mode.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
+        "image file-error policy requires standard image processing; fast-img uses its checkpointed failure handling"
+    );
+    Ok(())
+}
+
+fn media_error_mode(args: &Args, pipeline: &str, inherited: BatchErrorMode) -> BatchErrorMode {
+    match pipeline {
+        "IMG" => args
+            .img_error_mode
+            .map_or(inherited, ErrorModeOption::batch_mode),
+        "VID" => args
+            .vid_error_mode
+            .map_or(inherited, ErrorModeOption::batch_mode),
+        _ => inherited,
+    }
+}
+
+fn child_failure_should_abort(mode: BatchErrorMode, exit_code: i32, failed: usize) -> bool {
+    // Only a normal per-file failure summary permits continuing after a child exits.
+    // Signals, launch failures and absent summaries remain fatal/unknown.
+    mode.is_fail_fast() || !matches!(exit_code, 0 | 1) || failed == 0
+}
+
+fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
+    match args.mode {
+        LaunchMode::Images | LaunchMode::FastImg => {
+            media_error_mode(args, "IMG", inherited).is_fail_fast()
+        }
+        LaunchMode::Videos => media_error_mode(args, "VID", inherited).is_fail_fast(),
+        LaunchMode::Auto => {
+            media_error_mode(args, "IMG", inherited).is_fail_fast()
+                && media_error_mode(args, "VID", inherited).is_fail_fast()
+        }
+        _ => inherited.is_fail_fast(),
+    }
+}
+
+fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
+    let count = |index: usize, value| stats.reported[index].then_some(value);
+    format!(
+        "MFB_BATCH_RESULT={}",
+        serde_json::json!({
+            "schema_version": 1,
+            "media": media,
+            "succeeded": count(0, stats.succeeded),
+            "skipped": count(1, stats.skipped),
+            "ignored": count(2, stats.ignored),
+            "failed": count(3, stats.failed),
+            "exit_code": stats.exit_code,
+        })
+    )
+}
+
+fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
+    if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
+        println!(
+            "{}",
+            batch_result_line(&command.pipeline_label().to_ascii_lowercase(), stats)
+        );
+    }
+}
+
+fn print_batch_launch_error(command: &LaunchCommand, dry_run: bool) {
+    if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
+        println!(
+            "MFB_BATCH_RESULT={}",
+            serde_json::json!({
+                "schema_version": 1,
+                "media": command.pipeline_label().to_ascii_lowercase(),
+                "succeeded": null,
+                "skipped": null,
+                "ignored": null,
+                "failed": null,
+                "exit_code": null,
+            })
+        );
+    }
+}
+
 fn adjacent_output_dir(args: &Args) -> PathBuf {
     args.output.clone().unwrap_or_else(|| {
         unique_adjacent_output(args.inputs.first().expect("input required"), "optimized")
@@ -1150,6 +1361,7 @@ fn run_fast_img_post_success(
     summary.img.succeeded = counts.optimized_count;
     summary.img.skipped = counts.skipped_count;
     summary.img.failed = counts.failed_count;
+    summary.img.reported = [true, true, false, true];
     if args.shortest_path && verify.warnings == Some(false) {
         match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
             Ok(true) => {
@@ -1262,7 +1474,13 @@ fn run_fast_img_task(
 ) -> Result<(ProcessorStats, PathBuf)> {
     let target = args.inputs.first().context("input required")?;
     let (command, output) = fast_img_launch_command(args, project_root, target)?;
-    let stats = command.run_collecting(args.dry_run, Some(session), false)?;
+    let stats = command.run_collecting(args.dry_run, Some(session), false);
+    match &stats {
+        Ok(stats) if stats.exit_code != 0 => print_batch_result(&command, stats, args.dry_run),
+        Ok(_) => {}
+        Err(_) => print_batch_launch_error(&command, args.dry_run),
+    }
+    let stats = stats?;
     Ok((stats, output))
 }
 
@@ -1275,7 +1493,7 @@ fn fast_img_launch_command(
     let output = resolve_fast_img_output_for_run(args, target)?;
     let img_bin = cli_binary(project_root, "img");
     let retry = args.retry || args.resume;
-    let command = LaunchCommand::from_argv(build_fast_img_command(
+    let mut command = LaunchCommand::from_argv(build_fast_img_command(
         &img_bin,
         target,
         &output,
@@ -1286,7 +1504,32 @@ fn fast_img_launch_command(
         args.strategy.as_deref(),
         args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
     ))?;
+    push_img_policy_args(&mut command.args, args);
+    let command = command.with_error_mode(args.img_error_mode);
     Ok((command, output))
+}
+
+fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
+    if let Some(path) = &args.img_config {
+        command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
+    }
+    if let Some(policy) = args.img_fallback_policy {
+        let value = match policy {
+            FallbackPolicy::Strict => "strict",
+            FallbackPolicy::SameSemantics => "same-semantics",
+            FallbackPolicy::Repair => "repair",
+        };
+        command.extend(["--fallback-policy".to_owned(), value.to_owned()]);
+    }
+    if let Some(effort) = args.img_jpeg_effort {
+        command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
+    }
+    if let Some(heuristic) = args.img_quality_heuristic {
+        command.push(format!("--quality-heuristic={heuristic}"));
+    }
+    if let Some(database) = args.img_allow_database {
+        command.push(format!("--allow-database={database}"));
+    }
 }
 
 fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
@@ -1333,7 +1576,25 @@ fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
 fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -> LaunchCommand {
     let mut command = vec![cli_binary(project_root, bin).to_string_lossy().into_owned()];
     push_common_run_args(&mut command, args, input);
-    LaunchCommand::from_argv(command).expect("internal command must include binary")
+    match bin {
+        "img" => push_img_policy_args(&mut command, args),
+        "vid" => {
+            if let Some(codec) = args.vid_codec {
+                command.extend(["--codec".to_owned(), codec.as_str().to_owned()]);
+                if codec == VideoCodecOption::Av1 {
+                    command.push("--no-apple-compat".to_owned());
+                }
+            }
+        }
+        _ => {}
+    }
+    LaunchCommand::from_argv(command)
+        .expect("internal command must include binary")
+        .with_error_mode(match bin {
+            "img" => args.img_error_mode,
+            "vid" => args.vid_error_mode,
+            _ => None,
+        })
 }
 
 fn plan_auto_file(project_root: &Path, args: &Args, input: &Path) -> Result<LaunchCommand> {
@@ -1382,6 +1643,7 @@ fn plan_cli_invocations(
     project_root: &Path,
     session: Option<&DragDropSession>,
 ) -> Result<Vec<LaunchCommand>> {
+    validate_media_options(args)?;
     if args.inputs.is_empty() {
         // Handled by main menu
         return Ok(Vec::new());
@@ -1616,6 +1878,7 @@ fn run_drag_drop(
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
     foundation::batch_control::checkpoint()?;
+    validate_media_options(args)?;
     if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
         anyhow::ensure!(
             args.mode == LaunchMode::RestoreJpeg && args.inputs.len() == 1,
@@ -1660,7 +1923,10 @@ fn run_drag_drop(
     if mode_needs_img_vid_binaries(&args.mode) {
         ensure_tools_ready(&root, &args.mode)?;
     }
-    if mode_needs_db_health(&args.mode) {
+    if !args.dry_run
+        && mode_needs_db_health(&args.mode)
+        && !(args.mode == LaunchMode::Auto && scan.as_ref().is_some_and(|scan| scan.vid_count == 0))
+    {
         verify_database_mandatory(&root)?;
     }
 
@@ -1685,7 +1951,7 @@ fn run_drag_drop(
     }
 
     let error_mode = BatchErrorMode::current();
-    let fail_fast = error_mode.is_fail_fast();
+    let fail_fast = routing_fail_fast(args, error_mode);
     let commands = if let Some(ref scan) = scan {
         if mode_uses_standard_pipeline(&args.mode) {
             plan_routed_pipeline_commands(args, &root, scan, fail_fast)?
@@ -1727,8 +1993,9 @@ fn run_drag_drop(
                 args.photos_folder_id.as_deref(),
             ))?;
             draw_separator("Processing (restore-jpeg)");
-            match command.run_with_session(false, session) {
+            match command.run_collecting(false, session, false) {
                 Ok(stats) => {
+                    print_batch_result(&command, &stats, false);
                     if stats.exit_code != 0 {
                         if fail_fast {
                             bail!("restore-jpeg exited with code {}", stats.exit_code);
@@ -1744,8 +2011,14 @@ fn run_drag_drop(
                         summary.img = stats;
                     }
                 }
-                Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
-                Err(err) => first_error = Some(err),
+                Err(err) if drag_drop_error_should_abort(error_mode, &err) => {
+                    print_batch_launch_error(&command, false);
+                    return Err(err);
+                }
+                Err(err) => {
+                    print_batch_launch_error(&command, false);
+                    first_error = Some(err);
+                }
             }
             if first_error.is_none() && is_photos_audit {
                 summary.integrity_state = Some("CLEAN");
@@ -1814,13 +2087,18 @@ fn run_drag_drop(
                             ));
                         }
                     } else {
-                        run_fast_img_post_success(
+                        let verified = run_fast_img_post_success(
                             args,
                             &root,
                             session.expect("session"),
                             &mut summary,
                             &output,
-                        )?;
+                        );
+                        if verified.is_err() {
+                            summary.img.exit_code = 1;
+                        }
+                        println!("{}", batch_result_line("img", &summary.img));
+                        verified?;
                     }
                 }
                 Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
@@ -1831,8 +2109,12 @@ fn run_drag_drop(
         for (idx, command) in commands.into_iter().enumerate() {
             update_terminal_title(started.elapsed());
             draw_separator(&command_phase_label(&command.program, idx, total_cmds));
-            match command.run_with_session(args.dry_run, session) {
+            let command_error_mode = media_error_mode(args, command.pipeline_label(), error_mode);
+            match command.run_collecting(args.dry_run, session, false) {
                 Ok(stats) => {
+                    print_batch_result(&command, &stats, args.dry_run);
+                    let child_exit_code = stats.exit_code;
+                    let child_failed = stats.failed;
                     let is_img = command
                         .program
                         .file_name()
@@ -1860,8 +2142,34 @@ fn run_drag_drop(
                     } else {
                         summary.vid = stats;
                     }
+                    if child_exit_code != 0 || child_failed > 0 {
+                        if child_failed == 0 {
+                            if is_img {
+                                summary.img.failed += 1;
+                            } else if is_vid {
+                                summary.vid.failed += 1;
+                            }
+                        }
+                        let err = anyhow::anyhow!(
+                            "{} command exited with code {} and reported {} failed file(s)",
+                            command.pipeline_label(),
+                            child_exit_code,
+                            child_failed
+                        );
+                        if child_failure_should_abort(
+                            command_error_mode,
+                            child_exit_code,
+                            child_failed,
+                        ) {
+                            return Err(err);
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
                 }
                 Err(err) => {
+                    print_batch_launch_error(&command, args.dry_run);
                     let is_img = command
                         .program
                         .file_name()
@@ -1877,7 +2185,7 @@ fn run_drag_drop(
                     } else if is_vid {
                         summary.vid.failed += 1;
                     }
-                    if drag_drop_error_should_abort(error_mode, &err) {
+                    if drag_drop_error_should_abort(command_error_mode, &err) {
                         return Err(err);
                     }
                     eprintln!(
@@ -2383,6 +2691,14 @@ fn build_run_args(
         strategy,
         photos_album_id: None,
         photos_folder_id: None,
+        img_config: None,
+        img_fallback_policy: None,
+        img_jpeg_effort: None,
+        img_quality_heuristic: None,
+        img_allow_database: None,
+        img_error_mode: None,
+        vid_error_mode: None,
+        vid_codec: None,
     }
 }
 
@@ -2757,6 +3073,155 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
+    fn media_settings_are_typed_scoped_and_forwarded() {
+        let args = apply_mode_overrides(
+            Args::try_parse_from([
+                "mfb",
+                "--images-only",
+                "--img-config",
+                "/tmp/preferences.json",
+                "--img-fallback-policy",
+                "strict",
+                "--img-jpeg-effort",
+                "11",
+                "--img-quality-heuristic=false",
+                "--img-allow-database=true",
+                "--img-error-mode",
+                "log-and-continue",
+                "/tmp/media",
+            ])
+            .unwrap(),
+        );
+        validate_media_options(&args).unwrap();
+        let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--config", "/tmp/preferences.json"])
+        );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--fallback-policy", "strict"])
+        );
+        assert!(
+            command
+                .args
+                .contains(&"--quality-heuristic=false".to_owned())
+        );
+        assert!(command.args.contains(&"--allow-database=true".to_owned()));
+        assert!(command.env_overrides.contains(&(
+            foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
+            Some("log-and-continue".to_owned())
+        )));
+        assert!(command.env_overrides.contains(&(
+            foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
+            None
+        )));
+        let video = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video"));
+        assert!(!video.args.contains(&"--config".to_owned()));
+        assert!(video.env_overrides.is_empty());
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort", "12", "/tmp/media"]).is_err());
+        assert!(
+            Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
+        );
+    }
+
+    #[test]
+    fn video_av1_and_inapplicable_options_are_explicit() {
+        let args = apply_mode_overrides(
+            Args::try_parse_from([
+                "mfb",
+                "--videos-only",
+                "--vid-codec",
+                "av1",
+                "--vid-error-mode",
+                "fail-fast",
+                "/tmp/media",
+            ])
+            .unwrap(),
+        );
+        validate_media_options(&args).unwrap();
+        let command = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--codec", "av1"])
+        );
+        assert!(command.args.contains(&"--no-apple-compat".to_owned()));
+        assert_eq!(
+            media_error_mode(&args, "VID", BatchErrorMode::LogAndContinue),
+            BatchErrorMode::FailFast
+        );
+        assert_eq!(
+            media_error_mode(&args, "IMG", BatchErrorMode::LogAndContinue),
+            BatchErrorMode::LogAndContinue
+        );
+        for argv in [
+            vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
+            vec!["mfb", "--images-only", "--vid-codec", "av1"],
+            vec!["mfb", "--mode", "fast-vid", "--vid-codec", "av1"],
+            vec![
+                "mfb",
+                "--mode",
+                "restore-jpeg",
+                "--img-config",
+                "/tmp/config.json",
+            ],
+            vec!["mfb", "--mode", "fast-img", "--img-error-mode", "fail-fast"],
+        ] {
+            let args = apply_mode_overrides(Args::try_parse_from(argv).unwrap());
+            assert!(validate_media_options(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn batch_results_preserve_unknown_and_failure_semantics() {
+        let stats = ProcessorStats {
+            succeeded: 3,
+            skipped: 2,
+            failed: 1,
+            exit_code: 1,
+            reported: [true, true, false, true],
+            ..ProcessorStats::default()
+        };
+        let line = batch_result_line("img", &stats);
+        let result: serde_json::Value =
+            serde_json::from_str(line.strip_prefix("MFB_BATCH_RESULT=").unwrap()).unwrap();
+        assert_eq!(result["schema_version"], 1);
+        assert_eq!(result["succeeded"], 3);
+        assert_eq!(result["skipped"], 2);
+        assert_eq!(result["failed"], 1);
+        assert!(result["ignored"].is_null());
+        assert_eq!(result["exit_code"], 1);
+        assert!(!child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            1,
+            1
+        ));
+        assert!(!child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            0,
+            1
+        ));
+        assert!(child_failure_should_abort(BatchErrorMode::FailFast, 0, 1));
+        assert!(child_failure_should_abort(BatchErrorMode::FailFast, 1, 1));
+        assert!(child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            137,
+            1
+        ));
+        assert!(child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            1,
+            0
+        ));
+    }
+
+    #[test]
     fn drag_drop_error_policy_continues_only_classified_recoverable_errors() {
         let recoverable: anyhow::Error =
             foundation::UnifiedError::analysis_error("bad media").into();
@@ -2778,10 +3243,10 @@ mod tests {
 
     #[test]
     #[serial]
-    fn image_mode_database_preflight_requires_explicit_heuristic_opt_in() {
+    fn image_database_preflight_defers_to_resolved_child_configuration() {
         let _heuristic = foundation::common_utils::EnvGuard::set(
             foundation::constants::HEURISTIC_QUALITY_ENV_KEY,
-            "0",
+            "1",
         );
 
         assert!(!mode_needs_db_health(&LaunchMode::Images));
@@ -3026,6 +3491,14 @@ mod tests {
             strategy: None,
             photos_album_id: None,
             photos_folder_id: None,
+            img_config: None,
+            img_fallback_policy: None,
+            img_jpeg_effort: None,
+            img_quality_heuristic: None,
+            img_allow_database: None,
+            img_error_mode: None,
+            vid_error_mode: None,
+            vid_codec: None,
         };
 
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
@@ -3118,6 +3591,14 @@ mod tests {
                 strategy: None,
                 photos_album_id: None,
                 photos_folder_id: None,
+                img_config: None,
+                img_fallback_policy: None,
+                img_jpeg_effort: None,
+                img_quality_heuristic: None,
+                img_allow_database: None,
+                img_error_mode: None,
+                vid_error_mode: None,
+                vid_codec: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);
@@ -3151,6 +3632,14 @@ mod tests {
             strategy: None,
             photos_album_id: None,
             photos_folder_id: None,
+            img_config: None,
+            img_fallback_policy: None,
+            img_jpeg_effort: None,
+            img_quality_heuristic: None,
+            img_allow_database: None,
+            img_error_mode: None,
+            vid_error_mode: None,
+            vid_codec: None,
         };
         let error = plan_cli_invocations(&args, Path::new("/repo"), None)
             .expect_err("folder comparison must be rejected before spawning a worker");
@@ -3206,6 +3695,14 @@ mod tests {
                 strategy: None,
                 photos_album_id: None,
                 photos_folder_id: None,
+                img_config: None,
+                img_fallback_policy: None,
+                img_jpeg_effort: None,
+                img_quality_heuristic: None,
+                img_allow_database: None,
+                img_error_mode: None,
+                vid_error_mode: None,
+                vid_codec: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);

@@ -307,6 +307,7 @@ pub fn print_summary_report(summary: &PipelineSummary) {
                 ignored: summary.total_ignored(),
                 failed: effective_f,
                 exit_code: 0,
+                ..ProcessorStats::default()
             },
         );
         println!();

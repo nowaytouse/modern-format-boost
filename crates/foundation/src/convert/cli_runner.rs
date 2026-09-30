@@ -1133,12 +1133,14 @@ where
                 input_display = input.display(),
             )
         );
+        crate::report::print_single_file_outcome(crate::conversion::Outcome::Ignored);
         return Ok(());
     }
 
     let result = match converter(input) {
         Ok(r) => r,
         Err(e) => {
+            crate::report::print_recoverable_single_file_error(&e);
             return Err(e);
         }
     };
@@ -1181,8 +1183,17 @@ where
     );
 
     if !result.is_success() && !result.is_skipped() && !result.is_ignored() {
+        crate::report::print_single_file_outcome(crate::conversion::Outcome::Failed);
         anyhow::bail!(result.message().to_string());
     }
+
+    crate::report::print_single_file_outcome(if result.is_ignored() {
+        crate::conversion::Outcome::Ignored
+    } else if result.is_skipped() {
+        crate::conversion::Outcome::Skipped
+    } else {
+        crate::conversion::Outcome::Converted
+    });
 
     Ok(())
 }
