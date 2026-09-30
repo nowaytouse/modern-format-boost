@@ -1,6 +1,6 @@
 //! Explicitly opted-in, synthetic-only benchmark for the debug system library.
 use super::*;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
@@ -19,10 +19,11 @@ fn photos_native_debug_benchmark() -> anyhow::Result<()> {
     let _lock = acquire_photos_import_lock()?;
     require_active_photos_library(Some(&library))?;
     // Keep inputs and journals on every failure, including an unknown commit.
-    let scratch = tempfile::Builder::new()
-        .prefix("mfb-native-bench-")
-        .tempdir()?
-        .keep();
+    let scratch = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+        "native Photos benchmark evidence",
+        "mfb-native-bench-",
+    )?
+    .keep();
     std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
     eprintln!("Native benchmark evidence: {}", scratch.display());
     let jpeg = scratch.join("original.jpg");
@@ -83,8 +84,11 @@ fn photos_native_debug_benchmark() -> anyhow::Result<()> {
         "{}",
         serde_json::json!({"version":1,"batchID":"probe","state":"ready"})
     )?;
-    for line in std::fs::read_to_string(&requests_path)?.lines().skip(1) {
-        let request = serde_json::from_str(line)?;
+    for line in BufReader::new(std::fs::File::open(&requests_path)?)
+        .lines()
+        .skip(1)
+    {
+        let request = serde_json::from_str(&line?)?;
         require_active_photos_library(Some(&library))?;
         let reply = client.request(&request)?;
         super::super::photos_native::committed_pairs(&request, &reply)?;
@@ -94,23 +98,23 @@ fn photos_native_debug_benchmark() -> anyhow::Result<()> {
     drop(client);
     require_active_photos_library(Some(&library))?;
     let import_seconds = started.elapsed().as_secs_f64();
-    let records = std::fs::read_to_string(&results_path)?
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut records = BufReader::new(std::fs::File::open(&results_path)?).lines();
+    let ready: serde_json::Value = serde_json::from_str(
+        &records
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing PhotoKit target probe"))??,
+    )?;
     anyhow::ensure!(
-        records.len() == count.div_ceil(batch_size) + 1,
-        "worker replies incomplete; reconcile journals, never blindly replay"
-    );
-    anyhow::ensure!(
-        records[0]["state"] == "ready",
-        "PhotoKit target/authorization probe failed: {}",
-        records[0]
+        ready["state"] == "ready",
+        "PhotoKit target/authorization probe failed: {ready}"
     );
     let mut entries = BTreeSet::new();
     let mut uuids = BTreeSet::new();
     let mut transaction_seconds = Vec::new();
-    for record in &records[1..] {
+    let mut transaction_count = 0;
+    for record in records {
+        let record: serde_json::Value = serde_json::from_str(&record?)?;
+        transaction_count += 1;
         anyhow::ensure!(record["state"] == "committed", "uncertain batch: {record}");
         transaction_seconds.push(
             record["transactionSeconds"]
@@ -138,6 +142,10 @@ fn photos_native_debug_benchmark() -> anyhow::Result<()> {
             );
         }
     }
+    anyhow::ensure!(
+        transaction_count == count.div_ceil(batch_size),
+        "worker replies incomplete; reconcile journals, never blindly replay"
+    );
     anyhow::ensure!(entries == (0..count).map(|i| i.to_string()).collect());
     anyhow::ensure!(uuids.len() == count);
     let verify_started = std::time::Instant::now();
@@ -186,5 +194,202 @@ fn photos_native_debug_benchmark() -> anyhow::Result<()> {
     serde_json::to_writer_pretty(&mut file, &report)?;
     file.sync_all()?;
     eprintln!("Native Photos benchmark: {report}");
+    Ok(())
+}
+
+#[test]
+#[ignore = "imports synthetic assets through the real pipeline into debug.photoslibrary"]
+fn photos_pipeline_debug_benchmark() -> anyhow::Result<()> {
+    let library =
+        PathBuf::from(std::env::var("MFB_LIVE_PHOTOS_SMOKE_DEBUG_LIBRARY")?).canonicalize()?;
+    anyhow::ensure!(
+        library.file_name() == Some(std::ffi::OsStr::new("debug.photoslibrary")),
+        "pipeline benchmark is restricted to debug.photoslibrary"
+    );
+    let count: usize = std::env::var("MFB_PHOTOS_BENCH_COUNT")?.parse()?;
+    anyhow::ensure!((1..=100_000).contains(&count));
+    let backend = std::env::var("MFB_PHOTOS_IMPORT_BACKEND")?;
+    anyhow::ensure!(
+        ["photokit", "applescript"].contains(&backend.as_str()),
+        "set MFB_PHOTOS_IMPORT_BACKEND to photokit or applescript"
+    );
+    let config = crate::runtime_config::load(None, true)?.config;
+    let batch_size = if backend == "photokit" {
+        config.photos.native_batch_size
+    } else {
+        FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE
+    };
+    let verification_batch_size = config.photos.verification_batch_size;
+    crate::runtime_config::install(config)?;
+
+    let _lock = acquire_photos_import_lock()?;
+    require_active_photos_library(Some(&library))?;
+    let count_assets = || -> anyhow::Result<usize> {
+        require_active_photos_library(Some(&library))?;
+        let output = run_fast_img_command_with_timeout(
+            std::process::Command::new(resolve_osascript_command()).args([
+                "-e",
+                "tell application \"Photos\" to return count of media items",
+            ]),
+            Duration::from_secs(30),
+            "count debug Photos assets",
+        )?;
+        anyhow::ensure!(output.status.success(), "Photos asset count failed");
+        Ok(String::from_utf8(output.stdout)?.trim().parse()?)
+    };
+    let before = (count <= 1000).then(&count_assets).transpose()?;
+
+    // Keep synthetic inputs and the report after any failed or uncertain import.
+    let scratch = crate::media_conversion_gate::delivery_temp_dir_in_scratch_or_err(
+        "Photos pipeline benchmark evidence",
+        "mfb-pipeline-bench-",
+    )?
+    .keep();
+    std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
+    eprintln!("Photos pipeline benchmark evidence: {}", scratch.display());
+    let source_root = scratch.join("source");
+    let working_copy = scratch.join("optimized");
+    std::fs::create_dir(&source_root)?;
+    std::fs::create_dir(&working_copy)?;
+    let jpeg = scratch.join("original.jpg");
+    let jxl = scratch.join("original.jxl");
+    image::RgbImage::from_fn(96, 64, |x, y| {
+        image::Rgb([
+            u8::try_from(x * 2).unwrap(),
+            u8::try_from(y * 3).unwrap(),
+            u8::try_from(x + y).unwrap(),
+        ])
+    })
+    .save_with_format(&jpeg, image::ImageFormat::Jpeg)?;
+    let encoded = run_fast_img_command_with_timeout(
+        std::process::Command::new(
+            crate::common_utils::resolve_tool_path("cjxl")
+                .ok_or_else(|| anyhow::anyhow!("cjxl required"))?,
+        )
+        .arg(&jpeg)
+        .arg(&jxl)
+        .args(["--distance=0", "--effort=1"]),
+        Duration::from_secs(60),
+        "pipeline benchmark JXL fixture",
+    )?;
+    anyhow::ensure!(encoded.status.success(), "JXL fixture encoding failed");
+    verify_jxl_roundtrip_integrity(&jpeg, &jxl)?;
+    let xmp = scratch.join("metadata.xmp");
+    std::fs::write(&xmp, br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:description="Synthetic Photos pipeline benchmark"/></rdf:RDF></x:xmpmeta>"#)?;
+    crate::metadata::append_xmp_overlay_to_jxl(&xmp, &jxl)?;
+    let source_hash = crate::common_utils::calculate_blake3_hash(&jpeg)?;
+    let output_hash = crate::common_utils::calculate_blake3_hash(&jxl)?;
+
+    let mut marker = WorkingCopyMarker::new(source_root.clone(), working_copy.clone(), count);
+    let run_name = scratch.file_name().unwrap().to_str().unwrap();
+    for index in 0..count {
+        let stem = format!("{run_name}-{index:06}");
+        let source_rel = format!("{stem}.jpg");
+        let output_rel = format!("{stem}.jxl");
+        std::fs::hard_link(&jpeg, source_root.join(&source_rel))?;
+        std::fs::hard_link(&jxl, working_copy.join(&output_rel))?;
+        marker.blake3_log.insert(
+            source_rel,
+            Blake3Entry {
+                out_rel: Some(output_rel),
+                src: source_hash.clone(),
+                out: output_hash.clone(),
+                library_asset: None,
+            },
+        );
+    }
+    let output_paths = fast_img_marker_output_paths(&marker)?;
+    validate_fast_img_marker_output_hashes(&marker)?;
+    let started = std::time::Instant::now();
+    let import = import_marker_outputs_with_photos_checkpoint_in_library(
+        &marker,
+        &output_paths,
+        false,
+        |uuids| query_osxphotos_asset_probes_from_library(uuids, &library),
+        path_has_quarantine_xattr,
+        Some(&library),
+    )?;
+    let import_seconds = started.elapsed().as_secs_f64();
+    require_active_photos_library(Some(&library))?;
+    anyhow::ensure!(import.import_error_count == 0 && import.imported_assets.len() == count);
+    anyhow::ensure!(import.photos_library_path.as_deref() == Some(library.as_path()));
+    let imported_uuids = import
+        .imported_assets
+        .iter()
+        .map(|asset| {
+            asset
+                .photos_uuid
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("imported asset lacks Photos UUID"))
+        })
+        .collect::<anyhow::Result<BTreeSet<_>>>()?;
+    anyhow::ensure!(imported_uuids.len() == count, "duplicate Photos UUID");
+    for (source_rel, entry) in &marker.blake3_log {
+        anyhow::ensure!(source_root.join(source_rel).is_file());
+        anyhow::ensure!(
+            working_copy
+                .join(entry.out_rel.as_deref().expect("benchmark output path"))
+                .is_file()
+        );
+    }
+    let after_import = before.map(|_| count_assets()).transpose()?;
+    if let (Some(before), Some(after)) = (before, after_import) {
+        anyhow::ensure!(
+            after == before + count,
+            "Photos asset count did not increase by {count}"
+        );
+    }
+
+    // Resume from the original marker, before it held any imported UUID proof.
+    let resume_started = std::time::Instant::now();
+    let resumed = import_marker_outputs_with_photos_checkpoint_in_library(
+        &marker,
+        &output_paths,
+        true,
+        |uuids| query_osxphotos_asset_probes_from_library(uuids, &library),
+        path_has_quarantine_xattr,
+        Some(&library),
+    )?;
+    let resume_seconds = resume_started.elapsed().as_secs_f64();
+    require_active_photos_library(Some(&library))?;
+    anyhow::ensure!(resumed.import_error_count == 0 && resumed.imported_assets.len() == count);
+    let resumed_uuids = resumed
+        .imported_assets
+        .iter()
+        .map(|asset| {
+            asset
+                .photos_uuid
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("resumed asset lacks Photos UUID"))
+        })
+        .collect::<anyhow::Result<BTreeSet<_>>>()?;
+    anyhow::ensure!(
+        resumed_uuids == imported_uuids,
+        "resume changed Photos UUID custody"
+    );
+    let after_resume = after_import.map(|_| count_assets()).transpose()?;
+    anyhow::ensure!(after_resume == after_import, "resume added Photos assets");
+
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "backend": backend,
+        "synthetic": true,
+        "assets": count,
+        "batch_size": batch_size,
+        "verification_batch_size": verification_batch_size,
+        "import_seconds": import_seconds,
+        "resume_seconds": resume_seconds,
+        "total_seconds": started.elapsed().as_secs_f64(),
+        "photos_count_before": before,
+        "photos_count_after_import": after_import,
+        "photos_count_after_resume": after_resume,
+        "unique_uuids": imported_uuids.len(),
+        "sources_and_outputs_retained": true,
+        "marker_path": crate::pipeline::verification::marker_path_for_working_copy(&working_copy),
+    });
+    let mut file = std::fs::File::create_new(scratch.join("report.json"))?;
+    serde_json::to_writer_pretty(&mut file, &report)?;
+    file.sync_all()?;
+    eprintln!("Photos pipeline benchmark: {report}");
     Ok(())
 }

@@ -202,6 +202,7 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     let done = DispatchSemaphore(value: 0)
     PHPhotoLibrary.shared().performChanges({
         autoreleasepool {
+            var albumAssets: [String: [PHObjectPlaceholder]] = [:]
             for asset in assets {
                 let creation = PHAssetCreationRequest.forAsset()
                 for resource in asset.resources {
@@ -217,10 +218,14 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
                 }
                 guard let placeholder = creation.placeholderForCreatedAsset else { Darwin._exit(74) }
                 identities.append(["entryID": asset.entryID, "localIdentifier": placeholder.localIdentifier])
-                if let id = asset.albumIdentifier, let album = albums[id] {
-                    guard let change = PHAssetCollectionChangeRequest(for: album) else { Darwin._exit(74) }
-                    change.addAssets([placeholder] as NSArray)
+                if let id = asset.albumIdentifier {
+                    albumAssets[id, default: []].append(placeholder)
                 }
+            }
+            for (id, placeholders) in albumAssets {
+                guard let album = albums[id],
+                      let change = PHAssetCollectionChangeRequest(for: album) else { Darwin._exit(74) }
+                change.addAssets(placeholders as NSArray)
             }
             record["identities"] = identities
             record["state"] = "identifier-known"
@@ -239,6 +244,12 @@ private func importAssets(_ request: ImportRequest) throws -> [String: Any] {
     }
     record["state"] = committed ? "committed" : "uncertain"
     record["transactionSeconds"] = ProcessInfo.processInfo.systemUptime - started
+    var usage = rusage()
+    if getrusage(RUSAGE_SELF, &usage) == 0 {
+        record["peakRSSBytes"] = usage.ru_maxrss
+        record["userCPUSeconds"] = Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000
+        record["systemCPUSeconds"] = Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000
+    }
     if let error = transactionError { record["error"] = error.localizedDescription }
     try durableJournal(record, at: journal, create: false)
     // Success is not custody proof. Rust must re-query original resources and hash them.

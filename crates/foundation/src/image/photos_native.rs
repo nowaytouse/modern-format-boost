@@ -10,7 +10,19 @@ use serde_json::Value;
 
 pub(super) struct Client {
     stream: BufReader<UnixStream>,
-    _socket_dir: tempfile::TempDir,
+    socket_dir: Option<tempfile::TempDir>,
+    pending: Option<(Value, crate::image::photos_import_metrics::Timer)>,
+}
+
+fn retain_worker_log(socket_dir: tempfile::TempDir) -> String {
+    let path = socket_dir.keep().join("worker.log");
+    match std::fs::read_to_string(&path) {
+        Ok(log) => format!("worker log retained at {}: {log}", path.display()),
+        Err(error) => format!(
+            "worker log retained at {} but unreadable: {error}",
+            path.display()
+        ),
+    }
 }
 
 impl Client {
@@ -43,11 +55,19 @@ impl Client {
             .arg(&socket)
             .arg("--lock")
             .arg(state.join("writer.lock"))
-            .output()?;
+            .output();
+        let launch = match launch {
+            Ok(launch) => launch,
+            Err(error) => anyhow::bail!(
+                "PhotoKit helper launch failed: {error}; {}",
+                retain_worker_log(socket_dir)
+            ),
+        };
         anyhow::ensure!(
             launch.status.success(),
-            "PhotoKit helper launch failed: {}",
-            String::from_utf8_lossy(&launch.stderr)
+            "PhotoKit helper launch failed: {}; {}",
+            String::from_utf8_lossy(&launch.stderr),
+            retain_worker_log(socket_dir)
         );
         let deadline = Instant::now() + Duration::from_secs(20);
         let stream = loop {
@@ -61,51 +81,108 @@ impl Client {
                 }
                 Err(error) => anyhow::bail!(
                     "PhotoKit helper connection failed: {error}; {}",
-                    std::fs::read_to_string(socket_dir.path().join("worker.log"))
-                        .unwrap_or_default()
+                    retain_worker_log(socket_dir)
                 ),
             }
         };
         // macOS accepts inherit the listening socket's nonblocking flag.
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(630)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+        if let Err(error) = (|| -> std::io::Result<()> {
+            stream.set_nonblocking(false)?;
+            stream.set_read_timeout(Some(Duration::from_secs(630)))?;
+            stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+            Ok(())
+        })() {
+            anyhow::bail!(
+                "PhotoKit helper socket setup failed: {error}; {}",
+                retain_worker_log(socket_dir)
+            );
+        }
         let mut client = Self {
             stream: BufReader::new(stream),
-            _socket_dir: socket_dir,
+            socket_dir: Some(socket_dir),
+            pending: None,
         };
         let reply = client.request(&serde_json::json!({"version":1,"operation":"probe",
-            "batchID":"probe","witnessIdentifiers":witnesses}))?;
-        anyhow::ensure!(
-            reply["state"] == "ready",
-            "PhotoKit authorization/target probe failed: {reply}"
-        );
+            "batchID":"probe","witnessIdentifiers":witnesses}));
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => anyhow::bail!(
+                "PhotoKit startup probe failed: {error:#}; {}",
+                client.retain_log()
+            ),
+        };
+        if reply["state"] != "ready" {
+            anyhow::bail!(
+                "PhotoKit authorization/target probe failed: {reply}; {}",
+                client.retain_log()
+            );
+        }
         Ok(client)
     }
 
+    fn retain_log(&mut self) -> String {
+        self.socket_dir
+            .take()
+            .map_or_else(|| "worker log unavailable".into(), retain_worker_log)
+    }
+
     pub(super) fn request(&mut self, request: &Value) -> anyhow::Result<Value> {
+        self.begin_request(request)?;
+        self.finish_request()
+    }
+
+    pub(super) fn begin_request(&mut self, request: &Value) -> anyhow::Result<()> {
+        anyhow::ensure!(self.pending.is_none(), "PhotoKit request already in flight");
         let mut bytes = serde_json::to_vec(request)?;
         anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "PhotoKit request too large");
         bytes.push(b'\n');
+        let timing = crate::image::photos_import_metrics::timer("native_request_wall");
         self.stream.get_mut().write_all(&bytes)?;
+        self.pending = Some((request.clone(), timing));
+        Ok(())
+    }
+
+    pub(super) fn finish_request(&mut self) -> anyhow::Result<Value> {
+        let (request, _timing) = self
+            .pending
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no PhotoKit request in flight"))?;
         let mut line = Vec::new();
-        self.stream
+        if let Err(error) = self
+            .stream
             .by_ref()
             .take(8 * 1024 * 1024 + 1)
-            .read_until(b'\n', &mut line)?;
-        anyhow::ensure!(
-            line.len() <= 8 * 1024 * 1024 && line.last() == Some(&b'\n'),
-            "PhotoKit reply missing/oversized; retain all inputs and reconcile durable journals"
-        );
-        let reply: Value = serde_json::from_slice(&line)?;
-        anyhow::ensure!(
-            reply["version"] == 1 && reply["batchID"] == request["batchID"],
-            "PhotoKit reply identity mismatch"
-        );
-        anyhow::ensure!(
-            reply["state"] != "error",
-            "PhotoKit request failed: {reply}"
-        );
+            .read_until(b'\n', &mut line)
+        {
+            anyhow::bail!(
+                "PhotoKit reply read failed: {error}; {}; reconcile durable journals",
+                self.retain_log()
+            );
+        }
+        if line.last() != Some(&b'\n') {
+            anyhow::bail!(
+                "PhotoKit reply ended before completion: {}; reconcile durable journals",
+                self.retain_log()
+            );
+        }
+        if line.len() > 8 * 1024 * 1024 {
+            anyhow::bail!(
+                "PhotoKit reply oversized; {}; reconcile durable journals",
+                self.retain_log()
+            );
+        }
+        let reply: Value = serde_json::from_slice(&line).map_err(|error| {
+            anyhow::anyhow!("PhotoKit reply invalid: {error}; {}", self.retain_log())
+        })?;
+        if reply["version"] != 1 || reply["batchID"] != request["batchID"] {
+            anyhow::bail!(
+                "PhotoKit reply identity mismatch; {}; reconcile durable journals",
+                self.retain_log()
+            );
+        }
+        if reply["state"] == "error" {
+            anyhow::bail!("PhotoKit request failed: {reply}; {}", self.retain_log());
+        }
         Ok(reply)
     }
 }
@@ -196,14 +273,137 @@ mod tests {
                     changed["identities"].as_array_mut().unwrap().pop();
                 }
                 "duplicate" => {
-                    changed["identities"][0]["localIdentifier"] = Value::String("id-a".into())
+                    changed["identities"][0]["localIdentifier"] = Value::String("id-a".into());
                 }
                 "wrong-source" => {
-                    changed["request"]["assets"][0]["entryID"] = Value::String("other".into())
+                    changed["request"]["assets"][0]["entryID"] = Value::String("other".into());
                 }
                 _ => changed["state"] = Value::String("submitted".into()),
             }
             assert!(committed_pairs(&request, &changed).is_err(), "{alteration}");
         }
+    }
+
+    #[test]
+    fn ten_thousand_assets_reuse_one_transport_and_reject_wrong_reply() -> anyhow::Result<()> {
+        use crate::image::photos_import_schedule::{Schedule, Step};
+        let (stream, peer) = UnixStream::pair()?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        peer.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let server = std::thread::spawn(move || -> anyhow::Result<usize> {
+            let mut peer = BufReader::new(peer);
+            let mut calls = 0;
+            loop {
+                let mut line = String::new();
+                if peer.read_line(&mut line)? == 0 {
+                    return Ok(calls);
+                }
+                let request: Value = serde_json::from_str(&line)?;
+                let assets = request["assets"].as_array().unwrap();
+                let identities = assets
+                    .iter()
+                    .rev()
+                    .map(|asset| {
+                        serde_json::json!({"entryID": asset["entryID"],
+                        "localIdentifier": format!("id-{}", asset["entryID"].as_str().unwrap())})
+                    })
+                    .collect::<Vec<_>>();
+                let reply = serde_json::json!({"version": 1,
+                    "batchID": if assets.is_empty() { serde_json::json!("wrong") } else { request["batchID"].clone() },
+                    "state": "committed", "request": request, "identities": identities});
+                writeln!(peer.get_mut(), "{reply}")?;
+                if assets.is_empty() {
+                    return Ok(calls);
+                }
+                calls += 1;
+            }
+        });
+        let mut client = Client {
+            stream: BufReader::new(stream),
+            socket_dir: Some(tempfile::tempdir()?),
+            pending: None,
+        };
+        let policy = crate::runtime_config::PhotosPolicy {
+            native_batch_size: 250,
+            verification_batch_size: 128,
+            ..Default::default()
+        };
+        let mut schedule = Schedule::new(10_003, &policy)?;
+        let mut batch = 0;
+        let mut verified = 0;
+        while let Some(step) = schedule.next() {
+            match step {
+                Step::Import(range) => {
+                    let assets = range
+                        .map(|index| serde_json::json!({"entryID": format!("{index:05}")}))
+                        .collect::<Vec<_>>();
+                    let request =
+                        serde_json::json!({"version": 1, "batchID": batch, "assets": assets});
+                    let reply = client.request(&request)?;
+                    let pairs = committed_pairs(&request, &reply)?;
+                    assert_eq!(pairs.len(), assets.len());
+                    for (entry, id) in pairs {
+                        assert_eq!(id, format!("id-{entry}"));
+                    }
+                    batch += 1;
+                }
+                Step::Verify(range) => verified += range.len(),
+            }
+        }
+        assert_eq!(verified, 10_003);
+        assert_eq!(batch, 41);
+        assert!(
+            client
+                .request(&serde_json::json!({"version": 1, "batchID": "last", "assets": []}))
+                .is_err()
+        );
+        drop(client);
+        assert_eq!(server.join().expect("mock helper panicked")?, 41);
+        Ok(())
+    }
+
+    #[test]
+    fn helper_import_remains_pending_during_verification_and_rejects_second_write()
+    -> anyhow::Result<()> {
+        use std::sync::mpsc;
+        let (stream, peer) = UnixStream::pair()?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let (received_tx, received_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || -> anyhow::Result<()> {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line)?;
+            let request: Value = serde_json::from_str(&line)?;
+            received_tx.send(())?;
+            release_rx.recv()?;
+            let reply = serde_json::json!({"version":1,"batchID":request["batchID"],
+                "state":"committed","request":request,
+                "identities":[{"entryID":"next","localIdentifier":"id-next"}]});
+            writeln!(peer.get_mut(), "{reply}")?;
+            Ok(())
+        });
+        let mut client = Client {
+            stream: BufReader::new(stream),
+            socket_dir: Some(tempfile::tempdir()?),
+            pending: None,
+        };
+        let request = serde_json::json!({"version":1,"batchID":"next-batch",
+            "assets":[{"entryID":"next"}]});
+        client.begin_request(&request)?;
+        received_rx.recv_timeout(Duration::from_secs(5))?;
+        // This is the verification/checkpoint interval: the worker has received
+        // the import but its response is still blocked by the mock transport.
+        assert!(client.pending.is_some());
+        assert!(client.begin_request(&request).is_err());
+        release_tx.send(())?;
+        let reply = client.finish_request()?;
+        assert_eq!(
+            committed_pairs(&request, &reply)?,
+            vec![("next".into(), "id-next".into())]
+        );
+        assert!(client.pending.is_none());
+        server.join().expect("mock helper panicked")?;
+        Ok(())
     }
 }

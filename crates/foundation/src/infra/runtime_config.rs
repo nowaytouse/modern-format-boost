@@ -66,6 +66,11 @@ pub struct PhotosPolicy {
     pub preserve_folder_structure: bool,
     pub native_batch_size: usize,
     pub import_batch_size: usize,
+    pub verification_batch_size: usize,
+    pub adaptive_batching: bool,
+    pub native_min_batch_size: usize,
+    pub native_max_batch_size: usize,
+    pub target_batch_seconds: u64,
 }
 
 impl Default for PhotosPolicy {
@@ -77,6 +82,11 @@ impl Default for PhotosPolicy {
             preserve_folder_structure: true,
             native_batch_size: 100,
             import_batch_size: 50,
+            verification_batch_size: 250,
+            adaptive_batching: false,
+            native_min_batch_size: 50,
+            native_max_batch_size: 1000,
+            target_batch_seconds: 10,
         }
     }
 }
@@ -126,6 +136,22 @@ impl RuntimeConfig {
         ensure!(
             (1..=50).contains(&self.photos.import_batch_size),
             "photos.import_batch_size must be 1..50"
+        );
+        ensure!(
+            (1..=1000).contains(&self.photos.verification_batch_size),
+            "photos.verification_batch_size must be 1..1000"
+        );
+        ensure!(
+            (1..=self.photos.native_max_batch_size).contains(&self.photos.native_min_batch_size)
+                && self.photos.native_max_batch_size <= 1000
+                && (1..=600).contains(&self.photos.target_batch_seconds),
+            "invalid Photos adaptive bounds or target_batch_seconds (1..600)"
+        );
+        ensure!(
+            !self.photos.adaptive_batching
+                || (self.photos.native_min_batch_size..=self.photos.native_max_batch_size)
+                    .contains(&self.photos.native_batch_size),
+            "photos.native_batch_size must lie within adaptive min/max bounds"
         );
         for (field, name) in [
             ("photos.import_root", self.photos.import_root.as_deref()),
@@ -238,15 +264,22 @@ fn apply_file(
         .with_context(|| format!("invalid config {}", path.display()))
 }
 
-fn legacy_bool(name: &str) -> Result<Option<bool>> {
+fn legacy_env(name: &str) -> Result<Option<String>> {
     match std::env::var(name) {
-        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {name}")),
+    }
+}
+
+fn legacy_bool(name: &str) -> Result<Option<bool>> {
+    match legacy_env(name)? {
+        Some(value) => match value.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => Ok(Some(true)),
             "0" | "false" | "no" | "off" => Ok(Some(false)),
             _ => bail!("{name} must be a boolean (true/false, yes/no, on/off, 1/0)"),
         },
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("read {name}")),
+        None => Ok(None),
     }
 }
 
@@ -283,7 +316,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     let mut value = serde_json::to_value(RuntimeConfig::default())?;
     let mut sources = BTreeMap::new();
     default_sources(&value, "", &mut sources);
-    if let Ok(backend) = std::env::var("MFB_PHOTOS_IMPORT_BACKEND") {
+    if let Some(backend) = legacy_env("MFB_PHOTOS_IMPORT_BACKEND")? {
         merge(
             &mut value,
             json!({"photos":{"backend":backend}}),
@@ -292,7 +325,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             &mut sources,
         );
     }
-    if let Ok(size) = std::env::var("MFB_PHOTOS_NATIVE_BATCH_SIZE") {
+    if let Some(size) = legacy_env("MFB_PHOTOS_NATIVE_BATCH_SIZE")? {
         let size: usize = size
             .parse()
             .context("MFB_PHOTOS_NATIVE_BATCH_SIZE must be an integer")?;
@@ -304,7 +337,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             &mut sources,
         );
     }
-    if let Ok(size) = std::env::var("MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE") {
+    if let Some(size) = legacy_env("MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE")? {
         let size: usize = size
             .parse()
             .context("MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE must be an integer")?;
@@ -312,6 +345,18 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             &mut value,
             json!({"photos":{"import_batch_size":size.min(50)}}),
             "env:MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE",
+            "",
+            &mut sources,
+        );
+    }
+    if let Some(size) = legacy_env("MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE")? {
+        let size: usize = size
+            .parse()
+            .context("MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE must be an integer")?;
+        merge(
+            &mut value,
+            json!({"photos":{"verification_batch_size":size.min(128)}}),
+            "env:MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE",
             "",
             &mut sources,
         );
@@ -367,7 +412,11 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
         {
             apply_file(&mut value, &path, &mut sources)?;
         }
-        let project = std::env::current_dir()?.join("mfb.json");
+        let project = crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
+            Path::new("mfb.json"),
+            "runtime project configuration",
+        )
+        .map_err(anyhow::Error::msg)?;
         if project
             .try_exists()
             .with_context(|| format!("inspect config {}", project.display()))?
@@ -433,6 +482,12 @@ mod tests {
             r#"{"config_version":2}"#,
             r#"{"config_version":1,"photos":{"unknown":1}}"#,
             r#"{"config_version":1,"photos":{"native_batch_size":"large"}}"#,
+            r#"{"config_version":1,"photos":{"verification_batch_size":0}}"#,
+            r#"{"config_version":1,"photos":{"verification_batch_size":1001}}"#,
+            r#"{"config_version":1,"photos":{"native_min_batch_size":1001}}"#,
+            r#"{"config_version":1,"photos":{"native_max_batch_size":0}}"#,
+            r#"{"config_version":1,"photos":{"target_batch_seconds":0}}"#,
+            r#"{"config_version":1,"photos":{"adaptive_batching":true,"native_batch_size":1}}"#,
             r#"{"config_version":1,"photos":{"album_name":"bad/name"}}"#,
             r#"{"config_version":1,"tools":{"paths":{"bad/name":"/bin/echo"}}}"#,
             r#"{"config_version":1,"tools":{"paths":{"CJXL":"/bin/echo"}}}"#,

@@ -782,6 +782,9 @@ JPEG retries now default to `strict`; `same-semantics` permits original-byte
 compatibility retries, and `repair` enables existing guarded recovery paths.
 No preference disables exact reconstruction, metadata checks or Photos custody
 verification. A resume must retain the checkpoint's Photos naming policy.
+Native transaction and verification sizes are independently configurable, with
+a bounded identifier backlog. Optional `--photos-adaptive-batching` adjusts
+transaction sizes only after verified cycles; it is disabled by default.
 See [runtime configuration](docs/dev/config/RUNTIME_CONFIG.md) for all flags,
 legacy compatibility and native-backend limitations. Credentials remain in the
 existing private database configuration; this does not migrate `vid` settings.
@@ -972,6 +975,10 @@ specific revision, not a claim that maintenance debt can never exist:
   A previous green run does not cover uncommitted work or a newer push. Nightly
   publication is gated separately; neither CI nor publication proves live
   Photos/TCC behavior or 1K/10K/50K throughput.
+  Native import overlaps the next transaction with bounded verification;
+  developer mode exposes measured Photos diagnostics. Real 1K/10K results,
+  recovery evidence and independent runtime acceptance are tracked in
+  [Photos import follow-up](docs/hardening/PHOTOS_IMPORT_FOLLOWUP.md).
 - **Test Hardening & Stability**: "Fail Fast" is disabled in CI to collect comprehensive diagnostic information across all platforms. Critical paths (e.g., JPEG recovery proofs) are instrumented with deep context capture for error states.
 
 ### Core Structure

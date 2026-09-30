@@ -7,6 +7,8 @@ use super::{
     resolve_osascript_command, run_fast_img_command_with_timeout,
     run_photos_import_applescript_session_mode_in_library,
 };
+use crate::image::photos_import_metrics;
+use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
 use std::os::unix::fs::PermissionsExt;
 
@@ -18,15 +20,67 @@ fn resource(entry: &PhotosImportPendingEntry) -> anyhow::Result<serde_json::Valu
     )
 }
 
-fn helper_app() -> Option<PathBuf> {
-    std::env::var_os("MFB_PHOTOS_NATIVE_HELPER_APP")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let binary = std::env::current_exe().ok()?;
-            let contents = binary.parent()?.parent()?;
-            let app = contents.join("Helpers/MFB Photos Import.app");
-            app.is_dir().then_some(app)
+fn helper_app() -> anyhow::Result<Option<PathBuf>> {
+    if let Some(path) = std::env::var_os("MFB_PHOTOS_NATIVE_HELPER_APP") {
+        return Ok(Some(PathBuf::from(path)));
+    }
+    let binary = std::env::current_exe()?;
+    Ok(binary.parent().and_then(Path::parent).and_then(|contents| {
+        let app = contents.join("Helpers/MFB Photos Import.app");
+        app.is_dir().then_some(app)
+    }))
+}
+
+fn import_request(
+    entries: &[PhotosImportPendingEntry],
+    batch_index: usize,
+    albums: &BTreeMap<String, &str>,
+    witnesses: &[String],
+    journals: &Path,
+) -> anyhow::Result<serde_json::Value> {
+    for entry in entries {
+        anyhow::ensure!(
+            crate::common_utils::calculate_blake3_hash(&entry.path)? == entry.blake3_entry.out,
+            "original changed before native import: {}",
+            entry.rel_path
+        );
+    }
+    let batch_id = format!("batch-{batch_index}");
+    let assets = entries
+        .iter()
+        .map(|entry| {
+            Ok(serde_json::json!({"entryID":entry.rel_path,
+                "resources":[resource(entry)?],"albumIdentifier":albums[&entry.album_name]}))
         })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(
+        serde_json::json!({"version":1,"operation":"import","batchID":batch_id,
+        "witnessIdentifiers":witnesses,"assets":assets,"journalPath":journals.join(format!("{batch_id}.json"))}),
+    )
+}
+
+fn finish_import(
+    client: &mut Client,
+    request: &serde_json::Value,
+    identifiers: &mut BTreeMap<String, String>,
+    library: Option<&Path>,
+) -> anyhow::Result<()> {
+    let reply = client.finish_request()?;
+    let pairs = committed_pairs(request, &reply)?;
+    photos_import_metrics::swift_transaction(&reply)?;
+    require_active_photos_library(library)?;
+    for (entry, identifier) in pairs {
+        anyhow::ensure!(
+            identifiers.insert(entry, identifier).is_none(),
+            "duplicate queued native entry"
+        );
+    }
+    let count = request["assets"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing native request assets"))?
+        .len();
+    photos_import_metrics::committed(count, identifiers.len());
+    Ok(())
 }
 
 pub(super) fn try_import<Q, P>(
@@ -40,7 +94,12 @@ where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     P: FnMut(&Path) -> Result<bool>,
 {
-    try_import_inner(marker, plan, query, quarantined, library).map_err(|error| {
+    let profile = photos_import_metrics::Profile::start("native");
+    let result = try_import_inner(marker, plan, query, quarantined, library);
+    if !matches!(result, Ok(None)) {
+        profile.report(result.is_ok());
+    }
+    result.map_err(|error| {
         ImgQualityError::AnalysisError(format!(
             "PhotoKit import: {error:#}; sources and journals retained"
         ))
@@ -102,7 +161,7 @@ where
             photos_library_path: library.map(Path::to_path_buf),
         }));
     }
-    let Some(app) = helper_app() else {
+    let Some(app) = helper_app()? else {
         anyhow::ensure!(
             backend == "auto" && journal_files.is_empty(),
             "native helper app required for import/reconciliation"
@@ -243,44 +302,115 @@ where
         .into_keys()
         .zip(album_ids)
         .collect::<BTreeMap<_, _>>();
-    let size = if let Some(config) = crate::infra::runtime_config::active() {
-        config.photos.native_batch_size
-    } else {
-        std::env::var("MFB_PHOTOS_NATIVE_BATCH_SIZE")
-            .map_or(Ok(100), |value| value.parse::<usize>())?
-    };
-    anyhow::ensure!(
-        (1..=1000).contains(&size),
-        "native batch size must be 1...1000"
-    );
-    for (index, entries) in pending.chunks(size).enumerate() {
+    let mut policy = crate::infra::runtime_config::active()
+        .map_or_else(crate::runtime_config::PhotosPolicy::default, |config| {
+            config.photos.clone()
+        });
+    if crate::infra::runtime_config::active().is_none() {
+        policy.native_batch_size = std::env::var("MFB_PHOTOS_NATIVE_BATCH_SIZE")
+            .map_or(Ok(100), |value| value.parse::<usize>())?;
+    }
+    let mut schedule = Schedule::new(pending.len(), &policy)?;
+    photos_import_metrics::batch_sizes(policy.native_batch_size, policy.verification_batch_size);
+    let mut identifiers: BTreeMap<String, String> = BTreeMap::new();
+    let mut batch_index = journal_files.len();
+    let mut window_started = std::time::Instant::now();
+    let mut step = schedule.next();
+    while let Some(current) = step {
         let _transaction = crate::batch_control::begin_transaction()?;
         require_active_photos_library(library)?;
-        for entry in entries {
-            anyhow::ensure!(
-                crate::common_utils::calculate_blake3_hash(&entry.path)? == entry.blake3_entry.out,
-                "original changed before native import: {}",
-                entry.rel_path
-            );
+        match current {
+            Step::Verify(range) => {
+                let entries = &pending[range];
+                // A single helper write can run while this window is verified and checkpointed.
+                let next = schedule.next();
+                let prefetch = if let Some(Step::Import(import_range)) = &next {
+                    let request = import_request(
+                        &pending[import_range.clone()],
+                        batch_index,
+                        &albums,
+                        &witnesses,
+                        &journals,
+                    )?;
+                    client.begin_request(&request)?;
+                    batch_index += 1;
+                    Some(request)
+                } else {
+                    None
+                };
+                let verification = (|| -> anyhow::Result<()> {
+                    let _timing = photos_import_metrics::timer("verification_window");
+                    let pairs = entries
+                        .iter()
+                        .map(|entry| {
+                            let identifier = identifiers.get(&entry.rel_path).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "missing committed identifier for {}",
+                                    entry.rel_path
+                                )
+                            })?;
+                            Ok((entry.rel_path.clone(), identifier.clone()))
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    let mut proofs =
+                        library_records_from_pending_import(entries, &pairs, query, quarantined)?;
+                    checkpoint_photos_import_window(marker, entries, &proofs)?;
+                    for entry in entries {
+                        identifiers.remove(&entry.rel_path);
+                    }
+                    imported.append(&mut proofs);
+                    if identifiers.is_empty() {
+                        let pressure = matches!(
+                            crate::system_memory::memory_pressure_level(),
+                            Some(crate::system_memory::MemoryPressure::High)
+                        );
+                        if let Some((previous, next, reason)) =
+                            schedule.observe(window_started.elapsed(), pressure)
+                        {
+                            photos_import_metrics::batch_sizes(
+                                next,
+                                policy.verification_batch_size,
+                            );
+                            tracing::info!(target: "photos_import", previous, next, reason, "Native import batch adjusted after verified window");
+                        }
+                        window_started = std::time::Instant::now();
+                    }
+                    Ok(())
+                })();
+                // Drain the submitted request even when verification fails. The helper's
+                // durable journal is the recovery authority; never replay this batch here.
+                let imported_next = prefetch
+                    .as_ref()
+                    .map(|request| finish_import(&mut client, request, &mut identifiers, library))
+                    .transpose();
+                match (verification, imported_next) {
+                    (Err(verify), Err(import)) => anyhow::bail!(
+                        "verification failed: {verify:#}; prefetched import also failed: {import:#}"
+                    ),
+                    (Err(verify), _) => return Err(verify),
+                    (_, Err(import)) => return Err(import),
+                    (Ok(()), Ok(_)) => {}
+                }
+                step = if prefetch.is_some() {
+                    schedule.next()
+                } else {
+                    next
+                };
+            }
+            Step::Import(range) => {
+                let request =
+                    import_request(&pending[range], batch_index, &albums, &witnesses, &journals)?;
+                client.begin_request(&request)?;
+                batch_index += 1;
+                finish_import(&mut client, &request, &mut identifiers, library)?;
+                step = schedule.next();
+            }
         }
-        let batch_id = format!("batch-{}", journal_files.len() + index);
-        let assets = entries
-            .iter()
-            .map(|entry| {
-                Ok(serde_json::json!({"entryID":entry.rel_path,
-            "resources":[resource(entry)?],"albumIdentifier":albums[&entry.album_name]}))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let request = serde_json::json!({"version":1,"operation":"import","batchID":batch_id,
-            "witnessIdentifiers":witnesses,"assets":assets,"journalPath":journals.join(format!("{batch_id}.json"))});
-        let _timing = super::super::photos_import_metrics::timer("native_import_and_verification");
-        let reply = client.request(&request)?;
-        let pairs = committed_pairs(&request, &reply)?;
-        require_active_photos_library(library)?;
-        let mut proofs = library_records_from_pending_import(entries, &pairs, query, quarantined)?;
-        checkpoint_photos_import_window(marker, entries, &proofs)?;
-        imported.append(&mut proofs);
     }
+    anyhow::ensure!(
+        identifiers.is_empty(),
+        "unverified native identifiers remain queued"
+    );
     anyhow::ensure!(
         imported.len() == marker.expected_output_count(),
         "native verified asset count mismatch"

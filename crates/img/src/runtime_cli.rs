@@ -48,6 +48,12 @@ pub(super) struct RuntimeArgs {
     photos_native_batch_size: Option<usize>,
     #[arg(long, global = true, value_parser = clap::value_parser!(usize))]
     photos_import_batch_size: Option<usize>,
+    /// Independent Photos verification window and query cap.
+    #[arg(long, global = true, value_parser = clap::value_parser!(usize))]
+    photos_verification_batch_size: Option<usize>,
+    /// Adapt native transaction sizes after verified batches using latency and memory pressure.
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    photos_adaptive_batching: Option<bool>,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
     tools: Vec<(String, PathBuf)>,
@@ -163,6 +169,18 @@ impl RuntimeArgs {
             config.tools.paths.insert(name.clone(), path.clone());
             sources.insert(format!("tools.paths.{name}"), "CLI".into());
         }
+        apply(
+            self.photos_verification_batch_size,
+            &mut config.photos.verification_batch_size,
+            sources,
+            "photos.verification_batch_size",
+        );
+        apply(
+            self.photos_adaptive_batching,
+            &mut config.photos.adaptive_batching,
+            sources,
+            "photos.adaptive_batching",
+        );
         config.validate()?;
         Ok(loaded)
     }
@@ -194,6 +212,9 @@ mod tests {
             "--photos-album-name",
             "Family",
             "--preserve-folder-structure=false",
+            "--photos-verification-batch-size",
+            "500",
+            "--photos-adaptive-batching",
         ])?;
         let resolved = cli.policy.resolve(true)?;
         assert_eq!(resolved.config.img.fallback_policy, FallbackPolicy::Strict);
@@ -206,6 +227,9 @@ mod tests {
             Some("Archive")
         );
         assert!(!resolved.config.photos.preserve_folder_structure);
+        assert_eq!(resolved.config.photos.verification_batch_size, 500);
+        assert!(resolved.config.photos.adaptive_batching);
+        assert_eq!(resolved.sources["photos.verification_batch_size"], "CLI");
         assert_eq!(resolved.sources["img.fallback_policy"], "CLI");
         Ok(())
     }

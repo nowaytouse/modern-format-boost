@@ -422,6 +422,143 @@ private func countStatusValue(in line: String) -> String? {
         .trimmingCharacters(in: .whitespaces)
 }
 
+private struct PhotosDiagnostics {
+    struct Phase: Decodable {
+        let calls: Int
+        let seconds: Double
+    }
+
+    struct Profile: Decodable {
+        let schemaVersion: Int
+        let backend: String
+        let succeeded: Bool
+        let committedAssets: Int?
+        let verifiedAssets: Int?
+        let peakVerificationBacklog: Int?
+        let totalSeconds: Double?
+        let verifiedAssetsPerSecond: Double?
+        let transactionSamples: Int?
+        let transactionMeanSeconds: Double?
+        let transactionP50Seconds: Double?
+        let transactionP90Seconds: Double?
+        let transactionP95Seconds: Double?
+        let transactionP99Seconds: Double?
+        let importBatchSize: Int?
+        let verificationBatchSize: Int?
+        let helperPeakRssBytes: Int?
+        let phases: [String: Phase]?
+    }
+
+    private(set) var profile: Profile?
+    private(set) var backend: String?
+    private(set) var committedAssets: Int?
+    private(set) var verifiedAssets: Int?
+    private(set) var peakBacklog: Int?
+    private(set) var failed = false
+
+    var hasMeasurements: Bool { profile != nil || backend != nil }
+
+    mutating func reset() { self = PhotosDiagnostics() }
+
+    mutating func markFailed() {
+        if hasMeasurements { failed = true }
+    }
+
+    @discardableResult
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
+        let profilePrefix = "[PHOTOS PROFILE] "
+        if raw.hasPrefix(profilePrefix) {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            guard let decoded = try? decoder.decode(Profile.self, from: Data(raw.dropFirst(profilePrefix.count).utf8)),
+                  decoded.schemaVersion == 1 else { return false }
+            if backend != decoded.backend { reset() }
+            profile = decoded
+            backend = decoded.backend
+            committedAssets = decoded.committedAssets ?? committedAssets
+            verifiedAssets = decoded.verifiedAssets ?? verifiedAssets
+            peakBacklog = decoded.peakVerificationBacklog ?? peakBacklog
+            failed = !decoded.succeeded
+            return true
+        }
+        let progressPrefix = "[PHOTOS PROGRESS] "
+        guard raw.hasPrefix(progressPrefix) else { return false }
+        let fields = raw.dropFirst(progressPrefix.count).split(separator: " ").reduce(into: [String: String]()) { result, item in
+            let pair = item.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 { result[String(pair[0])] = String(pair[1]) }
+        }
+        guard let newBackend = fields["backend"] else { return false }
+        if backend != newBackend || profile != nil { reset() }
+        backend = newBackend
+        if newBackend == "native", let value = fields["committed"].flatMap(Int.init), value >= 0 {
+            committedAssets = value
+        }
+        if let value = fields["verified"].flatMap(Int.init), value >= 0 { verifiedAssets = value }
+        if newBackend == "native", let value = fields["peak_backlog"].flatMap(Int.init), value >= 0 {
+            peakBacklog = value
+        }
+        return true
+    }
+
+    func rendered() -> String {
+        let unknown = localized("diagnostics.unknown")
+        func count(_ value: Int?) -> String {
+            guard let value, value >= 0 else { return unknown }
+            return String(value)
+        }
+        func seconds(_ value: Double?) -> String {
+            guard let value, value.isFinite, value >= 0 else { return unknown }
+            return String(format: "%.2f s", value)
+        }
+        func rate(_ value: Double?) -> String {
+            guard let value, value.isFinite, value >= 0 else { return unknown }
+            return String(format: "%.2f %@", value, localized("diagnostics.assets_per_second"))
+        }
+        func row(_ key: String, _ value: String) -> String { "\(localized("diagnostics.\(key)")): \(value)" }
+        let status = failed ? localized("diagnostics.failed")
+            : profile?.succeeded == true ? localized("diagnostics.completed")
+            : hasMeasurements ? localized("diagnostics.in_progress") : unknown
+        let backendName = backend.map {
+            ["native": localized("diagnostics.backend.native"),
+             "applescript": localized("diagnostics.backend.applescript")][$0] ?? $0
+        } ?? unknown
+        let backlog: Int? = {
+            guard backend == "native", let committedAssets, let verifiedAssets, verifiedAssets >= 0,
+                  committedAssets >= verifiedAssets else { return nil }
+            return committedAssets - verifiedAssets
+        }()
+        var rows = [
+            row("status", status), row("backend", backendName),
+            row("import_batch", count(profile?.importBatchSize)),
+            row("verification_batch", count(profile?.verificationBatchSize)),
+            row("transactions", count(profile?.transactionSamples)),
+            row("committed", count(committedAssets)), row("verified", count(verifiedAssets)),
+            row("throughput", rate(profile?.verifiedAssetsPerSecond)),
+            row("total_time", seconds(profile?.totalSeconds)),
+            row("average_transaction", seconds(profile?.transactionMeanSeconds)),
+            row("backlog", count(backlog)), row("peak_backlog", count(peakBacklog)),
+            row("p50", seconds(profile?.transactionP50Seconds)),
+            row("p90", seconds(profile?.transactionP90Seconds)),
+            row("p95", seconds(profile?.transactionP95Seconds)),
+            row("p99", seconds(profile?.transactionP99Seconds)),
+            row("rss", profile?.helperPeakRssBytes.flatMap {
+                $0 >= 0 ? ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .memory) : nil
+            } ?? unknown),
+            "", localized("diagnostics.phases"),
+        ]
+        if let phases = profile?.phases, !phases.isEmpty {
+            rows += phases.keys.sorted().compactMap { name in
+                guard let phase = phases[name] else { return nil }
+                return "\(name): \(count(phase.calls)) · \(seconds(phase.seconds))"
+            }
+        } else {
+            rows.append(unknown)
+        }
+        return rows.joined(separator: "\n")
+    }
+}
+
 private enum LogTone: Equatable {
     case muted, normal, stage, result, warning, failure
 
@@ -1203,6 +1340,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let copyButton = NSButton(title: "", target: nil, action: nil)
     private let runButton = NSButton(title: "", target: nil, action: nil)
     private let historyButton = NSButton(title: "", target: nil, action: nil)
+    private let diagnosticsButton = NSButton(title: "", target: nil, action: nil)
+    private let diagnosticsTextView = NSTextView()
+    private var diagnosticsPanel: NSPanel?
+    private var photosDiagnostics = PhotosDiagnostics()
     private var resolvedHistoryDirectory = historyDirectory
     private let pauseButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
@@ -1494,6 +1635,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.keyEquivalent = "\r"
         historyButton.target = self
         historyButton.action = #selector(openHistory)
+        diagnosticsButton.target = self
+        diagnosticsButton.action = #selector(showDiagnostics)
+        diagnosticsButton.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
+        diagnosticsButton.imagePosition = .imageOnly
+        diagnosticsButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
         stopButton.target = self
@@ -1502,7 +1648,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stopButton.isEnabled = false
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actionRow = NSStackView(views: [historyButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
+        let actionRow = NSStackView(views: [historyButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -1687,6 +1833,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             && (preferences.object(forKey: optionKey("watch", for: selectedOperation)) as? Bool ?? false)
             ? .on : .off
         configurationChanged()
+        if !developerMode { diagnosticsPanel?.orderOut(nil) }
     }
 
     @objc private func resumeChoiceChanged(_ sender: NSButton) {
@@ -1724,6 +1871,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func clearBatchLog() {
         logView.string = ""
+        photosDiagnostics.reset()
+        refreshDiagnostics()
         countStatus = nil
         countStatusLabel.isHidden = true
         appendLog(localized("log.history", resolvedHistoryDirectory.path))
@@ -1735,6 +1884,40 @@ private final class AppController: NSObject, NSWindowDelegate {
                 throw HostError(message: localized("error.open_history", resolvedHistoryDirectory.path))
             }
         } catch { present(error) }
+    }
+
+    @objc private func showDiagnostics() {
+        guard developerMode else { return }
+        if diagnosticsPanel == nil {
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 440, height: 480),
+                styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                backing: .buffered, defer: false
+            )
+            panel.contentMinSize = NSSize(width: 360, height: 300)
+            panel.title = localized("button.photos_diagnostics")
+            panel.isReleasedWhenClosed = false
+            diagnosticsTextView.isEditable = false
+            diagnosticsTextView.isSelectable = true
+            diagnosticsTextView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            diagnosticsTextView.textContainerInset = NSSize(width: 12, height: 12)
+            let scroll = NSScrollView(frame: panel.contentView!.bounds)
+            scroll.autoresizingMask = [.width, .height]
+            scroll.hasVerticalScroller = true
+            diagnosticsTextView.frame = scroll.contentView.bounds
+            diagnosticsTextView.isVerticallyResizable = true
+            diagnosticsTextView.textContainer?.widthTracksTextView = true
+            scroll.documentView = diagnosticsTextView
+            panel.contentView?.addSubview(scroll)
+            panel.center()
+            diagnosticsPanel = panel
+        }
+        refreshDiagnostics()
+        diagnosticsPanel?.makeKeyAndOrderFront(self)
+    }
+
+    private func refreshDiagnostics() {
+        diagnosticsTextView.string = photosDiagnostics.rendered()
     }
 
     @objc private func togglePause() {
@@ -1838,6 +2021,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         if !developerMode { watchCheck.state = .off }
         copyButton.isHidden = !developerMode
         openButton.isHidden = !developerMode
+        diagnosticsButton.isHidden = !developerMode
         commandField.isHidden = !developerMode
         let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
@@ -1910,6 +2094,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func appendLog(_ text: String) {
+        var diagnosticsChanged = false
+        for line in text.split(separator: "\n") {
+            if photosDiagnostics.ingest(String(line)) { diagnosticsChanged = true }
+        }
+        if diagnosticsChanged { refreshDiagnostics() }
         for line in text.split(separator: "\n") where line.hasPrefix("MFB_LOG_DIRECTORY=") {
             let encoded = Data(line.dropFirst("MFB_LOG_DIRECTORY=".count).utf8)
             if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
@@ -1966,6 +2155,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func processingCompleted(_ result: Result<String, Error>) {
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
+            photosDiagnostics.markFailed()
+            refreshDiagnostics()
             setProcessing(false)
             if var retry = lastRequest, retry.operationMode.capabilities.supportsResume {
                 applyResumeDecision(fresh: false, to: &retry)
@@ -1982,6 +2173,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             statusLabel.stringValue = message
             appendLog("✓ \(message)")
         case let .failure(error):
+            photosDiagnostics.markFailed()
+            refreshDiagnostics()
             appendLog("✗ \(error.localizedDescription)")
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
                 let alert = NSAlert()
@@ -2002,6 +2195,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 }
                 lastRequest = retry
                 sawResumeDecision = false
+                photosDiagnostics.reset()
+                refreshDiagnostics()
                 setProcessing(true)
                 host.startProcessing(retry)
             } else {
@@ -2061,6 +2256,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
         historyButton.title = localized("button.history")
+        diagnosticsButton.toolTip = localized("button.photos_diagnostics")
+        diagnosticsButton.setAccessibilityLabel(localized("button.photos_diagnostics"))
+        diagnosticsPanel?.title = localized("button.photos_diagnostics")
         historyButton.toolTip = resolvedHistoryDirectory.path
         pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
         stopButton.title = localized("button.stop")
@@ -2073,6 +2271,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
         replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
         refreshCountStatus()
+        refreshDiagnostics()
         refreshProcessingStatus()
     }
 
@@ -2159,7 +2358,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func validateInterfaceForSelfTest() throws {
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
-        guard !developerMode, copyButton.isHidden, openButton.isHidden, commandField.isHidden, watchCheck.isHidden,
+        guard !developerMode, copyButton.isHidden, openButton.isHidden, diagnosticsButton.isHidden,
+              commandField.isHidden, watchCheck.isHidden,
               !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
               !verboseCheck.isEnabled,
               verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
@@ -2226,10 +2426,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerCheck.state = .on
         developerModeChanged()
         guard operationPopup.itemArray.count == OperationMode.allCases.count,
-              !copyButton.isHidden, !openButton.isHidden, !watchCheck.isHidden, watchCheck.isEnabled,
+               !copyButton.isHidden, !openButton.isHidden, !diagnosticsButton.isHidden,
+               !watchCheck.isHidden, watchCheck.isEnabled,
               preferences.bool(forKey: developerPreferenceKey),
               verboseCheck.title.contains("--verbose"), freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Developer mode did not reveal advanced controls") }
+        showDiagnostics()
+        guard diagnosticsPanel?.isVisible == true,
+              diagnosticsTextView.string.contains(localized("diagnostics.unknown")) else {
+            throw HostError(message: "Developer Photos diagnostics panel did not open")
+        }
         content.layoutSubtreeIfNeeded()
         let buttons = [ultimateCheck] + optionControls.map { $0.0 }
         for (index, button) in buttons.enumerated() where !button.isHidden {
@@ -2243,7 +2449,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         developerCheck.state = .off
         developerModeChanged()
-        guard operationPopup.itemArray.count == 6, watchCheck.isHidden, !watchCheck.isEnabled,
+        guard operationPopup.itemArray.count == 6, diagnosticsButton.isHidden,
+              diagnosticsPanel?.isVisible == false,
+              watchCheck.isHidden, !watchCheck.isEnabled,
               !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume") else {
             throw HostError(message: "Developer mode did not hide advanced controls")
         }
@@ -2627,6 +2835,35 @@ private func runSelfTest() -> Int32 {
               !backpressure.finishDelivery(), backpressure.isIdle
         else {
             fputs("native-host self-test log backpressure failed\n", stderr)
+            return 1
+        }
+        var diagnostics = PhotosDiagnostics()
+        diagnostics.ingest("ERR: [PHOTOS PROGRESS] backend=native committed=250 verified=100 peak_backlog=150")
+        guard diagnostics.committedAssets == 250, diagnostics.verifiedAssets == 100,
+              diagnostics.peakBacklog == 150, diagnostics.profile == nil else {
+            fputs("native-host self-test Photos progress parsing failed\n", stderr)
+            return 1
+        }
+        diagnostics.ingest("ERR: [PHOTOS PROFILE] {\"schema_version\":1,\"backend\":\"native\",\"succeeded\":false,\"committed_assets\":250,\"verified_assets\":100,\"total_seconds\":20.0,\"verified_assets_per_second\":5.0,\"transaction_samples\":2,\"transaction_p95_seconds\":4.0,\"helper_peak_rss_bytes\":1048576,\"phases\":{\"native_transaction\":{\"calls\":2,\"seconds\":7.0}}}")
+        guard diagnostics.failed, diagnostics.profile?.transactionSamples == 2,
+              diagnostics.profile?.transactionP95Seconds == 4,
+              diagnostics.profile?.helperPeakRssBytes == 1_048_576,
+              diagnostics.profile?.importBatchSize == nil,
+              diagnostics.rendered().contains(localized("diagnostics.unknown")) else {
+            fputs("native-host self-test Photos profile or missing-data handling failed\n", stderr)
+            return 1
+        }
+        diagnostics.ingest("ERR: [PHOTOS PROFILE] malformed")
+        diagnostics.markFailed()
+        guard diagnostics.profile?.transactionSamples == 2, diagnostics.failed else {
+            fputs("native-host self-test failed Photos diagnostics were lost\n", stderr)
+            return 1
+        }
+        diagnostics.reset()
+        diagnostics.ingest("ERR: [PHOTOS PROGRESS] backend=applescript committed=0 verified=3 peak_backlog=0")
+        guard diagnostics.committedAssets == nil, diagnostics.verifiedAssets == 3,
+              diagnostics.peakBacklog == nil, !diagnostics.failed else {
+            fputs("native-host self-test Photos diagnostics leaked across batches\n", stderr)
             return 1
         }
         let lock = NSLock()

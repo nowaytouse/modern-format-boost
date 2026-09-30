@@ -44,6 +44,9 @@ pub mod fast_img;
 
 mod photos_import_metrics;
 
+#[cfg(any(target_os = "macos", test))]
+mod photos_import_schedule;
+
 #[cfg(target_os = "macos")]
 mod photos_native;
 

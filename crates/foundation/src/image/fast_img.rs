@@ -1297,10 +1297,20 @@ fn photos_import_fail_fast_enabled() -> bool {
 }
 
 fn require_applescript_only_import_backend() -> Result<()> {
-    let native = crate::infra::runtime_config::active().map_or_else(
-        || std::env::var("MFB_PHOTOS_IMPORT_BACKEND").is_ok_and(|value| value == "photokit"),
-        |config| config.photos.backend == crate::infra::runtime_config::PhotosBackend::Native,
-    );
+    let native = match crate::infra::runtime_config::active() {
+        Some(config) => {
+            config.photos.backend == crate::infra::runtime_config::PhotosBackend::Native
+        }
+        None => match std::env::var("MFB_PHOTOS_IMPORT_BACKEND") {
+            Ok(value) => value == "photokit" || value == "native",
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "invalid Photos backend environment: {error}"
+                )));
+            }
+        },
+    };
     if native {
         return Err(ImgQualityError::AnalysisError(
             "native PhotoKit backend is unavailable for this Photos import path; sources retained"
@@ -2812,7 +2822,11 @@ where
             selected_library,
         )
     };
-    let profile = super::photos_import_metrics::Profile::start();
+    let profile = super::photos_import_metrics::Profile::start("applescript");
+    super::photos_import_metrics::batch_sizes(
+        FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE,
+        fast_img_icloud_upload_verify_batch_size().min(FAST_IMG_PHOTOS_IMPORT_TRANSACTION_SIZE),
+    );
     let pending_result = import_pending_media_entries_with_checkpoint(
         &mut checkpoint_marker,
         &pending_entries,
@@ -2822,12 +2836,7 @@ where
         &mut prepare_import_session,
         &mut run_import_batch,
     );
-    profile.report(
-        pending_result
-            .as_ref()
-            .map_or(0, |report| report.imported_assets.len()),
-        pending_result.is_ok(),
-    );
+    profile.report(pending_result.is_ok());
     let mut pending_report = pending_result?;
     imported_assets.append(&mut pending_report.imported_assets);
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -3736,12 +3745,12 @@ fn checkpoint_photos_import_window(
         }
         marker_entry.library_asset = Some(asset.blake3.clone());
     }
-    for asset in assets {
-        marker
-            .photos_imported_assets
-            .retain(|persisted| persisted.rel_path != asset.rel_path);
-        marker.photos_imported_assets.push(asset.clone());
-    }
+    marker
+        .photos_imported_assets
+        .retain(|persisted| !asset_index.contains_key(persisted.rel_path.as_str()));
+    marker
+        .photos_imported_assets
+        .extend(asset_index.into_values().cloned());
     marker
         .photos_imported_assets
         .sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -3750,6 +3759,7 @@ fn checkpoint_photos_import_window(
             "write Photos import checkpoint marker failed: {err}"
         ))
     })?;
+    super::photos_import_metrics::verified(assets.len());
     tracing::info!(
         target: "photos_import",
         checkpointed = assets.len(),
@@ -5588,8 +5598,6 @@ const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MACOS_OPEN_PATH: &str = "/usr/bin/open";
 #[cfg(target_os = "macos")]
 const MACOS_KILLALL_PATH: &str = "/usr/bin/killall";
-#[cfg(target_os = "macos")]
-const MACOS_XATTR_PATH: &str = "/usr/bin/xattr";
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_DEFAULT: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_MAX: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_DEFAULT: usize = 64;
@@ -5750,6 +5758,9 @@ fn fast_img_icloud_upload_verify_attempts() -> usize {
 }
 
 fn fast_img_icloud_upload_verify_batch_size() -> usize {
+    if let Some(config) = crate::runtime_config::active() {
+        return config.photos.verification_batch_size;
+    }
     fast_img_positive_usize_env(
         FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_ENV,
         FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_DEFAULT,
@@ -6195,28 +6206,14 @@ fn acquire_photos_import_lock() -> Result<PhotosImportLock> {
 
 #[cfg(target_os = "macos")]
 fn clear_quarantine_xattr(path: &Path) -> Result<()> {
-    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
-    command.arg("-d").arg("com.apple.quarantine").arg(path);
-    let output = run_fast_img_command_with_timeout(
-        &mut command,
-        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
-        "fast-img quarantine clear",
-    )
-    .map_err(|err| {
-        ImgQualityError::AnalysisError(format!("xattr quarantine clear command failed: {err}"))
-    })?;
-    if output.status.success() {
-        return Ok(());
+    match xattr::remove(path, "com.apple.quarantine") {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(libc::ENOATTR) => Ok(()),
+        Err(error) => Err(ImgQualityError::AnalysisError(format!(
+            "quarantine clear failed for {}: {error}",
+            path.display()
+        ))),
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("No such xattr") || stderr.contains("No such file") {
-        return Ok(());
-    }
-    Err(ImgQualityError::AnalysisError(format!(
-        "xattr quarantine clear failed for {}: {}",
-        path.display(),
-        stderr.trim()
-    )))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -6226,15 +6223,14 @@ const fn clear_quarantine_xattr(path: &Path) {
 
 #[cfg(target_os = "macos")]
 fn path_has_quarantine_xattr(path: &Path) -> Result<bool> {
-    let mut command = std::process::Command::new(MACOS_XATTR_PATH);
-    command.arg("-p").arg("com.apple.quarantine").arg(path);
-    let output = run_fast_img_command_with_timeout(
-        &mut command,
-        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
-        "fast-img quarantine probe",
-    )
-    .map_err(|e| ImgQualityError::AnalysisError(format!("xattr probe failed: {e}")))?;
-    Ok(output.status.success())
+    xattr::get(path, "com.apple.quarantine")
+        .map(|value| value.is_some())
+        .map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "quarantine probe failed for {}: {error}",
+                path.display()
+            ))
+        })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -7469,13 +7465,36 @@ mod tests {
             MACOS_PGREP_PATH,
             MACOS_OPEN_PATH,
             MACOS_KILLALL_PATH,
-            MACOS_XATTR_PATH,
         ] {
             assert!(
                 Path::new(path).is_absolute(),
                 "system tool is not absolute: {path}"
             );
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn photos_quarantine_native_probe_preserves_errors_and_other_attributes() -> anyhow::Result<()>
+    {
+        let scratch = tempfile::tempdir()?;
+        let path = scratch.path().join("original.jxl");
+        std::fs::write(&path, b"synthetic")?;
+        assert!(!path_has_quarantine_xattr(&path)?);
+        clear_quarantine_xattr(&path)?;
+        xattr::set(&path, "com.apple.quarantine", b"0081;0;MFB-test;")?;
+        xattr::set(&path, "user.mfb-test", b"preserve")?;
+        assert!(path_has_quarantine_xattr(&path)?);
+        clear_quarantine_xattr(&path)?;
+        assert!(!path_has_quarantine_xattr(&path)?);
+        assert_eq!(
+            xattr::get(&path, "user.mfb-test")?,
+            Some(b"preserve".to_vec())
+        );
+        std::fs::remove_file(&path)?;
+        assert!(path_has_quarantine_xattr(&path).is_err());
+        assert!(clear_quarantine_xattr(&path).is_err());
+        Ok(())
     }
 
     #[test]
@@ -8829,6 +8848,34 @@ mod tests {
         );
         let output_paths = fast_img_marker_output_paths(&marker)?;
         let mut imported_uuid = None;
+        if std::env::var("MFB_LIVE_PHOTOS_SMOKE_NATIVE_FAILURE").as_deref() == Ok("1") {
+            anyhow::ensure!(
+                std::env::var("MFB_PHOTOS_IMPORT_BACKEND").as_deref() == Ok("photokit"),
+                "native failure injection requires explicit photokit backend"
+            );
+            let mut config = crate::runtime_config::load(None, true)?.config;
+            config.photos.native_batch_size = 1;
+            config.photos.verification_batch_size = 1;
+            crate::runtime_config::install(config)?;
+            let failed = import_marker_outputs_with_photos_checkpoint_in_library(
+                &marker,
+                &output_paths,
+                false,
+                |_| {
+                    Err(ImgQualityError::AnalysisError(
+                        "injected post-commit verification interruption".into(),
+                    ))
+                },
+                path_has_quarantine_xattr,
+                Some(&library),
+            );
+            assert!(failed.is_err());
+            assert!(jpeg.is_file() && second_jpeg.is_file());
+            assert_eq!(count_assets()?, before + 2);
+            eprintln!(
+                "debug Photos post-commit interruption: sources retained; resuming durable identifiers"
+            );
+        }
         for operation in ["import", "resume-uncheckpointed", "resume-checkpointed"] {
             assert_debug_library_active()?;
             validate_fast_img_marker_output_hashes(&marker)?;
@@ -8876,6 +8923,12 @@ mod tests {
             eprintln!("debug Photos {operation}: UUID and original-payload custody verified");
         }
         verify_jxl_roundtrip_integrity(&jpeg, &input)?;
+
+        // The explicit-native run isolates native commit/recovery; Tier 2 is
+        // exercised by the compatibility smoke below, not silently switched.
+        if std::env::var("MFB_PHOTOS_IMPORT_BACKEND").as_deref() == Ok("photokit") {
+            return Ok(());
+        }
 
         // Exercise Tier 2 with a genuinely lossy JXL carrying metadata, not the
         // reversible JPEG output above. Original custody includes every box.

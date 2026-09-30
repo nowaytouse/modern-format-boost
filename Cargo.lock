@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "anyhow"
 version = "1.0.104"
-source = "git+https://github.com/dtolnay/anyhow#c63b279f3f4af2b02ca6267d9eb47d6d10497f69"
+source = "git+https://github.com/dtolnay/anyhow#2cbb4e1bcbf8e7015f8d8b04a291c4c0597030b4"
 
 [[package]]
 name = "arbitrary"
@@ -1221,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#ccb0d811751d343e428bb2ca6729dd5aa50906ea"
+source = "git+https://github.com/console-rs/indicatif#53cf51c6da16789f9a29a7a1cfdf8e364dcb0868"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1321,7 +1321,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "jpegxl-rs"
 version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
+source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
 dependencies = [
  "bon",
  "byteorder",
@@ -1333,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
+source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
 dependencies = [
  "cmake",
 ]
@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#3c5ce59f442ef1521990ee4894736e71e33f4b69"
+source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -2815,7 +2815,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#6a094dcce1cd51d1cbb065af8ecf92de39b11a05"
+source = "git+https://github.com/Stebalien/tempfile#1c294cc29d2a48746637252a0e30b1bebc05b3e6"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",
@@ -3614,7 +3614,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.59"
-source = "git+https://github.com/google/zerocopy#41f5b37afe7060fd9fe08c00b200672cd76d77b9"
+source = "git+https://github.com/google/zerocopy#cc135f46155b72e4b51188525c2974a3b84acf92"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3622,7 +3622,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.59"
-source = "git+https://github.com/google/zerocopy#41f5b37afe7060fd9fe08c00b200672cd76d77b9"
+source = "git+https://github.com/google/zerocopy#cc135f46155b72e4b51188525c2974a3b84acf92"
 dependencies = [
  "proc-macro2",
  "quote",

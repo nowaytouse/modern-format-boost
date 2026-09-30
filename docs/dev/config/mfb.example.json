@@ -12,7 +12,12 @@
     "album_name": null,
     "preserve_folder_structure": true,
     "native_batch_size": 100,
-    "import_batch_size": 50
+    "import_batch_size": 50,
+    "verification_batch_size": 250,
+    "adaptive_batching": false,
+    "native_min_batch_size": 50,
+    "native_max_batch_size": 1000,
+    "target_batch_seconds": 10
   },
   "tools": {
     "policy": "fallback",

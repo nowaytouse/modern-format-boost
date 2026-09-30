@@ -622,6 +622,11 @@ fn decide_build_action(
     ("skip", "")
 }
 
+fn set_artifact_target(command: &mut Command, project_root: &Path) {
+    // Packaging reads this directory; a shared Cargo cache must not redirect builds.
+    command.arg("--target-dir").arg(project_root.join("target"));
+}
+
 fn build_project(
     project_root: &Path,
     project_dir: &str,
@@ -671,6 +676,7 @@ fn build_project(
     if !build_all_bins {
         command.arg("--bin").arg(binary_name);
     }
+    set_artifact_target(&mut command, project_root);
     let status = command.current_dir(project_root).status()?;
 
     if !status.success() {
@@ -823,6 +829,7 @@ fn build_workspace_projects(
     for (_, binary_name, _) in projects {
         command.arg("--bin").arg(binary_name);
     }
+    set_artifact_target(&mut command, project_root);
     let status = command.current_dir(project_root).status()?;
     if !status.success() {
         println!(
@@ -1170,17 +1177,19 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
             "{}Building foundation dylib (cdylib)...{}",
             style.cyan, style.reset
         );
-        let status = Command::new("cargo")
-            .args([
-                "rustc",
-                "--release",
-                "--locked",
-                "-p",
-                "foundation",
-                "--lib",
-                "--crate-type",
-                "cdylib",
-            ])
+        let mut command = Command::new("cargo");
+        command.args([
+            "rustc",
+            "--release",
+            "--locked",
+            "-p",
+            "foundation",
+            "--lib",
+            "--crate-type",
+            "cdylib",
+        ]);
+        set_artifact_target(&mut command, project_root);
+        let status = command
             .current_dir(project_root)
             .status()
             .context("cargo rustc foundation cdylib failed")?;
@@ -2202,6 +2211,31 @@ mod tests {
 
         assert!(!bundle_file_needs_sync(&src, &dest));
         Ok(())
+    }
+
+    #[test]
+    fn parent_and_nested_helper_declare_photos_usage() {
+        for plist in [
+            include_str!("../../../gui/src-macos/Info.plist"),
+            include_str!("../../../gui/src-macos/PhotosImportHelper-Info.plist"),
+        ] {
+            assert!(plist.contains("<key>NSPhotoLibraryUsageDescription</key>"));
+        }
+    }
+
+    #[test]
+    fn artifact_builds_override_inherited_cargo_target_directory() {
+        let root = Path::new("/tmp/mfb");
+        for operation in ["build", "rustc"] {
+            let mut command = Command::new("cargo");
+            command
+                .arg(operation)
+                .env("CARGO_TARGET_DIR", "/tmp/shared-cache");
+            set_artifact_target(&mut command, root);
+            let args = command.get_args().collect::<Vec<_>>();
+            assert_eq!(args[args.len() - 2], "--target-dir");
+            assert_eq!(args[args.len() - 1], root.join("target"));
+        }
     }
 
     #[test]

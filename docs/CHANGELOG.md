@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Native Photos pipeline completion (2026-09-30)
+
+- Overlap one PhotoKit transaction with the previous verification/checkpoint
+  window. Drain in-flight replies on failure, retain uncertain journals and
+  original files, and keep pause/stop at transaction-safe boundaries.
+- Replace per-file xattr subprocesses with the existing native xattr dependency;
+  distinguish absent quarantine from I/O errors. Batch album changes once per
+  album instead of once per asset. The measured 1K production import fell from
+  101.073 s to 22.586 s; resume fell from 88.765 s to 8.515 s with unchanged UUIDs.
+- Add a developer-only native diagnostics panel in English, Chinese and Japanese,
+  real Swift transaction timings, independent batch sizes, helper RSS/CPU and
+  explicit unknown fields. Add live post-commit interruption/resume coverage.
+- Fix parent-app Photos permission declaration required by actual macOS TCC
+  attribution. Real original-debug-library 1K and 10K JXL benchmarks passed.
+- Refresh existing Cargo git dependencies: anyhow, indicatif, jpegxl-rs/src/sys,
+  tempfile and zerocopy/derive. Pin CI ImageMagick 7.1.2-32 with its release hash;
+  no new dependencies or codec-routing changes.
+- Local validation: 69 Photos regressions, 396 source contracts, 24 smart-build
+  tests and 281 IMG tests passed. Live tests are separate from CI and the
+  [remaining runtime acceptance matrix](hardening/PHOTOS_IMPORT_FOLLOWUP.md).
+
+### Bounded Photos scheduling and artifact refresh (2026-09-28)
+
+- Separate native transaction size from verification windows and the shared
+  Photos query cap. Drain a bounded identifier queue into durable checkpoints;
+  errors retain sources and journals and stop further submission. Scheduling
+  remains single-writer; the September 30 increment adds bounded stage overlap.
+- Merge checkpoint proofs once per window using the existing path index,
+  removing a full-history scan for every verified asset while retaining
+  replacement-by-path semantics and deterministic checkpoint ordering.
+- Add opt-in native batch adaptation using verified-cycle latency and memory
+  pressure, configurable min/max/target, and logged decisions. Track per-backend
+  transaction p95 alongside existing percentiles, committed/verified totals and
+  peak verification backlog. Add 10,003-asset scheduling and persistent mock IPC
+  regressions; these do not establish real Photos throughput.
+- Pin all `smart_build` Cargo artifact commands to the workspace target
+  directory. An inherited `CARGO_TARGET_DIR` previously allowed compilation
+  into a shared cache while packaging stale workspace binaries and dylibs.
+  Add a regression for the explicit target override.
+- Run the requested `cargo update`; the complete subsequent dependency refresh
+  is recorded above, with no manifest or dependency additions.
+- Record real-library benchmarks, recovery/TCC evidence and runtime acceptance
+  in [Photos import follow-up](hardening/PHOTOS_IMPORT_FOLLOWUP.md).
+
 ### Configurable image policies and native Photos import groundwork (2026-09-28)
 
 - Add versioned JSON image preferences with observable precedence: defaults,

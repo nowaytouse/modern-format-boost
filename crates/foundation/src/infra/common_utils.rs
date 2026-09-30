@@ -877,8 +877,10 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     let configured_override = crate::runtime_config::active()
         .and_then(|config| config.tools.paths.get(name))
         .map(|path| path.as_os_str().to_os_string());
-    let explicit_override =
-        configured_override.or_else(|| std::env::var_os(tool_override_env_name(name)));
+    let explicit_override = match configured_override {
+        Some(path) => Some(path),
+        None => std::env::var_os(tool_override_env_name(name)),
+    };
     let mut fallbacks = Vec::new();
     let mut home_error = None;
     if let Some(path) = explicit_override.as_ref() {
