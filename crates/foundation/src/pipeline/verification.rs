@@ -109,16 +109,35 @@ impl VerificationGate for Gate1Local {
                 )]);
             }
         };
-        let checks = vec![
-            check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
-            check_blake3_logged_outputs(ctx),
-            check_metadata_policy(ctx),
-            check_nonzero_size(ctx.expected_count, &jxl_files),
-            check_orientation_policy(ctx, &jxl_files),
-            check_decode_probe(&jxl_files),
-        ];
-        gate_result(checks)
+        // Reject cheap structural failures before launching metadata/decoder tools.
+        run_required_checks(&[
+            &|| check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
+            &|| check_nonzero_size(ctx.expected_count, &jxl_files),
+            &|| check_blake3_logged_outputs(ctx),
+            &|| check_metadata_policy(ctx),
+            &|| check_orientation_policy(ctx, &jxl_files),
+            &|| check_decode_probe(&jxl_files),
+        ])
     }
+}
+
+fn run_required_checks(probes: &[&dyn Fn() -> CheckDetail]) -> GateResult {
+    let mut checks = Vec::with_capacity(probes.len());
+    for probe in probes {
+        let started = std::time::Instant::now();
+        let check = probe();
+        tracing::info!(target: "verification_gate", gate = "local", check = check.name,
+            duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
+            "required check completed");
+        let passed = check.passed;
+        checks.push(check);
+        if !passed {
+            tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
+                "remaining checks not run after mandatory failure; import and cleanup blocked");
+            break;
+        }
+    }
+    gate_result(checks)
 }
 
 impl VerificationGate for Gate2Import {
@@ -681,22 +700,44 @@ fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail
         );
     }
 
-    check_orientation_policy_with_probes(ctx, files, orientation_tag_present, |source, output| {
-        if crate::image::format_detect::detect_true_format(output)
-            .map_err(|err| std::io::Error::other(err.to_string()))?
-            != crate::image::format_detect::FormatKind::Jxl
-        {
-            return Ok(false);
+    let orientations = match orientation_tags_batch(files) {
+        Ok(tags) => tags,
+        Err(error) => {
+            return detail(
+                "orient",
+                false,
+                "complete orientation probe".into(),
+                error.to_string(),
+                files.to_vec(),
+            );
         }
-        crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
-            .map(|result| {
-                matches!(
-                    result,
-                    crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
-                )
-            })
-            .map_err(|err| std::io::Error::other(err.to_string()))
-    })
+    };
+    check_orientation_policy_with_probes(
+        ctx,
+        files,
+        |path| {
+            orientations
+                .get(path)
+                .copied()
+                .ok_or_else(|| std::io::Error::other("orientation result missing"))
+        },
+        |source, output| {
+            if crate::image::format_detect::detect_true_format(output)
+                .map_err(|err| std::io::Error::other(err.to_string()))?
+                != crate::image::format_detect::FormatKind::Jxl
+            {
+                return Ok(false);
+            }
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output)
+                .map(|result| {
+                    matches!(
+                        result,
+                        crate::image::fast_img::IntegrityResult::RoundtripMatch { .. }
+                    )
+                })
+                .map_err(|err| std::io::Error::other(err.to_string()))
+        },
+    )
 }
 
 fn check_orientation_policy_with_probes<F, R>(
@@ -882,20 +923,64 @@ fn collect_delivery_output_files(
     Ok(files)
 }
 
-fn orientation_tag_present(path: &Path) -> std::io::Result<bool> {
+fn orientation_tags_batch(files: &[PathBuf]) -> std::io::Result<BTreeMap<PathBuf, bool>> {
     let exiftool = resolve_tool_path("exiftool").ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "exiftool was not found or failed its runtime health check",
         )
     })?;
-    let output = std::process::Command::new(exiftool)
-        .arg("-s3")
-        .arg("-Orientation")
-        .arg(path)
-        .output()?;
-    ensure_exiftool_success(path, output.status, &output.stderr)?;
-    Ok(!output.stdout.is_empty())
+    let mut tags = BTreeMap::new();
+    for batch in files.chunks(128) {
+        let mut command = std::process::Command::new(&exiftool);
+        command.args(["-j", "-s", "-Orientation"]);
+        let paths: Vec<_> = batch
+            .iter()
+            .map(|path| PathBuf::from(crate::path_safety::exiftool_path_arg(path).as_ref()))
+            .collect();
+        command.args(&paths);
+        let output = crate::process_runner::run_command_with_liveness_timeout(
+            &mut command,
+            std::time::Duration::from_secs(120),
+            crate::process_runner::image_process_hard_timeout(),
+            "Gate 1 batch orientation probe",
+        )?;
+        ensure_exiftool_success(&batch[0], output.status, &output.stderr)?;
+        let parsed = parse_orientation_batch(&paths, &output.stdout)?;
+        for (original, queried) in batch.iter().zip(&paths) {
+            tags.insert(original.clone(), parsed[queried]);
+        }
+    }
+    Ok(tags)
+}
+
+fn parse_orientation_batch(
+    paths: &[PathBuf],
+    raw: &[u8],
+) -> std::io::Result<BTreeMap<PathBuf, bool>> {
+    let records: Vec<serde_json::Value> = serde_json::from_slice(raw)?;
+    let mut tags = BTreeMap::new();
+    for record in records {
+        let source = record
+            .get("SourceFile")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| std::io::Error::other("orientation response has no SourceFile"))?;
+        let path = PathBuf::from(source);
+        if !paths.contains(&path)
+            || record.get("Error").is_some()
+            || tags
+                .insert(path, record.get("Orientation").is_some())
+                .is_some()
+        {
+            return Err(std::io::Error::other(
+                "invalid, unexpected or duplicate orientation response",
+            ));
+        }
+    }
+    if tags.len() != paths.len() {
+        return Err(std::io::Error::other("incomplete orientation response"));
+    }
+    Ok(tags)
 }
 
 fn ensure_exiftool_success(path: &Path, status: ExitStatus, stderr: &[u8]) -> std::io::Result<()> {
@@ -1126,13 +1211,94 @@ mod tests {
         let result = Gate1Local.run(&ctx);
 
         assert!(!result.passed);
-        assert_eq!(result.checks.len(), 6);
+        assert_eq!(result.checks.len(), 1);
         assert!(
             result
                 .checks
                 .iter()
                 .all(|check| !check.expected.is_empty() && !check.actual.is_empty())
         );
+    }
+
+    #[test]
+    fn required_checks_stop_on_failure_and_run_all_on_success() {
+        let calls = std::cell::Cell::new(0);
+        let probe = || {
+            calls.set(calls.get() + 1);
+            super::detail("probe", true, "pass".into(), "pass".into(), vec![])
+        };
+        let fail = || super::detail("failed", false, "pass".into(), "failed".into(), vec![]);
+        let result = super::run_required_checks(&[&probe, &fail, &probe]);
+        assert!(!result.passed);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(result.checks.len(), 2);
+        assert!(super::run_required_checks(&[&probe, &probe]).passed);
+        assert_eq!(calls.get(), 3);
+        assert!(!super::run_required_checks(&[]).passed);
+    }
+
+    #[test]
+    fn batch_orientation_requires_every_requested_file_exactly_once() {
+        let paths = vec![PathBuf::from("a.jxl"), PathBuf::from("b.jxl")];
+        let tags = super::parse_orientation_batch(
+            &paths,
+            br#"[{"SourceFile":"b.jxl"},{"SourceFile":"a.jxl","Orientation":"Rotate 90 CW"}]"#,
+        )
+        .unwrap();
+        assert!(tags[&paths[0]]);
+        assert!(!tags[&paths[1]]);
+        for invalid in [
+            br#"[{"SourceFile":"a.jxl"}]"#.as_slice(),
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"a.jxl"}]"#,
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"c.jxl"}]"#,
+            br#"[{"SourceFile":"a.jxl"},{"SourceFile":"b.jxl","Error":"bad data"}]"#,
+        ] {
+            assert!(super::parse_orientation_batch(&paths, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn batch_orientation_matches_real_single_file_probes() {
+        let root = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..32)
+            .map(|index| root.path().join(format!("image '{index}.jpg")))
+            .collect();
+        for path in &paths {
+            image::RgbImage::from_pixel(2, 2, image::Rgb([20, 40, 60]))
+                .save_with_format(path, image::ImageFormat::Jpeg)
+                .unwrap();
+        }
+        let output = crate::ExiftoolBuilder::new()
+            .arg("-Orientation#=6")
+            .arg(crate::path_safety::exiftool_path_arg(&paths[0]).as_ref())
+            .build()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let started = std::time::Instant::now();
+        let batch = super::orientation_tags_batch(&paths).unwrap();
+        let batch_elapsed = started.elapsed();
+        let started = std::time::Instant::now();
+        for path in &paths {
+            let output = crate::ExiftoolBuilder::new()
+                .arg("-s3")
+                .arg("-Orientation")
+                .arg(crate::path_safety::exiftool_path_arg(path).as_ref())
+                .build()
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(batch[path], !output.stdout.is_empty());
+        }
+        eprintln!(
+            "orientation probe comparison: files=32 batch_ms={} individual_ms={}",
+            batch_elapsed.as_millis(),
+            started.elapsed().as_millis()
+        );
+        assert!(batch[&paths[0]]);
+        assert!(!batch[&paths[1]]);
+        std::fs::remove_file(&paths[1]).unwrap();
+        assert!(super::orientation_tags_batch(&paths).is_err());
     }
 
     #[test]

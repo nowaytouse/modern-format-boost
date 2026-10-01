@@ -258,43 +258,219 @@ private struct ProcessorRequest {
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgErrorMode
     case vidCodec, vidErrorMode
+    case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase
+    case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
+    case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
+    case photosRoot, photosAlbum, photosPreserveTree
 
     var isImage: Bool { rawValue.hasPrefix("img") }
+    var isFastImage: Bool { rawValue.hasPrefix("fast") }
+    var isPhotos: Bool { rawValue.hasPrefix("photos") }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .imgErrorMode, .vidErrorMode].contains(self) }
+    var section: String {
+        if isDeveloper { return "developer" }
+        if isPhotos { return "photos" }
+        if isFastImage { return "fast" }
+        return isImage ? "img" : "vid"
+    }
     var flag: String {
         switch self {
-        case .imgConfig: "--img-config"
-        case .imgFallback: "--img-fallback-policy"
-        case .imgJpegEffort: "--img-jpeg-effort"
-        case .imgHeuristic: "--img-quality-heuristic"
-        case .imgDatabase: "--img-allow-database"
+        case .imgConfig, .fastConfig: "--img-config"
+        case .imgFallback, .fastFallback: "--img-fallback-policy"
+        case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
+        case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
+        case .imgDatabase, .fastDatabase: "--img-allow-database"
         case .imgErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
         case .vidErrorMode: "--vid-error-mode"
+        case .photosBackend: "--photos-backend"
+        case .photosNativeBatch: "--photos-native-batch-size"
+        case .photosAppleScriptBatch: "--photos-import-batch-size"
+        case .photosVerificationBatch: "--photos-verification-batch-size"
+        case .photosAdaptive: "--photos-adaptive-batching"
+        case .photosMinimumBatch: "--photos-native-min-batch-size"
+        case .photosMaximumBatch: "--photos-native-max-batch-size"
+        case .photosTargetSeconds: "--photos-target-batch-seconds"
+        case .photosRoot: "--photos-import-root"
+        case .photosAlbum: "--photos-album-name"
+        case .photosPreserveTree: "--preserve-folder-structure"
         }
     }
     var choices: [String] {
         switch self {
-        case .imgFallback: ["strict", "same-semantics", "repair"]
-        case .imgHeuristic, .imgDatabase: ["true", "false"]
+        case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
+        case .imgHeuristic, .imgDatabase, .fastHeuristic, .fastDatabase,
+             .photosAdaptive, .photosPreserveTree: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
         case .vidCodec: ["hevc", "av1"]
-        case .imgConfig, .imgJpegEffort: []
+        case .photosBackend: ["auto", "native", "applescript"]
+        default: []
+        }
+    }
+    var range: ClosedRange<Int>? {
+        switch self {
+        case .imgJpegEffort, .fastJpegEffort: 1...11
+        case .photosNativeBatch, .photosVerificationBatch, .photosMinimumBatch, .photosMaximumBatch: 1...1000
+        case .photosAppleScriptBatch: 1...50
+        case .photosTargetSeconds: 1...600
+        default: nil
+        }
+    }
+    var runtimeKey: String? {
+        switch self {
+        case .imgFallback, .fastFallback: "img.fallback_policy"
+        case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
+        case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
+        case .imgDatabase, .fastDatabase: "img.allow_database"
+        case .photosBackend: "photos.backend"
+        case .photosNativeBatch: "photos.native_batch_size"
+        case .photosAppleScriptBatch: "photos.import_batch_size"
+        case .photosVerificationBatch: "photos.verification_batch_size"
+        case .photosAdaptive: "photos.adaptive_batching"
+        case .photosMinimumBatch: "photos.native_min_batch_size"
+        case .photosMaximumBatch: "photos.native_max_batch_size"
+        case .photosTargetSeconds: "photos.target_batch_seconds"
+        case .photosRoot: "photos.import_root"
+        case .photosAlbum: "photos.album_name"
+        case .photosPreserveTree: "photos.preserve_folder_structure"
+        default: nil
         }
     }
     var preferenceKey: String { "MFBGuiMediaSettings.\(rawValue)" }
-    var title: String { localized("settings.\(rawValue)") }
+    var labelKey: String {
+        switch self {
+        case .fastConfig: "fastConfig"
+        case .fastFallback: "imgFallback"
+        case .fastJpegEffort: "imgJpegEffort"
+        case .fastHeuristic: "imgHeuristic"
+        case .fastDatabase: "imgDatabase"
+        default: rawValue
+        }
+    }
+    var title: String { localized("settings.\(labelKey)") }
+
+    func arguments(_ value: String) -> [String] {
+        choices == ["true", "false"] ? ["\(flag)=\(value)"] : [flag, value]
+    }
+}
+
+private enum ImageFallback: String { case strict, sameSemantics = "same-semantics", repair }
+private enum FileFailurePolicy: String { case recordAndContinue = "log-and-continue", failFast = "fail-fast" }
+private enum VideoCodec: String { case hevc, av1 }
+private enum PhotosImportBackend: String { case auto, native, applescript }
+
+private struct ImageSettings {
+    var configurationFile: String?
+    var fallback: ImageFallback?
+    var jpegEffort: Int?
+    var qualityHeuristic: Bool?
+    var allowDatabase: Bool?
+}
+
+private struct PhotosImportSettings {
+    var backend: PhotosImportBackend?
+    var nativeBatchSize: Int?
+    var appleScriptBatchSize: Int?
+    var verificationBatchSize: Int?
+    var adaptive: Bool?
+    var minimumBatchSize: Int?
+    var maximumBatchSize: Int?
+    var targetSeconds: Int?
+    var rootFolder: String?
+    var album: String?
+    var preserveTree: Bool?
 }
 
 private struct MediaSettings {
-    var values: [MediaSetting: String] = [:]
+    var image = ImageSettings()
+    var fastImage = ImageSettings()
+    var photos = PhotosImportSettings()
+    var imageFailure: FileFailurePolicy?
+    var videoFailure: FileFailurePolicy?
+    var videoCodec: VideoCodec?
+    private var invalidValues: [MediaSetting: String] = [:]
+
+    // String values are the control/persistence boundary; processing uses typed groups.
+    var values: [MediaSetting: String] {
+        get {
+            let stored: [MediaSetting: String?] = [
+                .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
+                .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
+                .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
+                .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
+                .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
+                .fastDatabase: fastImage.allowDatabase.map(String.init), .vidCodec: videoCodec?.rawValue,
+                .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
+                .photosNativeBatch: photos.nativeBatchSize.map(String.init),
+                .photosAppleScriptBatch: photos.appleScriptBatchSize.map(String.init),
+                .photosVerificationBatch: photos.verificationBatchSize.map(String.init),
+                .photosAdaptive: photos.adaptive.map(String.init), .photosMinimumBatch: photos.minimumBatchSize.map(String.init),
+                .photosMaximumBatch: photos.maximumBatchSize.map(String.init), .photosTargetSeconds: photos.targetSeconds.map(String.init),
+                .photosRoot: photos.rootFolder, .photosAlbum: photos.album, .photosPreserveTree: photos.preserveTree.map(String.init),
+            ]
+            var result = stored.compactMapValues { $0 }
+            result.merge(invalidValues) { _, invalid in invalid }
+            return result
+        }
+        set {
+            self = MediaSettings()
+            for (field, value) in newValue {
+                if let range = field.range {
+                    guard let number = Int(value), range.contains(number) else { invalidValues[field] = value; continue }
+                } else if !field.choices.isEmpty, !field.choices.contains(value) {
+                    invalidValues[field] = value
+                    continue
+                }
+                switch field {
+                case .imgConfig: image.configurationFile = value
+                case .imgFallback: image.fallback = ImageFallback(rawValue: value)
+                case .imgJpegEffort: image.jpegEffort = Int(value)
+                case .imgHeuristic: image.qualityHeuristic = Bool(value)
+                case .imgDatabase: image.allowDatabase = Bool(value)
+                case .imgErrorMode: imageFailure = FileFailurePolicy(rawValue: value)
+                case .fastConfig: fastImage.configurationFile = value
+                case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
+                case .fastJpegEffort: fastImage.jpegEffort = Int(value)
+                case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
+                case .fastDatabase: fastImage.allowDatabase = Bool(value)
+                case .vidCodec: videoCodec = VideoCodec(rawValue: value)
+                case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
+                case .photosBackend: photos.backend = PhotosImportBackend(rawValue: value)
+                case .photosNativeBatch: photos.nativeBatchSize = Int(value)
+                case .photosAppleScriptBatch: photos.appleScriptBatchSize = Int(value)
+                case .photosVerificationBatch: photos.verificationBatchSize = Int(value)
+                case .photosAdaptive: photos.adaptive = Bool(value)
+                case .photosMinimumBatch: photos.minimumBatchSize = Int(value)
+                case .photosMaximumBatch: photos.maximumBatchSize = Int(value)
+                case .photosTargetSeconds: photos.targetSeconds = Int(value)
+                case .photosRoot: photos.rootFolder = value
+                case .photosAlbum: photos.album = value
+                case .photosPreserveTree: photos.preserveTree = Bool(value)
+                }
+            }
+        }
+    }
 
     init(preferences: UserDefaults? = nil) {
         if let preferences {
+            if !preferences.bool(forKey: "MFBGuiSeparateFastImageSettings") {
+                for (standard, fast) in [(MediaSetting.imgConfig, MediaSetting.fastConfig),
+                    (.imgFallback, .fastFallback), (.imgJpegEffort, .fastJpegEffort),
+                    (.imgHeuristic, .fastHeuristic), (.imgDatabase, .fastDatabase)] {
+                    if preferences.string(forKey: fast.preferenceKey) == nil,
+                       let value = preferences.string(forKey: standard.preferenceKey) {
+                        preferences.set(value, forKey: fast.preferenceKey)
+                    }
+                }
+                preferences.set(true, forKey: "MFBGuiSeparateFastImageSettings")
+            }
+            var saved: [MediaSetting: String] = [:]
             for field in MediaSetting.allCases {
                 if let value = preferences.string(forKey: field.preferenceKey) {
-                    values[field] = value
+                    saved[field] = value
                 }
             }
+            values = saved
         }
     }
 
@@ -303,17 +479,24 @@ private struct MediaSettings {
             guard let value = values[field] else { continue }
             let valid: Bool
             switch field {
-            case .imgConfig:
+            case .imgConfig, .fastConfig:
                 var isDirectory: ObjCBool = false
                 valid = value.hasPrefix("/")
                     && FileManager.default.fileExists(atPath: value, isDirectory: &isDirectory)
                     && !isDirectory.boolValue && FileManager.default.isReadableFile(atPath: value)
-            case .imgJpegEffort:
-                valid = Int(value).map { (1...11).contains($0) } ?? false
+            case .photosRoot, .photosAlbum:
+                valid = !value.isEmpty && value != "." && value != ".."
+                    && !value.contains("/") && !value.contains("\\")
+                    && value.rangeOfCharacter(from: .controlCharacters) == nil
             default:
-                valid = field.choices.contains(value)
+                valid = field.range.map { range in Int(value).map(range.contains) ?? false }
+                    ?? field.choices.contains(value)
             }
             guard valid else { throw HostError(message: localized("settings.invalid", field.title, value)) }
+        }
+        if fields.contains(.photosMinimumBatch), let minimum = photos.minimumBatchSize,
+           let maximum = photos.maximumBatchSize, minimum > maximum {
+            throw HostError(message: localized("settings.bounds_invalid"))
         }
     }
 
@@ -326,19 +509,67 @@ private struct MediaSettings {
     }
 
     func arguments(operation: OperationMode, processing: ProcessingMode) throws -> [String] {
-        let images = operation.backendMode == "fast-img"
-            || (operation == .adjacent && processing != .videosOnly)
+        let fastImages = operation.backendMode == "fast-img"
+        let images = operation == .adjacent && processing != .videosOnly
         let videos = operation == .adjacent && processing != .imagesOnly
         let fields = MediaSetting.allCases.filter {
-            ($0.isImage ? images : videos) && ($0 != .imgErrorMode || operation == .adjacent)
+            $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
         try validate(fields)
         return fields.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
-            if field == .imgHeuristic || field == .imgDatabase { return ["\(field.flag)=\(value)"] }
-            return [field.flag, value]
+            return field.arguments(value)
         }
     }
+
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
+        MediaSetting.allCases.filter {
+            (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage)
+                && $0 != .imgErrorMode && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
+        }.flatMap { field -> [String] in
+            guard let value = values[field] else { return [] }
+            return field.arguments(value).map { argument in
+                argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
+            }
+        }
+    }
+}
+
+private func queryRuntimeSettings(arguments: [String]) throws -> [String: String] {
+    guard let binary = ProcessorLocator.resolveTool(named: "img") else {
+        throw HostError(message: localized("error.img_backend_missing"))
+    }
+    let process = Process()
+    process.executableURL = binary
+    process.arguments = ["config", "show", "--effective"] + arguments
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = output
+    try process.run()
+    let watchdog = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
+    defer { watchdog.cancel() }
+    let capture = try readBoundedProcessOutput(output.fileHandleForReading, limit: 1024 * 1024)
+    process.waitUntilExit()
+    guard !capture.exceeded, process.terminationStatus == 0 else {
+        throw HostError(message: String(decoding: capture.data.prefix(8192), as: UTF8.self))
+    }
+    guard let document = try JSONSerialization.jsonObject(with: capture.data) as? [String: Any],
+          let config = document["config"] as? [String: Any] else {
+        throw HostError(message: localized("settings.config_invalid"))
+    }
+    var result: [String: String] = [:]
+    for (section, object) in config {
+        guard let fields = object as? [String: Any] else { continue }
+        for (key, value) in fields {
+            if value is NSNull { continue }
+            if let number = value as? NSNumber {
+                result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                    ? (number.boolValue ? "true" : "false") : number.stringValue
+            } else if let text = value as? String { result["\(section).\(key)"] = text }
+        }
+    }
+    return result
 }
 
 @MainActor
@@ -347,16 +578,20 @@ private final class MediaSettingsPanel: NSObject {
     private let preferences: UserDefaults
     private let applied: () -> Void
     private var popups: [MediaSetting: NSPopUpButton] = [:]
-    private let configField = NSTextField()
-    private let effortField = NSTextField()
-    private let effortOverride = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let effortStepper = NSStepper()
+    private var textFields: [MediaSetting: NSTextField] = [:]
+    private var toggles: [MediaSetting: NSButton] = [:]
+    private var steppers: [MediaSetting: NSStepper] = [:]
+    private var restored = MediaSettings()
+    private var inherited: [MediaSetting: String] = [:]
+    private let status = NSTextField(wrappingLabelWithString: "")
     private let tabs = NSTabView()
+    private var applying = false
+    private var applyGeneration = UUID()
 
-    init(preferences: UserDefaults, applied: @escaping () -> Void) {
+    init(preferences: UserDefaults, developer: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 420),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 780, height: 610),
                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         panel.title = localized("settings.title")
@@ -367,35 +602,20 @@ private final class MediaSettingsPanel: NSObject {
         root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
         panel.contentView = root
         tabs.translatesAutoresizingMaskIntoConstraints = false
-        for isImage in [true, false] {
-            let tab = NSTabViewItem(identifier: isImage ? "img" : "vid")
-            tab.label = localized(isImage ? "media.images" : "media.videos")
+        for section in ["img", "fast", "vid", "photos"] + (developer ? ["developer"] : []) {
+            let tab = NSTabViewItem(identifier: section)
+            tab.label = localized("settings.section.\(section)")
             let grid = NSGridView()
             grid.rowSpacing = 12
             grid.columnSpacing = 14
-            for field in MediaSetting.allCases where field.isImage == isImage {
+            for field in MediaSetting.allCases where field.section == section {
                 let control: NSView
-                switch field {
-                case .imgConfig:
-                    configField.placeholderString = localized("settings.inherit")
-                    configField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                    let browse = NSButton(image: NSImage(systemSymbolName: "folder", accessibilityDescription: nil)!,
-                                          target: self, action: #selector(browseConfig))
-                    browse.toolTip = localized("settings.choose_config")
-                    browse.setAccessibilityLabel(localized("settings.choose_config"))
-                    control = NSStackView(views: [configField, browse])
-                case .imgJpegEffort:
-                    effortOverride.title = localized("settings.override")
-                    effortOverride.target = self
-                    effortOverride.action = #selector(effortChanged)
-                    effortField.widthAnchor.constraint(equalToConstant: 48).isActive = true
-                    effortStepper.minValue = 1
-                    effortStepper.maxValue = 11
-                    effortStepper.increment = 1
-                    effortStepper.target = self
-                    effortStepper.action = #selector(stepEffort)
-                    control = NSStackView(views: [effortOverride, effortField, effortStepper])
-                default:
+                if field.choices == ["true", "false"] {
+                    let toggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+                    toggle.allowsMixedState = true
+                    toggles[field] = toggle
+                    control = toggle
+                } else if !field.choices.isEmpty {
                     let popup = NSPopUpButton()
                     popup.addItem(withTitle: localized("settings.inherit"))
                     for value in field.choices {
@@ -404,9 +624,25 @@ private final class MediaSettingsPanel: NSObject {
                     }
                     popups[field] = popup
                     control = popup
+                } else {
+                    let text = NSTextField()
+                    text.placeholderString = localized("settings.inherit")
+                    text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                    textFields[field] = text
+                    if let range = field.range {
+                        text.widthAnchor.constraint(equalToConstant: 100).isActive = true
+                        let stepper = NSStepper()
+                        stepper.minValue = Double(range.lowerBound)
+                        stepper.maxValue = Double(range.upperBound)
+                        stepper.increment = 1
+                        stepper.target = self
+                        stepper.action = #selector(stepNumber(_:))
+                        steppers[field] = stepper
+                        control = NSStackView(views: [text, stepper])
+                    } else { control = text }
                 }
                 control.setAccessibilityLabel(field.title)
-                control.toolTip = localized("settings.\(field.rawValue).help")
+                control.toolTip = localized("settings.\(field.labelKey).help")
                 let row = grid.addRow(with: [NSTextField(labelWithString: field.title), control])
                 row.yPlacement = .center
             }
@@ -424,6 +660,9 @@ private final class MediaSettingsPanel: NSObject {
             tabs.addTabViewItem(tab)
         }
         root.addArrangedSubview(tabs)
+        status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        root.addArrangedSubview(status)
         let reset = NSButton(title: localized("settings.reset"), target: self, action: #selector(resetTab))
         let cancel = NSButton(title: localized("alert.cancel"), target: self, action: #selector(cancel))
         cancel.keyEquivalent = "\u{1b}"
@@ -436,16 +675,51 @@ private final class MediaSettingsPanel: NSObject {
         restore(MediaSettings(preferences: preferences))
     }
 
-    func show(for window: NSWindow, videos: Bool) {
-        tabs.selectTabViewItem(at: videos ? 1 : 0)
+    func show(for window: NSWindow, videos: Bool, fast: Bool = false) {
+        tabs.selectTabViewItem(withIdentifier: videos ? "vid" : (fast ? "fast" : "img"))
         window.beginSheet(panel)
+        loadInheritedValues()
+    }
+
+    private func loadInheritedValues() {
+        let settings = draft()
+        let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
+        let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { (try queryRuntimeSettings(arguments: standardArgs), try queryRuntimeSettings(arguments: fastArgs)) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                switch result {
+                case let .success((standard, fast)):
+                    for field in MediaSetting.allCases {
+                        guard let key = field.runtimeKey else { continue }
+                        self.inherited[field] = (field.isFastImage || field.isPhotos ? fast : standard)[key]
+                        if let value = self.inherited[field], let popup = self.popups[field] {
+                            popup.item(at: 0)?.title = localized("settings.inherited_value", localized("settings.value.\(value)"))
+                        }
+                    }
+                    self.restore(self.draft())
+                    self.status.stringValue = ""
+                case let .failure(error): self.status.stringValue = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func restore(_ settings: MediaSettings) {
-        configField.stringValue = settings.values[.imgConfig] ?? ""
-        effortOverride.state = settings.values[.imgJpegEffort] == nil ? .off : .on
-        effortField.stringValue = settings.values[.imgJpegEffort] ?? "11"
-        effortChanged()
+        restored = settings
+        for (field, text) in textFields {
+            text.stringValue = settings.values[field] ?? ""
+            text.placeholderString = inherited[field] ?? localized("settings.inherit")
+            steppers[field]?.integerValue = Int(settings.values[field] ?? inherited[field] ?? "") ?? field.range?.lowerBound ?? 0
+        }
+        for (field, toggle) in toggles {
+            let value = settings.values[field]
+            toggle.state = value.flatMap(Bool.init).map { $0 ? .on : .off } ?? .mixed
+            toggle.title = inherited[field].map { localized("settings.inherited_value", localized("settings.value.\($0)")) }
+                ?? localized("settings.inherit")
+            if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
+        }
         for (field, popup) in popups {
             popup.selectItem(at: 0)
             if let value = settings.values[field] {
@@ -461,46 +735,62 @@ private final class MediaSettingsPanel: NSObject {
     }
 
     private func draft() -> MediaSettings {
-        var settings = MediaSettings()
-        if !configField.stringValue.isEmpty { settings.values[.imgConfig] = configField.stringValue }
-        if effortOverride.state == .on { settings.values[.imgJpegEffort] = effortField.stringValue }
+        var settings = restored
+        for (field, text) in textFields {
+            settings.values[field] = text.stringValue.isEmpty ? nil : text.stringValue
+        }
+        for (field, toggle) in toggles {
+            if toggle.state == .mixed, let original = restored.values[field], Bool(original) == nil { continue }
+            settings.values[field] = toggle.state == .mixed ? nil : (toggle.state == .on ? "true" : "false")
+        }
         for (field, popup) in popups {
             settings.values[field] = popup.selectedItem?.representedObject as? String
         }
         return settings
     }
 
-    @objc private func effortChanged() {
-        effortField.isEnabled = effortOverride.state == .on
-        effortStepper.isEnabled = effortOverride.state == .on
-        effortStepper.integerValue = Int(effortField.stringValue) ?? 11
-    }
-
-    @objc private func stepEffort() { effortField.integerValue = effortStepper.integerValue }
-
-    @objc private func browseConfig() {
-        let picker = NSOpenPanel()
-        picker.canChooseDirectories = false
-        picker.allowsMultipleSelection = false
-        picker.beginSheetModal(for: panel) { [weak self] response in
-            if response == .OK, let url = picker.url { self?.configField.stringValue = url.path }
+    @objc private func stepNumber(_ sender: NSStepper) {
+        if let field = steppers.first(where: { $0.value === sender })?.key {
+            textFields[field]?.integerValue = sender.integerValue
         }
     }
 
     @objc private func resetTab() {
         var settings = draft()
-        let images = tabs.indexOfTabViewItem(tabs.selectedTabViewItem!) == 0
-        for field in MediaSetting.allCases where field.isImage == images { settings.values.removeValue(forKey: field) }
+        let section = tabs.selectedTabViewItem?.identifier as? String
+        for field in MediaSetting.allCases where field.section == section { settings.values.removeValue(forKey: field) }
         restore(settings)
     }
 
-    @objc private func cancel() { panel.sheetParent?.endSheet(panel) }
+    @objc private func cancel() {
+        applyGeneration = UUID()
+        applying = false
+        panel.sheetParent?.endSheet(panel)
+    }
 
     @objc private func apply() {
+        guard !applying else { return }
         do {
-            try draft().save(to: preferences)
-            applied()
-            cancel()
+            let settings = draft()
+            try settings.validate()
+            applying = true
+            applyGeneration = UUID()
+            let generation = applyGeneration
+            let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false)
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = Result { _ = try queryRuntimeSettings(arguments: standardArgs); _ = try queryRuntimeSettings(arguments: fastArgs) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.applyGeneration == generation else { return }
+                    self.applying = false
+                    do {
+                        try result.get()
+                        try settings.save(to: self.preferences)
+                        self.applied()
+                        self.cancel()
+                    } catch { NSAlert(error: error).beginSheetModal(for: self.panel) }
+                }
+            }
         } catch { NSAlert(error: error).beginSheetModal(for: panel) }
     }
 
@@ -509,7 +799,7 @@ private final class MediaSettingsPanel: NSObject {
         settings.values = [.imgFallback: "strict", .imgJpegEffort: "9", .imgDatabase: "false",
                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         restore(settings)
-        guard draft().values == settings.values, effortField.isEnabled else {
+        guard draft().values == settings.values, textFields[.imgJpegEffort]?.stringValue == "9" else {
             throw HostError(message: "Settings controls did not restore explicit overrides")
         }
         try draft().save(to: preferences)
@@ -518,10 +808,10 @@ private final class MediaSettingsPanel: NSObject {
         }
         tabs.selectTabViewItem(at: 0)
         resetTab()
-        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], !effortField.isEnabled else {
+        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], textFields[.imgJpegEffort]?.stringValue.isEmpty == true else {
             throw HostError(message: "Resetting image settings changed video settings")
         }
-        for index in 0...1 {
+        for index in 0..<tabs.numberOfTabViewItems {
             tabs.selectTabViewItem(at: index)
             panel.contentView?.layoutSubtreeIfNeeded()
             guard let content = tabs.selectedTabViewItem?.view, let grid = content.subviews.first as? NSGridView,
@@ -536,12 +826,25 @@ private final class MediaSettingsPanel: NSObject {
                     throw HostError(message: "Settings labels overlap or clip")
                 }
             }
-            for (field, popup) in popups where field.isImage == (index == 0) {
+            for (field, popup) in popups where field.section == tabs.selectedTabViewItem?.identifier as? String {
                 guard popup.bounds.width + 1 >= popup.intrinsicContentSize.width else {
                     throw HostError(message: "Settings choice clipped: \(field.rawValue)")
                 }
             }
         }
+        var invalid = MediaSettings()
+        invalid.values = [.imgDatabase: "invalid"]
+        restore(invalid)
+        guard draft().values[.imgDatabase] == "invalid" else {
+            throw HostError(message: "Invalid saved checkbox was silently converted to a valid value")
+        }
+        var independent = MediaSettings()
+        independent.values = [.imgJpegEffort: "11", .fastJpegEffort: "8", .photosNativeBatch: "250", .photosAlbum: "Selected"]
+        restore(independent)
+        tabs.selectTabViewItem(withIdentifier: "fast")
+        resetTab()
+        independent.values.removeValue(forKey: .fastJpegEffort)
+        guard draft().values == independent.values else { throw HostError(message: "Fast IMG reset affected other groups") }
         try MediaSettings().save(to: preferences)
         guard MediaSettings(preferences: preferences).values.isEmpty else {
             throw HostError(message: "Reset settings still override inherited configuration")
@@ -2586,11 +2889,12 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func showSettings() {
         guard configurationControlsEnabled,
               [.adjacent, .fastImgJxl, .fastImgAvif].contains(selectedOperation) else { return }
-        settingsPanel = MediaSettingsPanel(preferences: preferences) { [weak self] in
+        settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode) { [weak self] in
             self?.configurationChanged()
         }
         settingsPanel?.show(for: window, videos: selectedOperation == .fastVid
-            || (selectedOperation == .adjacent && processingPopup.indexOfSelectedItem == 2))
+            || (selectedOperation == .adjacent && processingPopup.indexOfSelectedItem == 2),
+            fast: selectedOperation.backendMode == "fast-img")
     }
 
     @objc private func languageChanged() {
@@ -3079,10 +3383,15 @@ private func runSelfTest() -> Int32 {
         )
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
+                                           .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
+                                           .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         let configuredArguments = try ProcessorCommand.arguments(from: configured)
         guard configuredArguments.contains("--img-fallback-policy"),
+              configuredArguments.contains("strict"), !configuredArguments.contains("same-semantics"),
+              configuredArguments.contains("--photos-native-batch-size"),
+              configuredArguments.contains("--preserve-folder-structure=false"),
               configuredArguments.contains("--img-allow-database=false"),
               !configuredArguments.contains("--img-error-mode"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
@@ -3091,7 +3400,14 @@ private func runSelfTest() -> Int32 {
               try configured.mediaSettings.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
               try configured.mediaSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty
         else { throw HostError(message: "Media settings leaked across processing modes") }
-        configured.mediaSettings.values[.imgJpegEffort] = "12"
+        let effective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
+        guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
+              effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
+              effective["photos.preserve_folder_structure"] == "false" else {
+            throw HostError(message: "GUI settings do not match the effective backend configuration")
+        }
+        configured.mediaSettings.values[.fastJpegEffort] = "12"
         do {
             _ = try ProcessorCommand.arguments(from: configured)
             throw HostError(message: "Out-of-range JPEG effort accepted")
@@ -3319,10 +3635,22 @@ private func runSelfTest() -> Int32 {
             let suite = "MFBGuiSelfTest.\(UUID().uuidString)"
             let preferences = UserDefaults(suiteName: suite)!
             defer { preferences.removePersistentDomain(forName: suite) }
+            preferences.set("8", forKey: MediaSetting.imgJpegEffort.preferenceKey)
+            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == "8" else {
+                throw HostError(message: "Existing shared image settings did not migrate")
+            }
+            var migrated = MediaSettings(preferences: preferences)
+            migrated.values.removeValue(forKey: .fastJpegEffort)
+            try migrated.save(to: preferences)
+            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == nil else {
+                throw HostError(message: "A Fast IMG reset was undone by repeated migration")
+            }
+            try MediaSettings().save(to: preferences)
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
         }
         print("native-host self-test passed")
         return 0

@@ -81,5 +81,40 @@ fn configuration_precedence_and_failure_are_observable_without_media() -> anyhow
     let invalid = inspect(root.path(), &["config", "show"])?;
     anyhow::ensure!(!invalid.status.success());
     anyhow::ensure!(String::from_utf8_lossy(&invalid.stderr).contains("unknown field"));
+    anyhow::ensure!(
+        !inspect(root.path(), &["config", "validate"])?
+            .status
+            .success()
+    );
+    let paths = inspect(root.path(), &["config", "path"])?;
+    anyhow::ensure!(paths.status.success());
+    let paths: serde_json::Value = serde_json::from_slice(&paths.stdout)?;
+    anyhow::ensure!(paths["files_enabled"] == true);
+    anyhow::ensure!(
+        paths["project"]
+            == root
+                .path()
+                .canonicalize()?
+                .join("mfb.json")
+                .to_string_lossy()
+                .as_ref()
+    );
+    anyhow::ensure!(
+        inspect(root.path(), &["config", "init", "new.json"])?
+            .status
+            .success()
+    );
+    let original = std::fs::read(root.path().join("new.json"))?;
+    anyhow::ensure!(
+        !inspect(root.path(), &["config", "init", "new.json"])?
+            .status
+            .success()
+    );
+    anyhow::ensure!(std::fs::read(root.path().join("new.json"))? == original);
+    anyhow::ensure!(
+        inspect(root.path(), &["config", "validate", "--no-config"])?
+            .status
+            .success()
+    );
     Ok(())
 }

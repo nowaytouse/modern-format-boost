@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Source-bound albums, settings and gate performance (2026-10-01)
+
+- Derive converted and retained-original Photos album names from the same input
+  directory. Numbered/custom output folders no longer create a second album;
+  legitimate source suffixes and existing checkpoint UUID proofs are preserved.
+  Previously created production albums are not modified automatically.
+- Correct macOS memory page-size parsing, including Apple Silicon's 16 KiB
+  pages, and share admission probes for 250 ms instead of spawning identical
+  memory queries in every waiting worker. Existing pressure limits remain.
+- Batch Gate 1 orientation queries with complete response accounting, retain
+  exact reconstruction and decode checks, and stop after mandatory failure.
+  Record per-check timing and explicitly deferred checks. Local 32-image probe
+  comparison: 115 ms batched versus 2525 ms individual, identical tag results;
+  this is not a whole-library throughput claim.
+- Query paired source/output/XMP metadata together, deduplicate paths and reuse
+  the source sidecar within one audit. Preserve wrong-source, sidecar, APP13/JXL
+  reconstruction and clear-policy checks. Reject empty, duplicate, unbound and
+  tool-error responses instead of accepting missing output as empty metadata.
+  Local pair comparison: 115 ms batched versus 238 ms individual, identical maps.
+- Separate native GUI Images, Fast IMG, Videos and Photos settings. Migrate
+  prior image preferences once; keep file overrides and failure handling in
+  Developer mode. Read inherited values from the backend and validate effective
+  profiles before saving. Add English, Simplified Chinese and Japanese labels.
+- Share typed Photos CLI/launcher overrides, expose adaptive bounds and target
+  duration, and add side-effect-free config path/validate commands plus explicit
+  atomic, non-overwriting config initialization.
+- Preserve the existing clap HEAD refresh and reuse workspace serde_json for
+  configuration command output. No codec routing or quality-policy changes.
+- Validation: 77 focused Rust tests passed (memory, gates, metadata, album
+  identity/checkpoint, configuration and launcher), including real ExifTool,
+  JPEG/JXL reconstruction and isolated CLI checks. Rust formatting and strict
+  Clippy passed; native settings self-tests passed in English, Chinese and
+  Japanese, including effective-backend parameter roundtrips. Production Photos
+  was not accessed; full-library throughput is not inferred from probe timings.
+
 ### Per-media GUI settings and explicit batch outcomes (2026-09-30)
 
 - Add native Images/Videos settings tabs with independent persistent overrides

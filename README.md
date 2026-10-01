@@ -364,12 +364,16 @@ the system by default with explicit light/dark choices. Linux and Windows
 retain the CLI for now; future GUI ports should use their own native platform
 adapter.
 
-The gear button opens separate **Images** and **Videos** settings tabs. Images
-can override the runtime JSON file, JPEG effort, encoding fallback, database
-access, quality heuristic and per-file error policy. Videos have an independent
-codec and per-file error policy. Each field initially inherits existing runtime
-settings; resetting a tab removes only that media type's GUI overrides. The JSON
-file is never rewritten. Video AV1 explicitly disables Apple compatibility;
+The gear button opens separate **Images**, **Fast IMG**, **Videos** and **Photos**
+settings tabs. Standard and Fast IMG independently configure JPEG transcoding
+effort, fallback, database access and quality inference. Photos exposes backend,
+native/AppleScript/verification batch sizes, adaptive bounds, folder and album
+names. Developer mode additionally exposes configuration-file overrides and
+standard image/video failure handling. Inherited image/Photos values are read
+from the actual backend, and Apply validates both image profiles before saving.
+Resetting a tab affects only that tab; JSON files are never rewritten. Existing
+shared image preferences migrate once to the separate Fast IMG profile.
+Video AV1 explicitly disables Apple compatibility;
 unsupported video quality/preset controls are not advertised.
 Video settings apply to standard processing, not Fast Video's fixed GIF path;
 the settings button is unavailable in operations without configurable encoding.
@@ -792,6 +796,9 @@ stop startup. `--no-config` skips files, not environment settings or CLI flags.
 
 ```sh
 img config show --effective
+img config validate
+img config path
+img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
 ```

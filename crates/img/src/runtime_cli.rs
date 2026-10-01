@@ -3,10 +3,10 @@
     reason = "CLI types must stay internal; public visibility conflicts with unreachable_pub"
 )]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use foundation::infra::runtime_config::{
-    self, FallbackPolicy, LoadedConfig, PhotosBackend, ToolPolicy,
+    self, FallbackPolicy, LoadedConfig, ToolPolicy, photos_args::PhotosArgs,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,26 +34,8 @@ pub(super) struct RuntimeArgs {
     /// Effort for reversible JPEG-to-JXL encoding; direct pixel encoding keeps its mode policy.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(1..=11))]
     jpeg_effort: Option<u8>,
-    #[arg(long, global = true, value_enum)]
-    photos_backend: Option<PhotosBackend>,
-    /// Top-level Photos folder name (one component).
-    #[arg(long, global = true)]
-    photos_import_root: Option<String>,
-    /// Base Photos album name (one component).
-    #[arg(long, global = true)]
-    photos_album_name: Option<String>,
-    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    preserve_folder_structure: Option<bool>,
-    #[arg(long, global = true, value_parser = clap::value_parser!(usize))]
-    photos_native_batch_size: Option<usize>,
-    #[arg(long, global = true, value_parser = clap::value_parser!(usize))]
-    photos_import_batch_size: Option<usize>,
-    /// Independent Photos verification window and query cap.
-    #[arg(long, global = true, value_parser = clap::value_parser!(usize))]
-    photos_verification_batch_size: Option<usize>,
-    /// Adapt native transaction sizes after verified batches using latency and memory pressure.
-    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    photos_adaptive_batching: Option<bool>,
+    #[command(flatten)]
+    photos: PhotosArgs,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
     tools: Vec<(String, PathBuf)>,
@@ -67,6 +49,58 @@ pub(super) enum ConfigCommand {
         #[arg(long)]
         effective: bool,
     },
+    /// Validate the effective configuration, without processing or accessing Photos.
+    Validate,
+    /// List configuration paths in precedence order without loading them.
+    Path,
+    /// Create a default configuration at an explicit path; never overwrite an existing file.
+    Init { path: PathBuf },
+}
+
+impl RuntimeArgs {
+    pub(crate) fn inspect(&self, command: &ConfigCommand) -> Result<()> {
+        match command {
+            ConfigCommand::Show { .. } => println!("{}", self.resolve(false)?.to_json(true)?),
+            ConfigCommand::Validate => {
+                let loaded = self.resolve(false)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"valid": true, "sources": loaded.sources})
+                );
+            }
+            ConfigCommand::Path => println!(
+                "{}",
+                serde_json::json!({
+                    "user": runtime_config::user_config_path(),
+                    "project": runtime_config::project_config_path()?,
+                    "explicit": self.config,
+                    "files_enabled": !self.no_config,
+                    "precedence": ["default", "environment", "user", "project", "explicit", "CLI"]
+                })
+            ),
+            ConfigCommand::Init { path } => {
+                use std::io::Write;
+                let mut content =
+                    serde_json::to_vec_pretty(&runtime_config::RuntimeConfig::default())?;
+                content.push(b'\n');
+                let parent = path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let mut file = tempfile::NamedTempFile::new_in(parent)?;
+                file.write_all(&content)?;
+                file.as_file().sync_all()?;
+                file.persist_noclobber(path).with_context(|| {
+                    format!(
+                        "create configuration {} (will not overwrite)",
+                        path.display()
+                    )
+                })?;
+                println!("{}", serde_json::json!({"created": path}));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn parse_tool(value: &str) -> Result<(String, PathBuf), String> {
@@ -133,55 +167,12 @@ impl RuntimeArgs {
             sources,
             "img.jpeg_effort",
         );
-        apply(
-            self.photos_backend,
-            &mut config.photos.backend,
-            sources,
-            "photos.backend",
-        );
-        if let Some(name) = &self.photos_import_root {
-            config.photos.import_root = Some(name.clone());
-            sources.insert("photos.import_root".into(), "CLI".into());
-        }
-        if let Some(name) = &self.photos_album_name {
-            config.photos.album_name = Some(name.clone());
-            sources.insert("photos.album_name".into(), "CLI".into());
-        }
-        apply(
-            self.preserve_folder_structure,
-            &mut config.photos.preserve_folder_structure,
-            sources,
-            "photos.preserve_folder_structure",
-        );
-        apply(
-            self.photos_native_batch_size,
-            &mut config.photos.native_batch_size,
-            sources,
-            "photos.native_batch_size",
-        );
-        apply(
-            self.photos_import_batch_size,
-            &mut config.photos.import_batch_size,
-            sources,
-            "photos.import_batch_size",
-        );
         for (name, path) in &self.tools {
             config.tools.paths.insert(name.clone(), path.clone());
             sources.insert(format!("tools.paths.{name}"), "CLI".into());
         }
-        apply(
-            self.photos_verification_batch_size,
-            &mut config.photos.verification_batch_size,
-            sources,
-            "photos.verification_batch_size",
-        );
-        apply(
-            self.photos_adaptive_batching,
-            &mut config.photos.adaptive_batching,
-            sources,
-            "photos.adaptive_batching",
-        );
-        config.validate()?;
+        self.photos.apply_to(&mut loaded);
+        loaded.config.validate()?;
         Ok(loaded)
     }
 }
@@ -243,5 +234,75 @@ mod tests {
         ] {
             assert!(crate::Cli::try_parse_from(args).is_err());
         }
+    }
+
+    #[test]
+    fn config_init_never_overwrites_and_commands_parse() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("preferences.json");
+        let args = RuntimeArgs::default();
+        args.inspect(&ConfigCommand::Init { path: path.clone() })?;
+        let first = std::fs::read(&path)?;
+        assert!(
+            args.inspect(&ConfigCommand::Init { path: path.clone() })
+                .is_err()
+        );
+        assert_eq!(std::fs::read(path)?, first);
+        for command in ["show", "validate", "path"] {
+            assert!(crate::Cli::try_parse_from(["img", "config", command, "--no-config"]).is_ok());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn photos_cli_bounds_and_forwarding_share_the_same_policy() -> Result<()> {
+        let cli = crate::Cli::try_parse_from([
+            "img",
+            "config",
+            "show",
+            "--no-config",
+            "--photos-native-batch-size",
+            "200",
+            "--photos-native-min-batch-size",
+            "100",
+            "--photos-native-max-batch-size",
+            "400",
+            "--photos-target-batch-seconds",
+            "5",
+            "--photos-adaptive-batching=true",
+        ])?;
+        let resolved = cli.policy.resolve(false)?;
+        assert_eq!(resolved.config.photos.native_min_batch_size, 100);
+        assert_eq!(resolved.config.photos.native_max_batch_size, 400);
+        assert_eq!(resolved.config.photos.target_batch_seconds, 5);
+        assert_eq!(resolved.sources["photos.native_min_batch_size"], "CLI");
+        let mut forwarded = vec![
+            "img".to_owned(),
+            "config".into(),
+            "show".into(),
+            "--no-config".into(),
+        ];
+        forwarded.extend(cli.policy.photos.cli_arguments());
+        assert_eq!(
+            serde_json::to_value(
+                crate::Cli::try_parse_from(forwarded)?
+                    .policy
+                    .resolve(false)?
+                    .config
+            )?,
+            serde_json::to_value(resolved.config)?
+        );
+        let invalid = crate::Cli::try_parse_from([
+            "img",
+            "config",
+            "validate",
+            "--no-config",
+            "--photos-native-min-batch-size",
+            "400",
+            "--photos-native-max-batch-size",
+            "100",
+        ])?;
+        assert!(invalid.policy.resolve(false).is_err());
+        Ok(())
     }
 }

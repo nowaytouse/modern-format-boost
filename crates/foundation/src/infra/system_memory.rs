@@ -5,6 +5,38 @@
 //! processes).
 
 use crate::builder_base::ToolBuilder;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+const MEMORY_SAMPLE_MAX_AGE: Duration = Duration::from_millis(250);
+static MEMORY_SAMPLE: Mutex<Option<MemorySample>> = Mutex::new(None);
+
+#[derive(Clone, Copy)]
+struct MemorySample {
+    sampled_at: Instant,
+    memory: Option<(u64, u64)>,
+}
+
+fn sample_memory(
+    cache: &Mutex<Option<MemorySample>>,
+    now: Instant,
+    probe: impl FnOnce() -> Option<(u64, u64)>,
+) -> Option<(u64, u64)> {
+    let Ok(mut sample) = cache.lock() else {
+        return probe();
+    };
+    if let Some(sample) = *sample
+        && now.saturating_duration_since(sample.sampled_at) < MEMORY_SAMPLE_MAX_AGE
+    {
+        return sample.memory;
+    }
+    let memory = probe();
+    *sample = Some(MemorySample {
+        sampled_at: now,
+        memory,
+    });
+    memory
+}
 
 /// Memory pressure level derived from available vs total RAM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +52,12 @@ pub enum MemoryPressure {
 /// Returns (`available_mb`, `total_mb`) if detection succeeds.
 #[must_use]
 pub fn get_memory_mb() -> Option<(u64, u64)> {
+    // Admission workers share one short-lived probe instead of spawning a
+    // sysctl/vm_stat pair per waiting worker on every 100 ms retry.
+    sample_memory(&MEMORY_SAMPLE, Instant::now(), probe_memory_mb)
+}
+
+fn probe_memory_mb() -> Option<(u64, u64)> {
     let (available, total) = if cfg!(target_os = "macos") {
         get_memory_macos()
     } else if cfg!(target_os = "linux") {
@@ -192,28 +230,21 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
 }
 
 fn parse_vm_stat_available(out: &str) -> Option<u64> {
-    let mut page_size = 4096u64;
+    let mut page_size = None;
     let mut pages_available = None::<u64>;
     let mut pages_free = None::<u64>;
     let mut pages_inactive = None::<u64>;
 
     for line in out.lines() {
         let line = line.trim();
-        if line.starts_with("page size of ") {
-            if let Some(rest) = line
-                .strip_prefix("page size of ")
-                .and_then(|s| s.strip_suffix(" bytes"))
-            {
-                match rest.replace(',', "").parse::<u64>() {
-                    Ok(n) => page_size = n,
-                    Err(e) => {
-                        crate::media_conversion_gate::delivery_runtime_batch_audit(
-                            "memory_probe",
-                            format!("failed to parse vm_stat page size '{rest}': {e}"),
-                        );
-                    }
-                }
-            }
+        if let Some((_, rest)) = line.split_once("page size of ") {
+            page_size = rest
+                .split_whitespace()
+                .next()?
+                .replace(',', "")
+                .parse::<u64>()
+                .ok()
+                .filter(|size| size.is_power_of_two());
         } else if line.starts_with("Pages available:") {
             pages_available = parse_vm_stat_value(line);
         } else if line.starts_with("Pages free:") {
@@ -225,13 +256,16 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
 
     let mut pages = pages_available;
     if pages.is_none() {
-        pages = pages_free.and_then(|f| pages_inactive.map(|i| f + i));
+        pages = pages_free.and_then(|f| pages_inactive.and_then(|i| f.checked_add(i)));
+        if pages_free.is_some() && pages_inactive.is_some() && pages.is_none() {
+            return None;
+        }
     }
     if pages.is_none() {
         pages = pages_free;
     }
     let pages = pages?;
-    Some((pages * page_size) / (1024 * 1024))
+    Some(pages.checked_mul(page_size?)? / (1024 * 1024))
 }
 
 fn parse_vm_stat_value(line: &str) -> Option<u64> {
@@ -414,6 +448,70 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vm_stat_uses_real_macos_header_page_size() {
+        let pages = "Pages free: 34559.\nPages inactive: 208154.\n";
+        let arm = format!("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n{pages}");
+        let intel = format!("Mach Virtual Memory Statistics: (page size of 4096 bytes)\n{pages}");
+        assert_eq!(parse_vm_stat_available(&arm), Some(3792));
+        assert_eq!(parse_vm_stat_available(&intel), Some(948));
+        assert_eq!(parse_vm_stat_available(pages), None);
+        assert_eq!(
+            parse_vm_stat_available(&arm.replace("16384", "invalid")),
+            None
+        );
+    }
+
+    #[test]
+    fn vm_stat_explicit_available_and_overflow_are_handled() {
+        assert_eq!(
+            parse_vm_stat_available(
+                "page size of 16384 bytes\nPages available: 128.\nPages free: 1.\n"
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            parse_vm_stat_available(&format!(
+                "page size of 16384 bytes\nPages free: {}.\nPages inactive: 1.\n",
+                u64::MAX
+            )),
+            None
+        );
+        assert_eq!(
+            parse_vm_stat_available(&format!(
+                "page size of 16384 bytes\nPages available: {}.\n",
+                u64::MAX
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn memory_probe_is_shared_but_expires_and_does_not_hide_failure() {
+        let cache = Mutex::new(None);
+        let now = Instant::now();
+        assert_eq!(
+            sample_memory(&cache, now, || Some((4000, 16000))),
+            Some((4000, 16000))
+        );
+        assert_eq!(
+            sample_memory(&cache, now + Duration::from_millis(249), || panic!(
+                "cached probe repeated"
+            )),
+            Some((4000, 16000))
+        );
+        assert_eq!(
+            sample_memory(&cache, now + MEMORY_SAMPLE_MAX_AGE, || None),
+            None
+        );
+        assert_eq!(
+            sample_memory(&cache, now + MEMORY_SAMPLE_MAX_AGE * 2, || Some((
+                500, 16000
+            ))),
+            Some((500, 16000))
+        );
+    }
 
     #[test]
     fn test_memory_detection_does_not_panic() {

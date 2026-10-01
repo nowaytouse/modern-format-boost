@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
+source = "git+https://github.com/clap-rs/clap#4be56132cf7a5ef6e237409a13225a5829cb24e4"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
+source = "git+https://github.com/clap-rs/clap#4be56132cf7a5ef6e237409a13225a5829cb24e4"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
+source = "git+https://github.com/clap-rs/clap#4be56132cf7a5ef6e237409a13225a5829cb24e4"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.1"
-source = "git+https://github.com/clap-rs/clap#6cde7384bc47913bdbf456cd2f0e3ebb94cb3557"
+source = "git+https://github.com/clap-rs/clap#4be56132cf7a5ef6e237409a13225a5829cb24e4"
 
 [[package]]
 name = "cmake"
@@ -1197,6 +1197,7 @@ dependencies = [
  "rayon",
  "rug",
  "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "vid",

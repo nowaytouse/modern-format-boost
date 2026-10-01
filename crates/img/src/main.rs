@@ -657,11 +657,10 @@ fn main_inner() -> anyhow::Result<()> {
             ..
         }
     );
-    let resolved = cli.policy.resolve(legacy_expert)?;
-    if matches!(cli.command, Commands::Config { .. }) {
-        println!("{}", resolved.to_json(true)?);
-        return Ok(());
+    if let Commands::Config { command } = &cli.command {
+        return cli.policy.inspect(command);
     }
+    let resolved = cli.policy.resolve(legacy_expert)?;
     let configuration_log = resolved.to_json(false)?;
     let allow_recovery = resolved.config.img.fallback_policy
         == foundation::infra::runtime_config::FallbackPolicy::Repair

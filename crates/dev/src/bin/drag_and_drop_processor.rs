@@ -203,6 +203,9 @@ struct Args {
     #[arg(long, num_args = 1, require_equals = true)]
     img_allow_database: Option<bool>,
 
+    #[command(flatten)]
+    photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
+
     /// Standard image batch policy; FastImg retains its checkpointed handling.
     #[arg(long, value_enum)]
     img_error_mode: Option<ErrorModeOption>,
@@ -1103,6 +1106,10 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 }
 
 fn validate_media_options(args: &Args) -> Result<()> {
+    anyhow::ensure!(
+        args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
+        "Photos import settings require --mode fast-img"
+    );
     let image_options = args.img_config.is_some()
         || args.img_fallback_policy.is_some()
         || args.img_jpeg_effort.is_some()
@@ -1510,6 +1517,7 @@ fn fast_img_launch_command(
 }
 
 fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
+    command.extend(args.photos.cli_arguments());
     if let Some(path) = &args.img_config {
         command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
     }
@@ -2693,6 +2701,7 @@ fn build_run_args(
         img_jpeg_effort: None,
         img_quality_heuristic: None,
         img_allow_database: None,
+        photos: Default::default(),
         img_error_mode: None,
         vid_error_mode: None,
         vid_codec: None,
@@ -3176,6 +3185,42 @@ mod tests {
     }
 
     #[test]
+    fn photos_settings_are_forwarded_only_to_fast_img() {
+        let mut args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "fast-img",
+            "--photos-backend",
+            "native",
+            "--photos-native-batch-size",
+            "200",
+            "--photos-import-batch-size",
+            "20",
+            "--photos-album-name",
+            "Selected",
+            "--preserve-folder-structure=false",
+            "/tmp/unused",
+        ])
+        .unwrap();
+        validate_media_options(&args).unwrap();
+        let mut forwarded = Vec::new();
+        push_img_policy_args(&mut forwarded, &args);
+        assert!(
+            forwarded
+                .windows(2)
+                .any(|pair| pair == ["--photos-native-batch-size", "200"])
+        );
+        assert!(
+            forwarded
+                .windows(2)
+                .any(|pair| pair == ["--photos-album-name", "Selected"])
+        );
+        assert!(forwarded.contains(&"--preserve-folder-structure=false".into()));
+        args.mode = LaunchMode::Images;
+        assert!(validate_media_options(&args).is_err());
+    }
+
+    #[test]
     fn batch_results_preserve_unknown_and_failure_semantics() {
         assert_eq!(
             command_phase_label(Path::new("/bin/img")),
@@ -3501,6 +3546,7 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
@@ -3601,6 +3647,7 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,
@@ -3642,6 +3689,7 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
@@ -3705,6 +3753,7 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,

@@ -25,6 +25,9 @@ but legacy environment settings and explicit flags still apply.
 
 ```sh
 img config show --effective
+img config validate
+img config path
+img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img run /path/to/images --allow-database --quality-heuristic
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
@@ -39,15 +42,24 @@ img fast-img /path/to/images --shortest-path --photos-backend native \
 initialize databases, acquire media locks or process files. Media runs also
 log the resolved configuration. Booleans accept a bare enable flag or an
 explicit `=false`, so a saved opt-in can be disabled for one run.
+`config validate` checks the same effective policy. `config path` reports the
+user/project/explicit paths and precedence without loading potentially invalid
+files. `config init PATH` atomically creates default JSON at an explicit path;
+an existing file is never replaced. These commands do not access Photos.
 
 ## Policy Fields
 
 ### Native GUI Overrides
 
-The gear button opens separate Images and Videos tabs. Image overrides include
-the JSON file, JPEG effort (1 through 11), fallback policy, quality heuristic,
-database access and per-file error mode. Video overrides include the existing
-HEVC/AV1 codec selector and an independent per-file error mode. AV1 disables
+The gear button opens Images, Fast IMG, Videos and Photos tabs. Standard and
+Fast IMG have independent JPEG transcoding effort (1 through 11), fallback,
+quality heuristic and database overrides. Existing shared image preferences
+migrate once to Fast IMG; subsequent edits and resets stay independent.
+Photos exposes backend selection, native/AppleScript/verification batch sizes,
+adaptive sizing with minimum/maximum/target duration, root folder, album name
+and subfolder preservation. Configuration-file overrides and per-file failure
+policies appear only in Developer mode. Video exposes the existing HEVC/AV1
+codec selector and independent developer file-error mode. AV1 disables
 Apple compatibility; video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
 Video settings apply only to standard `vid run` processing. Fast Video uses
@@ -58,13 +70,18 @@ retains its existing checkpointed per-file failure handling; the launcher reject
 an explicit error-mode override there rather than pretending it controls the
 FastImg encoding waves. Its fallback, effort and other image preferences still apply.
 
-All controls start inherited. Overrides are saved in native GUI preferences,
+All controls start inherited. Image and Photos defaults are queried from the
+backend configuration, not duplicated in Swift. Numeric fields use steppers;
+binary settings use three-state checkboxes (mixed means inherited). Apply
+validates the resolved standard and Fast IMG profiles, including adaptive
+batch bounds, before persisting. Configuration query failures stay visible.
+Overrides are saved in native GUI preferences,
 passed as explicit launcher options, and only forwarded to the matching media
 pipeline. Reset This Tab removes that tab's overrides, not the other tab or
 the runtime JSON. Invalid saved overrides and unreadable explicit files fail
 visibly instead of silently reverting to defaults. JSON schema validation
-remains owned by `img`. Tools, Photos names and other advanced settings remain
-available through the selected JSON file.
+remains owned by `img`. Tool executable paths remain available through JSON or
+direct `img --tool` overrides.
 
 The launcher accepts `--img-config`, `--img-fallback-policy`,
 `--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
@@ -73,6 +90,10 @@ The launcher accepts `--img-config`, `--img-fallback-policy`,
 apply only to the child process, including PTY launches, without mutating the
 launcher's global environment. Encoding options are not sent to verification,
 restore or maintenance tools.
+The launcher also accepts the shared `--photos-*` options and
+`--preserve-folder-structure` for Fast IMG only. `img` and the launcher use the
+same typed Photos argument definition, including `--photos-native-min-batch-size`,
+`--photos-native-max-batch-size` and `--photos-target-batch-seconds`.
 
 Fallback selects permitted attempts; error mode selects whether a recoverable
 file failure stops processing. Strict fallback is not fail-fast. Failed files
@@ -134,6 +155,41 @@ binds the naming policy before import; a changed policy cannot reuse that
 checkpoint's custody proofs. Restore the previous names or start a separate
 task with `--no-resume`. Legacy checkpoints containing Photos state require
 legacy naming until reconciled.
+
+Default names now derive directly from the original input directory for both
+converted outputs and retained originals. Collision-generated output names
+such as `Batch_optimized_2` and custom output paths cannot create a second
+output-derived album. Legitimate suffixes in source names are preserved.
+Existing checkpointed asset UUIDs remain authoritative and are not reimported;
+this fix does not automatically merge or delete previously created albums.
+
+## Verification And Scheduling (2026-10-01)
+
+Apple Silicon memory sampling reads the actual `vm_stat` page size rather than
+assuming 4096 bytes. Admission workers share a sample for at most 250 ms,
+including failed samples; expired samples are re-probed. This corrects a 4x
+underestimate on 16 KiB systems without removing memory-pressure limits.
+
+Gate 1 performs cheap count/size checks before expensive proofs, records each
+executed check's duration, and stops after the first mandatory failure. Remaining
+checks are explicitly reported as not run; import and cleanup stay blocked.
+Orientation tags are queried in batches of up to 128 files, with exact per-file
+response accounting. Missing, duplicate, unexpected or error responses fail
+closed. JPEG reconstruction and decoder checks remain separate and mandatory.
+
+An isolated 32-image comparison using the installed ExifTool returned identical
+orientation results: batch 115 ms versus individual probes 2525 ms. This is a
+local orientation-probe measurement, not a full-pipeline or Photos speed claim.
+No production library was accessed during this increment's tests.
+
+Embedded metadata audits also query source, output and optional XMP in a single
+bounded invocation (up to four unique files), reusing the source-sidecar map
+inside that audit. No cross-run or timestamp-only proof cache is introduced.
+Responses must identify each requested path exactly once; empty output and
+per-file tool errors cannot become an empty successful metadata map. A local
+pair comparison returned identical maps in 115 ms versus 238 ms separately.
+Sidecar precedence, wrong-source rejection and exact APP13/JXL reconstruction
+requirements remain covered by regression tests.
 
 The legacy `--allow_expert_options` flag maps to `repair`; an explicit
 `--fallback-policy` takes precedence. The new default is strict: JPEG e11

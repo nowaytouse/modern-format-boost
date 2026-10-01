@@ -308,6 +308,24 @@ fn default_sources(value: &Value, prefix: &str, sources: &mut BTreeMap<String, S
     }
 }
 
+pub mod photos_args;
+
+#[must_use]
+pub fn user_config_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|dir| dir.join("modern-format-boost/config.json"))
+}
+
+pub fn project_config_path() -> Result<PathBuf> {
+    crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
+        Path::new("mfb.json"),
+        "runtime project configuration",
+    )
+    .map_err(anyhow::Error::msg)
+}
+
 pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     ensure!(
         !(explicit.is_some() && no_config),
@@ -402,21 +420,14 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
         );
     }
     if !no_config {
-        let user_dir = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
-        if let Some(path) = user_dir.map(|dir| dir.join("modern-format-boost/config.json"))
+        if let Some(path) = user_config_path()
             && path
                 .try_exists()
                 .with_context(|| format!("inspect config {}", path.display()))?
         {
             apply_file(&mut value, &path, &mut sources)?;
         }
-        let project = crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
-            Path::new("mfb.json"),
-            "runtime project configuration",
-        )
-        .map_err(anyhow::Error::msg)?;
+        let project = project_config_path()?;
         if project
             .try_exists()
             .with_context(|| format!("inspect config {}", project.display()))?

@@ -17,6 +17,7 @@ gmp-mpfr-sys = { workspace = true, optional = true }
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
 foundation = { path = "../foundation", default-features = false }

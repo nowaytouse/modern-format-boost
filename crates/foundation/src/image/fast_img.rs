@@ -5045,7 +5045,8 @@ fn index_photos_probes_by_uuid(
 }
 
 fn fast_img_optimized_import_album_name(marker: &WorkingCopyMarker, rel_path: &str) -> String {
-    photos_import_album_name(&marker.working_copy, rel_path)
+    // Both converted outputs and retained originals belong to the source album.
+    photos_import_album_name(&marker.src_dir, rel_path)
 }
 
 fn photos_import_album_name(base: &Path, rel_path: &str) -> String {
@@ -5065,13 +5066,12 @@ fn photos_import_album_name_with_policy(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Imported");
-    let cleaned = fast_img_strip_optimized_import_suffixes(folder_name);
-    let inner_root = if cleaned.is_empty() {
+    let inner_root = if folder_name.is_empty() {
         "✨Imported".to_string()
-    } else if !cleaned.starts_with('✨') {
-        format!("✨{cleaned}")
+    } else if !folder_name.starts_with('✨') {
+        format!("✨{folder_name}")
     } else {
-        cleaned
+        folder_name.to_string()
     };
 
     let root = config
@@ -5092,19 +5092,6 @@ fn photos_import_album_name_with_policy(
     } else {
         format!("{root}/{album}")
     }
-}
-
-fn fast_img_strip_optimized_import_suffixes(folder_name: &str) -> String {
-    let mut cleaned = folder_name;
-    for suffix in [
-        "_optimized_collected",
-        "_collected_optimized",
-        "_optimized",
-        "_collected",
-    ] {
-        cleaned = cleaned.strip_suffix(suffix).unwrap_or(cleaned);
-    }
-    cleaned.to_string()
 }
 
 /// Tier-2 originals are archive assets, not rendered-image derivatives.
@@ -6772,7 +6759,7 @@ mod tests {
     #[test]
     fn optimized_import_album_names_match_icloud_import_default() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let src_root = temp_dir.path().join("src");
+        let src_root = temp_dir.path().join("Batch");
         let wc = temp_dir.path().join("Batch_optimized");
         let mut marker = WorkingCopyMarker::new(src_root, wc, 3);
         let cases = [
@@ -6788,10 +6775,21 @@ mod tests {
             );
         }
 
-        marker.working_copy = temp_dir.path().join("Batch_collected_optimized");
+        for output_name in [
+            "Batch_collected_optimized",
+            "Batch_optimized_2",
+            "Custom (2)",
+        ] {
+            marker.working_copy = temp_dir.path().join(output_name);
+            assert_eq!(
+                fast_img_optimized_import_album_name(&marker, "root.JXL"),
+                photos_import_album_name(&marker.src_dir, "original.avif")
+            );
+        }
+        marker.src_dir = temp_dir.path().join("Batch_optimized");
         assert_eq!(
             fast_img_optimized_import_album_name(&marker, "root.JXL"),
-            "✨/✨Batch"
+            "✨/✨Batch_optimized"
         );
     }
 
@@ -6841,7 +6839,7 @@ mod tests {
     #[test]
     fn photos_import_args_include_optimized_album_pairs() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let src_root = temp_dir.path().join("src");
+        let src_root = temp_dir.path().join("Batch");
         let wc = temp_dir.path().join("Batch_optimized");
         std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src_root, wc.clone(), 1);
@@ -7701,7 +7699,7 @@ mod tests {
     #[test]
     fn photos_import_pending_entries_skip_valid_checkpointed_marker_proofs() -> Result<()> {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let src_root = temp_dir.path().join("src");
+        let src_root = temp_dir.path().join("Batch");
         let wc = temp_dir.path().join("Batch_optimized");
         std::fs::create_dir_all(&wc).unwrap();
         let proven = wc.join("a.JXL");

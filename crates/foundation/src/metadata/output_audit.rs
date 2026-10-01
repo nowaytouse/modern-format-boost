@@ -135,22 +135,33 @@ pub fn verify_output_embedded_metadata(
     };
 
     let mismatches = match policy {
-        MetadataOutputPolicy::Preserve => {
-            let mut src_tags = preservable_tag_map(src)?;
-            merge_source_sidecar_metadata_into(&mut src_tags, src)?;
-            let dst_tags = preservable_tag_map(dst)?;
+        MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => {
+            let src_sidecar = super::find_xmp_sidecar(src);
+            let dst_sidecar = super::find_xmp_sidecar(dst);
+            let [mut src_tags, dst_tags, mut source_xmp, output_xmp] = preservable_tag_maps([
+                src,
+                dst,
+                src_sidecar.as_deref().unwrap_or(src),
+                dst_sidecar.as_deref().unwrap_or(dst),
+            ])?;
+            if src_sidecar.is_some() {
+                src_tags.extend(source_xmp.clone());
+            } else {
+                source_xmp.clear();
+            }
             verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
-            let mut mismatches = preserve_mismatches(&src_tags, &dst_tags);
-            mismatches.extend(output_sidecar_mismatches(src, dst)?);
-            mismatches
-        }
-        MetadataOutputPolicy::PreserveSource => {
-            let mut src_tags = preservable_tag_map(src)?;
-            merge_source_sidecar_metadata_into(&mut src_tags, src)?;
-            let dst_tags = preservable_tag_map(dst)?;
-            verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
-            let mut mismatches = preserve_source_mismatches(&src_tags, &dst_tags);
-            mismatches.extend(output_sidecar_mismatches(src, dst)?);
+            let mut mismatches = if matches!(policy, MetadataOutputPolicy::Preserve) {
+                preserve_mismatches(&src_tags, &dst_tags)
+            } else {
+                preserve_source_mismatches(&src_tags, &dst_tags)
+            };
+            if dst_sidecar.is_some() {
+                mismatches.extend(
+                    preserve_mismatches(&source_xmp, &output_xmp)
+                        .into_iter()
+                        .map(|mismatch| format!("output sidecar {mismatch}")),
+                );
+            }
             mismatches
         }
         MetadataOutputPolicy::Clear => clear_mismatches(dst, output_payload_bytes)?,
@@ -347,10 +358,14 @@ fn clear_mismatches(dst: &Path, output_payload_bytes: u64) -> io::Result<Vec<Str
     Ok(mismatches)
 }
 
-fn preservable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
-    let mut map = metadata_tag_map(path, PRESERVABLE_TAG_ARGS, "preservable")?;
-    map.retain(|key, _| !preserve_audit_excludes_tag(key));
-    Ok(map)
+fn preservable_tag_maps<const N: usize>(
+    paths: [&Path; N],
+) -> io::Result<[BTreeMap<String, String>; N]> {
+    let mut maps = metadata_tag_maps(paths, PRESERVABLE_TAG_ARGS, "preservable")?;
+    for map in &mut maps {
+        map.retain(|key, _| !preserve_audit_excludes_tag(key));
+    }
+    Ok(maps)
 }
 
 fn has_no_portable_embedded_metadata_channel(path: &Path) -> io::Result<bool> {
@@ -380,13 +395,12 @@ pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
         ));
     }
 
-    let mut expected = preservable_tag_map(src)?;
-    for (key, value) in preservable_tag_map(xmp)? {
+    let [mut expected, sidecar, actual] = preservable_tag_maps([src, xmp, dst])?;
+    for (key, value) in sidecar {
         // The native merge applies the explicit sidecar after embedded source
         // metadata, so sidecar values are authoritative for duplicate tags.
         expected.insert(key, value);
     }
-    let actual = preservable_tag_map(dst)?;
     let mismatches = preserve_source_mismatches(&expected, &actual);
     if mismatches.is_empty() {
         let detail = format!(
@@ -422,21 +436,27 @@ pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
 }
 
 fn clearable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
-    metadata_tag_map(path, CLEARABLE_TAG_ARGS, "clearable")
+    let [map] = metadata_tag_maps([path], CLEARABLE_TAG_ARGS, "clearable")?;
+    Ok(map)
 }
 
-fn metadata_tag_map(
-    path: &Path,
+fn metadata_tag_maps<const N: usize>(
+    paths: [&Path; N],
     tag_args: &[&str],
     label: &str,
-) -> io::Result<BTreeMap<String, String>> {
-    if has_no_portable_embedded_metadata_channel(path)? {
-        tracing::debug!(
-            target: "mfb.metadata",
-            path = %path.display(),
-            "NetPBM/PAM has no portable EXIF/XMP/ICC channel; adjacent XMP is audited separately"
-        );
-        return Ok(BTreeMap::new());
+) -> io::Result<[BTreeMap<String, String>; N]> {
+    let mut requested = BTreeMap::<std::path::PathBuf, Vec<usize>>::new();
+    let mut maps = std::array::from_fn(|_| BTreeMap::new());
+    for (index, path) in paths.iter().enumerate() {
+        if !has_no_portable_embedded_metadata_channel(path)? {
+            requested
+                .entry(std::path::PathBuf::from(exiftool_path_arg(path).as_ref()))
+                .or_default()
+                .push(index);
+        }
+    }
+    if requested.is_empty() {
+        return Ok(maps);
     }
     let mut builder = crate::ExiftoolBuilder::new();
     builder
@@ -449,20 +469,33 @@ fn metadata_tag_map(
     for arg in tag_args {
         builder.arg(*arg);
     }
-    builder.arg(exiftool_path_arg(path).as_ref());
-    parse_exiftool_json_object_map(
-        &builder.build().output().map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "failed to run exiftool {label} metadata dump for {}: {e}",
-                    path.display()
-                ),
-            )
-        })?,
-        path,
-        label,
-    )
+    let mut command = builder.build();
+    command.args(requested.keys());
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut command,
+        std::time::Duration::from_secs(120),
+        crate::process_runner::image_process_hard_timeout(),
+        "paired metadata audit",
+    )?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "exiftool {label} dump failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let objects = parse_metadata_records(&output.stdout)?;
+    if objects.len() != requested.len() {
+        return Err(io::Error::other("incomplete metadata response"));
+    }
+    for (path, map) in objects {
+        let indices = requested
+            .get(&path)
+            .ok_or_else(|| io::Error::other("unexpected metadata response path"))?;
+        for &index in indices {
+            maps[index] = map.clone();
+        }
+    }
+    Ok(maps)
 }
 
 fn preserve_audit_excludes_tag(key: &str) -> bool {
@@ -557,69 +590,36 @@ pub(super) fn stripped_embedded_metadata_size(path: &Path) -> io::Result<u64> {
     Ok(stripped_bytes)
 }
 
-fn merge_source_sidecar_metadata_into(
-    tags: &mut BTreeMap<String, String>,
-    media: &Path,
-) -> io::Result<()> {
-    let Some(sidecar) = super::find_xmp_sidecar(media) else {
-        return Ok(());
-    };
-    let sidecar_tags = preservable_tag_map(&sidecar)?;
-    for (key, value) in sidecar_tags {
-        // Delivery merges the sidecar after the embedded source metadata, so
-        // sidecar values are the final expected values for duplicate tags.
-        tags.insert(key, value);
+fn parse_metadata_records(
+    raw: &[u8],
+) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
+    let records: Vec<serde_json::Map<String, Value>> = serde_json::from_slice(raw)?;
+    let mut maps = BTreeMap::new();
+    for object in records {
+        let path = object
+            .get("SourceFile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| io::Error::other("metadata response has no SourceFile"))?;
+        if object.keys().any(|key| {
+            key.rsplit(':')
+                .next()
+                .is_some_and(|key| key.eq_ignore_ascii_case("Error"))
+        }) {
+            return Err(io::Error::other(format!(
+                "exiftool reported a metadata read error for {path}"
+            )));
+        }
+        if maps
+            .insert(std::path::PathBuf::from(path), metadata_object_map(&object))
+            .is_some()
+        {
+            return Err(io::Error::other("duplicate metadata response"));
+        }
     }
-    Ok(())
+    Ok(maps)
 }
 
-fn output_sidecar_mismatches(src: &Path, dst: &Path) -> io::Result<Vec<String>> {
-    let Some(dst_sidecar) = super::find_xmp_sidecar(dst) else {
-        return Ok(Vec::new());
-    };
-    let src_tags = match super::find_xmp_sidecar(src) {
-        Some(src_sidecar) => preservable_tag_map(&src_sidecar)?,
-        None => BTreeMap::new(),
-    };
-    let dst_tags = preservable_tag_map(&dst_sidecar)?;
-    Ok(preserve_mismatches(&src_tags, &dst_tags)
-        .into_iter()
-        .map(|mismatch| format!("output sidecar {mismatch}"))
-        .collect())
-}
-
-fn parse_exiftool_json_object_map(
-    output: &std::process::Output,
-    path: &Path,
-    label: &str,
-) -> io::Result<BTreeMap<String, String>> {
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "exiftool {label} dump failed for {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    if json_str.trim().is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let parsed: Value = serde_json::from_str(&json_str).map_err(|e| {
-        io::Error::other(format!(
-            "failed to parse exiftool {label} JSON for {}: {e}",
-            path.display()
-        ))
-    })?;
-    let obj = parsed
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "invalid exiftool {label} JSON structure for {}",
-                path.display()
-            ))
-        })?;
+fn metadata_object_map(obj: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for (key, value) in obj {
         if key.eq_ignore_ascii_case("SourceFile")
@@ -636,13 +636,61 @@ fn parse_exiftool_json_object_map(
         };
         map.insert(key.clone(), rendered);
     }
-    Ok(map)
+    map
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn preservable_tag_map(path: &Path) -> io::Result<BTreeMap<String, String>> {
+        let [map] = preservable_tag_maps([path])?;
+        Ok(map)
+    }
+
+    #[test]
+    fn metadata_records_reject_empty_duplicate_and_tool_errors() {
+        for invalid in [
+            b"".as_slice(),
+            br#"[{"XMP:Title":"unbound"}]"#,
+            br#"[{"SourceFile":"a"},{"SourceFile":"a"}]"#,
+            br#"[{"SourceFile":"a","ExifTool:Error":"read failed"}]"#,
+        ] {
+            assert!(parse_metadata_records(invalid).is_err());
+        }
+        let records = parse_metadata_records(
+            br#"[{"SourceFile":"b","XMP:Title":"B"},{"SourceFile":"a","XMP:Title":"A"}]"#,
+        )
+        .unwrap();
+        assert_eq!(records[Path::new("a")]["XMP:Title"], "A");
+        assert_eq!(records[Path::new("b")]["XMP:Title"], "B");
+    }
+
+    #[test]
+    fn paired_metadata_matches_individual_queries_and_deduplicates_paths() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("source.jpg");
+        let dst = root.path().join("output.jpg");
+        write_minimal_jpeg(&src);
+        write_minimal_jpeg(&dst);
+        write_metadata_tag(&src, "-XMP-dc:Title=Source");
+        write_metadata_tag(&dst, "-XMP-dc:Title=Output");
+        let started = std::time::Instant::now();
+        let [source, output, repeated] =
+            preservable_tag_maps([src.as_path(), dst.as_path(), src.as_path()]).unwrap();
+        let batch_elapsed = started.elapsed();
+        let started = std::time::Instant::now();
+        assert_eq!(source, preservable_tag_map(&src).unwrap());
+        assert_eq!(output, preservable_tag_map(&dst).unwrap());
+        assert_eq!(source, repeated);
+        assert_ne!(preserve_mismatches(&source, &output), Vec::<String>::new());
+        eprintln!(
+            "paired metadata comparison: batch_ms={} individual_ms={}",
+            batch_elapsed.as_millis(),
+            started.elapsed().as_millis()
+        );
+    }
 
     fn write_minimal_jpeg(path: &Path) {
         image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
