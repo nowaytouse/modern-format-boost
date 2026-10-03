@@ -241,7 +241,7 @@ pub fn scan_image_files(
     extensions: &[&str],
     recursive: bool,
 ) -> crate::unified_error::Result<Vec<PathBuf>> {
-    Ok(scan_image_tree_snapshot(dir, extensions, recursive)
+    Ok(scan_image_tree_snapshot(dir, extensions, recursive)?
         .files
         .into_iter()
         .map(|entry| entry.path)
@@ -263,7 +263,7 @@ pub fn collect_image_files_for_perceived_speed(
         snapshot
     } else {
         let files = scan_image_files(dir, extensions, recursive)?; // [SB] pure scan first
-        let snapshot = scan_image_tree_snapshot_from_files(dir, extensions, recursive, files);
+        let snapshot = scan_image_tree_snapshot_from_files(dir, extensions, recursive, files)?;
         if let Err(err) = save_cached_image_tree(&snapshot) {
             crate::media_conversion_gate::delivery_pipeline_path_audit(
                 "probe_heic",
@@ -280,18 +280,17 @@ pub fn collect_image_files_for_perceived_speed(
     Ok(snapshot.files.into_iter().map(|entry| entry.path).collect())
 }
 
-#[must_use]
 pub fn collect_video_files_for_perceived_speed(
     dir: &Path,
     extensions: &[&str],
     recursive: bool,
-) -> Vec<PathBuf> {
+) -> crate::unified_error::Result<Vec<PathBuf>> {
     let cached = load_cached_video_tree(dir, extensions, recursive)
         .filter(|snapshot| validate_cached_video_tree(snapshot, dir, extensions, recursive));
     let snapshot = if let Some(snapshot) = cached {
         snapshot
     } else {
-        let snapshot = scan_video_tree_snapshot(dir, extensions, recursive);
+        let snapshot = scan_video_tree_snapshot(dir, extensions, recursive)?;
         if let Err(err) = save_cached_video_tree(&snapshot) {
             crate::media_conversion_gate::delivery_pipeline_path_audit(
                 "probe_heic",
@@ -305,7 +304,7 @@ pub fn collect_video_files_for_perceived_speed(
         snapshot
     };
 
-    snapshot.files.into_iter().map(|entry| entry.path).collect()
+    Ok(snapshot.files.into_iter().map(|entry| entry.path).collect())
 }
 
 pub fn calculate_directory_size_by_extensions(
@@ -472,6 +471,7 @@ pub struct Summary {
     pub failed: usize,
     pub skipped: usize,
     pub ignored: usize,
+    pub unprocessed: usize,
     pub errors: Vec<(PathBuf, String)>,
     pub paused: bool,
     pub pause_info: Option<PauseInfo>,
@@ -487,6 +487,7 @@ impl Summary {
             failed: 0,
             skipped: 0,
             ignored: 0,
+            unprocessed: 0,
             errors: Vec::new(),
             paused: false,
             pause_info: None,
@@ -524,20 +525,42 @@ impl Summary {
         self.paused = true;
         self.pause_info = Some(PauseInfo { path, reason });
         self.paused_remaining = remaining;
+        self.unprocessed = remaining;
+    }
+
+    pub fn reconcile_inventory(&mut self, discovered: usize) -> anyhow::Result<()> {
+        let handled = self
+            .succeeded
+            .checked_add(self.failed)
+            .and_then(|count| count.checked_add(self.skipped))
+            .and_then(|count| count.checked_add(self.ignored))
+            .ok_or_else(|| anyhow::anyhow!("Batch disposition count overflow"))?;
+        anyhow::ensure!(
+            handled == self.total,
+            "Batch count mismatch: {handled} outcomes, but {} files processed",
+            self.total
+        );
+        let unprocessed = discovered.checked_sub(handled).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Batch count mismatch: {handled} outcomes exceed {discovered} discovered files"
+            )
+        })?;
+        self.unprocessed = unprocessed;
+        Ok(())
     }
 
     #[must_use]
-    pub fn success_rate(&self) -> f64 {
-        // Success rate should only consider succeeded and failed as active actions.
-        // Skipped items are implicitly successful (already optimized).
-        // Ignored items are excluded from the denominator.
-        let denominator = self.succeeded.saturating_add(self.failed);
+    pub fn success_rate(&self) -> Option<f64> {
+        // Only active conversion outcomes belong in this denominator.
+        let denominator = self.succeeded.checked_add(self.failed)?;
         if denominator == 0 {
-            100.0
+            None
         } else {
-            (crate::numeric_cast::usize_to_f64(self.succeeded)
-                / crate::numeric_cast::usize_to_f64(denominator))
-                * 100.0
+            Some(
+                (crate::numeric_cast::usize_to_f64(self.succeeded)
+                    / crate::numeric_cast::usize_to_f64(denominator))
+                    * 100.0,
+            )
         }
     }
 }
@@ -986,7 +1009,7 @@ fn scan_image_tree_snapshot(
     dir: &Path,
     extensions: &[&str],
     recursive: bool,
-) -> CachedImageTreeSnapshot {
+) -> crate::unified_error::Result<CachedImageTreeSnapshot> {
     let root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
     let walker = if recursive {
         WalkDir::new(&root).follow_links(true)
@@ -1025,13 +1048,17 @@ fn scan_image_tree_snapshot(
                                     path,
                                     format!(
                                         "METADATA AUDIT: Failed to read metadata for image entry \
-                                         '{}' during batch scan | Forensic: Error '{}'; skipping \
-                                         entry in path-tree cache",
+                                         '{}' during batch scan | Forensic: Error '{}'; \
+                                         aborting incomplete path-tree cache scan",
                                         path.display(),
                                         e
                                     ),
                                 );
-                                continue;
+                                return Err(crate::unified_error::UnifiedError::FileReadError {
+                                    path: path.to_path_buf(),
+                                    source: e,
+                                    operation: Some("image path-tree cache scan".to_string()),
+                                });
                             }
                         };
                         let file_entry = build_cached_image_entry(&root, path, &metadata);
@@ -1045,11 +1072,13 @@ fn scan_image_tree_snapshot(
                     &root,
                     format!(
                         "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
-                         building path-tree cache | Forensic: Error '{err}'; skipping entry to \
-                         maintain cache build continuity",
+                         building path-tree cache | Forensic: Error '{err}'; aborting incomplete scan",
                         root.display(),
                     ),
                 );
+                return Err(crate::unified_error::UnifiedError::Other(
+                    anyhow::Error::new(err),
+                ));
             }
         }
     }
@@ -1073,14 +1102,14 @@ fn scan_image_tree_snapshot(
         );
     }
 
-    CachedImageTreeSnapshot {
+    Ok(CachedImageTreeSnapshot {
         schema_version: crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
         root,
         recursive,
         extensions: normalized_extensions(extensions),
         directories,
         files,
-    }
+    })
 }
 
 fn scan_image_tree_snapshot_from_files(
@@ -1088,7 +1117,7 @@ fn scan_image_tree_snapshot_from_files(
     extensions: &[&str],
     recursive: bool,
     files: Vec<PathBuf>,
-) -> CachedImageTreeSnapshot {
+) -> crate::unified_error::Result<CachedImageTreeSnapshot> {
     let root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
     let walker = if recursive {
         WalkDir::new(&root).follow_links(true)
@@ -1112,46 +1141,46 @@ fn scan_image_tree_snapshot_from_files(
                     &root,
                     format!(
                         "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
-                         building path-tree cache | Forensic: Error '{err}'; skipping entry to \
-                         maintain cache build continuity",
+                         building path-tree cache | Forensic: Error '{err}'; aborting incomplete scan",
                         root.display(),
                     ),
                 );
+                return Err(crate::unified_error::UnifiedError::Other(
+                    anyhow::Error::new(err),
+                ));
             }
         }
     }
 
-    let files = files
-        .into_iter()
-        .filter_map(|path| {
-            let metadata = match fs::metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    crate::media_conversion_gate::delivery_pipeline_path_audit(
-                        "delivery_pipeline_batch",
-                        &path,
-                        format!(
-                            "METADATA AUDIT: Failed to read metadata for image entry '{}' during \
-                             batch scan | Forensic: Error '{}'; skipping entry in path-tree cache",
-                            path.display(),
-                            e
-                        ),
-                    );
-                    return None;
-                }
-            };
-            Some(build_cached_image_entry(&root, &path, &metadata))
-        })
-        .collect();
+    let mut file_entries = Vec::with_capacity(files.len());
+    for path in files {
+        let metadata = fs::metadata(&path).map_err(|err| {
+            crate::media_conversion_gate::delivery_pipeline_path_audit(
+                "delivery_pipeline_batch",
+                &path,
+                format!(
+                    "METADATA AUDIT: Failed to read metadata for image entry '{}' during \
+                     batch scan: {err}",
+                    path.display()
+                ),
+            );
+            crate::unified_error::UnifiedError::FileReadError {
+                path: path.clone(),
+                source: err,
+                operation: Some("image path-tree cache scan".to_string()),
+            }
+        })?;
+        file_entries.push(build_cached_image_entry(&root, &path, &metadata));
+    }
 
-    CachedImageTreeSnapshot {
+    Ok(CachedImageTreeSnapshot {
         schema_version: crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
         root,
         recursive,
         extensions: normalized_extensions(extensions),
         directories,
-        files,
-    }
+        files: file_entries,
+    })
 }
 
 /// Probes video file to extract priority data for sorting.
@@ -1247,26 +1276,29 @@ fn sort_cached_video_entries(entries: &mut [CachedVideoSortEntry]) {
 /// * `path` - The video file path
 ///
 /// # Returns
-/// Cached video entry, or None if metadata cannot be read
-fn build_cached_video_entry(root: &Path, path: &Path) -> Option<CachedVideoSortEntry> {
-    let metadata = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(e) => {
-            crate::media_conversion_gate::delivery_pipeline_path_audit(
-                "delivery_pipeline_batch",
-                path,
-                format!(
-                    "METADATA AUDIT: Failed to read metadata for video entry '{}' during batch \
-                     scan | Forensic: Error '{}'; skipping entry in video path-tree cache",
-                    path.display(),
-                    e
-                ),
-            );
-            return None;
+/// Cached video entry; metadata failures abort the enclosing tree scan.
+fn build_cached_video_entry(
+    root: &Path,
+    path: &Path,
+) -> crate::unified_error::Result<CachedVideoSortEntry> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        crate::media_conversion_gate::delivery_pipeline_path_audit(
+            "delivery_pipeline_batch",
+            path,
+            format!(
+                "METADATA AUDIT: Failed to read metadata for video entry '{}' during \
+                 batch scan: {err}",
+                path.display()
+            ),
+        );
+        crate::unified_error::UnifiedError::FileReadError {
+            path: path.to_path_buf(),
+            source: err,
+            operation: Some("video path-tree cache scan".to_string()),
         }
-    };
+    })?;
     let (pixel_count, duration_secs, frame_rate, estimated_work) = video_probe_priority_data(path);
-    Some(CachedVideoSortEntry {
+    Ok(CachedVideoSortEntry {
         path: path.to_path_buf(),
         size: metadata.len(),
         relative_depth: relative_depth_from_root(root, path),
@@ -1293,7 +1325,7 @@ fn scan_video_tree_snapshot(
     dir: &Path,
     extensions: &[&str],
     recursive: bool,
-) -> CachedVideoTreeSnapshot {
+) -> crate::unified_error::Result<CachedVideoTreeSnapshot> {
     let root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
     let walker = if recursive {
         WalkDir::new(&root).follow_links(true)
@@ -1325,9 +1357,8 @@ fn scan_video_tree_snapshot(
                     {
                         // Admission: it's a video OR it's an animated image candidate for the 'vid'
                         // tool
-                        if (codec.is_video() || codec.can_be_animated())
-                            && let Some(file_entry) = build_cached_video_entry(&root, path)
-                        {
+                        if codec.is_video() || codec.can_be_animated() {
+                            let file_entry = build_cached_video_entry(&root, path)?;
                             files.push(file_entry);
                         }
                     }
@@ -1339,11 +1370,13 @@ fn scan_video_tree_snapshot(
                     &root,
                     format!(
                         "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
-                         building video path-tree cache | Forensic: Error '{err}'; skipping entry \
-                         to maintain cache build continuity",
+                         building video path-tree cache | Forensic: Error '{err}'; aborting incomplete scan",
                         root.display(),
                     ),
                 );
+                return Err(crate::unified_error::UnifiedError::Other(
+                    anyhow::Error::new(err),
+                ));
             }
         }
     }
@@ -1367,14 +1400,14 @@ fn scan_video_tree_snapshot(
         );
     }
 
-    CachedVideoTreeSnapshot {
+    Ok(CachedVideoTreeSnapshot {
         schema_version: crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
         root,
         recursive,
         extensions: normalized_extensions(extensions),
         directories,
         files,
-    }
+    })
 }
 
 impl CachedImageTreeSnapshot {
@@ -1481,10 +1514,7 @@ mod tests {
     #[test]
     fn test_success_rate_empty() {
         let result = Summary::new();
-        assert!(
-            (result.success_rate() - 100.0).abs() < 0.01_f64,
-            "Empty batch should have 100% success rate"
-        );
+        assert_eq!(result.success_rate(), None);
     }
 
     #[test]
@@ -1494,7 +1524,7 @@ mod tests {
             result.success();
         }
         assert!(
-            (result.success_rate() - 100.0).abs() < 0.01_f64,
+            (result.success_rate().unwrap_or(-1.0) - 100.0).abs() < 0.01_f64,
             "All success should be 100%"
         );
     }
@@ -1506,7 +1536,7 @@ mod tests {
             result.fail(PathBuf::from(format!("file{i}.png")), "Error".to_string());
         }
         assert!(
-            (result.success_rate() - 0.0).abs() < 0.01_f64,
+            (result.success_rate().unwrap_or(-1.0) - 0.0).abs() < 0.01_f64,
             "All fail should be 0%"
         );
     }
@@ -1518,9 +1548,9 @@ mod tests {
         result.fail(PathBuf::from("test.png"), "Error".to_string());
 
         assert!(
-            (result.success_rate() - 50.0).abs() < 0.01_f64,
+            (result.success_rate().unwrap_or(-1.0) - 50.0).abs() < 0.01_f64,
             "1 success, 1 fail should be 50%, got {}",
-            result.success_rate()
+            result.success_rate().unwrap_or(-1.0)
         );
     }
 
@@ -1533,9 +1563,9 @@ mod tests {
         result.skip();
 
         assert!(
-            (result.success_rate() - 100.0).abs() < 0.01_f64,
+            (result.success_rate().unwrap_or(-1.0) - 100.0).abs() < 0.01_f64,
             "2 success, 2 skipped should be 100% because skips are excluded, got {}",
-            result.success_rate()
+            result.success_rate().unwrap_or(-1.0)
         );
     }
 
@@ -1562,7 +1592,7 @@ mod tests {
                 result.skip();
             }
 
-            let rate = result.success_rate();
+            let rate = result.success_rate().unwrap_or(-1.0);
             let denominator = result.succeeded.saturating_add(result.failed);
             let expected_calc = if denominator == 0 {
                 100.0_f64
@@ -1596,7 +1626,7 @@ mod tests {
 
         assert_eq!(result.total, 1_000_000);
         assert!(
-            (result.success_rate() - 50.0).abs() < 0.001_f64,
+            (result.success_rate().unwrap_or(-1.0) - 50.0).abs() < 0.001_f64,
             "STRICT: Large batch should calculate correctly"
         );
     }
@@ -1608,12 +1638,52 @@ mod tests {
         result.success();
         result.fail(PathBuf::from("test.png"), "Error".to_string());
 
-        let rate1 = result.success_rate();
-        let rate2 = result.success_rate();
-        let rate3 = result.success_rate();
+        let rate1 = result.success_rate().unwrap_or(-1.0);
+        let rate2 = result.success_rate().unwrap_or(-1.0);
+        let rate3 = result.success_rate().unwrap_or(-1.0);
 
         assert!((rate1 - rate2).abs() < 1e-7_f64);
         assert!((rate2 - rate3).abs() < 1e-7_f64);
+    }
+
+    #[test]
+    fn inventory_reconciliation_accounts_for_partial_and_completed_batches() {
+        let mut result = Summary::new();
+        result.success();
+        result.skip();
+        result.ignore();
+        result.fail(PathBuf::from("failed.png"), "test failure".to_owned());
+        result
+            .reconcile_inventory(7)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(result.total, 4);
+        assert_eq!(result.unprocessed, 3);
+        result
+            .reconcile_inventory(4)
+            .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(result.unprocessed, 0);
+    }
+
+    #[test]
+    fn inventory_reconciliation_rejects_missing_duplicate_and_overflow_counts() {
+        let mut result = Summary::new();
+        result.success();
+        result.total = 2;
+        assert!(result.reconcile_inventory(2).is_err());
+        result.total = 1;
+        assert!(result.reconcile_inventory(0).is_err());
+        result.succeeded = usize::MAX;
+        result.failed = 1;
+        assert!(result.reconcile_inventory(usize::MAX).is_err());
+        assert_eq!(result.success_rate(), None);
+    }
+
+    #[test]
+    fn skipped_and_ignored_only_batches_have_no_conversion_success_rate() {
+        let mut result = Summary::new();
+        result.skip();
+        result.ignore();
+        assert_eq!(result.success_rate(), None);
     }
 
     #[test]
@@ -1748,6 +1818,45 @@ mod tests {
     }
 
     #[test]
+    fn tree_scans_reject_missing_roots() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let missing = temp_dir.path().join("missing");
+
+        assert!(scan_image_files(&missing, &["jpg"], true).is_err());
+        assert!(scan_video_tree_snapshot(&missing, &["mp4"], true).is_err());
+        assert!(collect_video_files_for_perceived_speed(&missing, &["mp4"], true).is_err());
+    }
+
+    #[test]
+    fn candidate_metadata_failures_are_errors() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let missing_file = temp_dir.path().join("disappeared.jpg");
+
+        assert!(build_cached_video_entry(temp_dir.path(), &missing_file).is_err());
+        assert!(
+            scan_image_tree_snapshot_from_files(
+                temp_dir.path(),
+                &["jpg"],
+                true,
+                vec![missing_file]
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_scans_reject_symlink_loops() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        symlink(temp_dir.path(), temp_dir.path().join("loop")).expect("create symlink loop");
+
+        assert!(scan_image_files(temp_dir.path(), &["jpg"], true).is_err());
+        assert!(scan_video_tree_snapshot(temp_dir.path(), &["mp4"], true).is_err());
+    }
+
+    #[test]
     fn collect_files_filters_by_detected_codec_not_filename_extension() -> anyhow::Result<()> {
         let temp_dir = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let root = temp_dir.path();
@@ -1779,7 +1888,7 @@ mod tests {
         let image_path = nested.join("sample.jpg");
         write_test_image(&image_path, 16, 16, ImageFormat::Jpeg);
 
-        let snapshot = scan_image_tree_snapshot(root, &["jpg"], true);
+        let snapshot = scan_image_tree_snapshot(root, &["jpg"], true)?;
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
         let bumped = FileTime::from_unix_time(

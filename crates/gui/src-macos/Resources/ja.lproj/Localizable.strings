@@ -110,7 +110,7 @@
 "status.checking_processor" = "必要なコンポーネントを確認中…";
 "status.command_copied" = "コマンドをコピーしました";
 "status.completed" = "正常に完了しました";
-"status.count" = "照合件数：%@";
+"status.count" = "件数の状態：%@";
 "status.processor_ready" = "コンポーネントの準備完了";
 "status.processor_failed" = "コンポーネントの確認に失敗しました";
 "status.processor_unavailable" = "必要なコンポーネントがありません。クリックして完全版を入手してください。";
@@ -154,6 +154,7 @@
 "log.task_start" = "処理を開始";
 "log.photos_preflight" = "写真への読み込み事前確認を停止しました: %@";
 "log.omitted" = "[MFB UI] UI の処理中に %llu 件のログを省略しました";
+"log.critical_overflow" = "結果またはエラーの記録をすべて受信できなかったため、処理の完了を確認できません。バックエンドのログを確認してください。";
 "alert.resume.title" = "未完了のタスクが見つかりました";
 "alert.resume.info" = "検証済みの進捗を再開するか、別の出力先で新しく開始しますか？";
 "alert.resume.resume" = "再開";
@@ -238,9 +239,11 @@
 "settings.value.native" = "ネイティブ（PhotoKit）";
 "settings.value.applescript" = "AppleScript";
 "result.counts" = "成功 %@ · スキップ %@ · 失敗 %@ · 対象外 %@";
+"result.unprocessed" = "未処理 %@";
 "result.unknown" = "不明";
 "result.finished_with_failures" = "処理終了、一部ファイルが失敗";
 "result.stopped_with_error" = "エラーにより停止";
 "result.invalid" = "バッチ結果の形式が無効または未対応のため、件数を確認できません。";
 "result.incomplete" = "プロセス終了、一部の結果件数は未報告";
+"result.unfinished" = "処理終了、未完了の項目があります";
 "settings.unavailable" = "この操作に対応するメディアのエンコード設定はありません。";

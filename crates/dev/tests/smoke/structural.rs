@@ -249,7 +249,12 @@ fn release_openssl_shim_migration_preserves_only_the_known_legacy_link() {
 #[test]
 fn nightly_release_excludes_unrelated_ci_artifacts() {
     let source = include_str!("../../../../.github/workflows/cd-nightly.yml");
-    assert!(source.contains("uses: softprops/action-gh-release@v3."));
+    assert!(source.lines().any(|line| {
+        line.split_once('#')
+            .map_or(line, |(action, _)| action)
+            .trim()
+            == "uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64"
+    }));
     let download = source
         .split_once("uses: actions/download-artifact@")
         .expect("nightly must download its build artifact")

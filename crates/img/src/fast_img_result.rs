@@ -72,6 +72,13 @@ impl Report {
         marker
             .validate_relative_path_contract()
             .map_err(anyhow::Error::msg)?;
+        marker
+            .validate_library_asset_receipts_unique()
+            .map_err(anyhow::Error::msg)?;
+        let checked_add = |left: usize, right: usize, count: &str| {
+            left.checked_add(right)
+                .ok_or_else(|| anyhow::anyhow!("fast-img {count} count overflow"))
+        };
         let tier2 = originals
             .iter()
             .map(|c| c.rel_path.as_str())
@@ -87,25 +94,40 @@ impl Report {
         } else {
             gate1_complete_or_later(&marker.stage)
         };
-        let succeeded = if delivered {
+        let primary_succeeded = if delivered {
             marker.blake3_log.len()
         } else {
             0
-        } + marker.tier2_imported_assets.len();
+        };
+        let succeeded = checked_add(
+            primary_succeeded,
+            marker.tier2_imported_assets.len(),
+            "succeeded",
+        )?;
         // Count only explicit file failures; unresolved originals stay unprocessed.
-        let failed = marker.failed_sources.len()
-            + probe_failures
-            + recorded_failures
-                .into_iter()
-                .map(|failures| failures.originals)
-                .sum::<usize>();
+        let failed = recorded_failures.into_iter().try_fold(
+            checked_add(marker.failed_sources.len(), probe_failures, "failed")?,
+            |total, failures| checked_add(total, failures.originals, "failed"),
+        )?;
         let skipped = marker.skipped_sources.len();
-        let total = marker.src_jpeg_count + tier2.len() + probe_failures;
-        let unprocessed = total
-            .checked_sub(succeeded + failed + skipped)
-            .ok_or_else(|| {
-                anyhow::anyhow!("fast-img result dispositions exceed input inventory")
-            })?;
+        let total = checked_add(
+            checked_add(marker.src_jpeg_count, tier2.len(), "inventory")?,
+            probe_failures,
+            "inventory",
+        )?;
+        let dispositions = checked_add(
+            checked_add(succeeded, failed, "disposition")?,
+            skipped,
+            "disposition",
+        )?;
+        let unprocessed = total.checked_sub(dispositions).ok_or_else(|| {
+            anyhow::anyhow!("fast-img result dispositions exceed input inventory")
+        })?;
+        let photos_verified = checked_add(
+            marker.photos_imported_assets.len(),
+            marker.tier2_imported_assets.len(),
+            "Photos-verified",
+        )?;
         let sources = marker
             .blake3_log
             .keys()
@@ -140,8 +162,7 @@ impl Report {
             failed,
             unprocessed,
             encoded: marker.blake3_log.len(),
-            photos_verified: marker.photos_imported_assets.len()
-                + marker.tier2_imported_assets.len(),
+            photos_verified,
             source_retained,
             retention_unknown_reason,
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
@@ -173,8 +194,8 @@ pub(super) fn finish(
     report.ignored = ignored;
     println!("MFB_FAST_IMG_RESULT={}", serde_json::to_string(&report)?);
     println!(
-        "Succeeded: {}\nSkipped: {}\nFailed: {}\nIgnored: {}",
-        report.succeeded, report.skipped, report.failed, report.ignored
+        "Succeeded: {}\nSkipped: {}\nFailed: {}\nIgnored: {}\nUnprocessed: {}",
+        report.succeeded, report.skipped, report.failed, report.ignored, report.unprocessed
     );
     println!(
         "[RESULT  ] encoded={} Photos-verified={} unprocessed={} primary-cleanup-complete={}",
@@ -321,6 +342,25 @@ mod tests {
             (failed.succeeded, failed.failed, failed.unprocessed),
             (3, 2, 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn forged_inventory_overflow_fails_report_construction() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 0);
+        marker.src_jpeg_count = usize::MAX;
+        let originals = [ModernLossyStaticCandidate {
+            path: marker.src_dir.join("original.jxl"),
+            rel_path: "original.jxl".into(),
+            format: foundation::image::format_detect::FormatKind::Jxl,
+            blake3: "original-hash".into(),
+        }];
+
+        let error = Report::from_marker(&marker, true, &originals, 0, None)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("inventory addition must not wrap"))?;
+        assert!(error.to_string().contains("inventory count overflow"));
         Ok(())
     }
 }

@@ -622,11 +622,14 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     config.child_threads = thread_config.child_threads;
 
     if input.is_file() {
-        let result = auto_convert_single_file(&input, &config)
-            .inspect_err(foundation::report::print_recoverable_single_file_error)?;
+        let result = foundation::progress_mode::with_deferred_skip_reporting(|| {
+            auto_convert_single_file(&input, &config)
+        })
+        .inspect_err(foundation::report::print_recoverable_single_file_error)?;
         let outcome = if result.ignored {
             foundation::conversion::Outcome::Ignored
         } else if result.skipped {
+            foundation::progress_mode::image_skipped(&input, &result.message);
             foundation::conversion::Outcome::Skipped
         } else {
             foundation::conversion::Outcome::Converted
@@ -2328,12 +2331,15 @@ impl ImageBatchWorker<'_> {
 
         let mut live_config = self.config.clone();
         live_config.child_threads = child_threads;
-        match auto_convert_single_file(path, &live_config) {
+        match foundation::progress_mode::with_deferred_skip_reporting(|| {
+            auto_convert_single_file(path, &live_config)
+        }) {
             Ok(result) => {
                 if result.ignored {
                     self.counters.ignored.fetch_add(1, Ordering::Relaxed);
                 } else if result.skipped {
                     self.counters.skipped.fetch_add(1, Ordering::Relaxed);
+                    foundation::progress_mode::image_skipped(path, &result.message);
                 } else if let Some(e) = self
                     .checkpoint
                     .and_then(|checkpoint| checkpoint.mark_completed(path).err())
@@ -2420,7 +2426,6 @@ impl ImageBatchWorker<'_> {
                     } else {
                         foundation::progress_mode::image_skipped(path, &error_text);
                         self.counters.skipped.fetch_add(1, Ordering::Relaxed);
-                        foundation::progress_mode::image_processed_success();
                     }
                 } else {
                     if error_text.contains("Failed to open file")
@@ -2527,12 +2532,9 @@ impl ImageBatchFinalization<'_> {
         result.skipped = skipped_count;
         result.ignored = ignored_count;
         result.total = processed_count;
+        result.reconcile_inventory(self.total)?;
         if let Some(pause) = self.pause_controller.pause_info() {
-            result.pause(
-                pause.path,
-                pause.reason,
-                self.total.saturating_sub(processed_count),
-            );
+            result.pause(pause.path, pause.reason, result.unprocessed);
         }
 
         if !result.paused
@@ -2556,14 +2558,18 @@ impl ImageBatchFinalization<'_> {
             if copy_result.copied > 0 {
                 log_detail!(&format!("Copied {} unsupported files", copy_result.copied));
             }
-            if copy_result.failed > 0 {
+            if copy_result.has_errors() {
                 log_failure!(
                     "Unsupported Files",
-                    &format!("Failed to copy {} files", copy_result.failed),
+                    &format!(
+                        "Failed to copy {} files; {} directory scan errors",
+                        copy_result.failed, copy_result.scan_errors
+                    ),
                 );
                 post_run_errors.push(format!(
-                    "Unsupported file copy failed for {} files in {}",
+                    "Unsupported file copy failed for {} files with {} scan errors in {}",
                     copy_result.failed,
+                    copy_result.scan_errors,
                     output_dir.display()
                 ));
             }
@@ -2572,8 +2578,11 @@ impl ImageBatchFinalization<'_> {
                 config: self.config,
                 output_dir,
                 recursive: self.recursive,
-                ignored_count,
-                failed_count,
+                expected_output: success_count
+                    .checked_add(skipped_count)
+                    .and_then(|count| count.checked_add(copy_result.copied))
+                    .and_then(|count| count.checked_add(copy_result.skipped))
+                    .context("Output delivery count overflow")?,
                 result: &mut result,
                 post_run_errors: &mut post_run_errors,
             });
@@ -2631,6 +2640,7 @@ impl ImageBatchFinalization<'_> {
             ignored_count,
             failed_count,
             processed_count,
+            result.unprocessed,
         );
         print_summary(
             &result,
@@ -2786,6 +2796,13 @@ fn auto_convert_directory(
             foundation::preserve_directory_with_log(base_dir, output_dir)?;
         }
 
+        print_summary(
+            &Summary::new(),
+            start_time.elapsed(),
+            0,
+            0,
+            "Image Conversion",
+        );
         return Ok(());
     }
 
@@ -2818,7 +2835,7 @@ fn auto_convert_directory(
                     foundation::infra::static_logs::messages::LABEL_METADATA,
                     format!(
                         "Batch Audit: Resume detected - skipping {} already completed images",
-                        cp.completed_count()
+                        files.iter().filter(|path| cp.is_completed(path)).count()
                     )
                 );
             }
@@ -2907,7 +2924,11 @@ fn auto_convert_directory(
         ) = Some(format!("batch control after image batch: {error}"));
     }
 
-    progress_bar.finish();
+    if counters.processed.load(Ordering::Relaxed) == total {
+        progress_bar.finish();
+    } else {
+        progress_bar.finish_and_clear();
+    }
     foundation::progress_mode::disable_quiet_mode();
     foundation::progress_mode::xmp_merge_finalize();
     foundation::progress_mode::flush_log_file();
@@ -10059,8 +10080,7 @@ struct OutputCompletenessContext<'a> {
     config: &'a AutoConvertConfig,
     output_dir: &'a std::path::Path,
     recursive: bool,
-    ignored_count: usize,
-    failed_count: usize,
+    expected_output: usize,
     result: &'a mut foundation::Summary,
     post_run_errors: &'a mut Vec<String>,
 }
@@ -10070,8 +10090,7 @@ fn auto_convert_directory_output_completeness_verification(context: OutputComple
         config,
         output_dir,
         recursive,
-        ignored_count,
-        failed_count,
+        expected_output,
         result,
         post_run_errors,
     } = context;
@@ -10080,81 +10099,28 @@ fn auto_convert_directory_output_completeness_verification(context: OutputComple
         info,
         foundation::infra::static_logs::messages::OUTPUT_VERIFY
     );
-    let verify = foundation::verify_output_completeness_for_domain(
-        foundation::media_conversion_gate::base_dir_or_default(
-            config.base_dir.as_deref(),
-            "verify_output_base",
-        ),
+    let verify = foundation::verify_output_count(
+        expected_output,
         output_dir,
         recursive,
         foundation::VerifyDomain::ImagesAndPassthrough,
     );
-    let adjusted_expected = verify
-        .expected
-        .saturating_sub(ignored_count)
-        .saturating_sub(failed_count);
-    let adjusted_diff = foundation::numeric_cast::usize_to_i64_sat(adjusted_expected)
-        - foundation::numeric_cast::usize_to_i64_sat(verify.actual);
-    let (adjusted_passed, adjusted_message) = match adjusted_diff.cmp(&0) {
-        core::cmp::Ordering::Equal => (
-            true,
-            format!(
-                "{} Verification passed: {} files (ignored {} files, failed {} files excluded)",
-                foundation::modern_ui::symbols::pick(
-                    foundation::modern_ui::symbols::SUCCESS,
-                    foundation::modern_ui::symbols::plain::SUCCESS
-                ),
-                verify.actual,
-                ignored_count,
-                failed_count
-            ),
-        ),
-        core::cmp::Ordering::Greater => (
-            false,
-            format!(
-                "{} Verification FAILED: missing {adjusted_diff} files after excluding {ignored_count} ignored and {failed_count} failed inputs (expected {adjusted_expected}, got {})",
-                foundation::modern_ui::symbols::pick(
-                    foundation::modern_ui::symbols::ERROR,
-                    foundation::modern_ui::symbols::plain::ERROR
-                ),
-                verify.actual
-            ),
-        ),
-        core::cmp::Ordering::Less => (
-            true,
-            format!(
-                "{} Output has {} extra files after excluding {} ignored and {} failed inputs (expected {}, got {})",
-                foundation::modern_ui::symbols::styled_warning_icon(),
-                -adjusted_diff,
-                ignored_count,
-                failed_count,
-                adjusted_expected,
-                verify.actual
-            ),
-        ),
-    };
-    log_detail!(&adjusted_message);
-    if !adjusted_passed {
-        result.warn(&format!(
-            "Output completeness check failed after excluding {ignored} ignored and {failed} failed inputs: expected {expected}, got {actual}",
-            ignored = ignored_count,
-            failed = failed_count,
-            expected = adjusted_expected,
-            actual = verify.actual
-        ));
+    log_detail!(&verify.message);
+    if !verify.passed {
+        result.warn(&verify.message);
         foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
             "output_completeness_parity",
-            "file count mismatch between input and output directories; some files may have been lost",
+            &verify.message,
         );
         post_run_errors.push(format!(
-            "Output completeness verification failed for {} -> {}: expected {adjusted_expected}, got {} after excluding {ignored_count} ignored and {failed_count} failed inputs",
+            "Output count verification failed for {} -> {}: {}",
             foundation::media_conversion_gate::base_dir_or_default(
                 config.base_dir.as_deref(),
                 "integrity_audit",
             )
             .display(),
             output_dir.display(),
-            verify.actual
+            verify.message
         ));
     }
 }

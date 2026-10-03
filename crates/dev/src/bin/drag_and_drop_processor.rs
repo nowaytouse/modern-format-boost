@@ -10,8 +10,8 @@ use dev::infra::drag_drop::{
     ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
     build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
     create_directory_structure, delete_fast_img_shortest_path_output_dir,
-    effective_success_failure_counts, fast_img_retained_file_names, fast_img_session_size_metrics,
-    run_unified_verification, safety_check, scan_content, sync_non_media_files,
+    fast_img_retained_file_names, fast_img_session_size_metrics, run_unified_verification,
+    safety_check, scan_content, sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
@@ -343,41 +343,50 @@ impl DragDropSession {
             format_session_stamp(Some(Local::now()))
         )?;
         writeln!(file, "Verbose Log: {}", self.verbose_log.display())?;
+        let label =
+            |count: Option<usize>| count.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
+        for (media, stats, active) in [
+            ("Images", &summary.img, summary.has_image_stats()),
+            ("Videos", &summary.vid, summary.has_video_stats()),
+        ] {
+            if active {
+                writeln!(
+                    file,
+                    "{media}: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
+                    label(stats.reported[0].then_some(stats.succeeded)),
+                    label(stats.reported[1].then_some(stats.skipped)),
+                    label(stats.reported[2].then_some(stats.ignored)),
+                    label(stats.reported[3].then_some(stats.failed)),
+                    label(stats.unprocessed),
+                )?;
+            }
+        }
         writeln!(
             file,
-            "Images:  {} succeeded, {} skipped, {} failed",
-            summary.img.succeeded, summary.img.skipped, summary.img.failed
+            "Total: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
+            label(summary.total_count(0)),
+            label(summary.total_count(1)),
+            label(summary.total_count(2)),
+            label(summary.total_count(3)),
+            label(summary.total_unprocessed()),
         )?;
         writeln!(
             file,
-            "Videos:  {} succeeded, {} skipped, {} failed",
-            summary.vid.succeeded, summary.vid.skipped, summary.vid.failed
+            "Count scope: processor outcomes, not unique files or Photos assets"
         )?;
-        let tot_s = summary.total_succeeded();
-        let tot_sk = summary.img.skipped + summary.vid.skipped;
-        let tot_f = summary.total_failed();
-        let tot_proc = tot_s + tot_sk + tot_f;
-        let (effective_s, effective_f, integrity_penalty) = effective_success_failure_counts(
-            tot_s,
-            tot_f,
-            summary.integrity_state.map(|s| s == "WARNINGS"),
-            summary.integrity_issue_count,
-        );
         writeln!(
             file,
-            "Total:   {effective_s} succeeded, {tot_sk} skipped, {effective_f} failed"
+            "Conversion Success Rate: {}",
+            summary
+                .success_rate_percent()
+                .map_or_else(|| "N/A".to_owned(), |rate| format!("{rate}%"))
         )?;
-        if integrity_penalty > 0 {
+        if let Some(state) = summary.integrity_state {
             writeln!(
                 file,
-                "Adjusted: raw failures={tot_f}, integrity penalty={integrity_penalty}"
+                "Integrity: {state}; issues={}",
+                summary.integrity_issue_count
             )?;
-        }
-        if let Some(rate) = (effective_s * 100).checked_div(tot_proc) {
-            writeln!(file, "Success Rate: {rate}%")?;
-        }
-        if let Some(state) = summary.integrity_state {
-            writeln!(file, "Integrity: {state}")?;
         }
         if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
             writeln!(file, "Retained files (source preserved):")?;
@@ -387,12 +396,12 @@ impl DragDropSession {
             for name in &summary.skipped_file_names {
                 writeln!(file, "  [SKIP] {name}")?;
             }
-        } else if summary.total_failed() > 0 {
+        } else if let Some(failed) = summary.total_count(3).filter(|count| *count > 0) {
             // If failed count > 0 but no file names, point to verbose log
             writeln!(
                 file,
                 "Failed: {} file(s) - see verbose log for details: {}",
-                summary.total_failed(),
+                failed,
                 self.verbose_log.display()
             )?;
         }
@@ -407,19 +416,25 @@ impl DragDropSession {
         append_jsonl_audit_record(
             &self.session_audit,
             &format!(
-                "SESSION_COMPLETED images_ok={} images_skip={} images_fail={} videos_ok={} \
-                 videos_skip={} videos_fail={}",
-                summary.img.succeeded,
-                summary.img.skipped,
-                summary.img.failed,
-                summary.vid.succeeded,
-                summary.vid.skipped,
-                summary.vid.failed
+                "SESSION_COMPLETED images_ok={} images_skip={} images_ignore={} images_fail={} images_unprocessed={} videos_ok={} \
+                 videos_skip={} videos_ignore={} videos_fail={} videos_unprocessed={} integrity={:?} integrity_issues={}",
+                label(summary.img.reported[0].then_some(summary.img.succeeded)),
+                label(summary.img.reported[1].then_some(summary.img.skipped)),
+                label(summary.img.reported[2].then_some(summary.img.ignored)),
+                label(summary.img.reported[3].then_some(summary.img.failed)),
+                label(summary.img.unprocessed),
+                label(summary.vid.reported[0].then_some(summary.vid.succeeded)),
+                label(summary.vid.reported[1].then_some(summary.vid.skipped)),
+                label(summary.vid.reported[2].then_some(summary.vid.ignored)),
+                label(summary.vid.reported[3].then_some(summary.vid.failed)),
+                label(summary.vid.unprocessed),
+                summary.integrity_state,
+                summary.integrity_issue_count,
             ),
         )?;
         let has_integrity_issues =
             summary.integrity_state == Some("WARNINGS") && summary.integrity_issue_count > 0;
-        if tot_f > 0 || has_integrity_issues {
+        if summary.total_failed() > 0 || has_integrity_issues {
             eprintln!(
                 "   {} Session log:  {}",
                 pick_symbol("📋", "[LOG]"),
@@ -575,6 +590,7 @@ impl LaunchCommand {
                 .map(|(name, value)| (name.as_str(), value.as_deref()))
                 .collect::<Vec<_>>();
             set_child_active(true);
+            let mut session_log_error = None;
             let result = stream_process_with_pty_with_env(
                 &argv,
                 Some(&verbose),
@@ -587,8 +603,9 @@ impl LaunchCommand {
                         .append(true)
                         .open(&session_log)
                         .and_then(|mut file| writeln!(file, "{line}"))
+                        && session_log_error.is_none()
                     {
-                        eprintln!("[LOG] session stream write failed: {error}");
+                        session_log_error = Some(error);
                     }
                 },
                 || {
@@ -604,6 +621,12 @@ impl LaunchCommand {
             );
             set_child_active(false);
             match result {
+                Ok(_) if session_log_error.is_some() => {
+                    return Err(anyhow::Error::from(
+                        session_log_error.expect("checked session stream log error"),
+                    ))
+                    .context("write session child output log");
+                }
                 Ok(stats) => stats,
                 Err(error) => {
                     let event = format!(
@@ -647,14 +670,22 @@ impl LaunchCommand {
             }
         };
         if let Some(sess) = session {
+            let count = |index: usize, value: usize| {
+                stats.reported[index]
+                    .then_some(value)
+                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+            };
             let event = format!(
-                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={}",
+                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={} unprocessed={}",
                 self.pipeline_label(),
                 stats.exit_code,
-                stats.succeeded,
-                stats.skipped,
-                stats.ignored,
-                stats.failed
+                count(0, stats.succeeded),
+                count(1, stats.skipped),
+                count(2, stats.ignored),
+                count(3, stats.failed),
+                stats
+                    .unprocessed
+                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
             );
             append_jsonl_audit_record(&sess.session_audit, &event)?;
             sess.append_line(&sess.session_log, &event)?;
@@ -1161,6 +1192,15 @@ fn child_failure_should_abort(mode: BatchErrorMode, exit_code: i32, failed: usiz
     mode.is_fail_fast() || !matches!(exit_code, 0 | 1) || failed == 0
 }
 
+fn child_result_needs_error(
+    dry_run: bool,
+    exit_code: i32,
+    failed: usize,
+    counts_complete: bool,
+) -> bool {
+    exit_code != 0 || failed > 0 || (!dry_run && !counts_complete)
+}
+
 fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
     match args.mode {
         LaunchMode::Images | LaunchMode::FastImg => {
@@ -1176,7 +1216,13 @@ fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
 }
 
 fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
-    let count = |index: usize, value| stats.reported[index].then_some(value);
+    let inventory_valid = !stats.unprocessed_invalid
+        && stats.checked_total().is_some_and(|total| {
+            stats
+                .unprocessed
+                .is_none_or(|pending| total.checked_add(pending).is_some())
+        });
+    let count = |index: usize, value| (stats.reported[index] && inventory_valid).then_some(value);
     format!(
         "MFB_BATCH_RESULT={}",
         serde_json::json!({
@@ -1186,6 +1232,7 @@ fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
             "skipped": count(1, stats.skipped),
             "ignored": count(2, stats.ignored),
             "failed": count(3, stats.failed),
+            "unprocessed": stats.unprocessed.filter(|_| inventory_valid),
             "exit_code": stats.exit_code,
         })
     )
@@ -1333,12 +1380,7 @@ fn run_fast_img_post_success(
     output_dir: &Path,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
-    let (delivered_count, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
-    summary.img.succeeded = summary.img.succeeded.max(delivered_count);
-    summary.img.skipped = 0;
-    summary.img.ignored = 0;
-    summary.img.failed = 0;
-    summary.vid = ProcessorStats::default();
+    let (_, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
     summary.fast_img_size_after_override = summary
         .fast_img_session_output_bytes
         .or(Some(delivered_size));
@@ -1372,10 +1414,10 @@ fn run_fast_img_post_success(
         .integrity_summary
         .as_ref()
         .context("fast-img verifier omitted its machine integrity summary")?;
-    summary.img.succeeded = counts.optimized_count;
-    summary.img.skipped = counts.skipped_count;
-    summary.img.failed = counts.failed_count;
-    summary.img.reported = [true, true, false, true];
+    println!(
+        "[VERIFY] inventory: {} optimized, {} skipped, {} failed; processing counters unchanged",
+        counts.optimized_count, counts.skipped_count, counts.failed_count
+    );
     if args.shortest_path && verify.warnings == Some(false) {
         match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
             Ok(true) => {
@@ -1442,10 +1484,10 @@ fn run_fast_img_restore_post_success(
         .integrity_summary
         .as_ref()
         .context("restore-jpeg verifier omitted its machine integrity summary")?;
-    summary.img.succeeded = counts.optimized_count;
-    summary.img.skipped = summary.img.skipped.max(counts.skipped_count);
-    summary.img.failed = summary.img.failed.max(counts.failed_count);
-    summary.vid = ProcessorStats::default();
+    println!(
+        "[VERIFY] restore inventory: {} restored, {} skipped, {} failed; processing counters unchanged",
+        counts.optimized_count, counts.skipped_count, counts.failed_count
+    );
     Ok(())
 }
 
@@ -2012,19 +2054,17 @@ fn run_drag_drop(
             match command.run_collecting(false, session, false) {
                 Ok(stats) => {
                     print_batch_result(&command, &stats, false);
+                    summary.img = stats.clone();
                     if stats.exit_code != 0 {
                         if fail_fast {
                             bail!("restore-jpeg exited with code {}", stats.exit_code);
                         }
-                        summary.img.failed = summary.img.failed.max(1);
                         if first_error.is_none() {
                             first_error = Some(anyhow::anyhow!(
                                 "restore-jpeg exited with code {}",
                                 stats.exit_code
                             ));
                         }
-                    } else {
-                        summary.img = stats;
                     }
                 }
                 Err(err) if drag_drop_error_should_abort(error_mode, &err) => {
@@ -2095,7 +2135,6 @@ fn run_drag_drop(
                         if fail_fast {
                             bail!("fast-img exited with code {}", stats.exit_code);
                         }
-                        summary.img.failed = summary.img.failed.max(1);
                         if first_error.is_none() {
                             first_error = Some(anyhow::anyhow!(
                                 "fast-img exited with code {}",
@@ -2131,6 +2170,7 @@ fn run_drag_drop(
                     print_batch_result(&command, &stats, args.dry_run);
                     let child_exit_code = stats.exit_code;
                     let child_failed = stats.failed;
+                    let child_counts_complete = stats.counts_complete();
                     let is_img = command
                         .program
                         .file_name()
@@ -2142,42 +2182,43 @@ fn run_drag_drop(
                         .and_then(|s| s.to_str())
                         .is_some_and(|n| n == "vid");
                     if is_img {
-                        summary.img.succeeded += stats.succeeded;
-                        summary.img.skipped += stats.skipped;
-                        summary.img.ignored += stats.ignored;
-                        summary.img.failed += stats.failed;
-                        summary.img.exit_code = stats.exit_code;
+                        summary.add_image_stats(&stats);
                     } else if is_vid {
-                        summary.vid.succeeded += stats.succeeded;
-                        summary.vid.skipped += stats.skipped;
-                        summary.vid.ignored += stats.ignored;
-                        summary.vid.failed += stats.failed;
-                        summary.vid.exit_code = stats.exit_code;
+                        summary.add_video_stats(&stats);
                     } else if summary.img.total() == 0 {
                         summary.img = stats.clone();
                     } else {
                         summary.vid = stats;
                     }
-                    if child_exit_code != 0 || child_failed > 0 {
-                        if child_failed == 0 {
-                            if is_img {
-                                summary.img.failed += 1;
-                            } else if is_vid {
-                                summary.vid.failed += 1;
-                            }
-                        }
-                        let err = anyhow::anyhow!(
-                            "{} command exited with code {} and reported {} failed file(s)",
-                            command.pipeline_label(),
-                            child_exit_code,
-                            child_failed
-                        );
-                        if child_failure_should_abort(
-                            command_error_mode,
-                            child_exit_code,
-                            child_failed,
-                        ) {
-                            return Err(err);
+                    if child_result_needs_error(
+                        args.dry_run,
+                        child_exit_code,
+                        child_failed,
+                        child_counts_complete,
+                    ) {
+                        let err = if child_counts_complete {
+                            anyhow::anyhow!(
+                                "{} command exited with code {} and reported {} failed file(s)",
+                                command.pipeline_label(),
+                                child_exit_code,
+                                child_failed
+                            )
+                        } else {
+                            anyhow::anyhow!(
+                                "{} command exited with code {}; final file counts are incomplete or invalid",
+                                command.pipeline_label(),
+                                child_exit_code
+                            )
+                        };
+                        if !child_counts_complete
+                            || child_failure_should_abort(
+                                command_error_mode,
+                                child_exit_code,
+                                child_failed,
+                            )
+                        {
+                            first_error = Some(err);
+                            break;
                         }
                         if first_error.is_none() {
                             first_error = Some(err);
@@ -2197,12 +2238,19 @@ fn run_drag_drop(
                         .and_then(|s| s.to_str())
                         .is_some_and(|n| n == "vid");
                     if is_img {
-                        summary.img.failed += 1;
+                        summary.add_image_stats(&ProcessorStats {
+                            exit_code: 2,
+                            ..ProcessorStats::default()
+                        });
                     } else if is_vid {
-                        summary.vid.failed += 1;
+                        summary.add_video_stats(&ProcessorStats {
+                            exit_code: 2,
+                            ..ProcessorStats::default()
+                        });
                     }
                     if drag_drop_error_should_abort(command_error_mode, &err) {
-                        return Err(err);
+                        first_error = Some(err);
+                        break;
                     }
                     eprintln!(
                         "{} command error (log-and-continue): {err:#}",
@@ -2244,21 +2292,16 @@ fn run_drag_drop(
 
     let mut size_summary_block: Option<String> = None;
     if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
-        let (effective_s, effective_f, penalty) = effective_success_failure_counts(
-            summary.total_succeeded(),
-            summary.total_failed(),
-            summary.integrity_state.map(|s| s == "WARNINGS"),
-            summary.integrity_issue_count,
-        );
-        if penalty > 0 {
+        if summary.integrity_state == Some("WARNINGS") {
             eprintln!(
-                "{} +{penalty} integrity-derived failures applied to summary",
-                pick_symbol("⚠️", "[WARN]")
+                "{} Integrity verification reported {} issue(s); file outcome counts are unchanged",
+                pick_symbol("⚠️", "[WARN]"),
+                summary.integrity_issue_count
             );
         }
-        if effective_f > 0 {
+        if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
             eprintln!(
-                "\n   {} Exiting with failures: {effective_f} file(s) did not complete \
+                "\n   {} Exiting with failures: {failed_files} file(s) did not complete \
                  successfully.",
                 pick_symbol("❌", "[ERROR]")
             );
@@ -2273,7 +2316,6 @@ fn run_drag_drop(
                 }
             }
         }
-        let _ = effective_s;
         print_summary_report(&summary);
         if let Some(ref scan) = scan {
             let (before, after) = if matches!(args.mode, LaunchMode::FastImg) {
@@ -2308,7 +2350,7 @@ fn run_drag_drop(
         }
     }
     if let Some(sess) = session {
-        let _ = sess.finish_log(&summary, size_summary_block.as_deref());
+        sess.finish_log(&summary, size_summary_block.as_deref())?;
     }
     print_elapsed(started.elapsed());
     eprintln!(
@@ -2343,14 +2385,14 @@ fn run_drag_drop(
     }
 
     if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
-        let (_, effective_f, _) = effective_success_failure_counts(
-            summary.total_succeeded(),
-            summary.total_failed(),
-            summary.integrity_state.map(|s| s == "WARNINGS"),
-            summary.integrity_issue_count,
-        );
-        if effective_f > 0 {
-            bail!("exiting with failures: {effective_f} file(s) did not complete successfully");
+        if summary.integrity_state == Some("WARNINGS") {
+            bail!(
+                "integrity verification reported {} issue(s); file outcome counts are unchanged",
+                summary.integrity_issue_count
+            );
+        }
+        if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
+            bail!("exiting with failures: {failed_files} file(s) did not complete successfully");
         }
     }
 
@@ -3305,6 +3347,82 @@ mod tests {
             1,
             0
         ));
+        assert!(!child_result_needs_error(true, 0, 0, false));
+        assert!(child_result_needs_error(true, 1, 0, false));
+        assert!(child_result_needs_error(true, 0, 1, false));
+        assert!(child_result_needs_error(false, 0, 0, false));
+        assert!(child_result_needs_error(false, 1, 0, true));
+    }
+
+    #[test]
+    fn batch_result_preserves_pending_and_rejects_overflowing_inventory() {
+        let mut stats = ProcessorStats {
+            succeeded: 3,
+            unprocessed: Some(2),
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        };
+        let decode = |stats: &ProcessorStats| -> serde_json::Value {
+            serde_json::from_str(
+                batch_result_line("img", stats)
+                    .strip_prefix("MFB_BATCH_RESULT=")
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(decode(&stats)["unprocessed"], 2);
+        stats.succeeded = usize::MAX;
+        let result = decode(&stats);
+        for key in ["succeeded", "skipped", "ignored", "failed", "unprocessed"] {
+            assert!(
+                result[key].is_null(),
+                "overflowing inventory reported {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_log_retains_file_counts_and_reports_integrity_separately() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut summary = PipelineSummary {
+            integrity_state: Some("WARNINGS"),
+            integrity_issue_count: 56,
+            ..PipelineSummary::default()
+        };
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 3,
+            skipped: 2,
+            ignored: 4,
+            failed: 1,
+            unprocessed: Some(5),
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        });
+        session.finish_log(&summary, None).unwrap();
+        let log = fs::read_to_string(&session.session_log).unwrap();
+        assert!(log.contains("Total: 3 succeeded, 2 skipped, 4 ignored, 1 failed, 5 unprocessed"));
+        assert!(log.contains("Conversion Success Rate: 75%"));
+        assert!(log.contains("Integrity: WARNINGS; issues=56"));
+        let audit = fs::read_to_string(&session.session_audit).unwrap();
+        assert!(audit.contains("images_ignore=4 images_fail=1 images_unprocessed=5"));
+        assert!(audit.contains("integrity_issues=56"));
+    }
+
+    #[test]
+    fn session_log_does_not_invent_file_counts_for_process_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            exit_code: 2,
+            ..ProcessorStats::default()
+        });
+        session.finish_log(&summary, None).unwrap();
+        let log = fs::read_to_string(&session.session_log).unwrap();
+        assert!(log.contains("Total: unknown succeeded, unknown skipped, unknown ignored, unknown failed, unknown unprocessed"));
+        assert!(log.contains("Conversion Success Rate: N/A"));
+        assert!(!log.contains("1 failed"));
     }
 
     #[test]

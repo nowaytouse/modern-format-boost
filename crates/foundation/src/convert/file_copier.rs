@@ -20,10 +20,15 @@ pub const SIDECAR_EXTENSIONS: &[&str] = &["xmp"];
 
 #[derive(Debug, Clone)]
 pub struct CopyResult {
+    /// Eligible passthrough candidates inspected by the copy pass.
     pub total_files: usize,
     pub copied: usize,
     pub skipped: usize,
     pub failed: usize,
+    /// Inspected regular files excluded from the passthrough domain.
+    pub excluded: usize,
+    /// Directory traversal failures, separate from per-file copy failures.
+    pub scan_errors: usize,
     pub errors: Vec<(PathBuf, String, String)>,
 }
 
@@ -35,8 +40,15 @@ impl CopyResult {
             copied: 0,
             skipped: 0,
             failed: 0,
+            excluded: 0,
+            scan_errors: 0,
             errors: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub const fn has_errors(&self) -> bool {
+        self.failed > 0 || self.scan_errors > 0
     }
 }
 
@@ -71,32 +83,6 @@ fn build_copy_walker(input_dir: &Path, recursive: bool) -> WalkDir {
     }
 }
 
-fn prescan_copy_candidates(input_dir: &Path, recursive: bool) -> usize {
-    let mut total_files = 0usize;
-    for entry in build_copy_walker(input_dir, recursive) {
-        match entry {
-            Ok(entry) => {
-                if entry.file_type().is_file() && should_copy_file(entry.path()) {
-                    total_files += 1;
-                }
-            }
-            Err(err) => {
-                crate::media_conversion_gate::delivery_io_path_audit(
-                    "delivery_io_copy",
-                    input_dir,
-                    format!(
-                        "COPY AUDIT: Failed to inspect directory entry during pre-scan | \
-                         Forensic: Directory '{}', Error '{}'",
-                        input_dir.display(),
-                        err
-                    ),
-                );
-            }
-        }
-    }
-    total_files
-}
-
 fn push_copy_error(result: &mut CopyResult, path: &Path, error_msg: String, category: &str) {
     result.failed += 1;
     result
@@ -119,10 +105,11 @@ fn record_walkdir_failure(input_dir: &Path, err: &walkdir::Error, result: &mut C
             path.display(),
         ),
     );
-    push_copy_error(result, &path, error_msg, "walkdir");
+    result.scan_errors += 1;
+    result.errors.push((path, error_msg, "walkdir".to_string()));
 }
 
-fn destination_matches_source_size(path: &Path, dest: &Path) -> Result<bool, String> {
+fn destination_matches_source(path: &Path, dest: &Path) -> Result<bool, String> {
     match dest.try_exists() {
         Ok(false) => return Ok(false),
         Ok(true) => {}
@@ -145,7 +132,14 @@ fn destination_matches_source_size(path: &Path, dest: &Path) -> Result<bool, Str
             dest.display()
         )
     })?;
-    Ok(src_meta.len() == dst_meta.len())
+    if src_meta.len() != dst_meta.len() {
+        return Ok(false);
+    }
+    let source_hash = crate::common_utils::calculate_blake3_hash(path)
+        .map_err(|err| format!("failed to hash source {}: {err}", path.display()))?;
+    let destination_hash = crate::common_utils::calculate_blake3_hash(dest)
+        .map_err(|err| format!("failed to hash destination {}: {err}", dest.display()))?;
+    Ok(source_hash == destination_hash)
 }
 
 fn resolve_copy_destination(path: &Path, input_dir: &Path, output_dir: &Path) -> Option<PathBuf> {
@@ -221,7 +215,10 @@ fn handle_copied_file_success(path: &Path, dest: &Path, result: &mut CopyResult)
         return;
     }
 
-    handle_copied_file_xmp(path, dest);
+    if let Err(error_msg) = handle_copied_file_xmp(path, dest) {
+        push_copy_error(result, path, error_msg, "preserve_xmp");
+        return;
+    }
 
     if let Err(e) = crate::metadata::apply_file_timestamps(path, dest) {
         let error_msg = format!(
@@ -251,7 +248,7 @@ fn handle_copied_file_success(path: &Path, dest: &Path, result: &mut CopyResult)
     );
 }
 
-fn handle_copied_file_xmp(path: &Path, dest: &Path) {
+fn handle_copied_file_xmp(path: &Path, dest: &Path) -> Result<(), String> {
     match crate::merge_xmp_for_copied_file(path, dest) {
         Ok(true) => {
             debug!(file = %path.display(), "XMP merged successfully");
@@ -274,9 +271,12 @@ fn handle_copied_file_xmp(path: &Path, dest: &Path) {
                 "delivery_io_copy",
                 format!("XMP merge failed ({err}), trying to copy sidecar..."),
             );
-            copy_xmp_sidecar_if_exists(path, dest);
+            copy_xmp_sidecar_if_exists(path, dest).map_err(|fallback| {
+                format!("XMP merge failed ({err}); sidecar preservation failed ({fallback})")
+            })?;
         }
     }
+    Ok(())
 }
 
 fn record_copy_failure(path: &Path, dest: &Path, err: &std::io::Error, result: &mut CopyResult) {
@@ -302,11 +302,11 @@ fn copy_candidate_file(path: &Path, input_dir: &Path, output_dir: &Path, result:
         return;
     };
 
-    match destination_matches_source_size(path, &dest) {
+    match destination_matches_source(path, &dest) {
         Ok(true) => {
             debug!(
                 file = %path.display(),
-                "Skipping unsupported file copy (already exists in destination with matching size)"
+                "Skipping unsupported file copy (destination content matches source)"
             );
             result.skipped += 1;
             return;
@@ -384,10 +384,6 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         "Starting batch file copy operation"
     );
 
-    let total_files = prescan_copy_candidates(input_dir, recursive);
-
-    debug!(total_files = total_files, "Pre-scan completed");
-
     for entry in build_copy_walker(input_dir, recursive) {
         let entry = match entry {
             Ok(entry) => entry,
@@ -402,12 +398,11 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         }
 
         let path = entry.path();
-        result.total_files += 1;
-
         if !should_copy_file(path) {
-            result.skipped += 1;
+            result.excluded += 1;
             continue;
         }
+        result.total_files += 1;
         copy_candidate_file(path, input_dir, output_dir, &mut result);
     }
 
@@ -416,23 +411,26 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         copied = result.copied,
         skipped = result.skipped,
         failed = result.failed,
+        excluded = result.excluded,
+        scan_errors = result.scan_errors,
         "Batch file copy operation completed"
     );
 
-    if result.failed > 0 {
+    if result.has_errors() {
         crate::media_conversion_gate::delivery_io_batch_audit(
             "delivery_io_copy",
             format!(
-                "COPY AUDIT: Some files failed to copy during batch operation | Forensic: \
-                 FailedCount={}",
-                result.failed
+                "COPY AUDIT: Batch copy was incomplete | Forensic: FailedCount={}, \
+                 ScanErrors={}",
+                result.failed, result.scan_errors
             ),
         );
         crate::media_conversion_gate::delivery_io_batch_audit(
             "delivery_io_copy",
             format!(
-                "Batch copy completed with {} failures out of {} files",
-                result.failed, result.total_files
+                "Batch copy completed with {} file failures and {} scan errors among {} \
+                 eligible candidates",
+                result.failed, result.scan_errors, result.total_files
             ),
         );
     }
@@ -440,7 +438,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
     result
 }
 
-fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
+fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) -> Result<(), String> {
     let source_str = source.to_string_lossy();
     let dest_str = dest.to_string_lossy();
 
@@ -452,7 +450,12 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
 
     for xmp_source in &xmp_patterns {
         let xmp_path = Path::new(xmp_source);
-        if xmp_path.exists() {
+        if xmp_path.try_exists().map_err(|err| {
+            format!(
+                "Failed to inspect XMP sidecar {}: {err}",
+                xmp_path.display()
+            )
+        })? {
             let xmp_dest = format!("{dest_str}.xmp");
 
             match std::fs::copy(xmp_path, &xmp_dest) {
@@ -468,6 +471,7 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
                             dest = %xmp_dest,
                             "XMP sidecar copied successfully"
                         );
+                        return Ok(());
                     }
                     Err(e) => {
                         crate::media_conversion_gate::delivery_io_path_audit(
@@ -480,6 +484,9 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
                                 xmp_dest,
                             ),
                         );
+                        return Err(format!(
+                            "Copied XMP sidecar bytes but failed to preserve metadata: {e}"
+                        ));
                     }
                 },
                 Err(e) => {
@@ -495,16 +502,19 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
                         xmp_path,
                         format!("Failed to copy XMP sidecar {}: {e}", xmp_path.display()),
                     );
+                    return Err(format!(
+                        "Failed to copy XMP sidecar {}: {e}",
+                        xmp_path.display()
+                    ));
                 }
             }
-            return;
         }
     }
 
-    debug!(
-        source = %source.display(),
-        "No XMP sidecar found for file"
-    );
+    Err(format!(
+        "No XMP sidecar available to preserve after merge failure: {}",
+        source.display()
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -514,6 +524,7 @@ pub struct FileStats {
     pub videos: usize,
     pub sidecars: usize,
     pub others: usize,
+    pub scan_errors: usize,
 }
 
 impl FileStats {
@@ -531,6 +542,7 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         videos: 0,
         sidecars: 0,
         others: 0,
+        scan_errors: 0,
     };
 
     let walker = if recursive {
@@ -543,6 +555,7 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
+                stats.scan_errors += 1;
                 crate::media_conversion_gate::delivery_io_batch_audit(
                     "delivery_io_copy",
                     format!(
@@ -594,6 +607,7 @@ pub struct VerifyResult {
     pub expected: usize,
     pub actual: usize,
     pub diff: i64,
+    pub scan_errors: usize,
     pub message: String,
 }
 
@@ -623,19 +637,46 @@ pub fn verify_output_completeness_for_domain(
     let input_stats = count_files(input_dir, recursive);
     let output_stats = count_files(output_dir, recursive);
 
-    let expected = match domain {
-        VerifyDomain::All => input_stats.expected_output(),
-        VerifyDomain::ImagesAndPassthrough => input_stats.images + input_stats.others,
-        VerifyDomain::VideosAndPassthrough => input_stats.videos + input_stats.others,
-    };
     // Compare like-for-like: do not treat output sidecars/videos as "extra" when
     // the domain only expects images + passthrough files (matches Rust verify
     // integrity scope).
-    let actual = match domain {
-        VerifyDomain::All => output_stats.expected_output(),
-        VerifyDomain::ImagesAndPassthrough => output_stats.images + output_stats.others,
-        VerifyDomain::VideosAndPassthrough => output_stats.videos + output_stats.others,
-    };
+    let expected = count_for_domain(&input_stats, domain);
+    let actual = count_for_domain(&output_stats, domain);
+    compare_output_counts(
+        expected,
+        actual,
+        input_stats.scan_errors + output_stats.scan_errors,
+    )
+}
+
+/// Compare an immutable input-side expectation with an output-only scan.
+///
+/// This is count evidence only; matching cardinalities do not establish file
+/// identity or content equality.
+#[must_use]
+pub fn verify_output_count(
+    expected: usize,
+    output_dir: &Path,
+    recursive: bool,
+    domain: VerifyDomain,
+) -> VerifyResult {
+    let output_stats = count_files(output_dir, recursive);
+    compare_output_counts(
+        expected,
+        count_for_domain(&output_stats, domain),
+        output_stats.scan_errors,
+    )
+}
+
+const fn count_for_domain(stats: &FileStats, domain: VerifyDomain) -> usize {
+    match domain {
+        VerifyDomain::All => stats.expected_output(),
+        VerifyDomain::ImagesAndPassthrough => stats.images + stats.others,
+        VerifyDomain::VideosAndPassthrough => stats.videos + stats.others,
+    }
+}
+
+fn compare_output_counts(expected: usize, actual: usize, scan_errors: usize) -> VerifyResult {
     let diff = crate::numeric_cast::usize_to_i64_sat(expected)
         - crate::numeric_cast::usize_to_i64_sat(actual);
 
@@ -651,25 +692,43 @@ pub fn verify_output_completeness_for_domain(
         crate::modern_ui::symbols::WARNING,
         crate::modern_ui::symbols::plain::WARNING,
     );
-    let (passed, message) = match diff.cmp(&0) {
-        std::cmp::Ordering::Equal => (
-            true,
-            format!("{ok} Verification passed: {actual} files (no loss)"),
-        ),
-        std::cmp::Ordering::Greater => (
+    let (passed, message) = if scan_errors > 0 {
+        (
             false,
             format!(
-                "{err} Verification FAILED: missing {diff} files! (expected {expected}, got \
-                 {actual})"
+                "{err} Verification FAILED: incomplete file scan ({scan_errors} scan error(s)); \
+                 observed {actual} output files against expected count {expected} (count-only \
+                 evidence)"
             ),
-        ),
-        std::cmp::Ordering::Less => (
-            true,
-            format!(
-                "{warn} Output has {} extra files (expected {}, got {})",
-                -diff, expected, actual
+        )
+    } else {
+        match expected.cmp(&actual) {
+            std::cmp::Ordering::Equal => (
+                true,
+                format!(
+                    "{ok} Count verification passed: expected and output counts match at \
+                     {actual} files (count-only; identity and contents not verified)"
+                ),
             ),
-        ),
+            std::cmp::Ordering::Greater => (
+                false,
+                format!(
+                    "{err} Verification FAILED: missing {} files by count (expected \
+                     {expected}, got {actual})",
+                    expected - actual
+                ),
+            ),
+            std::cmp::Ordering::Less => (
+                true,
+                format!(
+                    "{warn} Output has {} extra files by count (expected {}, got {}; \
+                     identity and contents not verified)",
+                    actual - expected,
+                    expected,
+                    actual
+                ),
+            ),
+        }
     };
 
     VerifyResult {
@@ -677,6 +736,7 @@ pub fn verify_output_completeness_for_domain(
         expected,
         actual,
         diff,
+        scan_errors,
         message,
     }
 }
@@ -747,5 +807,143 @@ mod tests {
         assert!(verify.passed, "{}", verify.message);
         assert_eq!(verify.expected, 1);
         assert_eq!(verify.actual, 1);
+    }
+
+    #[test]
+    fn xmp_fallback_requires_a_successfully_preserved_sidecar() {
+        let input = TempDir::new().expect("input dir");
+        let output = TempDir::new().expect("output dir");
+        let source = input.path().join("notes.txt");
+        let dest = output.path().join("notes.txt");
+        assert!(copy_xmp_sidecar_if_exists(&source, &dest).is_err());
+        std::fs::create_dir(input.path().join("notes.txt.xmp")).expect("invalid sidecar directory");
+        let error = copy_xmp_sidecar_if_exists(&source, &dest).expect_err("sidecar copy must fail");
+        assert!(error.contains("Failed to copy XMP sidecar"));
+    }
+
+    #[test]
+    fn copy_result_counts_only_eligible_candidates_and_matching_existing_content() {
+        let input = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let output = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        touch(&input.path().join("photo.jpg"));
+        touch(&input.path().join("clip.mp4"));
+        touch(&input.path().join("photo.xmp"));
+        touch(&input.path().join(".hidden.txt"));
+        let source = input.path().join("notes.txt");
+        std::fs::write(&source, b"same content").unwrap_or_else(|e| panic!("write failed: {e}"));
+        let destination = output.path().join("notes.txt");
+        std::fs::write(&destination, b"same content")
+            .unwrap_or_else(|e| panic!("write failed: {e}"));
+
+        let result = copy_unsupported_files(input.path(), output.path(), false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.excluded, 4);
+        assert_eq!(result.scan_errors, 0);
+        assert_eq!(
+            result.total_files,
+            result.copied + result.skipped + result.failed
+        );
+        assert!(!result.has_errors());
+    }
+
+    #[test]
+    fn same_size_different_content_is_copied_instead_of_skipped() {
+        let input = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let output = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let source = input.path().join("notes.txt");
+        let destination = output.path().join("notes.txt");
+        std::fs::write(&source, b"source").unwrap_or_else(|e| panic!("write failed: {e}"));
+        std::fs::write(&destination, b"target").unwrap_or_else(|e| panic!("write failed: {e}"));
+
+        let result = copy_unsupported_files(input.path(), output.path(), false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.copied, 1);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 0);
+        assert_eq!(
+            std::fs::read(destination).unwrap_or_else(|e| panic!("read failed: {e}")),
+            b"source"
+        );
+    }
+
+    #[test]
+    fn copy_failure_is_counted_once_as_failed() {
+        let root = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let input = root.path().join("input");
+        std::fs::create_dir(&input).unwrap_or_else(|e| panic!("mkdir failed: {e}"));
+        let output = root.path().join("output-file");
+        touch(&input.join("notes.txt"));
+        touch(&output);
+
+        let result = copy_unsupported_files(&input, &output, false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 1);
+        assert_eq!(
+            result.total_files,
+            result.copied + result.skipped + result.failed
+        );
+        assert!(result.has_errors());
+    }
+
+    #[test]
+    fn output_count_verification_fails_closed_on_scan_error() {
+        let root = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let missing_output = root.path().join("missing-output");
+
+        let verify = verify_output_count(1, &missing_output, false, VerifyDomain::All);
+
+        assert!(!verify.passed);
+        assert_eq!(verify.expected, 1);
+        assert_eq!(verify.actual, 0);
+        assert!(verify.scan_errors > 0);
+    }
+
+    #[test]
+    fn immutable_expected_count_still_detects_delivery_missing_after_source_removal() {
+        let root = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        let source = root.path().join("source.txt");
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap_or_else(|e| panic!("mkdir failed: {e}"));
+        touch(&source);
+        let expected_before_source_removal = 1;
+        std::fs::remove_file(&source).unwrap_or_else(|e| panic!("remove failed: {e}"));
+
+        let verify = verify_output_count(
+            expected_before_source_removal,
+            &output,
+            false,
+            VerifyDomain::All,
+        );
+
+        assert!(!verify.passed);
+        assert_eq!(verify.expected, 1);
+        assert_eq!(verify.actual, 0);
+        assert!(verify.message.contains("missing 1 files by count"));
+    }
+
+    #[test]
+    fn output_count_verification_keeps_extra_output_warning_as_count_only() {
+        let output = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+        touch(&output.path().join("first.txt"));
+        touch(&output.path().join("second.txt"));
+
+        let verify = verify_output_count(1, output.path(), false, VerifyDomain::All);
+
+        assert!(verify.passed);
+        assert_eq!(verify.diff, -1);
+        assert!(verify.message.contains("extra files by count"));
+        assert!(
+            verify
+                .message
+                .contains("identity and contents not verified")
+        );
     }
 }

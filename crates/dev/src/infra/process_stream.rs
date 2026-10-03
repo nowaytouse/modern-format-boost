@@ -3,7 +3,7 @@
 
 use crate::infra::hardening::delegated_exit_code;
 use anyhow::{Context, Result, bail};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -18,12 +18,37 @@ pub struct ProcessorStats {
     pub exit_code: i32,
     /// Observed counters in succeeded, skipped, ignored, failed order.
     pub reported: [bool; 4],
+    /// Files still awaiting a terminal outcome, when the child reported it.
+    pub unprocessed: Option<usize>,
+    /// Distinguish a malformed pending count from a legacy report without it.
+    pub unprocessed_invalid: bool,
 }
 
 impl ProcessorStats {
     #[must_use]
+    pub fn checked_total(&self) -> Option<usize> {
+        self.succeeded
+            .checked_add(self.skipped)
+            .and_then(|count| count.checked_add(self.ignored))
+            .and_then(|count| count.checked_add(self.failed))
+    }
+
+    #[must_use]
+    pub fn counts_complete(&self) -> bool {
+        self.reported.iter().all(|reported| *reported)
+            && !self.unprocessed_invalid
+            && self.checked_total().is_some_and(|total| {
+                self.unprocessed
+                    .is_none_or(|pending| total.checked_add(pending).is_some())
+            })
+    }
+
+    #[must_use]
     pub fn total(&self) -> usize {
-        self.succeeded + self.skipped + self.ignored + self.failed
+        self.succeeded
+            .saturating_add(self.skipped)
+            .saturating_add(self.ignored)
+            .saturating_add(self.failed)
     }
 }
 
@@ -35,6 +60,90 @@ fn parse_stats_count(token: &str) -> Option<usize> {
             None
         }
     }
+}
+
+fn is_progress_stat(token: &str, label: &str) -> bool {
+    let Some(value) = token
+        .strip_prefix(label)
+        .and_then(|value| value.strip_prefix(':'))
+    else {
+        return false;
+    };
+    let chars = value.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    let consume_digits = |index: &mut usize| {
+        let start = *index;
+        while chars.get(*index).is_some_and(char::is_ascii_digit) {
+            *index += 1;
+        }
+        *index > start
+    };
+    if !consume_digits(&mut index) || !matches!(chars.get(index), Some('✓' | '+')) {
+        return false;
+    }
+    index += 1;
+    if index == chars.len() {
+        return true;
+    }
+    if matches!(label, "I" | "V") {
+        if !consume_digits(&mut index) {
+            return false;
+        }
+        if matches!(chars.get(index), Some('x' | '✗')) {
+            return index + 1 == chars.len();
+        }
+        if chars.get(index) != Some(&'s') {
+            return false;
+        }
+        index += 1;
+        if index == chars.len() {
+            return true;
+        }
+    } else if label != "X" {
+        return false;
+    }
+    consume_digits(&mut index)
+        && matches!(chars.get(index), Some('x' | '✗'))
+        && index + 1 == chars.len()
+}
+
+fn is_valid_counter_suffix(parts: &[&str]) -> bool {
+    match parts {
+        [] | ["│"] | ["|"] => true,
+        ["│", "│", chart, xmp, images, preprocessing] if matches!(*chart, "📊" | "#") => {
+            is_progress_stat(xmp, "X")
+                && is_progress_stat(images, "I")
+                && is_progress_stat(preprocessing, "P")
+        }
+        ["│", "│", stats @ ..] => is_video_progress_overlay(stats),
+        _ => false,
+    }
+}
+
+fn is_video_progress_overlay(stats: &[&str]) -> bool {
+    let labels = stats
+        .iter()
+        .map(|stat| {
+            if stat.starts_with("X:") {
+                "X"
+            } else if stat.starts_with("V:") {
+                "V"
+            } else if stat.starts_with("P:") {
+                "P"
+            } else {
+                "?"
+            }
+        })
+        .collect::<Vec<_>>();
+    let expected = matches!(
+        labels.as_slice(),
+        ["V"] | ["V", "P"] | ["X", "V"] | ["X", "V", "P"]
+    );
+    expected
+        && stats
+            .iter()
+            .zip(labels)
+            .all(|(stat, label)| label != "?" && is_progress_stat(stat, label))
 }
 
 /// Accept bare counters or the exact report decoration, never a filename/message substring.
@@ -51,47 +160,73 @@ pub fn ingest_stats_line(stats: &mut ProcessorStats, line: &str) {
         }
     }
     let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() > 3 || (parts.len() == 3 && !matches!(parts[2], "|" | "│")) {
-        return;
-    }
-    if parts.len() >= 2 {
-        let is_target = matches!(parts[0], "Succeeded:" | "Skipped:" | "Ignored:" | "Failed:");
-        if is_target && let Some(n) = parse_stats_count(parts[1]) {
-            match parts[0] {
-                "Succeeded:" => {
-                    stats.succeeded = n;
-                    stats.reported[0] = true;
+    if let Some(label) = parts.first() {
+        let index = match *label {
+            "Succeeded:" => Some(0),
+            "Skipped:" => Some(1),
+            "Ignored:" => Some(2),
+            "Failed:" => Some(3),
+            _ => None,
+        };
+        if let Some(index) = index {
+            if parts.len() < 2 || !is_valid_counter_suffix(&parts[2..]) {
+                stats.reported[index] = false;
+            } else if let Some(value) = parse_stats_count(parts[1]) {
+                stats.reported[index] = true;
+                match index {
+                    0 => stats.succeeded = value,
+                    1 => stats.skipped = value,
+                    2 => stats.ignored = value,
+                    3 => stats.failed = value,
+                    _ => unreachable!(),
                 }
-                "Skipped:" => {
-                    stats.skipped = n;
-                    stats.reported[1] = true;
-                }
-                "Ignored:" => {
-                    stats.ignored = n;
-                    stats.reported[2] = true;
-                }
-                "Failed:" => {
-                    stats.failed = n;
-                    stats.reported[3] = true;
-                }
-                _ => {}
+            } else {
+                stats.reported[index] = false;
             }
+        } else if *label == "Unprocessed:" {
+            stats.unprocessed = (parts.len() >= 2 && is_valid_counter_suffix(&parts[2..]))
+                .then(|| parse_stats_count(parts[1]))
+                .flatten();
+            stats.unprocessed_invalid = stats.unprocessed.is_none();
         }
     }
 }
 
-fn drain_reader<R: Read, F: FnMut(&str)>(
-    reader: R,
-    stats: &mut ProcessorStats,
-    line_handler: &mut F,
-) {
+fn remember_log_write_error(result: io::Result<()>, first_error: &mut Option<io::Error>) {
+    if let Err(error) = result
+        && first_error.is_none()
+    {
+        *first_error = Some(error);
+    }
+}
+
+fn finish_log_writes(first_error: Option<io::Error>, context: &'static str) -> Result<()> {
+    if let Some(error) = first_error {
+        return Err(error).context(context);
+    }
+    Ok(())
+}
+
+fn open_stream_log(
+    log_path: Option<&Path>,
+    context: &'static str,
+) -> Result<Option<std::fs::File>> {
+    log_path
+        .map(|path| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .with_context(|| format!("{context} {}", path.display()))
+        })
+        .transpose()
+}
+
+fn drain_reader<R: Read>(reader: R, sender: std::sync::mpsc::SyncSender<io::Result<String>>) {
     for line in BufReader::new(reader).lines() {
-        match line {
-            Ok(l) => {
-                ingest_stats_line(stats, &l);
-                line_handler(&l);
-            }
-            Err(err) => eprintln!("[PROCESS] stream read failed: {err}"),
+        let failed = line.is_err();
+        if sender.send(line).is_err() || failed {
+            break;
         }
     }
 }
@@ -114,14 +249,32 @@ where
     F: FnMut(&str),
 {
     let mut stats = ProcessorStats::default();
-    if let Some(stdout) = child.stdout.take() {
-        drain_reader(stdout, &mut stats, &mut line_handler);
-    }
-    if let Some(stderr) = child.stderr.take() {
-        drain_reader(stderr, &mut stats, &mut line_handler);
-    }
+    let mut read_error = None;
+    // Drain both pipes concurrently: a full stderr pipe must not block stdout's EOF.
+    std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(128);
+        if let Some(stdout) = child.stdout.take() {
+            let sender = sender.clone();
+            scope.spawn(move || drain_reader(stdout, sender));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let sender = sender.clone();
+            scope.spawn(move || drain_reader(stderr, sender));
+        }
+        drop(sender);
+        for line in receiver {
+            match line {
+                Ok(line) => {
+                    ingest_stats_line(&mut stats, &line);
+                    line_handler(&line);
+                }
+                Err(error) => remember_log_write_error(Err(error), &mut read_error),
+            }
+        }
+    });
     let status = child.wait().context("wait for child")?;
     stats.exit_code = delegated_exit_code(status, "child", "stream_child_output_collecting");
+    finish_log_writes(read_error, "read child output")?;
     Ok(stats)
 }
 
@@ -252,6 +405,7 @@ where
     use std::io;
     use std::os::unix::io::FromRawFd;
 
+    let mut log_file = open_stream_log(log_path, "open PTY stream log")?;
     let mut master_fd: libc::c_int = 0;
     let mut slave_fd: libc::c_int = 0;
     let ret = unsafe {
@@ -294,26 +448,15 @@ where
     if flags >= 0 {
         let _ = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
-    let mut log_file = log_path
-        .map(|path| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .with_context(|| format!("open PTY stream log {}", path.display()))
-        })
-        .transpose()?;
-
     let mut stats = ProcessorStats::default();
     let mut output_tail = String::new();
     let mut log_buffer = String::new();
     let mut last_heartbeat = Instant::now();
     let mut buf = [0u8; 16 * 1024];
+    let mut log_write_error = None;
     let mut emit_line = |line: &str| {
-        if let Some(file) = log_file.as_mut()
-            && let Err(error) = writeln!(file, "{line}")
-        {
-            eprintln!("[PROCESS] stream log write failed: {error}");
+        if let Some(file) = log_file.as_mut() {
+            remember_log_write_error(writeln!(file, "{line}"), &mut log_write_error);
         }
         line_handler(line);
     };
@@ -357,20 +500,22 @@ where
             }
             Err(err) if pty_read_error_is_end_of_stream(&err) => break,
             Err(err) if matches!(err.kind(), io::ErrorKind::Interrupted) => {}
-            // Guard against the Linux PTY exit race: if the child has already
-            // exited when we get any unexpected I/O error (e.g. EIO variants,
-            // EPIPE after slave close), treat it as end-of-stream rather than
-            // a real error. The child's exit code is captured in child.wait()
-            // below, so no information is lost.
-            Err(_)
+            Err(err) => {
                 if child
                     .try_wait()
-                    .context("check pty child on error")?
-                    .is_some() =>
-            {
-                break;
+                    .context("check pty child after read error")?
+                    .is_none()
+                    && let Err(kill_error) = child.kill()
+                    && child
+                        .try_wait()
+                        .context("check pty child after failed termination")?
+                        .is_none()
+                {
+                    return Err(kill_error).context("terminate child after PTY read error");
+                }
+                child.wait().context("reap child after PTY read error")?;
+                return Err(err).context("read pty child output");
             }
-            Err(err) => return Err(err).context("read pty child output"),
         }
     }
 
@@ -384,6 +529,7 @@ where
 
     let status = child.wait().context("wait for pty child")?;
     stats.exit_code = delegated_exit_code(status, &cmd[0], "stream_process_with_pty");
+    finish_log_writes(log_write_error, "write PTY child output log")?;
     Ok(stats)
 }
 
@@ -451,6 +597,7 @@ where
             heartbeat_cb,
         );
     }
+    let mut log_file = open_stream_log(log_path, "open process stream log")?;
     let mut command = Command::new(&cmd[0]);
     apply_env_overrides(&mut command, env_overrides);
     let child = command
@@ -459,23 +606,15 @@ where
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn process for streaming")?;
-    let mut log_file = log_path
-        .map(|path| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .with_context(|| format!("open process stream log {}", path.display()))
-        })
-        .transpose()?;
-    stream_child_output_collecting(child, |line| {
-        if let Some(file) = log_file.as_mut()
-            && let Err(error) = writeln!(file, "{line}")
-        {
-            eprintln!("[PROCESS] stream log write failed: {error}");
+    let mut log_write_error = None;
+    let stats = stream_child_output_collecting(child, |line| {
+        if let Some(file) = log_file.as_mut() {
+            remember_log_write_error(writeln!(file, "{line}"), &mut log_write_error);
         }
         line_handler(line);
-    })
+    })?;
+    finish_log_writes(log_write_error, "write child output log")?;
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -484,24 +623,79 @@ mod tests {
 
     #[test]
     fn test_parse_stats_extracts_numbers() {
-        let output = "Succeeded: 10\nSkipped: 2\nIgnored: 3\nFailed: 1";
+        let output = "Succeeded: 10\nSkipped: 2\nIgnored: 3\nFailed: 1\nUnprocessed: 4";
         let stats = parse_stats_from_output(output);
         assert_eq!(stats.succeeded, 10);
         assert_eq!(stats.skipped, 2);
         assert_eq!(stats.ignored, 3);
         assert_eq!(stats.failed, 1);
         assert_eq!(stats.reported, [true; 4]);
+        assert_eq!(stats.unprocessed, Some(4));
     }
 
     #[test]
     fn report_counters_keep_missing_values_unknown_and_skip_distinct() {
         let stats = parse_stats_from_output(
-            "\x1b[32m│ ✅ Succeeded: 7 │\x1b[0m\n| [X] Failed: 0 |\n│ ⏭️ Skipped: 2 │\nfilename Failed: 99\nFailed: 8.jpg\nFailed: 4 invalid message",
+            "\x1b[32m│ ✅ Succeeded: 7 │\x1b[0m\n| [X] Failed: 0 |\n│ ⏭️ Skipped: 2 │\nfilename Failed: 99",
         );
         assert_eq!((stats.succeeded, stats.skipped, stats.failed), (7, 2, 0));
         assert_eq!(stats.reported, [true, true, false, true]);
+        let malformed = parse_stats_from_output("Failed: 0\nFailed: 8.jpg");
+        assert!(!malformed.reported[3]);
+        let malformed_shape = parse_stats_from_output("Succeeded: 7\nSucceeded: 8 trailing");
+        assert!(!malformed_shape.reported[0]);
+        let malformed_message = parse_stats_from_output("Failed: 0\nFailed: 4 invalid message");
+        assert!(!malformed_message.reported[3]);
         let empty = parse_stats_from_output("[ENCODE] no summary available");
         assert_eq!(empty.reported, [false; 4]);
+        assert_eq!(empty.unprocessed, None);
+    }
+
+    #[test]
+    fn report_counters_accept_only_known_progress_overlays() {
+        let valid =
+            parse_stats_from_output("│ ✅ Succeeded: 7 │ │ 📊 X:0✓ I:0✓ P:0✓\nUnprocessed: 2");
+        assert!(valid.reported[0]);
+        assert_eq!(valid.succeeded, 7);
+        assert_eq!(valid.unprocessed, Some(2));
+
+        let invalid = parse_stats_from_output("Succeeded: 7 │ │ 📊 X:0✓ I:0✓ P:0✓ filename.jpg");
+        assert!(!invalid.reported[0]);
+
+        let video = parse_stats_from_output("│ ❌ Failed: 1 │ │ X:0✓ V:0✓1x");
+        assert!(video.reported[3]);
+        assert_eq!(video.failed, 1);
+    }
+
+    #[test]
+    fn bare_malformed_final_count_labels_invalidate_prior_values() {
+        let stats =
+            parse_stats_from_output("Succeeded: 7\nSucceeded:\nUnprocessed: 2\nUnprocessed:");
+        assert!(!stats.reported[0]);
+        assert_eq!(stats.unprocessed, None);
+        assert!(stats.unprocessed_invalid);
+    }
+
+    #[test]
+    fn malformed_final_count_does_not_reuse_earlier_value() {
+        let stats = parse_stats_from_output(
+            "Succeeded: 7\nSucceeded: 18446744073709551616\nUnprocessed: 2\nUnprocessed: -1",
+        );
+        assert!(!stats.reported[0]);
+        assert_eq!(stats.unprocessed, None);
+        assert!(stats.unprocessed_invalid);
+        assert!(!stats.counts_complete());
+    }
+
+    #[test]
+    fn pending_parse_failure_is_not_a_legacy_missing_count() {
+        let summary = "Succeeded: 1\nSkipped: 0\nIgnored: 0\nFailed: 0";
+        assert!(parse_stats_from_output(summary).counts_complete());
+        let invalid = parse_stats_from_output(&format!("{summary}\nUnprocessed: bad"));
+        assert!(!invalid.counts_complete());
+        let valid = parse_stats_from_output(&format!("{summary}\nUnprocessed: 2"));
+        assert!(valid.counts_complete());
+        assert_eq!(valid.unprocessed, Some(2));
     }
 
     #[cfg(unix)]
@@ -594,6 +788,87 @@ mod tests {
         let log = std::fs::read_to_string(log_path)?;
         assert!(log.contains("first"));
         assert!(log.contains("second"));
+        Ok(())
+    }
+
+    #[test]
+    fn child_log_write_failures_are_retained_and_propagated() {
+        struct FailingWriter;
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test log failure",
+                ))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut first_error = None;
+        let mut writer = FailingWriter;
+        remember_log_write_error(writeln!(&mut writer, "child output"), &mut first_error);
+        let error = finish_log_writes(first_error, "write child output log")
+            .expect_err("child log write error must fail the stream result");
+        assert!(format!("{error:#}").contains("write child output log"));
+        assert!(format!("{error:#}").contains("test log failure"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_log_path_prevents_child_execution() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let sentinel = temp.path().join("started");
+        let command = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "touch \"$1\"".to_owned(),
+            "sh".to_owned(),
+            sentinel.to_string_lossy().into_owned(),
+        ];
+        let result = stream_process_with_pty(
+            &command,
+            Some(&temp.path().join("missing/child.log")),
+            |_| {},
+            || {},
+        );
+        assert!(result.is_err());
+        assert!(!sentinel.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipes_are_drained_concurrently_without_losing_summary() -> Result<()> {
+        let child = Command::new("sh")
+            .args(["-c", "i=0; while [ \"$i\" -lt 12000 ]; do printf 'diagnostic padding padding padding\\n' >&2; i=$((i+1)); done; printf 'Succeeded: 1\\n'"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let pid = i32::try_from(child.id())?;
+        let (done, completion) = std::sync::mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if completion.recv_timeout(Duration::from_secs(10)).is_err() {
+                // The test owns this still-unreaped child; bound a regression's pipe deadlock.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        });
+        let mut diagnostics = 0;
+        let result = stream_child_output_collecting(child, |line| {
+            if line.starts_with("diagnostic") {
+                diagnostics += 1;
+            }
+        });
+        let _ = done.send(());
+        watchdog.join().expect("watchdog must join");
+        let stats = result?;
+        assert_eq!(stats.exit_code, 0);
+        assert_eq!(diagnostics, 12000);
+        assert!(stats.reported[0]);
+        assert_eq!(stats.succeeded, 1);
         Ok(())
     }
 }

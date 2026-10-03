@@ -686,6 +686,7 @@ pub fn log_batch_complete_audit(
     ignored: usize,
     failed: usize,
     total: usize,
+    unprocessed: usize,
 ) {
     tracing::info!(
         target: "mfb::audit",
@@ -697,6 +698,7 @@ pub fn log_batch_complete_audit(
         ignored = ignored,
         failed = failed,
         total = total,
+        unprocessed = unprocessed,
         "MFB_AUDIT"
     );
 }

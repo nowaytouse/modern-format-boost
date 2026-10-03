@@ -219,6 +219,8 @@ fn print_panel_table(
 pub struct PipelineSummary {
     pub img: ProcessorStats,
     pub vid: ProcessorStats,
+    pub img_events: usize,
+    pub vid_events: usize,
     pub integrity_state: Option<&'static str>,
     pub integrity_issue_count: usize,
     /// Parsed from fast-img `[SIZE]` lines (session-scoped source bytes).
@@ -237,35 +239,191 @@ pub struct PipelineSummary {
 }
 
 impl PipelineSummary {
+    pub fn add_image_stats(&mut self, stats: &ProcessorStats) {
+        add_processor_stats(&mut self.img, stats, self.img_events == 0);
+        self.img_events = self.img_events.saturating_add(1);
+    }
+
+    pub fn add_video_stats(&mut self, stats: &ProcessorStats) {
+        add_processor_stats(&mut self.vid, stats, self.vid_events == 0);
+        self.vid_events = self.vid_events.saturating_add(1);
+    }
+
     #[must_use]
     pub fn total_succeeded(&self) -> usize {
-        self.img.succeeded + self.vid.succeeded
+        self.img.succeeded.saturating_add(self.vid.succeeded)
     }
 
     #[must_use]
     pub fn total_failed(&self) -> usize {
-        self.img.failed + self.vid.failed
+        self.img.failed.saturating_add(self.vid.failed)
     }
 
     #[must_use]
     pub fn total_skipped(&self) -> usize {
-        self.img.skipped + self.vid.skipped
+        self.img.skipped.saturating_add(self.vid.skipped)
     }
 
     #[must_use]
     pub fn total_ignored(&self) -> usize {
-        self.img.ignored + self.vid.ignored
+        self.img.ignored.saturating_add(self.vid.ignored)
+    }
+
+    #[must_use]
+    pub fn total_count(&self, index: usize) -> Option<usize> {
+        let (img_seen, img_value, vid_seen, vid_value) = match index {
+            0 => (
+                self.image_seen(),
+                self.img.succeeded,
+                self.video_seen(),
+                self.vid.succeeded,
+            ),
+            1 => (
+                self.image_seen(),
+                self.img.skipped,
+                self.video_seen(),
+                self.vid.skipped,
+            ),
+            2 => (
+                self.image_seen(),
+                self.img.ignored,
+                self.video_seen(),
+                self.vid.ignored,
+            ),
+            3 => (
+                self.image_seen(),
+                self.img.failed,
+                self.video_seen(),
+                self.vid.failed,
+            ),
+            _ => return None,
+        };
+        let img = if img_seen {
+            self.img.reported[index].then_some(img_value)
+        } else {
+            Some(0)
+        }?;
+        let vid = if vid_seen {
+            self.vid.reported[index].then_some(vid_value)
+        } else {
+            Some(0)
+        }?;
+        img.checked_add(vid)
+    }
+
+    #[must_use]
+    pub fn total_unprocessed(&self) -> Option<usize> {
+        let img = if self.image_seen() {
+            self.img.unprocessed
+        } else {
+            Some(0)
+        }?;
+        let vid = if self.video_seen() {
+            self.vid.unprocessed
+        } else {
+            Some(0)
+        }?;
+        img.checked_add(vid)
+    }
+
+    #[must_use]
+    pub fn success_rate_percent(&self) -> Option<usize> {
+        let succeeded = self.total_count(0)?;
+        let failed = self.total_count(3)?;
+        let attempts = succeeded.checked_add(failed)?;
+        if attempts == 0 {
+            return None;
+        }
+        let widen = |value: usize| match u128::try_from(value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                eprintln!("[SUMMARY] Cannot widen count {value} for percentage: {error}");
+                None
+            }
+        };
+        let percentage = (widen(succeeded)? * 100) / widen(attempts)?;
+        match usize::try_from(percentage) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                eprintln!("[SUMMARY] Cannot represent success percentage {percentage}: {error}");
+                None
+            }
+        }
     }
 
     #[must_use]
     pub fn has_image_stats(&self) -> bool {
-        self.img.total() > 0 || self.img.exit_code != 0
+        self.image_seen() || self.img.total() > 0 || self.img.exit_code != 0
     }
 
     #[must_use]
     pub fn has_video_stats(&self) -> bool {
-        self.vid.total() > 0 || self.vid.exit_code != 0
+        self.video_seen() || self.vid.total() > 0 || self.vid.exit_code != 0
     }
+
+    fn image_seen(&self) -> bool {
+        self.img_events > 0
+            || self.img.reported.iter().any(|reported| *reported)
+            || self.img.exit_code != 0
+    }
+
+    fn video_seen(&self) -> bool {
+        self.vid_events > 0
+            || self.vid.reported.iter().any(|reported| *reported)
+            || self.vid.exit_code != 0
+    }
+}
+
+fn add_processor_stats(total: &mut ProcessorStats, next: &ProcessorStats, first: bool) {
+    if first {
+        *total = next.clone();
+        return;
+    }
+    let left = [total.succeeded, total.skipped, total.ignored, total.failed];
+    let right = [next.succeeded, next.skipped, next.ignored, next.failed];
+    for index in 0..4 {
+        if total.reported[index]
+            && next.reported[index]
+            && let Some(sum) = left[index].checked_add(right[index])
+        {
+            set_stat_value(total, index, sum);
+            continue;
+        }
+        set_stat_value(total, index, 0);
+        total.reported[index] = false;
+    }
+    total.unprocessed = total
+        .unprocessed
+        .zip(next.unprocessed)
+        .and_then(|(left, right)| left.checked_add(right));
+    total.unprocessed_invalid |= next.unprocessed_invalid;
+    if next.exit_code != 0 {
+        total.exit_code = next.exit_code;
+    }
+}
+
+fn set_stat_value(stats: &mut ProcessorStats, index: usize, value: usize) {
+    match index {
+        0 => stats.succeeded = value,
+        1 => stats.skipped = value,
+        2 => stats.ignored = value,
+        3 => stats.failed = value,
+        _ => unreachable!(),
+    }
+}
+
+fn totals_as_stats(summary: &PipelineSummary) -> ProcessorStats {
+    let mut stats = ProcessorStats {
+        unprocessed: summary.total_unprocessed(),
+        ..ProcessorStats::default()
+    };
+    for index in 0..4 {
+        if let Some(value) = summary.total_count(index) {
+            set_stat_value(&mut stats, index, value);
+            stats.reported[index] = true;
+        }
+    }
+    stats
 }
 
 /// Optimization summary report (mirrors Python end-of-run Rich table + success
@@ -273,12 +431,7 @@ impl PipelineSummary {
 pub fn print_summary_report(summary: &PipelineSummary) {
     draw_separator("Task Completed");
 
-    let effective_s = summary.total_succeeded();
-    let effective_f = summary.total_failed();
-    let rate_denominator = effective_s + effective_f;
-    let success_rate = (effective_s * 100)
-        .checked_div(rate_denominator)
-        .unwrap_or(100);
+    let rate = summary.success_rate_percent();
 
     if colors_enabled() {
         println!("{BOLD}{GRAY}Optimization Summary Report{RESET}");
@@ -301,17 +454,10 @@ pub fn print_summary_report(summary: &PipelineSummary) {
         println!("{}", styled(&"─".repeat(56), GRAY));
         print_summary_row(
             &format!("{} Total", pick_symbol("📦", "TOT")),
-            &ProcessorStats {
-                succeeded: effective_s,
-                skipped: summary.total_skipped(),
-                ignored: summary.total_ignored(),
-                failed: effective_f,
-                exit_code: 0,
-                ..ProcessorStats::default()
-            },
+            &totals_as_stats(summary),
         );
         println!();
-        if rate_denominator > 0 {
+        if let Some(success_rate) = rate {
             let bar_len = 20usize;
             let filled = (success_rate * bar_len) / 100;
             let bar: String = "█".repeat(filled) + &"░".repeat(bar_len.saturating_sub(filled));
@@ -325,6 +471,8 @@ pub fn print_summary_report(summary: &PipelineSummary) {
             println!(
                 "   {BOLD}{GRAY}Success Rate:{RESET} [{rate_color}]{bar}{RESET} {success_rate}%"
             );
+        } else {
+            println!("   {BOLD}{GRAY}Success Rate:{RESET} N/A");
         }
         if let Some(state) = summary.integrity_state {
             let color = if state == "WARNINGS" { YELLOW } else { GREEN };
@@ -332,20 +480,50 @@ pub fn print_summary_report(summary: &PipelineSummary) {
         }
     } else {
         println!(
-            "[Summary] succeeded={effective_s} failed={effective_f} skipped={} ignored={}",
-            summary.total_skipped(),
-            summary.total_ignored()
+            "[Summary] succeeded={} failed={} skipped={} ignored={}",
+            summary
+                .total_count(0)
+                .map_or_else(|| "?".to_owned(), |n| n.to_string()),
+            summary
+                .total_count(3)
+                .map_or_else(|| "?".to_owned(), |n| n.to_string()),
+            summary
+                .total_count(1)
+                .map_or_else(|| "?".to_owned(), |n| n.to_string()),
+            summary
+                .total_count(2)
+                .map_or_else(|| "?".to_owned(), |n| n.to_string())
         );
-        println!("Success rate: {success_rate}%");
+        println!(
+            "Success rate: {}",
+            rate.map_or_else(|| "N/A".to_owned(), |n| format!("{n}%"))
+        );
     }
+    println!(
+        "Unprocessed: {}",
+        summary
+            .total_unprocessed()
+            .map_or_else(|| "?".to_owned(), |n| n.to_string())
+    );
+    println!("Counts summarize processor outcomes, not unique files or Photos assets.");
     println!();
     flush();
 }
 
 fn print_summary_row(label: &str, stats: &ProcessorStats) {
+    let count = |index: usize, value: usize| {
+        if stats.reported[index] {
+            value.to_string()
+        } else {
+            "?".to_owned()
+        }
+    };
     println!(
         "  {label:<16} {GREEN}{}{RESET}  {YELLOW}{}{RESET}  {DIM}{}{RESET}  {RED}{}{RESET}",
-        stats.succeeded, stats.skipped, stats.ignored, stats.failed
+        count(0, stats.succeeded),
+        count(1, stats.skipped),
+        count(2, stats.ignored),
+        count(3, stats.failed)
     );
 }
 
@@ -438,5 +616,52 @@ mod tests {
         s.vid.failed = 1;
         assert_eq!(s.total_succeeded(), 3);
         assert_eq!(s.total_failed(), 1);
+    }
+
+    #[test]
+    fn pipeline_aggregation_preserves_unknown_overflow_and_failure_status() {
+        let mut summary = PipelineSummary::default();
+        let first = ProcessorStats {
+            succeeded: 4,
+            failed: 1,
+            reported: [true; 4],
+            unprocessed: Some(2),
+            exit_code: 1,
+            ..ProcessorStats::default()
+        };
+        summary.add_image_stats(&first);
+        assert_eq!(summary.total_count(0), Some(4));
+        assert_eq!(summary.total_unprocessed(), Some(2));
+        assert_eq!(summary.success_rate_percent(), Some(80));
+        let next = ProcessorStats {
+            succeeded: usize::MAX,
+            reported: [true, false, true, true],
+            unprocessed: None,
+            ..ProcessorStats::default()
+        };
+        summary.add_image_stats(&next);
+        assert_eq!(summary.total_count(0), None);
+        assert_eq!(summary.total_count(1), None);
+        assert_eq!(summary.total_unprocessed(), None);
+        assert_eq!(summary.success_rate_percent(), None);
+        assert_eq!(summary.img.exit_code, 1);
+    }
+
+    #[test]
+    fn no_attempts_have_no_rate_and_large_counts_do_not_overflow_percent_math() {
+        let mut summary = PipelineSummary::default();
+        let mut stats = ProcessorStats {
+            skipped: 10,
+            reported: [true; 4],
+            unprocessed: Some(0),
+            ..ProcessorStats::default()
+        };
+        summary.add_image_stats(&stats);
+        assert_eq!(summary.success_rate_percent(), None);
+        stats.skipped = 0;
+        stats.succeeded = usize::MAX;
+        let mut large = PipelineSummary::default();
+        large.add_image_stats(&stats);
+        assert_eq!(large.success_rate_percent(), Some(100));
     }
 }

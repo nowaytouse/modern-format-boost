@@ -110,7 +110,7 @@
 "status.checking_processor" = "Checking core components…";
 "status.command_copied" = "Command copied";
 "status.completed" = "Completed successfully";
-"status.count" = "Verification count: %@";
+"status.count" = "Count status: %@";
 "status.processor_ready" = "Core components ready";
 "status.processor_failed" = "Core component check failed";
 "status.processor_unavailable" = "Core components missing. Click to get the complete app.";
@@ -154,6 +154,7 @@
 "log.task_start" = "Starting task";
 "log.photos_preflight" = "Photos import preflight stopped: %@";
 "log.omitted" = "[MFB UI] omitted %llu process log entries while the UI was busy";
+"log.critical_overflow" = "Some result or error records could not reach the interface. Task completion cannot be confirmed; review the backend logs.";
 "alert.resume.title" = "Unfinished task found";
 "alert.resume.info" = "Resume its verified progress or start a separate fresh run?";
 "alert.resume.resume" = "Resume";
@@ -238,9 +239,11 @@
 "settings.value.native" = "Native (PhotoKit)";
 "settings.value.applescript" = "AppleScript";
 "result.counts" = "Succeeded %@ · Skipped %@ · Failed %@ · Ignored %@";
+"result.unprocessed" = "Unprocessed %@";
 "result.unknown" = "unknown";
 "result.finished_with_failures" = "Finished with file failures";
 "result.stopped_with_error" = "Stopped with an error";
 "result.invalid" = "Batch result is malformed or unsupported; counts are unavailable.";
 "result.incomplete" = "Process exited; some result counts were not reported";
+"result.unfinished" = "Processing ended with unfinished items";
 "settings.unavailable" = "This operation has no configurable media encoding settings.";

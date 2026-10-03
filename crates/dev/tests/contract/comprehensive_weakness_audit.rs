@@ -1205,10 +1205,23 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
                 .into(),
         );
     }
-    if !ci_quality.contains("extractions/setup-just@v4") {
+    const SETUP_JUST_V4_PIN: &str =
+        "uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3";
+    let setup_just_steps: Vec<_> = ci_quality
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("uses: extractions/setup-just@"))
+        .collect();
+    if setup_just_steps.is_empty()
+        || setup_just_steps.iter().any(|line| {
+            line.split_once('#')
+                .map_or(*line, |(action, _)| action)
+                .trim()
+                != SETUP_JUST_V4_PIN
+        })
+    {
         inventory.push(
-            "CI ci-quality must use extractions/setup-just@v4 (composite action, Node-neutral)"
-                .into(),
+            "CI ci-quality must pin extractions/setup-just v4 to its audited commit SHA".into(),
         );
     }
     if !check_all.contains("normalize_stale_embed_measurement_slots.rs") {

@@ -1,8 +1,7 @@
 use crate::batch::{PauseController, Summary, disk_full_pause_reason};
 use crate::common_utils::has_extension;
 use crate::file_copier::{
-    SUPPORTED_VIDEO_EXTENSIONS, VerifyDomain, copy_unsupported_files,
-    verify_output_completeness_for_domain,
+    SUPPORTED_VIDEO_EXTENSIONS, VerifyDomain, copy_unsupported_files, verify_output_count,
 };
 use crate::report::print_summary;
 use crate::smart_file_copier::fix_extension_if_mismatch;
@@ -133,6 +132,7 @@ where
 {
     let input = &config.input;
     let recursive = config.recursive;
+    let start_time = Instant::now();
 
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(input) {
@@ -159,7 +159,7 @@ where
         input,
         SUPPORTED_VIDEO_EXTENSIONS,
         recursive,
-    );
+    )?;
 
     if files.is_empty() {
         crate::media_conversion_gate::delivery_pipeline_path_audit(
@@ -172,6 +172,7 @@ where
                 SUPPORTED_VIDEO_EXTENSIONS.join(", ")
             ),
         );
+        print_summary(&Summary::new(), start_time.elapsed(), 0, 0, &config.label);
         return Ok(());
     }
 
@@ -211,7 +212,7 @@ where
                 &format!(
                     "{} Resume: skipping {} already completed files",
                     crate::media_conversion_gate::ui_icon_pick("📂", "[DIR]"),
-                    cp.completed_count()
+                    files.iter().filter(|path| cp.is_completed(path)).count()
                 )
             );
         } else {
@@ -281,7 +282,6 @@ where
     }
     let checkpoint = checkpoint.map(Arc::new);
 
-    let start_time = Instant::now();
     let total_files = files.len();
     let pause_controller = Arc::new(PauseController::new());
     let progress_bar = Arc::new(crate::CoarseProgressBar::new(
@@ -505,6 +505,7 @@ where
                     "checkpoint already completed",
                 );
                 skipped.fetch_add(1, Ordering::Relaxed);
+                crate::progress_mode::video_skipped(&fixed, "checkpoint already completed");
                 let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 crate::progress_mode::write_progress_line_to_run_log(
                     start_time.elapsed().as_secs(),
@@ -516,7 +517,8 @@ where
                 return;
             }
 
-            match converter(fixed.as_path()) {
+            match crate::progress_mode::with_deferred_skip_reporting(|| converter(fixed.as_path()))
+            {
                 Ok(result) => {
                     if result.is_ignored() {
                         // Domain ignore: do not copy here. Copying would create
@@ -598,6 +600,7 @@ where
                                 )
                             );
                             skipped.fetch_add(1, Ordering::Relaxed);
+                            crate::progress_mode::video_skipped(&fixed, skip_reason.as_ref());
                         }
                     } else if result.is_success() {
                         let checkpoint_error = checkpoint
@@ -779,6 +782,7 @@ where
                                     )
                                 );
                                 skipped.fetch_add(1, Ordering::Relaxed);
+                                crate::progress_mode::video_skipped(&fixed, &error_msg);
                             }
                         } else {
                             crate::infra::static_logs::log_file_outcome_audit(
@@ -796,6 +800,7 @@ where
                                 )
                             );
                             skipped.fetch_add(1, Ordering::Relaxed);
+                            crate::progress_mode::video_skipped(&fixed, &error_msg);
                         }
                     } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
                         if pause_controller.request_pause(&fixed, reason.clone()) {
@@ -856,15 +861,12 @@ where
     batch_result.skipped = skipped.load(Ordering::Relaxed);
     batch_result.ignored = ignored.load(Ordering::Relaxed);
     batch_result.total = processed.load(Ordering::Relaxed);
+    batch_result.reconcile_inventory(total_files)?;
     batch_result.errors =
         crate::media_conversion_gate::mutex_into_inner_or_recover("cli_batch_errors", errors);
 
     if let Some(pause) = pause_controller.pause_info() {
-        batch_result.pause(
-            pause.path,
-            pause.reason,
-            total_files.saturating_sub(batch_result.total),
-        );
+        batch_result.pause(pause.path, pause.reason, batch_result.unprocessed);
     }
     let abort_reason = crate::media_conversion_gate::mutex_guard_or_recover(
         "cli_batch_abort_reason",
@@ -872,7 +874,7 @@ where
     )
     .clone();
 
-    if batch_result.paused {
+    if batch_result.paused || batch_result.unprocessed > 0 {
         progress_bar.finish_and_clear();
     } else {
         progress_bar.finish();
@@ -926,6 +928,7 @@ where
         batch_result.ignored,
         batch_result.failed,
         batch_result.total,
+        batch_result.unprocessed,
     );
 
     print_summary(
@@ -958,12 +961,12 @@ where
                 &format!("Copied {} unsupported files", copy_result.copied)
             );
         }
-        if copy_result.failed > 0 {
+        if copy_result.has_errors() {
             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                 "delivery_pipeline_cli",
                 format!(
-                    "Failed to copy {} files to output directory",
-                    copy_result.failed
+                    "Failed to copy {} files to output directory; {} directory scan errors",
+                    copy_result.failed, copy_result.scan_errors
                 ),
             );
             let sample_errors = copy_result
@@ -976,8 +979,9 @@ where
                 .collect::<Vec<_>>()
                 .join(" | ");
             anyhow::bail!(
-                "Batch output is incomplete: {} unsupported file copies failed{}",
+                "Batch output is incomplete: {} unsupported file copies failed; {} scan errors{}",
                 copy_result.failed,
+                copy_result.scan_errors,
                 if sample_errors.is_empty() {
                     String::new()
                 } else {
@@ -990,61 +994,28 @@ where
             crate::infra::static_logs::messages::LABEL_VERIFY,
             crate::infra::static_logs::messages::MSG_VERIFY_COMPLETENESS
         );
-        let verify = verify_output_completeness_for_domain(
-            input,
+        let expected_output = batch_result
+            .succeeded
+            .checked_add(batch_result.skipped)
+            .and_then(|count| count.checked_add(copy_result.copied))
+            .and_then(|count| count.checked_add(copy_result.skipped))
+            .context("Output delivery count overflow")?;
+        let verify = verify_output_count(
+            expected_output,
             output_dir,
             recursive,
             VerifyDomain::VideosAndPassthrough,
         );
-        let ignored_count = ignored.load(Ordering::Relaxed);
-        let failed_count = failed.load(Ordering::Relaxed);
-        let adjusted_expected = verify
-            .expected
-            .saturating_sub(ignored_count)
-            .saturating_sub(failed_count);
-        let adjusted_diff = crate::numeric_cast::usize_to_i64_sat(adjusted_expected)
-            - crate::numeric_cast::usize_to_i64_sat(verify.actual);
-        let (adjusted_passed, adjusted_message) = match adjusted_diff.cmp(&0) {
-            std::cmp::Ordering::Equal => (
-                true,
-                format!(
-                    "✅ Verification passed: {} files (ignored {} files, failed {} files excluded)",
-                    verify.actual, ignored_count, failed_count
-                ),
-            ),
-            std::cmp::Ordering::Greater => (
-                false,
-                crate::media_conversion_gate::ui_user_facing_error(format!(
-                    "Verification FAILED: missing {adjusted_diff} files after excluding \
-                     {ignored_count} ignored and {failed_count} failed inputs (expected \
-                     {adjusted_expected}, got {})",
-                    verify.actual
-                )),
-            ),
-            std::cmp::Ordering::Less => (
-                true,
-                format!(
-                    "{} Output has {} extra files after excluding {} ignored and {} failed inputs \
-                     (expected {}, got {})",
-                    crate::modern_ui::symbols::styled_warning_icon(),
-                    -adjusted_diff,
-                    ignored_count,
-                    failed_count,
-                    adjusted_expected,
-                    verify.actual
-                ),
-            ),
-        };
         crate::log_info!(
             crate::infra::static_logs::messages::LABEL_VERIFY,
-            &adjusted_message
+            &verify.message
         );
-        if !adjusted_passed {
+        if !verify.passed {
             crate::media_conversion_gate::delivery_pipeline_batch_audit(
                 "delivery_pipeline_cli",
                 crate::infra::static_logs::messages::MSG_VERIFY_MISMATCH,
             );
-            anyhow::bail!("Batch output completeness verification failed: {adjusted_message}");
+            anyhow::bail!("Batch output count verification failed: {}", verify.message);
         }
 
         if let Some(ref base_dir) = config.base_dir {

@@ -5,7 +5,7 @@
 //! (`init_logging`).
 
 use crate::modern_ui::{colors, symbols};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write as _};
@@ -22,6 +22,37 @@ use tracing::Level;
 
 thread_local! {
     static LOG_PREFIX: RefCell<String> = const { RefCell::new(String::new()) };
+    static DEFERRED_SKIP_REPORTING: Cell<bool> = const { Cell::new(false) };
+}
+
+struct DeferredSkipReportingGuard {
+    previously_deferred: bool,
+}
+
+impl DeferredSkipReportingGuard {
+    fn enter() -> Self {
+        let previously_deferred = DEFERRED_SKIP_REPORTING.with(|deferred| deferred.replace(true));
+        Self {
+            previously_deferred,
+        }
+    }
+}
+
+impl Drop for DeferredSkipReportingGuard {
+    fn drop(&mut self) {
+        DEFERRED_SKIP_REPORTING.with(|deferred| deferred.set(self.previously_deferred));
+    }
+}
+
+fn skip_reporting_is_deferred() -> bool {
+    DEFERRED_SKIP_REPORTING.with(Cell::get)
+}
+
+/// Defer per-file skip notices and counters until the caller confirms delivery.
+/// Nested scopes restore their prior state, including when `operation` unwinds.
+pub fn with_deferred_skip_reporting<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = DeferredSkipReportingGuard::enter();
+    operation()
 }
 
 static RUN_LOG_IO_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
@@ -906,6 +937,9 @@ pub fn image_processed_failure() {
 /// Call when an image is skipped (e.g. source is already lossy modern format).
 /// Writes structured skip record to the log file and a prominent stderr line.
 pub fn image_skipped(path: &std::path::Path, reason: &str) {
+    if skip_reporting_is_deferred() {
+        return;
+    }
     let _img_skip = IMAGE_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     crate::infra::static_logs::log_skip_at_with_pipeline(
         &format!(
@@ -973,6 +1007,9 @@ pub fn video_processed_failure() {
 /// Call when a video is skipped.
 /// Writes structured skip record to the log file and a prominent stderr line.
 pub fn video_skipped(path: &std::path::Path, reason: &str) {
+    if skip_reporting_is_deferred() {
+        return;
+    }
     let _ = VIDEO_SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::infra::static_logs::log_skip_at_with_pipeline(
         &format!(
@@ -1580,5 +1617,60 @@ mod terminal_ux_tests {
         }
 
         *lock_log_writer() = original_writer;
+    }
+}
+
+#[cfg(test)]
+mod deferred_skip_reporting_tests {
+    use super::*;
+
+    #[test]
+    #[serial_test::serial]
+    fn deferred_skips_do_not_increment_counters_and_nested_scopes_restore() {
+        let image_skips_before = IMAGE_SKIP_COUNT.load(Ordering::Relaxed);
+        let video_skips_before = VIDEO_SKIP_COUNT.load(Ordering::Relaxed);
+
+        with_deferred_skip_reporting(|| {
+            assert!(skip_reporting_is_deferred());
+            image_skipped(std::path::Path::new("deferred-image.jpg"), "pending copy");
+            video_skipped(std::path::Path::new("deferred-video.mp4"), "pending copy");
+
+            with_deferred_skip_reporting(|| assert!(skip_reporting_is_deferred()));
+            assert!(skip_reporting_is_deferred());
+        });
+
+        assert!(!skip_reporting_is_deferred());
+        assert_eq!(IMAGE_SKIP_COUNT.load(Ordering::Relaxed), image_skips_before);
+        assert_eq!(VIDEO_SKIP_COUNT.load(Ordering::Relaxed), video_skips_before);
+    }
+
+    #[test]
+    fn deferred_skip_reporting_restores_after_unwind() {
+        let result = std::panic::catch_unwind(|| {
+            with_deferred_skip_reporting(|| {
+                assert!(skip_reporting_is_deferred());
+                panic!("exercise deferred skip scope unwind");
+            });
+        });
+
+        assert!(result.is_err());
+        assert!(!skip_reporting_is_deferred());
+    }
+
+    #[test]
+    fn deferred_skip_reporting_is_thread_local() {
+        assert!(!skip_reporting_is_deferred());
+        with_deferred_skip_reporting(|| {
+            assert!(skip_reporting_is_deferred());
+            std::thread::spawn(|| {
+                assert!(!skip_reporting_is_deferred());
+                with_deferred_skip_reporting(|| assert!(skip_reporting_is_deferred()));
+                assert!(!skip_reporting_is_deferred());
+            })
+            .join()
+            .expect("child thread should finish");
+            assert!(skip_reporting_is_deferred());
+        });
+        assert!(!skip_reporting_is_deferred());
     }
 }

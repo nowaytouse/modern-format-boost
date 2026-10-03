@@ -24,7 +24,9 @@ fn single_file_counts(outcome: crate::conversion::Outcome) -> [usize; 4] {
 /// Report the real single-file disposition to command-line launchers.
 pub fn print_single_file_outcome(outcome: crate::conversion::Outcome) {
     let [succeeded, skipped, ignored, failed] = single_file_counts(outcome);
-    println!("Succeeded: {succeeded}\nSkipped: {skipped}\nIgnored: {ignored}\nFailed: {failed}");
+    println!(
+        "Succeeded: {succeeded}\nSkipped: {skipped}\nIgnored: {ignored}\nFailed: {failed}\nUnprocessed: 0"
+    );
 }
 
 /// Unknown and fatal errors deliberately have no recoverable-file summary.
@@ -244,11 +246,14 @@ pub fn print_summary(
         crate::infra::static_logs::messages::LABEL_REPORT,
         format!(
             "Summary: {operation_name} | total={total}, succeeded={succ}, failed={fail}, \
-             skipped={skip} | {comparison} | reduction={reduction_str} | elapsed={dur}",
+             skipped={skip}, ignored={ignored}, unprocessed={unprocessed} | \
+             converted_bytes: {comparison} | reduction={reduction_str} | elapsed={dur}",
             total = result.total,
             succ = result.succeeded,
             fail = result.failed,
             skip = result.skipped,
+            ignored = result.ignored,
+            unprocessed = result.unprocessed,
             comparison = comparison.log_fragment(),
             dur = format_duration(duration),
         )
@@ -358,16 +363,21 @@ fn print_file_stats(result: &Summary) {
     }
 
     let rate = result.success_rate();
+    style.emit_row(&format!(
+        "Unprocessed:             {:>10}",
+        result.unprocessed
+    ));
+    let rate_label = rate.map_or_else(|| "N/A".to_owned(), |value| format!("{value:.1}%"));
     if style.plain {
-        style.emit_row(&format!("{chart} Success Rate:        {rate:>9.1}%"));
+        style.emit_row(&format!("{chart} Conversion Success:  {rate_label:>10}"));
     } else {
-        let rate_color = if rate > 90.0_f64 {
+        let rate_color = if rate.is_some_and(|value| value > 90.0_f64) {
             BRIGHT_GREEN
         } else {
             BRIGHT_YELLOW
         };
         style.emit_row(&format!(
-            "{BRIGHT_CYAN}{chart} Success Rate:{RESET}        {rate_color}{rate:>9.1}%{RESET}"
+            "{BRIGHT_CYAN}{chart} Conversion Success:{RESET}  {rate_color}{rate_label:>10}{RESET}"
         ));
     }
     style.emit_border_mid();
@@ -387,11 +397,11 @@ fn print_size_info(comparison: SizeComparison, reduction_pct: Option<f64>) {
 
     if style.plain {
         style.emit_row(&format!(
-            "{disk} Total Before:       {:>10}",
+            "{disk} Converted Before:   {:>10}",
             comparison.before_label()
         ));
         style.emit_row(&format!(
-            "{disk} Total After:        {:>10}",
+            "{disk} Converted After:    {:>10}",
             comparison.after_label()
         ));
         style.emit_row(&format!(
@@ -405,7 +415,7 @@ fn print_size_info(comparison: SizeComparison, reduction_pct: Option<f64>) {
         style.emit_row(&format!("{down} Size Reduction:     {reduction_label}"));
     } else {
         style.emit_row(&format!(
-            "{disk} Total Before:       {DIM}{:>10}{RESET}",
+            "{disk} Converted Before:   {DIM}{:>10}{RESET}",
             comparison.before_label()
         ));
         let out_color = match reduction_pct {
@@ -413,7 +423,7 @@ fn print_size_info(comparison: SizeComparison, reduction_pct: Option<f64>) {
             Some(_) | None => BRIGHT_YELLOW,
         };
         style.emit_row(&format!(
-            "{disk} Total After:        {out_color}{:>10}{RESET}",
+            "{disk} Converted After:    {out_color}{:>10}{RESET}",
             comparison.after_label()
         ));
         style.emit_row(&format!(

@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Compact native settings, reliable logs and CI contracts (2026-10-04)
+
+- Align the native window's path and mode controls with the available width.
+  Reduce oversized title spacing and use restrained native surfaces. Settings
+  sheets now fit the selected tab's visible rows rather than reserving a large
+  fixed empty panel; advanced Photos controls remain contextual.
+- Reserve bounded GUI delivery capacity for result, control, warning and error
+  records. Ordinary log bursts cannot displace them. Exhausting the critical
+  reserve explicitly invalidates completion instead of silently losing results.
+- Keep dry-run's absent media counters separate from processing failures.
+  Standard-pipeline failures still reach final session reporting. Propagate
+  child/session log write failures and show unavailable counters as unknown.
+- Open requested logs before starting child work; reject malformed trailing
+  counts while accepting the exact terminal progress decoration. Drain stdout
+  and stderr concurrently to avoid a full error pipe stalling the process.
+- Require a successful native bundle assembly/self-test marker for smart-build
+  reuse. An executable left behind by failed compilation is not a completed GUI.
+- Repair both completed-CI failures reproduced locally: the workflow contract
+  and nightly artifact smoke test now recognize audited commit-pinned actions,
+  without reverting them to movable version tags.
+- Preserve the incoming mio 1.2.4 update and digest-pinned OSS-Fuzz Rust builder
+  image. The registry confirms the pinned manifest; container execution remains
+  a separate validation from local Rust and native-host checks.
+
+### Outcome count audit and clearer Simplified Chinese (2026-10-03)
+
+- Reconcile standard IMG/VID terminal outcomes against their candidate inventory
+  with checked arithmetic. Report unprocessed work after pause or abort without
+  counting it as skipped/failed or forcing partial progress to 100 percent.
+- Defer inner conversion skip notices and live counters until source-preserving
+  copies complete. Remove the IMG skip-as-success increment; include video resume
+  and error-classified skips exactly once. Scope resume notices to current inputs.
+- Separate passthrough candidates from excluded entries and traversal errors.
+  Require equal content hashes before reusing an existing copy. Fail count checks
+  on scan errors and use immutable delivery expectations after source cleanup;
+  matching counts are no longer described as proof of "no loss".
+- Do not count a passthrough copy as successful when both XMP merge and the
+  sidecar-preservation fallback fail. Propagate the preservation error and retain
+  the original file.
+- Reject duplicate receipt paths within Fast IMG tiers and repeated Photos UUIDs
+  across tiers when loading, saving or reporting markers. Check report arithmetic
+  and keep encoded, Photos-verified and pending delivery counts distinct.
+- Preserve known Fast GIF counts on per-file and finalization errors. Ready
+  encodes without required Photos proof remain unprocessed rather than delivered.
+- Carry optional remaining-work counts through the launcher and native GUI.
+  Keep integrity issues separate from real file dispositions, include ignored
+  counts in session logs, and display no-attempt success rates as unavailable.
+  Label conversion byte totals according to their actual scope.
+- Preserve child-reported counts instead of overwriting them with a later
+  directory verification's inventory. Infrastructure failures do not become a
+  synthetic failed file; malformed or overflowing totals remain unavailable.
+- Clarify Simplified Chinese results, source-retention conditions, recovery,
+  verification backlog and per-media settings without changing format placeholders
+  or merging failed, skipped, ignored and unprocessed semantics. Counting rules
+  and validation scope are documented in `hardening/COUNTING_CONTRACT.md`.
+
 ### JPEG XL API migration and platform CI repair (2026-10-03)
 
 - Preserve the incoming Cargo and workflow changes. Refresh dependency indexes;

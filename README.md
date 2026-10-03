@@ -49,6 +49,18 @@ Typical routes:
 
 Routing source of truth: [`delivery_codec_strategy.rs`](crates/foundation/src/convert/delivery_codec_strategy.rs).
 
+### Reading processing counts
+
+Standard batches reconcile `processed = succeeded + failed + skipped + ignored`
+and report `unprocessed` work separately after pause or abort. Skips are not new
+conversion successes; integrity issues do not invent failed files. No-attempt
+conversion rates are unavailable rather than 100 percent. Combined processor
+totals describe processing outcomes, not necessarily unique input files or Photos
+assets, and conversion byte totals exclude skipped/reused/passthrough input.
+Matching output cardinalities do not replace identity or content verification.
+See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
+receipt uniqueness, error handling and regression boundaries.
+
 ### What it guarantees—and what it does not
 
 - A conversion candidate is delivered only after its route-specific decode,
@@ -390,6 +402,11 @@ or a reported file failure cannot become an all-success completion message.
 The GUI always enables detailed logs and starts each batch with a clean log
 view. **Log History** opens the backend's resolved log directory (normally under
 `~/.modern_format_boost`); clearing the view does not delete stored logs.
+Result, control and error records have a separate bounded delivery reserve, so
+routine log bursts cannot displace them. If that reserve is also exhausted, the
+GUI marks completion as unconfirmed rather than reporting a misleading success.
+Settings sheets fit the current tab's visible controls; path and mode fields use
+the main window's available width without oversized empty form margins.
 **Pause / Continue / Stop** cooperate with the Rust backend at safe boundaries:
 active file work finishes and verified progress is saved first. FastImg encoding
 uses bounded waves. Native Photos uses configurable verification windows;

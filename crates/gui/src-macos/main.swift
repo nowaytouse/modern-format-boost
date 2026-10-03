@@ -588,7 +588,7 @@ private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntim
 }
 
 @MainActor
-private final class MediaSettingsPanel: NSObject {
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
     private let panel: NSPanel
     private let preferences: UserDefaults
     private let applied: () -> Void
@@ -607,6 +607,9 @@ private final class MediaSettingsPanel: NSObject {
     private let advanced = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(wrappingLabelWithString: "")
     private let tabs = NSTabView()
+    private let root = NSStackView()
+    private var tabHeight: NSLayoutConstraint?
+    private var grids: [String: NSGridView] = [:]
     private var applying = false
     private var applyGeneration = UUID()
 
@@ -616,17 +619,25 @@ private final class MediaSettingsPanel: NSObject {
         self.developer = developer
         self.fast = fast
         self.videos = videos
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 780, height: 610),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 300),
                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         panel.title = localized("settings.title")
-        let root = NSStackView()
+        let surface = NSView()
+        panel.contentView = surface
         root.orientation = .vertical
-        root.alignment = .width
-        root.spacing = 16
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
-        panel.contentView = root
+        root.alignment = .leading
+        root.spacing = 12
+        root.translatesAutoresizingMaskIntoConstraints = false
+        surface.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 20),
+            root.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -20),
+            root.topAnchor.constraint(equalTo: surface.topAnchor, constant: 16),
+            root.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -16),
+        ])
         tabs.translatesAutoresizingMaskIntoConstraints = false
+        tabs.delegate = self
         for section in ["img", "photos", "performance"] + (developer ? ["developer"] : []) {
             let fields = MediaSetting.allCases.filter { field in
                 if field == .performance { return section == "performance" }
@@ -642,8 +653,8 @@ private final class MediaSettingsPanel: NSObject {
             let tab = NSTabViewItem(identifier: section)
             tab.label = localized("settings.section.\(section)")
             let grid = NSGridView()
-            grid.rowSpacing = 12
-            grid.columnSpacing = 14
+            grid.rowSpacing = 10
+            grid.columnSpacing = 12
             for field in fields {
                 let control: NSView
                 if field == .photosAdaptive || field == .photosPreserveTree {
@@ -680,13 +691,15 @@ private final class MediaSettingsPanel: NSObject {
                 }
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
+                control.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 let row = grid.addRow(with: [NSTextField(labelWithString: field.title), control])
                 rows[field] = row
                 row.yPlacement = .center
             }
             grid.column(at: 0).xPlacement = .leading
-            grid.column(at: 0).width = 260
+            grid.column(at: 0).width = 240
             grid.column(at: 1).xPlacement = .fill
+            grids[section] = grid
             let content = NSView()
             grid.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(grid)
@@ -694,11 +707,15 @@ private final class MediaSettingsPanel: NSObject {
                 grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
                 grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
                 grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                grid.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
             ])
             tab.view = content
             tabs.addTabViewItem(tab)
         }
         root.addArrangedSubview(tabs)
+        tabHeight = tabs.heightAnchor.constraint(equalToConstant: 210)
+        tabHeight?.isActive = true
+        tabs.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         advanced.title = localized("settings.advanced")
         advanced.target = self
         advanced.action = #selector(updateVisibility)
@@ -706,7 +723,10 @@ private final class MediaSettingsPanel: NSObject {
         root.addArrangedSubview(advanced)
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
+        status.maximumNumberOfLines = 3
+        status.isHidden = true
         root.addArrangedSubview(status)
+        status.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         let reset = NSButton(title: localized("settings.reset"), target: self, action: #selector(resetTab))
         let cancel = NSButton(title: localized("alert.cancel"), target: self, action: #selector(cancel))
         cancel.keyEquivalent = "\u{1b}"
@@ -715,7 +735,9 @@ private final class MediaSettingsPanel: NSObject {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let actions = NSStackView(views: [reset, spacer, cancel, apply])
+        actions.distribution = .fill
         root.addArrangedSubview(actions)
+        actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         restore(MediaSettings(preferences: preferences))
     }
 
@@ -723,6 +745,25 @@ private final class MediaSettingsPanel: NSObject {
         if tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
         window.beginSheet(panel)
         loadInheritedValues()
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        updatePanelSize()
+    }
+
+    private func updatePanelSize() {
+        guard let section = tabs.selectedTabViewItem?.identifier as? String,
+              let grid = grids[section], let tabHeight else { return }
+        advanced.isHidden = developer || section != "photos"
+        status.isHidden = status.stringValue.isEmpty
+        let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
+        let rowsHeight = visibleRows.reduce(CGFloat(0)) { height, row in
+            height + max(24, row.cell(at: 1).contentView?.fittingSize.height ?? 24)
+        } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
+        tabHeight.constant = rowsHeight + 64
+        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52)
+        panel.setContentSize(NSSize(width: 720, height: tabHeight.constant + 76 + extras))
+        panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     private func loadInheritedValues() {
@@ -745,6 +786,7 @@ private final class MediaSettingsPanel: NSObject {
                     self.status.stringValue = ""
                 case let .failure(error): self.status.stringValue = error.localizedDescription
                 }
+                self.updatePanelSize()
             }
         }
     }
@@ -820,6 +862,7 @@ private final class MediaSettingsPanel: NSObject {
             if [.photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field) { hidden = hidden || !adaptive }
             row.isHidden = hidden
         }
+        updatePanelSize()
     }
 
     @objc private func stepNumber(_ sender: NSStepper) {
@@ -893,8 +936,12 @@ private final class MediaSettingsPanel: NSObject {
             tabs.selectTabViewItem(at: index)
             panel.contentView?.layoutSubtreeIfNeeded()
             guard let content = tabs.selectedTabViewItem?.view, let grid = content.subviews.first as? NSGridView,
-                  content.bounds.contains(grid.frame) else {
+                  content.bounds.contains(grid.frame), grid.frame.width >= content.bounds.width - 40 else {
                 throw HostError(message: "Settings grid extends outside its tab")
+            }
+            if tabs.selectedTabViewItem?.identifier as? String == "performance",
+               let surface = panel.contentView, surface.bounds.height > 230 {
+                throw HostError(message: "Single-row settings tab retained oversized empty space")
             }
             for rowIndex in 0..<grid.numberOfRows {
                 let row = grid.row(at: rowIndex)
@@ -1116,16 +1163,42 @@ private struct BatchResults {
         let skipped: Int?
         let failed: Int?
         let ignored: Int?
+        let unprocessed: Int?
         let exitCode: Int?
 
         var counts: [Int?] { [succeeded, skipped, failed, ignored] }
+        var countsAreValid: Bool {
+            var total = 0
+            for value in counts + [unprocessed] {
+                guard let value else { continue }
+                let sum = total.addingReportingOverflow(value)
+                guard value >= 0, !sum.overflow else { return false }
+                total = sum.partialValue
+            }
+            return true
+        }
     }
 
     private(set) var totals: [String: [Int?]] = [:]
+    private(set) var pendingTotals: [String: Int?] = [:]
     private(set) var hasFailure = false
     private(set) var hasFileFailures = false
+    private(set) var hasUnprocessed = false
+    private(set) var pendingTotalOverflowed = false
     private(set) var invalid = false
-    var isIncomplete: Bool { invalid || totals.values.contains { $0.contains(where: { $0 == nil }) } }
+    var isIncomplete: Bool {
+        if invalid || pendingTotalOverflowed || totals.values.contains(where: { $0.contains(where: { $0 == nil }) }) {
+            return true
+        }
+        var total = 0
+        for value in totals.values.flatMap({ $0 }) + Array(pendingTotals.values) {
+            guard let value else { continue }
+            let sum = total.addingReportingOverflow(value)
+            if sum.overflow { return true }
+            total = sum.partialValue
+        }
+        return false
+    }
 
     mutating func ingest(_ line: String) -> String? {
         let raw = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
@@ -1135,8 +1208,11 @@ private struct BatchResults {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let event = try? decoder.decode(Event.self, from: Data(raw.dropFirst(prefix.count).utf8)),
               event.schemaVersion == 1, ["img", "vid"].contains(event.media),
-              event.counts.allSatisfy({ $0.map { $0 >= 0 } ?? true }) else {
+              event.countsAreValid else {
             invalid = true
+            for media in Array(pendingTotals.keys) {
+                pendingTotals.updateValue(nil, forKey: media)
+            }
             return "[WARN] \(localized("result.invalid"))"
         }
         hasFailure = hasFailure || (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0
@@ -1148,11 +1224,27 @@ private struct BatchResults {
             let sum = left.addingReportingOverflow(right)
             return sum.overflow ? nil : sum.partialValue
         }
+        if let unprocessed = event.unprocessed, unprocessed > 0 { hasUnprocessed = true }
+        if invalid {
+            pendingTotals.updateValue(nil, forKey: event.media)
+        } else if pendingTotals.keys.contains(event.media) {
+            let previous = pendingTotals[event.media] ?? nil
+            if let previousValue = previous, let unprocessed = event.unprocessed {
+                let sum = previousValue.addingReportingOverflow(unprocessed)
+                if sum.overflow { pendingTotalOverflowed = true }
+                pendingTotals.updateValue(sum.overflow ? nil : sum.partialValue, forKey: event.media)
+            } else {
+                pendingTotals.updateValue(nil, forKey: event.media)
+            }
+        } else {
+            pendingTotals.updateValue(event.unprocessed, forKey: event.media)
+        }
         let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
         let summary = localized("result.counts", count(event.succeeded), count(event.skipped),
                                 count(event.failed), count(event.ignored))
+            + " · " + localized("result.unprocessed", count(event.unprocessed))
         let tag = (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
-            : (event.exitCode == nil || event.counts.contains { $0 == nil } ? "WARN" : "SUMMARY")
+            : (event.exitCode == nil || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
         return "[\(tag)] \(event.media.uppercased()): \(summary) (exit=\(count(event.exitCode)))"
     }
 }
@@ -1398,31 +1490,57 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     private let lock = NSLock()
     private let maxBytes: Int
     private let maxEntries: Int
+    private let maxCriticalBytes: Int
+    private let maxCriticalEntries: Int
     private var pending = ""
     private var pendingBytes = 0
     private var pendingEntries = 0
+    private var criticalBytes = 0
+    private var criticalEntries = 0
+    private var criticalOverflow = false
     private var omittedEntries: UInt64 = 0
     private var deliveryInFlight = false
 
-    init(maxBytes: Int = maxProcessLogBatchBytes, maxEntries: Int = maxProcessLogBatchEntries) {
+    init(maxBytes: Int = maxProcessLogBatchBytes, maxEntries: Int = maxProcessLogBatchEntries,
+         maxCriticalBytes: Int = maxProcessLogBatchBytes, maxCriticalEntries: Int = maxProcessLogBatchEntries) {
+        precondition(maxBytes >= 0 && maxEntries >= 0 && maxCriticalBytes >= 0 && maxCriticalEntries >= 0)
         self.maxBytes = maxBytes
         self.maxEntries = maxEntries
+        self.maxCriticalBytes = maxCriticalBytes
+        self.maxCriticalEntries = maxCriticalEntries
     }
 
     func enqueue(_ entry: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let separatorBytes = pendingEntries == 0 ? 0 : 1
-        let entryBytes = entry.utf8.count
-        if pendingEntries >= maxEntries
-            || pendingBytes + separatorBytes + entryBytes > maxBytes
-        {
-            if omittedEntries < UInt64.max { omittedEntries += 1 }
-        } else {
-            if pendingEntries > 0 { pending.append("\n") }
-            pending.append(entry)
-            pendingBytes += separatorBytes + entryBytes
-            pendingEntries += 1
+        // Control records and diagnostics have a separate bounded reserve, preserving arrival order.
+        for line in entry.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            let tone = LogTone.classify(text)
+            let critical = text.contains("MFB_")
+                || text.contains("[PHOTOS PROFILE]") || countStatusValue(in: text) != nil
+                || tone == .warning || tone == .failure || tone == .result
+            let limit = critical ? maxCriticalBytes : maxBytes
+            let used = critical ? criticalBytes : pendingBytes
+            let entries = critical ? criticalEntries : pendingEntries
+            let entryLimit = critical ? maxCriticalEntries : maxEntries
+            let separatorBytes = pending.isEmpty ? 0 : 1
+            let entryBytes = text.utf8.count
+            if entries >= entryLimit || separatorBytes > limit - used
+                || entryBytes > limit - used - separatorBytes {
+                if critical { criticalOverflow = true }
+                if omittedEntries < UInt64.max { omittedEntries += 1 }
+                continue
+            }
+            if separatorBytes > 0 { pending.append("\n") }
+            pending.append(text)
+            if critical {
+                criticalBytes += separatorBytes + entryBytes
+                criticalEntries += 1
+            } else {
+                pendingBytes += separatorBytes + entryBytes
+                pendingEntries += 1
+            }
         }
         guard !deliveryInFlight else { return false }
         deliveryInFlight = true
@@ -1435,12 +1553,20 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
         guard deliveryInFlight else { return nil }
         var payload = pending
         if omittedEntries > 0 {
-            if pendingEntries > 0 { payload.append("\n") }
+            if !payload.isEmpty { payload.append("\n") }
             payload.append(localized("log.omitted", omittedEntries))
+        }
+        if criticalOverflow {
+            // Missing control records must invalidate completion, even if a later record is valid.
+            if !payload.isEmpty { payload.append("\n") }
+            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow"))")
         }
         pending.removeAll(keepingCapacity: true)
         pendingBytes = 0
         pendingEntries = 0
+        criticalBytes = 0
+        criticalEntries = 0
+        criticalOverflow = false
         omittedEntries = 0
         return payload
     }
@@ -1448,7 +1574,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     func finishDelivery() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let hasPending = pendingEntries > 0 || omittedEntries > 0
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0
         if !hasPending { deliveryInFlight = false }
         return hasPending
     }
@@ -1456,7 +1582,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     var isIdle: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !deliveryInFlight && pendingEntries == 0 && omittedEntries == 0
+        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0 && omittedEntries == 0
     }
 }
 
@@ -2220,7 +2346,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.delegate = self
 
         let root = NativeDropView()
-        root.material = .underWindowBackground
+        root.material = .windowBackground
         root.blendingMode = .behindWindow
         root.state = .active
         root.onDrop = { [weak self] path in self?.acceptTarget(path) }
@@ -2236,11 +2362,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             systemSymbolName: "photo.stack.fill",
             accessibilityDescription: "Modern Format Boost",
         )
-        icon.image = icon.image?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 28, weight: .medium))
+        icon.image = icon.image?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 24, weight: .medium))
         icon.contentTintColor = .controlAccentColor
         icon.setContentHuggingPriority(.required, for: .horizontal)
-        let heading = NSFont.systemFont(ofSize: 23, weight: .semibold)
-        titleLabel.font = heading.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 23) } ?? heading
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
         let titleStack = NSStackView(views: [titleLabel, subtitleLabel])
@@ -2284,6 +2409,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetRow.alignment = .centerY
         targetRow.spacing = 8
         targetField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        targetField.widthAnchor.constraint(equalTo: targetRow.widthAnchor, constant: -100).isActive = true
+        chooseButton.widthAnchor.constraint(equalToConstant: 92).isActive = true
 
         backupField.isEditable = false
         backupField.isSelectable = true
@@ -2314,10 +2441,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         ])
         videoCodecRow = grid.addRow(with: [NSTextField(labelWithString: localized("settings.vidCodec")), videoCodecPopup])
         processingRow = grid.row(at: 0)
-        grid.rowSpacing = 5
+        grid.rowSpacing = 8
         grid.columnSpacing = 12
-        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 0).width = 120
         grid.column(at: 1).xPlacement = .fill
+        for popup in [processingPopup, operationPopup, videoCodecPopup] {
+            popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            popup.widthAnchor.constraint(equalTo: grid.widthAnchor, constant: -132).isActive = true
+        }
         mediaLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
         operationLabel.widthAnchor.constraint(equalTo: mediaLabel.widthAnchor).isActive = true
 
@@ -2420,7 +2552,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         logView.backgroundColor = .textBackgroundColor.withAlphaComponent(0.72)
         logScroll.documentView = logView
         logScroll.hasVerticalScroller = true
-        logScroll.borderType = .bezelBorder
+        logScroll.borderType = .lineBorder
         logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
         countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -2447,7 +2579,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 10
+        stack.setCustomSpacing(16, after: header)
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
@@ -2457,8 +2590,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         root.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
             stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
         ])
@@ -2967,9 +3100,12 @@ private final class AppController: NSObject, NSWindowDelegate {
                 statusLabel.stringValue = localized(batchResults.hasFileFailures
                     ? "result.finished_with_failures" : "result.stopped_with_error")
                 appendLog("[FAIL] \(statusLabel.stringValue)")
-            } else if batchResults.isIncomplete || (batchResults.totals.isEmpty
+            } else if batchResults.isIncomplete
+                || (batchResults.hasUnprocessed && host.controlState != "paused")
+                || (batchResults.totals.isEmpty
                 && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
-                statusLabel.stringValue = localized("result.incomplete")
+                statusLabel.stringValue = localized(batchResults.isIncomplete || batchResults.totals.isEmpty
+                    ? "result.incomplete" : "result.unfinished")
                 appendLog("[WARN] \(statusLabel.stringValue)")
             } else {
                 statusLabel.stringValue = message
@@ -3225,8 +3361,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         else { throw HostError(message: "Default options or developer gating failed") }
         content.layoutSubtreeIfNeeded()
         guard logScroll.frame.height >= 260,
+              targetField.frame.width >= content.bounds.width * 0.65,
+              operationPopup.frame.width >= content.bounds.width * 0.65,
               window.title.contains(appVersion) else {
-            throw HostError(message: "Log area or visible version regressed")
+            throw HostError(message: "Main form width, log area or visible version regressed")
         }
         appendLog("previous batch sentinel")
         clearBatchLog()
@@ -3276,7 +3414,17 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "GUI treated reported file failures as success")
         }
         clearBatchLog()
-        guard batchResults.totals.isEmpty, !batchResults.hasFailure else {
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
+            throw HostError(message: "GUI did not report remaining unprocessed files")
+        }
+        processingCompleted(.success(localized("status.completed")))
+        guard statusLabel.stringValue == localized("result.unfinished") else {
+            throw HostError(message: "GUI reported success with unprocessed files")
+        }
+        clearBatchLog()
+        guard batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty,
+              !batchResults.hasFailure, !batchResults.hasUnprocessed else {
             throw HostError(message: "Batch counters leaked into a new run")
         }
         let attribution = try bundledLicenseText()
@@ -3584,9 +3732,65 @@ private func runSelfTest() -> Int32 {
         catch {}
         var results = BatchResults()
         let skipped = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":0,"ignored":1,"exit_code":0}"#
-        guard results.ingest(skipped) != nil, !results.hasFailure, !results.isIncomplete,
-              results.totals["img"] == [3, 2, 0, 1] else {
+        let legacyLine = results.ingest(skipped)
+        guard legacyLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,
+              !results.hasFailure, !results.isIncomplete,
+              results.totals["img"] == [3, 2, 0, 1],
+              results.pendingTotals["img"] != nil, (results.pendingTotals["img"] ?? nil) == nil,
+              !results.hasUnprocessed else {
             throw HostError(message: "Skipped files counted as failures")
+        }
+        var nullPending = BatchResults()
+        let nullPendingLine = nullPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":null,"exit_code":0}"#)
+        guard nullPendingLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,
+              !nullPending.isIncomplete, nullPending.pendingTotals["img"] != nil,
+              (nullPending.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Legacy null pending count became zero or incomplete")
+        }
+        var pending = BatchResults()
+        let pendingLine = pending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        _ = pending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":3,"exit_code":0}"#)
+        guard pendingLine?.contains(localized("result.unprocessed", "2")) == true,
+              (pending.pendingTotals["img"] ?? nil) == 5, pending.hasUnprocessed, !pending.isIncomplete else {
+            throw HostError(message: "Pending counts were not reported and aggregated separately")
+        }
+        var pendingOverflow = BatchResults()
+        let maxPending = String(Int.max)
+        _ = pendingOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":0,\"skipped\":0,\"failed\":0,\"ignored\":0,\"unprocessed\":\(maxPending),\"exit_code\":0}")
+        _ = pendingOverflow.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":1,"exit_code":0}"#)
+        guard pendingOverflow.pendingTotalOverflowed, pendingOverflow.isIncomplete,
+              (pendingOverflow.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Overflowing pending aggregate was treated as a known total")
+        }
+        var inventoryOverflow = BatchResults()
+        _ = inventoryOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":\(Int.max),\"skipped\":1,\"failed\":0,\"ignored\":0,\"exit_code\":0}")
+        guard inventoryOverflow.invalid, inventoryOverflow.isIncomplete else {
+            throw HostError(message: "Overflowing event inventory was accepted")
+        }
+        var aggregateOverflow = BatchResults()
+        _ = aggregateOverflow.ingest("MFB_BATCH_RESULT={\"schema_version\":1,\"media\":\"img\",\"succeeded\":\(Int.max),\"skipped\":0,\"failed\":0,\"ignored\":0,\"exit_code\":0}")
+        _ = aggregateOverflow.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"vid","succeeded":0,"skipped":1,"failed":0,"ignored":0,"exit_code":0}"#)
+        guard aggregateOverflow.isIncomplete else {
+            throw HostError(message: "Overflowing combined inventory was accepted")
+        }
+        for event in [
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":-1,"exit_code":0}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":"bad","exit_code":0}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":9223372036854775808,"exit_code":0}"#,
+        ] {
+            var invalidPending = BatchResults()
+            _ = invalidPending.ingest(event)
+            guard invalidPending.invalid, invalidPending.isIncomplete, invalidPending.pendingTotals.isEmpty else {
+                throw HostError(message: "Malformed or negative pending count was accepted")
+            }
+        }
+        var invalidAfterPending = BatchResults()
+        _ = invalidAfterPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
+        _ = invalidAfterPending.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":-1,"exit_code":0}"#)
+        guard invalidAfterPending.invalid, invalidAfterPending.isIncomplete,
+              invalidAfterPending.pendingTotals["img"] != nil,
+              (invalidAfterPending.pendingTotals["img"] ?? nil) == nil else {
+            throw HostError(message: "Invalid pending count preserved a partial aggregate as known")
         }
         _ = results.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":null,"skipped":0,"failed":1,"ignored":null,"exit_code":1}"#)
         guard results.hasFailure, results.isIncomplete, results.totals["img"] == [nil, 2, 1, nil] else {
@@ -3753,6 +3957,26 @@ private func runSelfTest() -> Int32 {
               !backpressure.finishDelivery(), backpressure.isIdle
         else {
             fputs("native-host self-test log backpressure failed\n", stderr)
+            return 1
+        }
+        let reserved = ProcessLogBackpressure(maxBytes: 8, maxEntries: 1)
+        _ = reserved.enqueue("routine")
+        _ = reserved.enqueue("omitted")
+        _ = reserved.enqueue(skipped + "\nERR: Permission denied")
+        guard let delivered = reserved.takeDelivery(), delivered.contains(skipped),
+              delivered.contains("ERR: Permission denied"), !reserved.finishDelivery(), reserved.isIdle else {
+            fputs("native-host self-test critical log reserve failed\n", stderr)
+            return 1
+        }
+        let exhausted = ProcessLogBackpressure(maxBytes: 8, maxEntries: 1, maxCriticalBytes: 8, maxCriticalEntries: 1)
+        _ = exhausted.enqueue(skipped)
+        var lostResults = BatchResults()
+        for line in (exhausted.takeDelivery() ?? "").split(separator: "\n") {
+            _ = lostResults.ingest(String(line))
+        }
+        _ = lostResults.ingest(skipped)
+        guard lostResults.invalid, lostResults.isIncomplete, !exhausted.finishDelivery(), exhausted.isIdle else {
+            fputs("native-host self-test critical log overflow must fail closed\n", stderr)
             return 1
         }
         var diagnostics = PhotosDiagnostics()

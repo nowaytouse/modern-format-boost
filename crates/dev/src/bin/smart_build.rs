@@ -522,11 +522,11 @@ fn gui_needs_rebuild(project_root: &Path) -> bool {
         .iter()
         .map(|(source, _)| get_mtime(&project_root.join(source)))
         .fold(newest_input, f64::max);
-    let bundle_binary = native_app_bundle_path(project_root)
-        .join("Contents")
-        .join("MacOS")
-        .join("Modern Format Boost");
-    !bundle_binary.is_file() || newest_input > get_mtime(&bundle_binary)
+    let contents = native_app_bundle_path(project_root).join("Contents");
+    let completed = contents.join("Resources/native-build-complete.txt");
+    !contents.join("MacOS/Modern Format Boost").is_file()
+        || !completed.is_file()
+        || newest_input > get_mtime(&completed)
 }
 
 fn clean_old_binaries(project_root: &Path, targets: &[&str], style: Style) -> Result<i32> {
@@ -1591,6 +1591,8 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     if !test_status.success() {
         anyhow::bail!("Native host self-test failed");
     }
+    fs::write(resources_dir.join("native-build-complete.txt"), b"1\n")
+        .context("record successful native bundle assembly and self-test")?;
 
     println!(
         "{}  Swift native host compiled and assembled.{}",
@@ -2067,6 +2069,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn incomplete_native_build_cannot_be_reused() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let root = tempdir.path();
+        let contents = native_app_bundle_path(root).join("Contents");
+        fs::create_dir_all(contents.join("MacOS"))?;
+        fs::write(contents.join("MacOS/Modern Format Boost"), b"partial")?;
+        assert!(gui_needs_rebuild(root));
+        fs::create_dir_all(contents.join("Resources"))?;
+        fs::write(contents.join("Resources/native-build-complete.txt"), b"1\n")?;
+        assert!(!gui_needs_rebuild(root));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let input = native_gui_dir(root).join("main.swift");
+        fs::create_dir_all(input.parent().unwrap())?;
+        fs::write(input, "changed")?;
+        assert!(gui_needs_rebuild(root));
+        Ok(())
+    }
+
+    #[test]
     fn test_decide_build_action_force() {
         let tempdir = tempfile::tempdir().unwrap();
         // Since we pass force = true, decide_build_action should always return
@@ -2291,6 +2312,9 @@ mod tests {
             .join("Modern Format Boost");
         fs::create_dir_all(bundle_binary.parent().unwrap())?;
         fs::write(&bundle_binary, "app")?;
+        let resources = native_app_bundle_path(root).join("Contents/Resources");
+        fs::create_dir_all(&resources)?;
+        fs::write(resources.join("native-build-complete.txt"), b"1\n")?;
         assert!(!gui_needs_rebuild(root));
 
         std::thread::sleep(std::time::Duration::from_millis(20));

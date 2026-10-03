@@ -2284,6 +2284,44 @@ impl WorkingCopyMarker {
         Ok(())
     }
 
+    pub fn validate_library_asset_receipts_unique(&self) -> Result<(), String> {
+        let mut primary_paths = BTreeSet::new();
+        for asset in &self.photos_imported_assets {
+            if !primary_paths.insert(asset.rel_path.as_str()) {
+                return Err(format!(
+                    "fast-img marker has duplicate primary Photos receipt path {}",
+                    asset.rel_path
+                ));
+            }
+        }
+
+        let mut tier2_paths = BTreeSet::new();
+        for asset in &self.tier2_imported_assets {
+            if !tier2_paths.insert(asset.rel_path.as_str()) {
+                return Err(format!(
+                    "fast-img marker has duplicate tier-2 Photos receipt path {}",
+                    asset.rel_path
+                ));
+            }
+        }
+
+        let mut photos_uuids = BTreeSet::new();
+        for asset in self
+            .photos_imported_assets
+            .iter()
+            .chain(&self.tier2_imported_assets)
+        {
+            if let Some(uuid) = asset.photos_uuid.as_deref()
+                && !photos_uuids.insert(uuid)
+            {
+                return Err(format!(
+                    "fast-img marker has duplicate Photos UUID receipt {uuid}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate_relative_path_contract(&self) -> Result<(), String> {
         for rel in self
             .blake3_log
@@ -2511,6 +2549,9 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     marker
         .validate_relative_path_contract()
         .map_err(std::io::Error::other)?;
+    marker
+        .validate_library_asset_receipts_unique()
+        .map_err(std::io::Error::other)?;
     if marker.working_copy.exists() {
         marker
             .validate_checkpoint_path_contract(&marker.working_copy)
@@ -2566,6 +2607,9 @@ fn parse_marker_for_working_copy(
     }
     marker
         .validate_checkpoint_path_contract(working_copy)
+        .map_err(std::io::Error::other)?;
+    marker
+        .validate_library_asset_receipts_unique()
         .map_err(std::io::Error::other)?;
     Ok(marker)
 }
@@ -2770,10 +2814,11 @@ pub fn marker_checks_from_result(result: &GateResult) -> String {
 #[cfg(test)]
 mod working_copy_tests {
     use super::{
-        Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, SkippedSourceEntry,
-        WorkingCopyMarker, marker_path_for_working_copy, parse_marker_for_working_copy,
-        prepare_jxl_output_dir, read_marker, resolve_fresh_working_copy_dir,
-        resolve_working_copy_dir, working_copy_dir, write_marker_atomic,
+        Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, LibraryAssetRecord,
+        SkippedSourceEntry, WorkingCopyMarker, marker_path_for_working_copy,
+        parse_marker_for_working_copy, prepare_jxl_output_dir, read_marker,
+        resolve_fresh_working_copy_dir, resolve_working_copy_dir, working_copy_dir,
+        write_marker_atomic,
     };
     use crate::common_utils::EnvGuard;
     use serial_test::serial;
@@ -2833,6 +2878,70 @@ mod working_copy_tests {
         assert!(marker.source_disposition_is_complete());
         assert!(!marker.source_disposition_over_recorded());
         assert!(marker.validate_source_disposition_disjoint().is_ok());
+    }
+
+    #[test]
+    fn library_asset_receipts_reject_duplicates_without_conflating_tier_paths() {
+        let mut marker =
+            WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("src_optimized"), 1);
+        let receipt = |rel_path: &str, uuid: &str| LibraryAssetRecord {
+            rel_path: rel_path.to_string(),
+            photos_uuid: Some(uuid.to_string()),
+            ..LibraryAssetRecord::default()
+        };
+
+        marker.photos_imported_assets = vec![receipt("same.jxl", "primary-1")];
+        marker.tier2_imported_assets = vec![receipt("same.jxl", "tier2-1")];
+        assert!(marker.validate_library_asset_receipts_unique().is_ok());
+
+        marker
+            .photos_imported_assets
+            .push(receipt("same.jxl", "primary-2"));
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets.clear();
+        marker.tier2_imported_assets = vec![
+            receipt("same.jxl", "tier2-1"),
+            receipt("same.jxl", "tier2-2"),
+        ];
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets = vec![receipt("primary.jxl", "shared-uuid")];
+        marker.tier2_imported_assets = vec![receipt("original.jxl", "shared-uuid")];
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+
+        marker.photos_imported_assets = vec![receipt("a.jxl", "shared-uuid")];
+        marker
+            .photos_imported_assets
+            .push(receipt("b.jxl", "shared-uuid"));
+        marker.tier2_imported_assets.clear();
+        assert!(marker.validate_library_asset_receipts_unique().is_err());
+    }
+
+    #[test]
+    fn marker_boundaries_reject_duplicate_library_receipts() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 0);
+        marker.photos_imported_assets = vec![
+            LibraryAssetRecord {
+                rel_path: "a.jxl".to_string(),
+                photos_uuid: Some("duplicate".to_string()),
+                ..LibraryAssetRecord::default()
+            },
+            LibraryAssetRecord {
+                rel_path: "b.jxl".to_string(),
+                photos_uuid: Some("duplicate".to_string()),
+                ..LibraryAssetRecord::default()
+            },
+        ];
+
+        assert!(write_marker_atomic(&marker).is_err());
+        let data = serde_json::to_vec(&marker).unwrap();
+        assert!(parse_marker_for_working_copy(&data, &wc).is_err());
     }
 
     #[test]

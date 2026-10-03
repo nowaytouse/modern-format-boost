@@ -536,7 +536,7 @@ pub use file_copier::{
     CopyResult, FileStats, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
     SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, VerifyDomain,
     VerifyResult, copy_unsupported_files, count_files as count_all_files,
-    verify_output_completeness, verify_output_completeness_for_domain,
+    verify_output_completeness, verify_output_completeness_for_domain, verify_output_count,
 };
 pub use smart_file_copier::{
     check_extension_mismatch_readonly, copy_on_skip_or_fail, fix_extension_if_mismatch,

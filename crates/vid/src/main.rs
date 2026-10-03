@@ -157,6 +157,72 @@ struct FastGifDelivery {
     output: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastGifItemOutcome {
+    Succeeded,
+    Skipped,
+    Ignored,
+    Failed,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct FastGifBatchStats {
+    succeeded: usize,
+    skipped: usize,
+    ignored: usize,
+    failed: usize,
+    unprocessed: usize,
+}
+
+impl FastGifBatchStats {
+    fn reconcile_delivery(&mut self, photos: bool, verified: usize) -> anyhow::Result<()> {
+        if photos {
+            let pending = self.succeeded.checked_sub(verified).ok_or_else(|| {
+                anyhow::anyhow!("fast-gif verified Photos receipts exceed ready output count")
+            })?;
+            self.unprocessed = self
+                .unprocessed
+                .checked_add(pending)
+                .context("fast-gif pending delivery count overflow")?;
+            self.succeeded = verified;
+        }
+        Ok(())
+    }
+}
+
+fn process_fast_gif_batch<E>(
+    files: &[PathBuf],
+    mut process: impl FnMut(&Path) -> anyhow::Result<FastGifItemOutcome, E>,
+) -> (FastGifBatchStats, Option<E>)
+where
+    E: std::fmt::Display,
+{
+    let mut stats = FastGifBatchStats::default();
+    for (index, file) in files.iter().enumerate() {
+        match process(file) {
+            Ok(FastGifItemOutcome::Succeeded) => stats.succeeded += 1,
+            Ok(FastGifItemOutcome::Skipped) => stats.skipped += 1,
+            Ok(FastGifItemOutcome::Ignored) => stats.ignored += 1,
+            Ok(FastGifItemOutcome::Failed) => stats.failed += 1,
+            Err(error) => {
+                println!("[FAIL    ] {} {error}", file.display());
+                stats.failed += 1;
+                stats.unprocessed = files.len().saturating_sub(index + 1);
+                return (stats, Some(error));
+            }
+        }
+    }
+    (stats, None)
+}
+
+fn print_fast_gif_batch_counts(stats: &FastGifBatchStats) {
+    println!("Succeeded: {}", stats.succeeded);
+    println!("Skipped: {}", stats.skipped);
+    println!("Ignored: {}", stats.ignored);
+    println!("Failed: {}", stats.failed);
+    println!("Unprocessed: {}", stats.unprocessed);
+}
+
 fn fast_gif_default_output_dir(input: &Path) -> anyhow::Result<PathBuf> {
     fast_gif_adjacent_dir(input, "gif")
 }
@@ -623,128 +689,153 @@ fn run_fast_gif(
             "Fast GIF"
         },
     );
-    let mut converted = 0usize;
-    let mut skipped = 0usize;
-    let mut failed = 0usize;
     let mut deliveries = Vec::new();
-    for file in files {
+    let (mut stats, batch_error) = process_fast_gif_batch(&files, |file| {
         if effective_strategy == "avif" {
-            let result = vid::animated_image::convert_to_avif_meme(&file, &options)
+            let result = vid::animated_image::convert_to_avif_meme(file, &options)
                 .map_err(|err| anyhow::anyhow!(err))?;
             if let Some(output) = fast_gif_avif_delivery_output_path(&result)? {
                 println!("[READY   ] {} -> {}", file.display(), output.display());
                 deliveries.push(FastGifDelivery {
-                    input: file.clone(),
+                    input: file.to_path_buf(),
                     output,
                 });
-                converted += 1;
+                Ok(FastGifItemOutcome::Succeeded)
+            } else if result.ignored {
+                println!("[IGNORE  ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Ignored)
             } else if !result.success {
-                failed += 1;
                 println!("[FAIL    ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Failed)
             } else {
-                skipped += 1;
                 println!("[SKIP    ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Skipped)
             }
-            continue;
-        }
-
-        if fast_gif_requires_loop_intent(strategy) {
-            let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(&file)?;
-            if !verdict.is_keep_gif() {
-                skipped += 1;
-                println!(
-                    "[SKIP    ] {} loop-intent is not GIF: {}",
-                    file.display(),
-                    verdict.reason()
-                );
-                continue;
-            }
-        }
-
-        let result = vid::animated_image::convert_to_gif_apple_compat(&file, &options)
-            .map_err(|err| anyhow::anyhow!(err))?;
-        if let Some(output) = fast_gif_delivery_output_path(&result)? {
-            println!("[READY   ] {} -> {}", file.display(), output.display());
-            deliveries.push(FastGifDelivery {
-                input: file.clone(),
-                output,
-            });
-            converted += 1;
-        } else if !result.success {
-            failed += 1;
-            println!("[FAIL    ] {} {}", file.display(), result.message);
         } else {
-            skipped += 1;
-            println!("[SKIP    ] {} {}", file.display(), result.message);
+            if fast_gif_requires_loop_intent(strategy) {
+                let verdict = vid::animated_image::assess_loop_intent_for_fast_gif(file)?;
+                if !verdict.is_keep_gif() {
+                    println!(
+                        "[SKIP    ] {} loop-intent is not GIF: {}",
+                        file.display(),
+                        verdict.reason()
+                    );
+                    return Ok(FastGifItemOutcome::Skipped);
+                }
+            }
+
+            let result = vid::animated_image::convert_to_gif_apple_compat(file, &options)
+                .map_err(|err| anyhow::anyhow!(err))?;
+            if let Some(output) = fast_gif_delivery_output_path(&result)? {
+                println!("[READY   ] {} -> {}", file.display(), output.display());
+                deliveries.push(FastGifDelivery {
+                    input: file.to_path_buf(),
+                    output,
+                });
+                Ok(FastGifItemOutcome::Succeeded)
+            } else if result.ignored {
+                println!("[IGNORE  ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Ignored)
+            } else if !result.success {
+                println!("[FAIL    ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Failed)
+            } else {
+                println!("[SKIP    ] {} {}", file.display(), result.message);
+                Ok(FastGifItemOutcome::Skipped)
+            }
         }
-    }
-    foundation::preserve_directory_with_log(&input_root, &output_root).with_context(|| {
-        format!(
-            "fast-gif failed to preserve output directory metadata {} -> {}",
-            input_root.display(),
-            output_root.display()
-        )
-    })?;
-    if shortest_path {
-        let candidates = fast_gif_photos_import_candidates(&deliveries, &output_root)?;
-        if !candidates.is_empty() {
-            let library = foundation::image::fast_img::import_media_outputs_with_library_verifier(
-                &candidates,
-            )
-            .map_err(|err| anyhow::anyhow!(err))?;
-            if library.imported_assets.len() != candidates.len() {
-                anyhow::bail!(
-                    "fast-gif Photos import proof count mismatch: expected {} got {}",
-                    candidates.len(),
-                    library.imported_assets.len()
+    });
+    let encoded = stats.succeeded;
+    let mut photos_verified = 0;
+    let finalization = if let Some(error) = batch_error {
+        Err(error)
+    } else {
+        (|| -> anyhow::Result<()> {
+            foundation::preserve_directory_with_log(&input_root, &output_root).with_context(
+                || {
+                    format!(
+                        "fast-gif failed to preserve output directory metadata {} -> {}",
+                        input_root.display(),
+                        output_root.display()
+                    )
+                },
+            )?;
+            if shortest_path {
+                let candidates = fast_gif_photos_import_candidates(&deliveries, &output_root)?;
+                if !candidates.is_empty() {
+                    let library =
+                        foundation::image::fast_img::import_media_outputs_with_library_verifier(
+                            &candidates,
+                        )
+                        .map_err(|err| anyhow::anyhow!(err))?;
+                    photos_verified = library.imported_assets.len();
+                    if library.imported_assets.len() != candidates.len() {
+                        anyhow::bail!(
+                            "fast-gif Photos import proof count mismatch: expected {} got {}",
+                            candidates.len(),
+                            library.imported_assets.len()
+                        );
+                    }
+                    println!(
+                        "[IMPORT  ] verified {} {} output(s) in Photos library",
+                        library.imported_assets.len(),
+                        delivery_label
+                    );
+                }
+            }
+            let source_dirs = deliveries
+                .iter()
+                .filter_map(|delivery| delivery.input.parent().map(Path::to_path_buf))
+                .collect::<Vec<_>>();
+            for delivery in deliveries {
+                let moved = fast_gif_move_original(&delivery.input, &input_root, &originals_root)?;
+                println!(
+                    "[DONE    ] {} -> {} | original moved to {}",
+                    delivery.input.display(),
+                    delivery.output.display(),
+                    moved.display()
                 );
             }
-            println!(
-                "[IMPORT  ] verified {} {} output(s) in Photos library",
-                library.imported_assets.len(),
-                delivery_label
-            );
-        }
-    }
-    let source_dirs = deliveries
-        .iter()
-        .filter_map(|delivery| delivery.input.parent().map(Path::to_path_buf))
-        .collect::<Vec<_>>();
-    for delivery in deliveries {
-        let moved = fast_gif_move_original(&delivery.input, &input_root, &originals_root)?;
-        println!(
-            "[DONE    ] {} -> {} | original moved to {}",
-            delivery.input.display(),
-            delivery.output.display(),
-            moved.display()
-        );
-    }
-    foundation::preserve_directory_with_log(&input_root, &originals_root).with_context(|| {
-        format!(
-            "fast-gif failed to preserve originals directory metadata {} -> {}",
-            input_root.display(),
-            originals_root.display()
-        )
-    })?;
-    if input.is_dir() {
-        foundation::io_utils::prune_empty_directories_within(&input_root, &source_dirs)
-            .with_context(|| {
-                format!(
-                    "fast-gif refused unsafe empty-directory cleanup under {}",
-                    input_root.display()
-                )
-            })?;
-    }
+            foundation::preserve_directory_with_log(&input_root, &originals_root).with_context(
+                || {
+                    format!(
+                        "fast-gif failed to preserve originals directory metadata {} -> {}",
+                        input_root.display(),
+                        originals_root.display()
+                    )
+                },
+            )?;
+            if input.is_dir() {
+                foundation::io_utils::prune_empty_directories_within(&input_root, &source_dirs)
+                    .with_context(|| {
+                        format!(
+                            "fast-gif refused unsafe empty-directory cleanup under {}",
+                            input_root.display()
+                        )
+                    })?;
+            }
+            Ok(())
+        })()
+    };
+    stats.reconcile_delivery(shortest_path, photos_verified)?;
     println!(
-        "[DONE    ] fast-gif converted {converted} {delivery_label} output(s) into {} ({skipped} skipped, {failed} failed)",
-        output_root.display()
+        "[RESULT  ] encoded={encoded} Photos-verified={photos_verified} finalization-complete={}",
+        finalization.is_ok()
     );
-    println!("Succeeded: {converted}");
-    println!("Skipped: {skipped}");
-    println!("Ignored: 0");
-    println!("Failed: {failed}");
-    if failed > 0 {
-        anyhow::bail!("fast-gif failed to convert {failed} file(s); see [FAIL] lines above");
+    print_fast_gif_batch_counts(&stats);
+    finalization?;
+    println!(
+        "[DONE    ] fast-gif converted {} {delivery_label} output(s) into {} ({} skipped, {} failed)",
+        stats.succeeded,
+        output_root.display(),
+        stats.skipped,
+        stats.failed
+    );
+    if stats.failed > 0 {
+        anyhow::bail!(
+            "fast-gif failed to convert {} file(s); see [FAIL] lines above",
+            stats.failed
+        );
     }
     Ok(())
 }
@@ -1366,12 +1457,13 @@ mod fast_gif_tests {
         clippy::panic
     )]
     use super::{
-        Cli, Commands, FastGifDelivery, command_requires_database,
-        fast_gif_avif_delivery_output_path, fast_gif_avif_output_path_for,
-        fast_gif_candidate_files, fast_gif_convert_options, fast_gif_delivery_output_path,
-        fast_gif_effective_strategy, fast_gif_original_path_for, fast_gif_output_path_for,
-        fast_gif_photos_import_candidates, fast_gif_required_tools, fast_gif_requires_loop_intent,
-        fast_gif_shortest_path_supported, validate_command_strategy,
+        Cli, Commands, FastGifBatchStats, FastGifDelivery, FastGifItemOutcome,
+        command_requires_database, fast_gif_avif_delivery_output_path,
+        fast_gif_avif_output_path_for, fast_gif_candidate_files, fast_gif_convert_options,
+        fast_gif_delivery_output_path, fast_gif_effective_strategy, fast_gif_original_path_for,
+        fast_gif_output_path_for, fast_gif_photos_import_candidates, fast_gif_required_tools,
+        fast_gif_requires_loop_intent, fast_gif_shortest_path_supported, process_fast_gif_batch,
+        validate_command_strategy,
     };
     use clap::Parser;
     use clap::error::ErrorKind;
@@ -1627,6 +1719,75 @@ mod fast_gif_tests {
         };
 
         assert_eq!(fast_gif_delivery_output_path(&result)?, Some(output));
+        Ok(())
+    }
+
+    #[test]
+    fn fast_gif_batch_counts_returned_outcomes_and_hard_error_once() {
+        let files = (0..6)
+            .map(|index| PathBuf::from(format!("candidate-{index}.gif")))
+            .collect::<Vec<_>>();
+        let mut next = 0;
+
+        let (stats, error) = process_fast_gif_batch(&files, |_| {
+            let outcome = match next {
+                0 => Ok(FastGifItemOutcome::Succeeded),
+                1 => Ok(FastGifItemOutcome::Skipped),
+                2 => Ok(FastGifItemOutcome::Ignored),
+                3 => Ok(FastGifItemOutcome::Failed),
+                4 => Err("probe failed"),
+                _ => unreachable!("batch stops after a hard error"),
+            };
+            next += 1;
+            outcome
+        });
+
+        assert_eq!(error, Some("probe failed"));
+        assert_eq!(
+            next, 5,
+            "the item after the hard error must remain untouched"
+        );
+        assert_eq!(
+            stats,
+            FastGifBatchStats {
+                succeeded: 1,
+                skipped: 1,
+                ignored: 1,
+                failed: 2,
+                unprocessed: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn fast_gif_delivery_counts_do_not_confuse_ready_outputs_with_photos_proofs()
+    -> anyhow::Result<()> {
+        let ready = || FastGifBatchStats {
+            succeeded: 3,
+            skipped: 1,
+            ignored: 1,
+            failed: 2,
+            unprocessed: 1,
+        };
+        let mut pending = ready();
+        pending.reconcile_delivery(true, 1)?;
+        assert_eq!((pending.succeeded, pending.unprocessed), (1, 3));
+        assert_eq!(
+            pending.skipped
+                + pending.ignored
+                + pending.failed
+                + pending.succeeded
+                + pending.unprocessed,
+            8
+        );
+
+        let mut local = ready();
+        local.reconcile_delivery(false, 0)?;
+        assert_eq!((local.succeeded, local.unprocessed), (3, 1));
+
+        let mut invalid = ready();
+        assert!(invalid.reconcile_delivery(true, 4).is_err());
+        assert_eq!((invalid.succeeded, invalid.unprocessed), (3, 1));
         Ok(())
     }
 
