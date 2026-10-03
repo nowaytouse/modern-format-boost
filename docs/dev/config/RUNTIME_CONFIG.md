@@ -45,7 +45,10 @@ explicit `=false`, so a saved opt-in can be disabled for one run.
 `config validate` checks the same effective policy. `config path` reports the
 user/project/explicit paths and precedence without loading potentially invalid
 files. `config init PATH` atomically creates default JSON at an explicit path;
-an existing file is never replaced. These commands do not access Photos.
+an existing file is never replaced. Relative targets are resolved to an absolute
+path before temporary-file creation; the parent must exist. Missing parents,
+empty targets and path-resolution failures are reported without selecting a
+fallback destination. These commands do not access Photos.
 
 ## Policy Fields
 

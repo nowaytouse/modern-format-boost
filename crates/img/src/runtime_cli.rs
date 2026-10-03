@@ -85,14 +85,15 @@ impl RuntimeArgs {
                 let mut content =
                     serde_json::to_vec_pretty(&runtime_config::RuntimeConfig::default())?;
                 content.push(b'\n');
-                let parent = path
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or_else(|| std::path::Path::new("."));
+                let target = std::path::absolute(path)
+                    .with_context(|| format!("resolve configuration path {}", path.display()))?;
+                let parent = target.parent().with_context(|| {
+                    format!("configuration path has no parent: {}", target.display())
+                })?;
                 let mut file = tempfile::NamedTempFile::new_in(parent)?;
                 file.write_all(&content)?;
                 file.as_file().sync_all()?;
-                file.persist_noclobber(path).with_context(|| {
+                file.persist_noclobber(&target).with_context(|| {
                     format!(
                         "create configuration {} (will not overwrite)",
                         path.display()
@@ -251,6 +252,19 @@ mod tests {
                 .is_err()
         );
         assert_eq!(std::fs::read(path)?, first);
+        assert!(
+            args.inspect(&ConfigCommand::Init {
+                path: PathBuf::new()
+            })
+            .is_err()
+        );
+        assert!(
+            args.inspect(&ConfigCommand::Init {
+                path: root.path().join("missing").join("preferences.json"),
+            })
+            .is_err()
+        );
+        assert!(!root.path().join("missing").exists());
         for command in ["show", "validate", "path"] {
             assert!(crate::Cli::try_parse_from(["img", "config", command, "--no-config"]).is_ok());
         }

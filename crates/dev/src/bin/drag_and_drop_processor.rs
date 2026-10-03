@@ -3211,12 +3211,12 @@ mod tests {
                     .any(|pair| pair == ["--performance", "tight"])
             );
         }
-        assert!(
+        assert_eq!(
             Args::try_parse_from(["mfb"])
                 .unwrap()
                 .performance
-                .cli_arguments()
-                .is_empty()
+                .cli_arguments(),
+            Vec::<String>::new()
         );
     }
 

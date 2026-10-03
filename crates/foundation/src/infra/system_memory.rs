@@ -238,13 +238,28 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
     for line in out.lines() {
         let line = line.trim();
         if let Some((_, rest)) = line.split_once("page size of ") {
-            page_size = rest
-                .split_whitespace()
-                .next()?
-                .replace(',', "")
-                .parse::<u64>()
-                .ok()
-                .filter(|size| size.is_power_of_two());
+            let value = rest.split_whitespace().next()?.replace(',', "");
+            page_size = match value.parse::<u64>() {
+                Ok(size) if size.is_power_of_two() => Some(size),
+                Ok(size) => {
+                    crate::media_conversion_gate::delivery_runtime_batch_audit(
+                        "delivery_system",
+                        format!(
+                            "SYSTEM AUDIT: Invalid vm_stat page size | Forensic: {size} is not a nonzero power of two"
+                        ),
+                    );
+                    return None;
+                }
+                Err(error) => {
+                    crate::media_conversion_gate::delivery_runtime_batch_audit(
+                        "delivery_system",
+                        format!(
+                            "SYSTEM AUDIT: Failed to parse vm_stat page size | Forensic: Input '{value}', Error '{error}'"
+                        ),
+                    );
+                    return None;
+                }
+            };
         } else if line.starts_with("Pages available:") {
             pages_available = parse_vm_stat_value(line);
         } else if line.starts_with("Pages free:") {
@@ -457,10 +472,12 @@ mod tests {
         assert_eq!(parse_vm_stat_available(&arm), Some(3792));
         assert_eq!(parse_vm_stat_available(&intel), Some(948));
         assert_eq!(parse_vm_stat_available(pages), None);
-        assert_eq!(
-            parse_vm_stat_available(&arm.replace("16384", "invalid")),
-            None
-        );
+        for invalid in ["invalid", "0", "3", "18446744073709551616"] {
+            assert_eq!(
+                parse_vm_stat_available(&arm.replace("16384", invalid)),
+                None
+            );
+        }
     }
 
     #[test]

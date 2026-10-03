@@ -97,7 +97,6 @@ profiling-procmacros = { git = "https://github.com/aclysma/profiling" }
 # Core error_handling>
 # Core error handling
 anyhow = { git = "https://github.com/dtolnay/anyhow" }
-thiserror = { git = "https://github.com/dtolnay/thiserror" }
 
 # Logging and tracing
 tracing = { git = "https://github.com/tokio-rs/tracing" }
@@ -134,7 +133,6 @@ xattr = { git = "https://github.com/Stebalien/xattr" }
 
 # System utilities
 which = { git = "https://github.com/harryfei/which-rs" }
-log = { git = "https://github.com/rust-lang/log" }
 
 # Terminal
 console = { git = "https://github.com/console-rs/console" }

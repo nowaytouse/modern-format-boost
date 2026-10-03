@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### CI failure closure and direct dependency cleanup (2026-10-03)
+
+- Investigate the completed October 1 and October 2 CI runs: both shared health
+  and deep production audit failed the same three contract tests. Resolve config
+  initialization targets explicitly instead of silently selecting the current
+  directory, and record invalid macOS page-size parsing before declining the
+  memory sample. Atomic no-overwrite creation and memory safety limits remain.
+- Aggregate typed original-file failures in Fast IMG reports without a numeric
+  fallback. Unclassified originals remain unprocessed rather than being inferred
+  as successful or failed. Keep the contract checks and zero-offender baselines
+  unchanged; extend result-accounting and invalid-input regressions.
+- Re-run online `cargo update`: no newer compatible versions were available
+  after the preceding refresh. Remove eight unused direct dependency declarations:
+  foundation's thiserror/log, video's serde/rayon, dev's nix, and fuzz's
+  anyhow/tracing/tracing-subscriber. Remove two unused workspace declarations and
+  update the lockfile edges. Used transitive packages, rolling upstream patches
+  and GMP feature wiring remain; this cleanup is not a measured encoding speedup.
+- Validation: all 396 silent-fallback contract tests passed, along with four
+  memory tests, four configuration tests and three result-accounting tests.
+  Strict Clippy passed for foundation/img/vid/dev including all test targets;
+  fuzz binaries checked successfully. Relative config initialization succeeded,
+  and a repeated create failed without changing the existing file hash.
+  Formatting, forced all-tool/GUI build, three-language native self-tests and
+  final bundle signature verification passed. New hosted CI is not yet claimed
+  successful. A user-facing two-round overview is available in README_ZH.md.
+
 ### Partial success, contextual settings and diagnostics (2026-10-03)
 
 - Fix Fast IMG cleanup ordering: verified primary deliveries are cleaned and

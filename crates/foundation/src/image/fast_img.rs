@@ -9011,7 +9011,7 @@ mod tests {
         );
         let tier2_wc = scratch.path().join("tier2-checkpoint");
         std::fs::create_dir(&tier2_wc)?;
-        let mut tier2_marker = WorkingCopyMarker::new(tier2_root.clone(), tier2_wc, 0);
+        let mut tier2_marker = WorkingCopyMarker::new(tier2_root, tier2_wc, 0);
         bind_photos_library_proof(&mut tier2_marker, Some(&library))?;
         bind_photos_import_naming_policy(&mut tier2_marker)?;
         let mut tier2_uuid = None;

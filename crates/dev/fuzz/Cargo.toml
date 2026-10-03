@@ -19,9 +19,6 @@ foundation = { path = "../../foundation", default-features = false, features = [
   "ci-static-build",
   "fuzzing",
 ] }
-anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 # Individual fuzz targets
 [[bin]]

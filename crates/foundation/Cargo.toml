@@ -19,7 +19,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -34,7 +33,6 @@ walkdir = { workspace = true }
 libc = { workspace = true }
 xattr = { workspace = true }
 filetime = { workspace = true }
-log = { workspace = true }
 which = { workspace = true }
 tempfile = { workspace = true }
 image = { workspace = true }

@@ -535,7 +535,10 @@ mod tests {
         assert_eq!(loaded.config.performance.mode, PerformanceMode::Tight);
         assert_eq!(loaded.sources["performance.mode"], "CLI");
         assert_eq!(args.cli_arguments(), ["--performance", "tight"]);
-        assert!(PerformanceArgs::default().cli_arguments().is_empty());
+        assert_eq!(
+            PerformanceArgs::default().cli_arguments(),
+            Vec::<String>::new()
+        );
         assert!(
             serde_json::from_value::<RuntimeConfig>(json!({"performance":{"mode":"unknown"}}))
                 .is_err()

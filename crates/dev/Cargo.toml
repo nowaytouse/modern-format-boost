@@ -21,7 +21,6 @@ vid = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 libc = { workspace = true }
-nix = { features = ["term", "fs"], version = ">= 0.29" }
 notify = ">= 6.0"
 sysinfo = ">= 0.30"
 ctrlc = { workspace = true }

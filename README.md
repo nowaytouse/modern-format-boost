@@ -793,6 +793,9 @@ Priority is defaults < recognized legacy environment < user file < `mfb.json`
 in the process working directory < `--config` file < explicit CLI flags.
 Each file requires `"config_version": 1`; malformed or unsupported settings
 stop startup. `--no-config` skips files, not environment settings or CLI flags.
+`config init` resolves relative paths explicitly and creates files atomically
+without overwriting. Missing parent directories and path-resolution errors are
+reported instead of selecting a fallback destination.
 
 ```sh
 img config show --effective

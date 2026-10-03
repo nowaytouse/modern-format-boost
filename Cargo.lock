@@ -703,7 +703,6 @@ dependencies = [
  "insta",
  "jxl-oxide",
  "libc",
- "nix",
  "notify",
  "postgres",
  "proptest",
@@ -918,7 +917,6 @@ dependencies = [
  "jxl-oxide",
  "libc",
  "libheif-rs",
- "log",
  "pgvector",
  "pkg-config",
  "postgres",
@@ -932,7 +930,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "tempfile",
- "thiserror",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1732,13 +1729,10 @@ dependencies = [
 name = "modern-format-boost-fuzz"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "arbitrary",
  "foundation",
  "image",
  "libfuzzer-sys",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3196,9 +3190,7 @@ dependencies = [
  "clap",
  "foundation",
  "gmp-mpfr-sys",
- "rayon",
  "rug",
- "serde",
  "serde_json",
  "tempfile",
  "tracing",

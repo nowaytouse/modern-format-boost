@@ -64,7 +64,7 @@ impl Report {
         photos: bool,
         originals: &[ModernLossyStaticCandidate],
         probe_failures: usize,
-        original_failures: usize,
+        recorded_failures: Option<&FileFailures>,
     ) -> anyhow::Result<Self> {
         marker
             .validate_source_disposition_disjoint()
@@ -92,7 +92,13 @@ impl Report {
         } else {
             0
         } + marker.tier2_imported_assets.len();
-        let failed = marker.failed_sources.len() + probe_failures + original_failures;
+        // Count only explicit file failures; unresolved originals stay unprocessed.
+        let failed = marker.failed_sources.len()
+            + probe_failures
+            + recorded_failures
+                .into_iter()
+                .map(|failures| failures.originals)
+                .sum::<usize>();
         let skipped = marker.skipped_sources.len();
         let total = marker.src_jpeg_count + tier2.len() + probe_failures;
         let unprocessed = total
@@ -152,13 +158,12 @@ pub(super) fn finish(
     ignored: usize,
     execution: anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    let original_failures = execution
+    let recorded_failures = execution
         .as_ref()
         .err()
-        .and_then(|error| error.downcast_ref::<FileFailures>())
-        .map_or(0, |failures| failures.originals);
+        .and_then(|error| error.downcast_ref::<FileFailures>());
     let mut report =
-        Report::from_marker(marker, photos, originals, probe_failures, original_failures).map_err(
+        Report::from_marker(marker, photos, originals, probe_failures, recorded_failures).map_err(
             |error| match execution.as_ref() {
                 Ok(()) => error,
                 Err(execution) => error.context(format!("execution also failed: {execution:#}")),
@@ -238,7 +243,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         for successes in [100, 1163] {
             let marker = partial_marker(root.path(), successes);
-            let report = Report::from_marker(&marker, true, &[], 0, 0)?;
+            let report = Report::from_marker(&marker, true, &[], 0, None)?;
             assert_eq!(
                 (
                     report.succeeded,
@@ -273,7 +278,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let mut marker = partial_marker(root.path(), 3);
         marker.stage = FastImgStageName::Gate1Passed;
-        let report = Report::from_marker(&marker, true, &[], 0, 0)?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
         assert_eq!(
             (
                 report.succeeded,
@@ -283,10 +288,39 @@ mod tests {
             ),
             (0, 3, 1, 3)
         );
-        let local = Report::from_marker(&marker, false, &[], 0, 0)?;
+        let local = Report::from_marker(&marker, false, &[], 0, None)?;
         assert_eq!((local.succeeded, local.unprocessed), (3, 0));
         marker.skipped_sources = marker.failed_sources.clone();
-        assert!(Report::from_marker(&marker, true, &[], 0, 0).is_err());
+        assert!(Report::from_marker(&marker, true, &[], 0, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn unclassified_originals_are_not_forged_into_file_failures() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 3);
+        let originals = [ModernLossyStaticCandidate {
+            path: marker.src_dir.join("original.jxl"),
+            rel_path: "original.jxl".into(),
+            format: foundation::image::format_detect::FormatKind::Jxl,
+            blake3: "original-hash".into(),
+        }];
+        let pending = Report::from_marker(&marker, true, &originals, 0, None)?;
+        assert_eq!(
+            (pending.succeeded, pending.failed, pending.unprocessed),
+            (3, 1, 1)
+        );
+        let failed = Report::from_marker(
+            &marker,
+            true,
+            &originals,
+            0,
+            Some(&FileFailures::originals(1)),
+        )?;
+        assert_eq!(
+            (failed.succeeded, failed.failed, failed.unprocessed),
+            (3, 2, 0)
+        );
         Ok(())
     }
 }
