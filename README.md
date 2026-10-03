@@ -376,19 +376,23 @@ the system by default with explicit light/dark choices. Linux and Windows
 retain the CLI for now; future GUI ports should use their own native platform
 adapter.
 
-The gear button opens separate **Images**, **Fast IMG**, **Videos** and **Photos**
-settings tabs. Standard and Fast IMG independently configure JPEG transcoding
-effort, fallback, database access and quality inference. Photos exposes backend,
-native/AppleScript/verification batch sizes, adaptive bounds, folder and album
-names. Developer mode additionally exposes configuration-file overrides and
-standard image/video failure handling. Inherited image/Photos values are read
+The gear button remains available in every idle workflow. Its **Photos** tab
+always exposes import preferences, including the backend, import and verification
+batch sizes, adaptive bounds, folder and album names. Image controls
+are contextual: standard IMG and Fast IMG independently configure JPEG
+transcoding effort, fallback, database access and quality inference. Developer
+mode additionally exposes configuration-file overrides and standard image/video
+failure handling. Inherited image/Photos values are read
 from the actual backend, and Apply validates both image profiles before saving.
 Resetting a tab affects only that tab; JSON files are never rewritten. Existing
 shared image preferences migrate once to the separate Fast IMG profile.
 Video AV1 explicitly disables Apple compatibility;
 unsupported video quality/preset controls are not advertised.
 Video settings apply to standard processing, not Fast Video's fixed GIF path;
-the settings button is unavailable in operations without configurable encoding.
+the HEVC/AV1 choice is on the main screen, not an empty video settings tab.
+Photos preferences currently configure Fast IMG delivery; showing the tab in
+other workflows allows editing the saved preferences, not extending their CLI
+contracts. Unsupported options are never forwarded to a processor.
 Image file-error policy is also standard-mode-only. FastImg keeps its established
 checkpointed failure handling; its encoding settings remain configurable.
 
@@ -407,6 +411,10 @@ routine log bursts cannot displace them. If that reserve is also exhausted, the
 GUI marks completion as unconfirmed rather than reporting a misleading success.
 Settings sheets fit the current tab's visible controls; path and mode fields use
 the main window's available width without oversized empty form margins.
+Preview and Photos import options stay together at the left of the main form;
+empty option columns collapse when switching workflows. Numeric arrows follow
+manual edits, and invalid numbers remain visible for correction rather than
+being silently replaced with a stale value.
 **Pause / Continue / Stop** cooperate with the Rust backend at safe boundaries:
 active file work finishes and verified progress is saved first. FastImg encoding
 uses bounded waves. Native Photos uses configurable verification windows;

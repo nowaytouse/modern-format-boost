@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Persistent Photos settings and compact option rows (2026-10-04)
+
+- Keep Settings accessible in every idle native workflow and always include the
+  Photos import tab. Preserve backend, batching, adaptive scheduling and naming
+  preferences without changing which processors accept their CLI arguments.
+- Collapse empty option columns. In the normal interface, align preview and
+  Photos import options together at the left; retain organized columns in
+  Developer mode. Check all mode transitions for clipping and overlap.
+- Synchronize numeric steppers after manual edits. Keep invalid values visible
+  and disable their arrows until corrected instead of replacing them with a
+  stale number. Remove stale invalid menu entries before restoring preferences.
+- Extend native self-tests for Photos settings in standard, Fast IMG and
+  video-only contexts, numeric editing, invalid-menu recovery, and option layout
+  across every normal and Developer operation. No live Photos transaction is
+  required by these UI checks.
+- Validation: English, Simplified Chinese and Japanese native self-tests,
+  formatting, GUI assembly and strict bundle signature checks passed. Actual
+  AppKit windows confirmed Photos tab availability, advanced batch layout,
+  compact AVIF options, and manual numeric edit/arrow behavior. No production
+  library was opened or modified by the acceptance checks.
+
 ### Compact native settings, reliable logs and CI contracts (2026-10-04)
 
 - Align the native window's path and mode controls with the available width.

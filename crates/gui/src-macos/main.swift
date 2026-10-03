@@ -588,7 +588,7 @@ private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntim
 }
 
 @MainActor
-private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextFieldDelegate {
     private let panel: NSPanel
     private let preferences: UserDefaults
     private let applied: () -> Void
@@ -646,7 +646,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
                     if field == .vidErrorMode { return developer && section == "developer" && !fast }
                     return developer && section == "developer" && !videos && (fast ? field.isFastImage : field.isImage)
                 }
-                if field.isPhotos { return section == "photos" && fast }
+                if field.isPhotos { return section == "photos" }
                 return section == "img" && !videos && (fast ? field.isFastImage : field.isImage)
             }
             if fields.isEmpty { continue }
@@ -674,6 +674,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
                     control = popup
                 } else {
                     let text = NSTextField()
+                    text.delegate = self
                     text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                     textFields[field] = text
@@ -719,7 +720,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         advanced.title = localized("settings.advanced")
         advanced.target = self
         advanced.action = #selector(updateVisibility)
-        advanced.isHidden = developer || !fast
+        advanced.isHidden = true
         root.addArrangedSubview(advanced)
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
@@ -741,7 +742,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         restore(MediaSettings(preferences: preferences))
     }
 
-    func show(for window: NSWindow, videos: Bool, fast: Bool = false) {
+    func show(for window: NSWindow) {
         if tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
         window.beginSheet(panel)
         loadInheritedValues()
@@ -799,7 +800,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         }
         for (field, text) in textFields {
             text.stringValue = displayed[field] ?? ""
-            steppers[field]?.integerValue = Int(displayed[field] ?? "") ?? field.range?.lowerBound ?? 0
+            updateStepper(for: field)
         }
         for (field, toggle) in toggles {
             let value = displayed[field]
@@ -809,6 +810,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
             if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
         }
         for (field, popup) in popups {
+            for index in popup.itemArray.indices.reversed()
+                where !field.choices.contains(popup.item(at: index)?.representedObject as? String ?? "") {
+                popup.removeItem(at: index)
+            }
             popup.selectItem(at: -1)
             if let value = displayed[field] {
                 if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) {
@@ -871,6 +876,25 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         }
     }
 
+    func controlTextDidChange(_ notification: Notification) {
+        guard let text = notification.object as? NSTextField,
+              let field = textFields.first(where: { $0.value === text })?.key else { return }
+        updateStepper(for: field)
+    }
+
+    private func updateStepper(for field: MediaSetting) {
+        guard let stepper = steppers[field], let text = textFields[field], let range = field.range else { return }
+        if text.stringValue.isEmpty {
+            stepper.integerValue = range.lowerBound
+            stepper.isEnabled = true
+        } else if let value = Int(text.stringValue), range.contains(value) {
+            stepper.integerValue = value
+            stepper.isEnabled = true
+        } else {
+            stepper.isEnabled = false
+        }
+    }
+
     @objc private func resetTab() {
         var settings = draft()
         let section = tabs.selectedTabViewItem?.identifier as? String
@@ -913,6 +937,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
     }
 
     func validateForSelfTest() throws {
+        try validatePhotosForSelfTest()
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
         let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
@@ -923,6 +948,22 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         guard draft().values == settings.values, textFields[effort]?.stringValue == "9" else {
             throw HostError(message: "Settings controls did not restore explicit overrides")
         }
+        textFields[effort]?.stringValue = "10"
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textFields[effort]))
+        guard steppers[effort]?.integerValue == 10, steppers[effort]?.isEnabled == true else {
+            throw HostError(message: "Numeric editing left a stale stepper value")
+        }
+        steppers[effort]?.integerValue = 9
+        if let stepper = steppers[effort] { stepNumber(stepper) }
+        guard textFields[effort]?.stringValue == "9" else {
+            throw HostError(message: "Stepper did not continue from the edited number")
+        }
+        textFields[effort]?.stringValue = "12"
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textFields[effort]))
+        guard steppers[effort]?.isEnabled == false, draft().values[effort] == "12" else {
+            throw HostError(message: "Invalid numeric edit was silently replaced")
+        }
+        restore(settings)
         try draft().save(to: preferences)
         guard MediaSettings(preferences: preferences).values == settings.values else {
             throw HostError(message: "Media settings did not persist independently")
@@ -961,12 +1002,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         var invalid = MediaSettings()
         invalid.values = [database: "invalid"]
         restore(invalid)
+        restore(invalid)
         guard draft().values[database] == "invalid" else {
             throw HostError(message: "Invalid saved checkbox was silently converted to a valid value")
+        }
+        guard popups[database]?.numberOfItems == database.choices.count + 1 else {
+            throw HostError(message: "Reloading invalid settings duplicated menu entries")
         }
         var independent = MediaSettings()
         independent.values = [.imgJpegEffort: "11", .fastJpegEffort: "8", .photosNativeBatch: "250", .photosAlbum: "Selected"]
         restore(independent)
+        guard popups[database]?.numberOfItems == database.choices.count else {
+            throw HostError(message: "Recovered settings kept stale invalid menu entries")
+        }
         tabs.selectTabViewItem(withIdentifier: "img")
         resetTab()
         independent.values.removeValue(forKey: effort)
@@ -982,6 +1030,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate {
         try MediaSettings().save(to: preferences)
         guard MediaSettings(preferences: preferences).values.isEmpty else {
             throw HostError(message: "Reset settings still override inherited configuration")
+        }
+    }
+
+    func validatePhotosForSelfTest() throws {
+        guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "photos" }),
+              MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
+            throw HostError(message: "Photos import settings disappeared outside Fast IMG")
         }
     }
 }
@@ -2205,6 +2260,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let backupRow = NSStackView()
     private let photosScopeButton = NSButton(title: "", target: nil, action: nil)
     private let photosScopeRow = NSStackView()
+    private let options = NSStackView()
+    private var optionColumns: [NSStackView] = []
+    private let optionsSpacer = NSView()
     private let openButton = NSButton(title: "", target: nil, action: nil)
     private let copyButton = NSButton(title: "", target: nil, action: nil)
     private let runButton = NSButton(title: "", target: nil, action: nil)
@@ -2484,7 +2542,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         resumeCheck.setButtonType(.radio)
         freshCheck.setButtonType(.radio)
-        let columns = [
+        optionColumns = [
             [ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
             [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
             [verboseCheck, archiveCheck, retryCheck, watchCheck],
@@ -2493,11 +2551,14 @@ private final class AppController: NSObject, NSWindowDelegate {
             column.orientation = .vertical
             column.alignment = .leading
             column.spacing = 5
+            column.setContentHuggingPriority(.defaultHigh, for: .horizontal)
             return column
         }
-        let options = NSStackView(views: columns)
+        for column in optionColumns { options.addArrangedSubview(column) }
+        optionsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        options.addArrangedSubview(optionsSpacer)
         options.orientation = .horizontal
-        options.distribution = .fillEqually
+        options.distribution = .fill
         options.alignment = .top
         options.spacing = 12
 
@@ -2895,9 +2956,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func applyCapabilityState() {
         let capabilities = selectedOperation.capabilities
-        let hasMediaSettings = [.adjacent, .fastImgJxl, .fastImgAvif].contains(selectedOperation)
-        settingsButton.isEnabled = configurationControlsEnabled && hasMediaSettings
-        settingsButton.toolTip = localized(hasMediaSettings ? "settings.title" : "settings.unavailable")
+        settingsButton.isEnabled = configurationControlsEnabled
+        settingsButton.toolTip = localized("settings.title")
         if let fixed = capabilities.fixedProcessingMode {
             processingPopup.selectItem(
                 at: ProcessingMode.allCases.firstIndex { $0.rawValue == fixed.rawValue } ?? 0,
@@ -2965,6 +3025,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         if !capabilities.supportsStandardOptions {
             for control in [forceCheck, plainCheck, inPlaceCheck] { control.state = .off }
         }
+        for column in optionColumns {
+            column.isHidden = column.arrangedSubviews.allSatisfy(\.isHidden)
+        }
+        optionsSpacer.isHidden = developerMode
+        options.distribution = developerMode ? .fillEqually : .fill
     }
 
     private func updateMetadataSafetyNotice() {
@@ -3149,15 +3214,14 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func showSettings() {
-        guard configurationControlsEnabled,
-              [.adjacent, .fastImgJxl, .fastImgAvif].contains(selectedOperation) else { return }
+        guard configurationControlsEnabled else { return }
         settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
-            fast: selectedOperation.backendMode == "fast-img", videos: processingPopup.indexOfSelectedItem == 2) { [weak self] in
+            fast: selectedOperation.backendMode == "fast-img",
+            videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
+                : selectedOperation.backendMode != "fast-img") { [weak self] in
             self?.configurationChanged()
         }
-        settingsPanel?.show(for: window, videos: selectedOperation == .fastVid
-            || (selectedOperation == .adjacent && processingPopup.indexOfSelectedItem == 2),
-            fast: selectedOperation.backendMode == "fast-img")
+        settingsPanel?.show(for: window)
     }
 
     @objc private func videoCodecChanged() {
@@ -3434,8 +3498,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         for controls in [[ultimateCheck, freshCheck, resumeCheck, dryRunCheck],
                          [shortestPathCheck, forceCheck, plainCheck, inPlaceCheck],
                          [verboseCheck, archiveCheck, retryCheck]] {
-            let x = controls[0].convert(controls[0].bounds, to: content).minX
-            guard controls.allSatisfy({ abs($0.convert($0.bounds, to: content).minX - x) < 1 }) else {
+            let visible = controls.filter { !$0.isHidden }
+            guard let first = visible.first else { continue }
+            let x = first.convert(first.bounds, to: content).minX
+            guard visible.allSatisfy({ abs($0.convert($0.bounds, to: content).minX - x) < 1 }) else {
                 throw HostError(message: "Option column alignment drifted")
             }
         }
@@ -3576,6 +3642,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard reopened.shortestPathCheck.state == .off, reopened.watchCheck.state == .on else {
             throw HostError(message: "Fast-img options did not persist")
         }
+        for developer in [false, true] {
+            developerCheck.state = developer ? .on : .off
+            developerModeChanged()
+            for item in operationPopup.itemArray {
+                operationPopup.select(item)
+                operationChanged()
+                try validateOptionLayoutForSelfTest()
+                guard settingsButton.isEnabled else {
+                    throw HostError(message: "Settings unavailable in \(selectedOperation)")
+                }
+            }
+        }
         setProcessing(true)
         defer { setProcessing(false) }
         processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
@@ -3593,6 +3671,33 @@ private final class AppController: NSObject, NSWindowDelegate {
               !languagePopup.isEnabled, !appearancePopup.isEnabled,
               optionControls.allSatisfy({ !$0.0.isEnabled })
         else { throw HostError(message: "Background status or running controls lost their state") }
+    }
+
+    private func validateOptionLayoutForSelfTest() throws {
+        guard let content = window.contentView else { throw HostError(message: "Missing content view") }
+        content.layoutSubtreeIfNeeded()
+        let buttons = ([ultimateCheck] + optionControls.map { $0.0 }).filter { !$0.isHidden }
+        let operation = operationPopup.convert(operationPopup.bounds, to: content)
+        let log = logScroll.convert(logScroll.bounds, to: content)
+        for (index, button) in buttons.enumerated() {
+            let rect = button.convert(button.bounds, to: content)
+            guard content.bounds.contains(rect),
+                  button.bounds.width + 1 >= button.intrinsicContentSize.width,
+                  !rect.intersects(operation), !rect.intersects(log),
+                  buttons.dropFirst(index + 1).allSatisfy({
+                      !rect.intersects($0.convert($0.bounds, to: content))
+                  }) else {
+                throw HostError(message: "Option clipped or overlapped in \(selectedOperation): \(button.title)")
+            }
+        }
+        if !developerMode, !shortestPathCheck.isHidden {
+            let preview = dryRunCheck.convert(dryRunCheck.bounds, to: content)
+            let photos = shortestPathCheck.convert(shortestPathCheck.bounds, to: content)
+            let gap = photos.minX - preview.maxX
+            guard abs(preview.minY - photos.minY) < 1, (8...24).contains(gap) else {
+                throw HostError(message: "Compact preview/Photos options drifted in \(selectedOperation)")
+            }
+        }
     }
 
     private func present(_ error: Error) {
@@ -4046,6 +4151,8 @@ private func runSelfTest() -> Int32 {
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, fast: true, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, videos: true, applied: {}).validatePhotosForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, developer: true, videos: true, applied: {}).validatePhotosForSelfTest()
         }
         print("native-host self-test passed")
         return 0
