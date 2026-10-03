@@ -35,10 +35,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install just
-        uses: extractions/setup-just@v4
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: "1.39.0"
 
@@ -97,10 +97,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
 
       - name: Test dispatch2
         working-directory: crates/dev/dispatch2
@@ -116,7 +118,7 @@ jobs:
       SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install build dependencies
         run: |
@@ -136,7 +138,9 @@ jobs:
         run: cargo run --locked -p dev --bin build_libdispatch
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
 
       - name: Test dispatch2 (no objc2; Linux libdispatch)
         working-directory: crates/dev/dispatch2
@@ -172,7 +176,7 @@ jobs:
       SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -352,13 +356,13 @@ jobs:
           jpegtran -version 2>&1 | grep -F "libjpeg-turbo version ${LIBJPEG_TURBO_VERSION}"
 
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: nightly-2026-08-09
           components: rustfmt, clippy
 
       - name: Cache Cargo dependencies
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -427,12 +431,12 @@ jobs:
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: nightly-2026-08-09
           components: rustfmt, clippy, miri, rust-src, llvm-tools
@@ -444,7 +448,7 @@ jobs:
       # Cache sources only: a cross-lock target restore grew beyond 11 GB
       # compressed and exhausted disk during the instrumented libheif build.
       - name: Cache Cargo dependencies
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -455,7 +459,7 @@ jobs:
             ${{ runner.os }}-cargo-health-sources-v1-
 
       - name: Install just
-        uses: extractions/setup-just@v4
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: "1.39.0"
 
@@ -554,7 +558,7 @@ jobs:
 
       - name: Upload check diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: check-all-${{ matrix.group }}-logs
           path: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
@@ -569,7 +573,7 @@ jobs:
       - name: Upload LCOV artifact
         if: always() && matrix.group == 'coverage'
         continue-on-error: true
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-lcov-shared-utils
           path: lcov.info
@@ -601,10 +605,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: stable
 
@@ -647,12 +651,12 @@ jobs:
       SYSTEM_DEPS_LIBHEIF_LINK: static
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Install Nightly Rust
-        uses: dtolnay/rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: nightly-2026-08-09
           components: clippy, rustfmt, miri, rust-src, llvm-tools

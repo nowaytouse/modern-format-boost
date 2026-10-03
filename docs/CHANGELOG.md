@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### JPEG XL API migration and platform CI repair (2026-10-03)
+
+- Preserve the incoming Cargo and workflow changes. Refresh dependency indexes;
+  the lockfile now uses jpegxl-rs 0.16.0 with its matching source/sys revision and
+  Tokio 1.53.2. No downgrade is used to bypass the breaking encoder API change.
+- Migrate gain-map and depth-workflow main-image encoding to the single input
+  pixel type and byte-vector return API. Keep naked gain-map codestreams,
+  lossless RGB pixels, ISO semantics and container-prefix custody unchanged.
+- Fix the depth-workflow main-image helper's RGBA16 channel declaration and
+  distance units; forward the requested HDR intensity target. Add a synthetic
+  roundtrip regression covering exact lossless pixels, alpha, dimensions and
+  intensity, plus successful lossy-distance encoding. Reject invalid distances
+  before writing output and verify an existing delivery stays unchanged. This
+  helper does not embed depth data and is not the ordinary JPEG reconstruction pipeline.
+- Completed CI run 37108183353 passed shared checks and the deep audit but failed
+  IMG/VID package Clippy on Linux: the native Photos checkpoint argument was
+  only consumed on macOS. Compile that private argument and call-site value
+  only on macOS instead of suppressing the lint or reducing CI strictness.
+- Retain audited SHA-pinned action upgrades. Explicitly select stable in both
+  dispatch2 jobs after replacing the toolchain action's stable branch with a
+  SHA, and update the workflow contract to guard the pins and required inputs.
+- Validation: all 396 silent-fallback contracts, four gain-map regressions
+  (including independent libjxl jhgm readback), and the new RGBA16 regression
+  passed locally. Strict all-target Clippy passed for foundation/img/vid/dev;
+  Rust formatting and actionlint passed. Linux CI for this new revision remains
+  pending; the completed preceding run is not evidence that this revision is green.
+
 ### CI failure closure and direct dependency cleanup (2026-10-03)
 
 - Investigate the completed October 1 and October 2 CI runs: both shared health

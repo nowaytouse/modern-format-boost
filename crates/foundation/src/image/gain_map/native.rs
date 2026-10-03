@@ -15,14 +15,14 @@ pub(super) fn encode(source: &Source) -> Result<Vec<u8>> {
         .color_encoding(jpegxl_rs::encode::ColorEncoding::LinearSrgb)
         .build()?;
     let pixels = encoder
-        .encode::<u8, u8>(
+        .encode::<u8>(
             source.pixels.as_raw(),
             source.pixels.width(),
             source.pixels.height(),
         )
         .context("lossless native gain-map encoding failed")?;
     ensure!(
-        pixels.data.starts_with(&[0xFF, 0x0A]),
+        pixels.starts_with(&[0xFF, 0x0A]),
         "gain map is not a naked JXL codestream"
     );
     // No alternate profile means inherit the baseline profile. Only sources
@@ -30,7 +30,7 @@ pub(super) fn encode(source: &Source) -> Result<Vec<u8>> {
     let size = source
         .iso
         .len()
-        .checked_add(pixels.data.len())
+        .checked_add(pixels.len())
         .and_then(|size| size.checked_add(8))
         .context("gain-map size overflow")?;
     ensure!(
@@ -42,7 +42,7 @@ pub(super) fn encode(source: &Source) -> Result<Vec<u8>> {
     output.extend_from_slice(&u16::try_from(source.iso.len())?.to_be_bytes());
     output.extend_from_slice(&source.iso);
     output.extend_from_slice(&[0; 5]); // color encoding size + compressed ICC size
-    output.extend_from_slice(&pixels.data);
+    output.extend_from_slice(&pixels);
     Ok(output)
 }
 

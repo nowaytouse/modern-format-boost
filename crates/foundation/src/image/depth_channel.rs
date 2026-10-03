@@ -1,7 +1,7 @@
-//! # Depth Channel Extraction and JXL Extra Channel Embedding
+//! # Depth Channel Extraction and Main Image Encoding
 //!
-//! Extracts depth maps from HEIC/HEIF auxiliary images and embeds them
-//! into JXL files as extra channels using jpegxl-rs FFI.
+//! Extracts depth maps from HEIC/HEIF auxiliary images and provides main-image
+//! JXL encoding helpers. Native extra-channel depth embedding is not implemented.
 //!
 //! ## Supported Depth Formats
 //! - **Apple Depth Data**: `depth` auxiliary type from Apple HEIC
@@ -11,16 +11,16 @@
 //! ## Architecture
 //! 1. Extract depth map from HEIC using libheif-rs
 //! 2. Normalize depth to 16-bit grayscale
-//! 3. Encode main image to JXL with extra channel via jpegxl-rs
+//! 3. Encode the main image to JXL; depth data requires separate sidecar delivery
 //!
 //! ## Limitations
 //! The `cjxl` CLI does not support `--extra-channel` parameters.
-//! This module uses `jpegxl-rs` crate for direct libjxl FFI encoding.
+//! The jpegxl-rs helper only encodes the main image, including its alpha channel.
 
 use crate::builder_base::ToolBuilder;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
-use jpegxl_rs::encode::EncoderSpeed;
+use jpegxl_rs::encode::{EncoderFrame, EncoderSpeed};
 use jpegxl_rs::encoder_builder;
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle};
 use quick_xml::events::Event;
@@ -283,16 +283,15 @@ fn parse_depth_metadata_from_xmp(xmp_data: &[u8]) -> Result<(Option<f32>, Option
     Ok((near, far))
 }
 
-/// Encode image to `JXL` with depth extra channel using `jpegxl-rs`.
+/// Encode the main image to `JXL` for a depth-aware workflow.
 ///
-/// Note: Current `jpegxl-rs` API has limited extra channel support.
-/// This function encodes the main image. Depth map is saved separately
-/// as sidecar file since `jpegxl-rs` doesn't expose
-/// `JxlEncoderSetExtraChannelBuffer`.
+/// This function does not embed or save the depth map. Callers must preserve it
+/// separately; use [`encode_jxl_depth_fallback`] for sidecar delivery.
 ///
 /// # Errors
 ///
 /// Returns an error if:
+/// - The effective distance is not finite or outside 0..=15.
 /// - The `JXL` encoder fails to initialize.
 /// - The image encoding process fails.
 /// - The output file cannot be written.
@@ -303,9 +302,13 @@ pub fn encode_jxl_with_depth(
     distance: f32,
     _effort: u8,
     ultimate: bool,
-    _intensity_target: Option<f32>,
+    intensity_target: Option<f32>,
 ) -> Result<()> {
     let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
+    ensure!(
+        (0.0..=15.0).contains(&actual_dist),
+        "JXL distance must be finite and in 0..=15, got {actual_dist}"
+    );
     let actual_eff = crate::constants::jxl_effort_for_mode(ultimate);
 
     // Convert main image to RGBA16 for encoding
@@ -314,15 +317,17 @@ pub fn encode_jxl_with_depth(
 
     // Create encoder builder
     let mut encoder = encoder_builder()
+        .has_alpha(true)
+        .uses_original_profile(true)
         .build()
         .map_err(|e| anyhow!("Failed to create JXL encoder: {e:?}"))?;
 
     // Set lossless mode based on distance
     encoder.lossless = Some(actual_dist <= 0.001);
 
-    // Set quality (0-100 scale, convert from distance)
-    // distance 0 = quality 100, distance 1 = quality ~70
-    encoder.quality = actual_dist.mul_add(-30.0, 100.0).clamp(0.0, 100.0);
+    // jpegxl-rs calls this quality, but the value is a Butteraugli distance.
+    encoder.quality = actual_dist;
+    encoder.target_intensity = intensity_target;
 
     // Set encoding speed
     let speed = match actual_eff {
@@ -332,14 +337,13 @@ pub fn encode_jxl_with_depth(
     };
     encoder.speed = speed;
 
-    // Encode main image using encoder.encode() method
-    // Specify u16 for both input (RGBA) and output (encoded data)
-    let encode_result: jpegxl_rs::encode::EncoderResult<u16> = encoder
-        .encode(&rgba_image, width, height)
+    let frame = EncoderFrame::new(rgba_image.as_raw()).num_channels(4);
+    let codestream = encoder
+        .encode_frame(&frame, width, height)
         .map_err(|e| anyhow!("Failed to encode JXL: {e:?}"))?;
 
     // Write output
-    std::fs::write(output, encode_result.data).context("Failed to write JXL output")?;
+    std::fs::write(output, codestream).context("Failed to write JXL output")?;
 
     // Note: Extra channel embedding requires direct libjxl FFI (jpegxl-sys)
     // Current jpegxl-rs high-level API doesn't expose
@@ -433,6 +437,47 @@ pub fn encode_jxl_depth_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_encoding_preserves_rgba16_pixels_and_intensity() -> Result<()> {
+        let pixels = ImageBuffer::from_fn(8, 8, |x, y| {
+            let x = u16::try_from(x).expect("small fixture coordinate");
+            let y = u16::try_from(y).expect("small fixture coordinate");
+            image::Rgba([x * 8191, y * 8191, (x + y) * 4093, 32768 + x * 4093])
+        });
+        let source = DynamicImage::ImageRgba16(pixels.clone());
+        let depth = DepthMap {
+            image: DynamicImage::new_luma16(8, 8),
+            width: 8,
+            height: 8,
+            depth_type: DepthType::Apple,
+            near_distance: None,
+            far_distance: None,
+        };
+        let folder = tempfile::tempdir()?;
+        let path = folder.path().join("main.jxl");
+        let decoder = jpegxl_rs::decoder_builder().build()?;
+        for distance in [0.0, 1.0] {
+            encode_jxl_with_depth(&source, &depth, &path, distance, 7, false, Some(1000.0))?;
+            let (metadata, restored) = decoder.decode_with::<u16>(&std::fs::read(&path)?)?;
+            assert_eq!((metadata.width, metadata.height), (8, 8));
+            assert!(metadata.has_alpha_channel);
+            assert_eq!(metadata.intensity_target, 1000.0);
+            assert_eq!(restored.len(), pixels.as_raw().len());
+            if distance == 0.0 {
+                assert_eq!(restored, *pixels.as_raw());
+            }
+        }
+        let delivered = std::fs::read(&path)?;
+        for distance in [-1.0, 16.0, f32::NAN, f32::INFINITY] {
+            let error =
+                encode_jxl_with_depth(&source, &depth, &path, distance, 7, false, Some(1000.0))
+                    .expect_err("invalid distance must fail before writing output");
+            assert!(error.to_string().contains("JXL distance"));
+            assert_eq!(std::fs::read(&path)?, delivered);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_depth_type_display() {

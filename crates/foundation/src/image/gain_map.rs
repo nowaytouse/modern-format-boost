@@ -601,7 +601,7 @@ mod tests {
             .uses_original_profile(true)
             .color_encoding(jpegxl_rs::encode::ColorEncoding::Srgb)
             .build()?;
-        let original = encoder.encode::<u8, u8>(source.pixels.as_raw(), 8, 8)?.data;
+        let original = encoder.encode::<u8>(source.pixels.as_raw(), 8, 8)?;
         std::fs::write(&path, &original)?;
         assert!(crate::metadata::read_gain_map_from_jxl(&path).is_err());
         crate::metadata::append_gain_map_to_jxl(&path, &bundle)?;

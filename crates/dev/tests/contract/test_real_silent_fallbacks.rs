@@ -18230,10 +18230,26 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         "rust-toolchain.toml must pin a dated nightly channel"
     );
     assert!(
-        workflow.contains("dtolnay/rust-toolchain@v1"),
-        "ci-quality workflow must install Rust via dtolnay/rust-toolchain (reads pinned toolchain \
-         file)"
+        workflow.contains("dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067"),
+        "ci-quality workflow must use the audited rust-toolchain commit"
     );
+    for job in ["dispatch2-macos", "dispatch2-linux"] {
+        let setup = workflow
+            .split_once(&format!("\n  {job}:"))
+            .expect("dispatch2 job must exist")
+            .1
+            .split_once("- name: Test dispatch2")
+            .expect("dispatch2 test step must exist")
+            .0;
+        assert!(
+            setup.contains(concat!(
+                "uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1\n",
+                "        with:\n",
+                "          toolchain: stable\n"
+            )),
+            "{job} needs an explicit stable toolchain when pinning the action by SHA"
+        );
+    }
     let check_all = fs::read_to_string(root.join("crates/dev/src/bin/check_all.rs"))
         .expect("check_all.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
@@ -18312,8 +18328,8 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         "just_fix_gate.rs must delegate to just check"
     );
     assert!(
-        workflow.contains("extractions/setup-just@v4"),
-        "ci-quality must use setup-just@v4 (composite; avoids deprecated Node 20 runtime)"
+        workflow.contains("extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3"),
+        "ci-quality must pin the audited setup-just v4 composite action"
     );
     assert!(
         !workflow.contains("extractions/setup-just@v2"),

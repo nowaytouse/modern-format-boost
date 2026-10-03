@@ -1971,7 +1971,7 @@ pub fn import_modern_lossy_static_tier_in_library(
         import_modern_lossy_static_tier_checkpointed(&mut marker, candidates)
     }
     #[cfg(not(target_os = "macos"))]
-    import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library, None)
+    import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library)
 }
 
 /// Import originals using the same durable native receipts as converted outputs.
@@ -1985,6 +1985,7 @@ pub fn import_modern_lossy_static_tier_checkpointed(
         &source,
         candidates,
         library.as_deref(),
+        #[cfg(target_os = "macos")]
         Some(marker),
     )
 }
@@ -1993,7 +1994,7 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     src_dir: &Path,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
     bound_library: Option<&Path>,
-    checkpoint: Option<&mut WorkingCopyMarker>,
+    #[cfg(target_os = "macos")] checkpoint: Option<&mut WorkingCopyMarker>,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(bound_library)?;
@@ -2238,8 +2239,6 @@ fn import_modern_lossy_static_tier_with_checkpoint(
         handle.import_error_count = metadata_failures;
         return Ok(handle);
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = checkpoint;
     let mut handle = import_or_reconcile_modern_lossy_static_candidates(
         &import_candidates,
         selected.as_deref(),

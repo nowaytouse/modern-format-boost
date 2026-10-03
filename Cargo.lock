@@ -1318,8 +1318,8 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "jpegxl-rs"
-version = "0.15.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
+version = "0.16.0+libjxl-0.12.0"
+source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
 dependencies = [
  "bon",
  "byteorder",
@@ -1331,7 +1331,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
+source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
 dependencies = [
  "cmake",
 ]
@@ -1339,7 +1339,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.13.0+libjxl-0.12.0"
-source = "git+https://github.com/inflation/jpegxl-rs#09260e266c149e3549728a5500e1d07b31788be0"
+source = "git+https://github.com/inflation/jpegxl-rs#625d8fbba9f3d8d3b1346ff762a195209541f9a7"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -2898,9 +2898,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "bytes",
  "libc",
