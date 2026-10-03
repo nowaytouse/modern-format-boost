@@ -186,6 +186,8 @@ struct Args {
     /// Image runtime JSON overlay; the file is not modified.
     #[arg(long, value_name = "PATH")]
     img_config: Option<PathBuf>,
+    #[command(flatten)]
+    performance: foundation::runtime_config::PerformanceArgs,
 
     /// Permitted image encoding attempts, independent of batch failure handling.
     #[arg(long, value_enum)]
@@ -554,6 +556,11 @@ impl LaunchCommand {
         }
         cmd.env("COLUMNS", "223");
         cmd.env("LINES", "45");
+        if let Some(config) = foundation::runtime_config::active() {
+            let mode = clap::ValueEnum::to_possible_value(&config.performance.mode)
+                .context("performance mode has no CLI value")?;
+            cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
+        }
         let stats = if let Some(sess) = session {
             let verbose = sess.verbose_log.clone();
             let session_log = sess.session_log.clone();
@@ -1517,6 +1524,7 @@ fn fast_img_launch_command(
 }
 
 fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
+    command.extend(args.performance.cli_arguments());
     command.extend(args.photos.cli_arguments());
     if let Some(path) = &args.img_config {
         command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
@@ -1587,6 +1595,7 @@ fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -
     match bin {
         "img" => push_img_policy_args(&mut command, args),
         "vid" => {
+            command.extend(args.performance.cli_arguments());
             if let Some(codec) = args.vid_codec {
                 command.extend(["--codec".to_owned(), codec.as_str().to_owned()]);
                 if codec == VideoCodecOption::Av1 {
@@ -1711,13 +1720,15 @@ fn plan_cli_invocations(
                     .output
                     .clone()
                     .unwrap_or_else(|| fast_vid_output_dir_for_target(input));
-                commands.push(LaunchCommand::from_argv(build_fast_vid_command(
+                let mut command = LaunchCommand::from_argv(build_fast_vid_command(
                     &vid_bin,
                     input,
                     &output,
                     args.shortest_path,
                     args.strategy.as_deref(),
-                ))?);
+                ))?;
+                command.args.extend(args.performance.cli_arguments());
+                commands.push(command);
             }
             LaunchMode::Collect | LaunchMode::Compare => {
                 let output = args.output.clone().unwrap_or_else(|| {
@@ -2697,6 +2708,7 @@ fn build_run_args(
         photos_album_id: None,
         photos_folder_id: None,
         img_config: None,
+        performance: Default::default(),
         img_fallback_policy: None,
         img_jpeg_effort: None,
         img_quality_heuristic: None,
@@ -2996,6 +3008,9 @@ fn main() -> Result<()> {
     }
     resize_terminal_for_gui(35, 110);
     let args = apply_mode_overrides(Args::parse());
+    let mut runtime = foundation::runtime_config::load(None, false)?;
+    args.performance.apply_to(&mut runtime);
+    foundation::runtime_config::install(runtime.config)?;
     let mut session = DragDropSession::start()?;
     println!(
         "MFB_LOG_DIRECTORY={}",
@@ -3182,6 +3197,27 @@ mod tests {
             let args = apply_mode_overrides(Args::try_parse_from(argv).unwrap());
             assert!(validate_media_options(&args).is_err());
         }
+    }
+
+    #[test]
+    fn explicit_performance_is_forwarded_as_cli_precedence() {
+        let args = Args::try_parse_from(["mfb", "--performance", "tight"]).unwrap();
+        for bin in ["img", "vid"] {
+            let command = rust_run_command(Path::new("/tmp"), bin, &args, Path::new("input"));
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--performance", "tight"])
+            );
+        }
+        assert!(
+            Args::try_parse_from(["mfb"])
+                .unwrap()
+                .performance
+                .cli_arguments()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3542,6 +3578,7 @@ mod tests {
             photos_album_id: None,
             photos_folder_id: None,
             img_config: None,
+            performance: Default::default(),
             img_fallback_policy: None,
             img_jpeg_effort: None,
             img_quality_heuristic: None,
@@ -3643,6 +3680,7 @@ mod tests {
                 photos_album_id: None,
                 photos_folder_id: None,
                 img_config: None,
+                performance: Default::default(),
                 img_fallback_policy: None,
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
@@ -3685,6 +3723,7 @@ mod tests {
             photos_album_id: None,
             photos_folder_id: None,
             img_config: None,
+            performance: Default::default(),
             img_fallback_policy: None,
             img_jpeg_effort: None,
             img_quality_heuristic: None,
@@ -3749,6 +3788,7 @@ mod tests {
                 photos_album_id: None,
                 photos_folder_id: None,
                 img_config: None,
+                performance: Default::default(),
                 img_fallback_policy: None,
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,

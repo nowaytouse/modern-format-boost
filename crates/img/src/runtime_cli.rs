@@ -36,6 +36,8 @@ pub(super) struct RuntimeArgs {
     jpeg_effort: Option<u8>,
     #[command(flatten)]
     photos: PhotosArgs,
+    #[command(flatten)]
+    performance: runtime_config::PerformanceArgs,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
     tools: Vec<(String, PathBuf)>,
@@ -172,6 +174,7 @@ impl RuntimeArgs {
             sources.insert(format!("tools.paths.{name}"), "CLI".into());
         }
         self.photos.apply_to(&mut loaded);
+        self.performance.apply_to(&mut loaded);
         loaded.config.validate()?;
         Ok(loaded)
     }

@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Partial success, contextual settings and diagnostics (2026-10-03)
+
+- Fix Fast IMG cleanup ordering: verified primary deliveries are cleaned and
+  checkpointed before the independent modern-original Photos transaction. A
+  later backend error cannot undo successful sibling results. Missing-EOI JPEGs
+  remain failed and retained; no reconstruction checks were weakened.
+- Extend native journaled import to modern originals and generic media instead
+  of entering an AppleScript-only guard after successful native output import.
+  Persist UUID/original-byte proofs per verification window, reconcile durable
+  intents before new imports, and bind staged XMP retries to payload identity.
+- Emit structured Fast IMG result facts on finalization errors, including known
+  delivered/failed/skipped/ignored counts, unprocessed files and unknown retention
+  reasons. File failures exit 1; infrastructure failures exit 2. Retained failed
+  encodes are still retried when original delivery is also pending.
+- Make Native the default Photos method; Automatic fallback remains explicit.
+  GUI settings display resolved values without inherited/mixed-state choices,
+  preserve independent standard/Fast IMG overrides, expose only relevant tabs,
+  and put HEVC/AV1 on the main screen. Expand advanced Photos controls on demand.
+  Move Developer mode to About; keep failure policies and source tooltips there.
+  Improve component-status recovery links and English/Chinese/Japanese labels.
+- Add shared `performance.mode` and `--performance` for IMG, VID and the launcher.
+  Adaptive is the default; fixed tiers remain memory-capped. Explicit GUI/CLI
+  choices reach child processes with CLI precedence rather than being demoted
+  to an environment preference.
+- Split `check_all` into format, compile, clippy, tests, audit and coverage groups
+  while retaining aggregate execution. CI runs independent groups with
+  `fail-fast: false`; command, exit, timing, output tail and complete log artifacts
+  support investigation. Reuse coverage data for LCOV instead of executing the
+  instrumented suite twice; remove the duplicate shared fix-gate invocation.
+- Refresh authorized Cargo dependencies, including BLAKE3, bon, cc, cfg-expr,
+  insta, libc, log, uuid and zerocopy. No direct lazy_static/once_cell usage was
+  found; upstream transitive dependencies are retained rather than forked away.
+- Live acceptance used only the original debug library: AppleScript import and
+  UUID resume passed; native post-commit interruption/recovery passed without
+  duplicate assets; modern-original JXL/XMP byte custody and deletion gates
+  passed. These synthetic fixture checks are not a production throughput claim.
+- Validation: focused Fast IMG foundation tests (102), image pipeline tests
+  (151), runtime configuration tests (3), and launcher/checker tests (22/16)
+  passed. The targeted cleanup/retry regression also passed after final changes.
+  Strict Clippy, Rust formatting and workflow syntax checks passed. Forced smart
+  build refreshed all nine tools, GUI, Photos helper and foundation dylib;
+  English, Chinese and Japanese native-host self-tests and final bundle signature
+  verification passed. Hosted CI was not polled or treated as local evidence.
+
 ### Source-bound albums, settings and gate performance (2026-10-01)
 
 - Derive converted and retained-original Photos album names from the same input

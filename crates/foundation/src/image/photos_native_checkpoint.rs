@@ -12,12 +12,244 @@ use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
 use std::os::unix::fs::PermissionsExt;
 
+struct ImportTask {
+    identity: String,
+    expected: usize,
+    relocated_originals: bool,
+}
+
+fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Result<ImportTask> {
+    Ok(ImportTask {
+        identity: blake3::hash(&serde_json::to_vec(&(
+            &marker.src_dir,
+            &marker.working_copy,
+            library,
+        ))?)
+        .to_hex()
+        .to_string(),
+        expected: marker.expected_output_count(),
+        relocated_originals: false,
+    })
+}
+
+fn original_plan(
+    marker: &WorkingCopyMarker,
+    candidates: &[super::PhotosImportCandidate],
+) -> Result<PhotosImportCheckpointPlan> {
+    super::validate_photos_import_candidates(candidates)?;
+    let mut proven_assets = marker.tier2_imported_assets.clone();
+    for asset in &mut proven_assets {
+        if let Some(delivery_hash) = asset.library_blake3.take() {
+            asset.blake3 = delivery_hash;
+        }
+    }
+    let mut pending_entries = Vec::new();
+    for candidate in candidates {
+        if let Some(proof) = proven_assets
+            .iter()
+            .find(|a| a.rel_path == candidate.rel_path)
+        {
+            if proof.blake3 != candidate.blake3 || proof.photos_uuid.is_none() {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 native checkpoint identity changed for {}; source retained",
+                    candidate.rel_path
+                )));
+            }
+            continue;
+        }
+        pending_entries.push(PhotosImportPendingEntry {
+            source_rel: candidate.rel_path.clone(),
+            rel_path: candidate.rel_path.clone(),
+            path: candidate.path.clone(),
+            album_name: candidate.album_name.clone(),
+            blake3_entry: super::Blake3Entry {
+                out_rel: Some(candidate.rel_path.clone()),
+                src: candidate.blake3.clone(),
+                out: candidate.blake3.clone(),
+                library_asset: None,
+            },
+        });
+    }
+    Ok(PhotosImportCheckpointPlan {
+        pending_entries,
+        proven_assets,
+    })
+}
+
+pub(super) fn try_import_originals(
+    marker: &mut WorkingCopyMarker,
+    candidates: &[super::PhotosImportCandidate],
+    enriched: &BTreeMap<String, (String, String, String)>,
+    library: Option<&Path>,
+) -> Result<Option<LibraryHandle>> {
+    let profile = photos_import_metrics::Profile::start("native");
+    let result = (|| -> anyhow::Result<Option<LibraryHandle>> {
+        let plan = original_plan(marker, candidates)?;
+        if let Some(proof) = super::library_handle_from_marker_tier2_proof(marker) {
+            super::reverify_modern_lossy_static_photos_custody(&proof)?;
+        }
+        let mut task = import_task(marker, library)?;
+        task.identity.push_str("-originals");
+        task.expected = plan.proven_assets.len() + plan.pending_entries.len();
+        task.relocated_originals = true;
+        let result = try_import_inner(
+            &task,
+            &plan,
+            &mut |ids| super::query_selected_photos_asset_probes(ids, library),
+            &mut super::path_has_quarantine_xattr,
+            library,
+            &mut |_entries, assets| {
+                let mut handle = LibraryHandle {
+                    imported_assets: assets.to_vec(),
+                    import_error_count: 0,
+                    photos_library_path: library.map(Path::to_path_buf),
+                };
+                super::apply_tier2_enriched_delivery_proofs(&mut handle, enriched)?;
+                super::apply_tier2_library_assets_to_marker(marker, &handle)?;
+                super::write_marker_atomic(marker)?;
+                photos_import_metrics::verified(assets.len());
+                Ok(())
+            },
+        )?;
+        Ok(result.map(|mut handle| {
+            handle
+                .imported_assets
+                .retain(|asset| candidates.iter().any(|c| c.rel_path == asset.rel_path));
+            handle
+        }))
+    })();
+    if !matches!(result, Ok(None)) {
+        profile.report(result.is_ok());
+    }
+    result.map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "PhotoKit original import: {error:#}; sources and journals retained"
+        ))
+    })
+}
+
 fn resource(entry: &PhotosImportPendingEntry) -> anyhow::Result<serde_json::Value> {
+    let kind = if matches!(
+        entry
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("mp4" | "mov" | "m4v" | "mkv" | "webm")
+    ) {
+        match crate::image::format_detect::detect_true_format(&entry.path)? {
+            crate::image::format_detect::FormatKind::Mp4
+            | crate::image::format_detect::FormatKind::Mov
+            | crate::image::format_detect::FormatKind::Mkv
+            | crate::image::format_detect::FormatKind::Webm => "video",
+            _ => anyhow::bail!(
+                "video output extension/content mismatch: {}",
+                entry.path.display()
+            ),
+        }
+    } else {
+        "photo"
+    };
     Ok(
-        serde_json::json!({"path":entry.path,"kind":"photo","blake3":entry.blake3_entry.out,
+        serde_json::json!({"path":entry.path,"kind":kind,"blake3":entry.blake3_entry.out,
         "originalFilename":entry.path.file_name().and_then(|name| name.to_str())
             .ok_or_else(|| anyhow::anyhow!("PhotoKit original filename is not UTF-8"))?}),
     )
+}
+
+pub(super) fn candidate_marker(
+    source: &Path,
+    identity: &impl serde::Serialize,
+    library: Option<&Path>,
+) -> Result<WorkingCopyMarker> {
+    let task = (|| -> anyhow::Result<WorkingCopyMarker> {
+        let key = blake3::hash(&serde_json::to_vec(&(source, identity, library))?)
+            .to_hex()
+            .to_string();
+        let directory = crate::process_lock::get_mfb_root()?
+            .join("photos-original-checkpoints")
+            .join(key);
+        std::fs::create_dir_all(&directory)?;
+        anyhow::ensure!(
+            !std::fs::symlink_metadata(&directory)?
+                .file_type()
+                .is_symlink(),
+            "original checkpoint directory is a symlink"
+        );
+        let mut marker = match crate::pipeline::verification::read_marker(&directory) {
+            Ok(marker) => marker,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                WorkingCopyMarker::new(source.to_path_buf(), directory, 0)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        super::bind_photos_library_proof(&mut marker, library)?;
+        super::bind_photos_import_naming_policy(&mut marker)?;
+        super::write_marker_atomic(&marker)?;
+        Ok(marker)
+    })();
+    task.map_err(|error| ImgQualityError::AnalysisError(format!("original checkpoint: {error:#}")))
+}
+
+pub(super) fn try_import_candidates(
+    candidates: &[super::PhotosImportCandidate],
+    library: Option<&Path>,
+) -> Result<Option<LibraryHandle>> {
+    super::validate_photos_import_candidates(candidates)?;
+    let mut groups: BTreeMap<(PathBuf, String), Vec<super::PhotosImportCandidate>> =
+        BTreeMap::new();
+    for candidate in candidates {
+        let source = candidate
+            .path
+            .parent()
+            .ok_or_else(|| ImgQualityError::AnalysisError("original has no parent".into()))?;
+        groups
+            .entry((source.to_path_buf(), candidate.album_name.clone()))
+            .or_default()
+            .push(candidate.clone());
+    }
+    let mut imported = Vec::new();
+    for ((source, album), candidates) in groups {
+        let mut marker = candidate_marker(&source, &("media-output", album), library)?;
+        let Some(mut handle) =
+            try_import_originals(&mut marker, &candidates, &BTreeMap::new(), library)?
+        else {
+            if !imported.is_empty() {
+                return Err(ImgQualityError::AnalysisError("native backend became unavailable after verified imports; receipts retained, no backend switch".into()));
+            }
+            return Ok(None);
+        };
+        imported.append(&mut handle.imported_assets);
+    }
+    Ok(Some(LibraryHandle {
+        imported_assets: imported,
+        import_error_count: 0,
+        photos_library_path: library.map(Path::to_path_buf),
+    }))
+}
+
+fn resource_matches(
+    recorded: &serde_json::Value,
+    entry: &PhotosImportPendingEntry,
+    allow_relocation: bool,
+) -> anyhow::Result<bool> {
+    let mut expected = serde_json::json!([resource(entry)?]);
+    let mut recorded = recorded.clone();
+    if allow_relocation {
+        // XMP staging directories are ephemeral. Content, filename and resource
+        // kind remain bound to the durable intent when only the staging path moves.
+        for value in [&mut expected, &mut recorded] {
+            if let Some(resources) = value.as_array_mut() {
+                for resource in resources {
+                    if let Some(object) = resource.as_object_mut() {
+                        object.remove("path");
+                    }
+                }
+            }
+        }
+    }
+    Ok(recorded == expected)
 }
 
 fn helper_app() -> anyhow::Result<Option<PathBuf>> {
@@ -95,7 +327,16 @@ where
     P: FnMut(&Path) -> Result<bool>,
 {
     let profile = photos_import_metrics::Profile::start("native");
-    let result = try_import_inner(marker, plan, query, quarantined, library);
+    let result = import_task(marker, library).and_then(|task| {
+        try_import_inner(
+            &task,
+            plan,
+            query,
+            quarantined,
+            library,
+            &mut |entries, assets| checkpoint_photos_import_window(marker, entries, assets),
+        )
+    });
     if !matches!(result, Ok(None)) {
         profile.report(result.is_ok());
     }
@@ -106,16 +347,18 @@ where
     })
 }
 
-fn try_import_inner<Q, P>(
-    marker: &mut WorkingCopyMarker,
+fn try_import_inner<Q, P, C>(
+    task: &ImportTask,
     plan: &PhotosImportCheckpointPlan,
     query: &mut Q,
     quarantined: &mut P,
     library: Option<&Path>,
+    checkpoint: &mut C,
 ) -> anyhow::Result<Option<LibraryHandle>>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     P: FnMut(&Path) -> Result<bool>,
+    C: FnMut(&[PhotosImportPendingEntry], &[super::LibraryAssetRecord]) -> Result<()>,
 {
     let backend = if let Some(config) = crate::infra::runtime_config::active() {
         match config.photos.backend {
@@ -131,14 +374,7 @@ where
         "invalid MFB_PHOTOS_IMPORT_BACKEND"
     );
     let state = crate::process_lock::get_mfb_root()?.join("photos-native");
-    let task = blake3::hash(&serde_json::to_vec(&(
-        &marker.src_dir,
-        &marker.working_copy,
-        library,
-    ))?)
-    .to_hex()
-    .to_string();
-    let journals = state.join(task);
+    let journals = state.join(&task.identity);
     let mut journal_files = match std::fs::read_dir(&journals) {
         Ok(entries) => entries
             .map(|entry| entry.map(|e| e.path()))
@@ -237,7 +473,7 @@ where
                         anyhow::anyhow!("journal is missing requested asset {entry_id}")
                     })?;
                 anyhow::ensure!(
-                    asset["resources"] == serde_json::json!([resource(entry)?]),
+                    resource_matches(&asset["resources"], entry, task.relocated_originals)?,
                     "journal source/hash binding changed"
                 );
                 recovered_entries.push(entry.clone());
@@ -259,7 +495,7 @@ where
                 query,
                 quarantined,
             )?;
-            checkpoint_photos_import_window(marker, &recovered_entries, &proofs)?;
+            checkpoint(&recovered_entries, &proofs)?;
             for entry in recovered_entries {
                 pending.remove(&entry.rel_path);
             }
@@ -269,7 +505,7 @@ where
     let pending = pending.into_values().collect::<Vec<_>>();
     if pending.is_empty() {
         anyhow::ensure!(
-            imported.len() == marker.expected_output_count(),
+            imported.len() == task.expected,
             "native verified asset count mismatch"
         );
         imported.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -354,7 +590,7 @@ where
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     let mut proofs =
                         library_records_from_pending_import(entries, &pairs, query, quarantined)?;
-                    checkpoint_photos_import_window(marker, entries, &proofs)?;
+                    checkpoint(entries, &proofs)?;
                     for entry in entries {
                         identifiers.remove(&entry.rel_path);
                     }
@@ -412,7 +648,7 @@ where
         "unverified native identifiers remain queued"
     );
     anyhow::ensure!(
-        imported.len() == marker.expected_output_count(),
+        imported.len() == task.expected,
         "native verified asset count mismatch"
     );
     imported.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
@@ -421,4 +657,70 @@ where
         import_error_count: 0,
         photos_library_path: library.map(Path::to_path_buf),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn originals_reuse_exact_receipts_and_reject_changed_delivery() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("original.avif");
+        std::fs::write(&path, b"synthetic-original")?;
+        let hash = crate::common_utils::calculate_blake3_hash(&path)?;
+        let candidate = super::super::PhotosImportCandidate {
+            rel_path: "original.avif".into(),
+            path,
+            blake3: hash.clone(),
+            album_name: "Test".into(),
+        };
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        assert_eq!(
+            original_plan(&marker, std::slice::from_ref(&candidate))?
+                .pending_entries
+                .len(),
+            1
+        );
+        marker
+            .tier2_imported_assets
+            .push(super::super::LibraryAssetRecord {
+                rel_path: candidate.rel_path.clone(),
+                blake3: "before-xmp".into(),
+                library_blake3: Some(hash.clone()),
+                photos_uuid: Some("verified-uuid".into()),
+                ..Default::default()
+            });
+        let plan = original_plan(&marker, std::slice::from_ref(&candidate))?;
+        assert!(plan.pending_entries.is_empty());
+        assert_eq!(plan.proven_assets[0].blake3, hash);
+        marker.tier2_imported_assets[0].library_blake3 = Some("changed".into());
+        assert!(original_plan(&marker, &[candidate]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_original_journal_still_binds_bytes_and_filename() -> anyhow::Result<()> {
+        let entry = PhotosImportPendingEntry {
+            source_rel: "image.avif".into(),
+            rel_path: "image.avif".into(),
+            path: PathBuf::from("/staging/new/image.avif"),
+            album_name: "Test".into(),
+            blake3_entry: super::super::Blake3Entry {
+                out: "verified-hash".into(),
+                ..Default::default()
+            },
+        };
+        let mut recorded = serde_json::json!([resource(&entry)?]);
+        recorded[0]["path"] = serde_json::json!("/staging/old/image.avif");
+        assert!(resource_matches(&recorded, &entry, true)?);
+        assert!(!resource_matches(&recorded, &entry, false)?);
+        recorded[0]["blake3"] = serde_json::json!("different-hash");
+        assert!(!resource_matches(&recorded, &entry, true)?);
+        recorded[0]["blake3"] = serde_json::json!("verified-hash");
+        recorded[0]["originalFilename"] = serde_json::json!("different.avif");
+        assert!(!resource_matches(&recorded, &entry, true)?);
+        Ok(())
+    }
 }

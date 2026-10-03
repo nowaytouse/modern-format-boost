@@ -782,10 +782,10 @@ _Note: The application automatically initializes the required schemas, tables, a
 
 ## ⚙️ Environment Variables & Tuning
 
-### Image Runtime Configuration
+### Runtime Configuration
 
-Image operations support versioned JSON preferences, including GUI-launched
-`img` operations. Start with the [configuration example](docs/dev/config/mfb.example.json).
+Image operations and shared IMG/VID scheduling support versioned JSON preferences,
+including GUI-launched operations. Start with the [configuration example](docs/dev/config/mfb.example.json).
 The default user file is `~/.config/modern-format-boost/config.json`, or
 `$XDG_CONFIG_HOME/modern-format-boost/config.json` when XDG is set.
 
@@ -801,10 +801,17 @@ img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+vid --performance adaptive run /path/to/videos
 ```
 
 Configure database/quality inference, JPEG effort and recovery policy, tool
 paths, Photos backend and batches, folder/album names and subfolder preservation.
+Photos defaults to explicit Native import. Automatic compatibility fallback
+remains an opt-in; changing backends cannot bypass an unresolved transaction.
+The GUI shows effective choices directly, keeps image settings contextual to
+the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
+Photos batch sizes expand on demand; failure policies and configuration sources
+belong to Developer mode, enabled from About.
 JPEG retries now default to `strict`; `same-semantics` permits original-byte
 compatibility retries, and `repair` enables existing guarded recovery paths.
 No preference disables exact reconstruction, metadata checks or Photos custody
@@ -814,7 +821,7 @@ a bounded identifier backlog. Optional `--photos-adaptive-batching` adjusts
 transaction sizes only after verified cycles; it is disabled by default.
 See [runtime configuration](docs/dev/config/RUNTIME_CONFIG.md) for all flags,
 legacy compatibility and native-backend limitations. Credentials remain in the
-existing private database configuration; this does not migrate `vid` settings.
+existing private database configuration; video codec/quality policy remains separate.
 
 ### Environment Overrides
 
@@ -832,6 +839,11 @@ The following environment variables remain available:
 ### ⚡ Performance Governor Scheduler (SSOT)
 
 MFB employs a live memory governor to dynamically adjust parallel batch sizes and thread allocations based on memory pressure. It operates in three tiers:
+
+The default `performance.mode = "adaptive"` selects these tiers from live
+pressure. GUI Performance settings and `--performance adaptive|relaxed|balanced|tight`
+on `img`, `vid`, or the launcher select the same policy. Explicit CLI choices
+override JSON, and fixed tiers still obey high-memory-pressure safety caps.
 
 - **`relaxed`**: Max headroom mode with high parallelism caps. Enabled when system memory pressure is low.
 - **`balanced`**: Default mode balancing throughput and resource footprints.
@@ -893,6 +905,13 @@ vid strategy --codec hevc /path/to/video.mp4
 ```
 
 ### ⚡ FastImg state and resumption
+
+Successful siblings remain successful when another input fails. Fast IMG emits
+`MFB_FAST_IMG_RESULT` with delivered, failed, skipped, ignored, unprocessed,
+Photos-verified and retained-source facts even when finalization fails. Verified
+primary sources are cleaned before starting independent modern-original import;
+failed/unproven inputs remain intact. Exit 1 denotes per-file failures and exit 2
+denotes infrastructure or safety-gate failures, without clearing known counters.
 
 FastImg records durable stage, relative-path and BLAKE3 evidence in an adjacent
 working copy. State handling is explicit:
@@ -997,6 +1016,10 @@ specific revision, not a claim that maintenance debt can never exist:
 - **CI Verification**: GitHub workflows run formatting, Clippy, tests,
   dependency/security audit and platform-specific checks. Local targeted checks
   should match the code being changed; repository-wide gates remain CI-owned.
+  `check_all --ci --group format|compile|clippy|tests|audit|coverage` selects an
+  independent lane; omitting `--group` retains the complete audit. Each lane
+  publishes command/exit summaries and downloadable logs, without cancelling
+  independent lanes when one fails.
 - **Revision Evidence**: Check the commit SHA on the
   [quality workflow run](https://github.com/nowaytouse/modern-format-boost/actions/workflows/ci-quality.yml).
   A previous green run does not cover uncommitted work or a newer push. Nightly

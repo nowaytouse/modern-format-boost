@@ -262,12 +262,14 @@ private enum MediaSetting: String, CaseIterable {
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
+    case performance
 
     var isImage: Bool { rawValue.hasPrefix("img") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
     var isDeveloper: Bool { [.imgConfig, .fastConfig, .imgErrorMode, .vidErrorMode].contains(self) }
     var section: String {
+        if self == .performance { return "performance" }
         if isDeveloper { return "developer" }
         if isPhotos { return "photos" }
         if isFastImage { return "fast" }
@@ -275,6 +277,7 @@ private enum MediaSetting: String, CaseIterable {
     }
     var flag: String {
         switch self {
+        case .performance: "--performance"
         case .imgConfig, .fastConfig: "--img-config"
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
@@ -298,6 +301,7 @@ private enum MediaSetting: String, CaseIterable {
     }
     var choices: [String] {
         switch self {
+        case .performance: ["adaptive", "relaxed", "balanced", "tight"]
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
         case .imgHeuristic, .imgDatabase, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree: ["true", "false"]
@@ -318,6 +322,7 @@ private enum MediaSetting: String, CaseIterable {
     }
     var runtimeKey: String? {
         switch self {
+        case .performance: "performance.mode"
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
@@ -388,12 +393,14 @@ private struct MediaSettings {
     var imageFailure: FileFailurePolicy?
     var videoFailure: FileFailurePolicy?
     var videoCodec: VideoCodec?
+    var performance: String?
     private var invalidValues: [MediaSetting: String] = [:]
 
     // String values are the control/persistence boundary; processing uses typed groups.
     var values: [MediaSetting: String] {
         get {
             let stored: [MediaSetting: String?] = [
+                .performance: performance,
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
@@ -422,6 +429,7 @@ private struct MediaSettings {
                     continue
                 }
                 switch field {
+                case .performance: performance = value
                 case .imgConfig: image.configurationFile = value
                 case .imgFallback: image.fallback = ImageFallback(rawValue: value)
                 case .imgJpegEffort: image.jpegEffort = Int(value)
@@ -513,7 +521,8 @@ private struct MediaSettings {
         let images = operation == .adjacent && processing != .videosOnly
         let videos = operation == .adjacent && processing != .imagesOnly
         let fields = MediaSetting.allCases.filter {
-            $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
+            if $0 == .performance { return images || videos || fastImages }
+            return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
         try validate(fields)
         return fields.flatMap { field -> [String] in
@@ -524,7 +533,7 @@ private struct MediaSettings {
 
     func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
         MediaSetting.allCases.filter {
-            (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage)
+            ($0 == .performance || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && $0 != .imgErrorMode && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
@@ -535,7 +544,13 @@ private struct MediaSettings {
     }
 }
 
-private func queryRuntimeSettings(arguments: [String]) throws -> [String: String] {
+private struct EffectiveRuntimeSettings {
+    let values: [String: String]
+    let sources: [String: String]
+    subscript(key: String) -> String? { values[key] }
+}
+
+private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntimeSettings {
     guard let binary = ProcessorLocator.resolveTool(named: "img") else {
         throw HostError(message: localized("error.img_backend_missing"))
     }
@@ -569,7 +584,7 @@ private func queryRuntimeSettings(arguments: [String]) throws -> [String: String
             } else if let text = value as? String { result["\(section).\(key)"] = text }
         }
     }
-    return result
+    return EffectiveRuntimeSettings(values: result, sources: document["sources"] as? [String: String] ?? [:])
 }
 
 @MainActor
@@ -583,14 +598,24 @@ private final class MediaSettingsPanel: NSObject {
     private var steppers: [MediaSetting: NSStepper] = [:]
     private var restored = MediaSettings()
     private var inherited: [MediaSetting: String] = [:]
+    private var inheritedSources: [MediaSetting: String] = [:]
+    private var displayed: [MediaSetting: String] = [:]
+    private var rows: [MediaSetting: NSGridRow] = [:]
+    private let developer: Bool
+    private let fast: Bool
+    private let videos: Bool
+    private let advanced = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(wrappingLabelWithString: "")
     private let tabs = NSTabView()
     private var applying = false
     private var applyGeneration = UUID()
 
-    init(preferences: UserDefaults, developer: Bool = false, applied: @escaping () -> Void) {
+    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
+        self.developer = developer
+        self.fast = fast
+        self.videos = videos
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 780, height: 610),
                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
@@ -602,22 +627,34 @@ private final class MediaSettingsPanel: NSObject {
         root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
         panel.contentView = root
         tabs.translatesAutoresizingMaskIntoConstraints = false
-        for section in ["img", "fast", "vid", "photos"] + (developer ? ["developer"] : []) {
+        for section in ["img", "photos", "performance"] + (developer ? ["developer"] : []) {
+            let fields = MediaSetting.allCases.filter { field in
+                if field == .performance { return section == "performance" }
+                if field == .vidCodec { return false }
+                if field.isDeveloper {
+                    if field == .vidErrorMode { return developer && section == "developer" && !fast }
+                    return developer && section == "developer" && !videos && (fast ? field.isFastImage : field.isImage)
+                }
+                if field.isPhotos { return section == "photos" && fast }
+                return section == "img" && !videos && (fast ? field.isFastImage : field.isImage)
+            }
+            if fields.isEmpty { continue }
             let tab = NSTabViewItem(identifier: section)
             tab.label = localized("settings.section.\(section)")
             let grid = NSGridView()
             grid.rowSpacing = 12
             grid.columnSpacing = 14
-            for field in MediaSetting.allCases where field.section == section {
+            for field in fields {
                 let control: NSView
-                if field.choices == ["true", "false"] {
-                    let toggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-                    toggle.allowsMixedState = true
+                if field == .photosAdaptive || field == .photosPreserveTree {
+                    let toggle = NSButton(checkboxWithTitle: "", target: self, action: #selector(updateVisibility))
+                    toggle.allowsMixedState = false
                     toggles[field] = toggle
                     control = toggle
                 } else if !field.choices.isEmpty {
                     let popup = NSPopUpButton()
-                    popup.addItem(withTitle: localized("settings.inherit"))
+                    popup.target = self
+                    popup.action = #selector(updateVisibility)
                     for value in field.choices {
                         popup.addItem(withTitle: localized("settings.value.\(value)"))
                         popup.lastItem?.representedObject = value
@@ -626,7 +663,7 @@ private final class MediaSettingsPanel: NSObject {
                     control = popup
                 } else {
                     let text = NSTextField()
-                    text.placeholderString = localized("settings.inherit")
+                    text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                     textFields[field] = text
                     if let range = field.range {
@@ -644,9 +681,11 @@ private final class MediaSettingsPanel: NSObject {
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 let row = grid.addRow(with: [NSTextField(labelWithString: field.title), control])
+                rows[field] = row
                 row.yPlacement = .center
             }
-            grid.column(at: 0).xPlacement = .trailing
+            grid.column(at: 0).xPlacement = .leading
+            grid.column(at: 0).width = 260
             grid.column(at: 1).xPlacement = .fill
             let content = NSView()
             grid.translatesAutoresizingMaskIntoConstraints = false
@@ -660,6 +699,11 @@ private final class MediaSettingsPanel: NSObject {
             tabs.addTabViewItem(tab)
         }
         root.addArrangedSubview(tabs)
+        advanced.title = localized("settings.advanced")
+        advanced.target = self
+        advanced.action = #selector(updateVisibility)
+        advanced.isHidden = developer || !fast
+        root.addArrangedSubview(advanced)
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         root.addArrangedSubview(status)
@@ -676,7 +720,7 @@ private final class MediaSettingsPanel: NSObject {
     }
 
     func show(for window: NSWindow, videos: Bool, fast: Bool = false) {
-        tabs.selectTabViewItem(withIdentifier: videos ? "vid" : (fast ? "fast" : "img"))
+        if tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
         window.beginSheet(panel)
         loadInheritedValues()
     }
@@ -691,14 +735,13 @@ private final class MediaSettingsPanel: NSObject {
                 guard let self else { return }
                 switch result {
                 case let .success((standard, fast)):
+                    let draft = self.draft()
                     for field in MediaSetting.allCases {
                         guard let key = field.runtimeKey else { continue }
                         self.inherited[field] = (field.isFastImage || field.isPhotos ? fast : standard)[key]
-                        if let value = self.inherited[field], let popup = self.popups[field] {
-                            popup.item(at: 0)?.title = localized("settings.inherited_value", localized("settings.value.\(value)"))
-                        }
+                        self.inheritedSources[field] = (field.isFastImage || field.isPhotos ? fast : standard).sources[key]
                     }
-                    self.restore(self.draft())
+                    self.restore(draft)
                     self.status.stringValue = ""
                 case let .failure(error): self.status.stringValue = error.localizedDescription
                 }
@@ -708,21 +751,24 @@ private final class MediaSettingsPanel: NSObject {
 
     private func restore(_ settings: MediaSettings) {
         restored = settings
+        displayed = inherited.merging(settings.values) { _, explicit in explicit }
+        for field in [MediaSetting.imgErrorMode, .vidErrorMode] where displayed[field] == nil {
+            displayed[field] = "log-and-continue"
+        }
         for (field, text) in textFields {
-            text.stringValue = settings.values[field] ?? ""
-            text.placeholderString = inherited[field] ?? localized("settings.inherit")
-            steppers[field]?.integerValue = Int(settings.values[field] ?? inherited[field] ?? "") ?? field.range?.lowerBound ?? 0
+            text.stringValue = displayed[field] ?? ""
+            steppers[field]?.integerValue = Int(displayed[field] ?? "") ?? field.range?.lowerBound ?? 0
         }
         for (field, toggle) in toggles {
-            let value = settings.values[field]
-            toggle.state = value.flatMap(Bool.init).map { $0 ? .on : .off } ?? .mixed
-            toggle.title = inherited[field].map { localized("settings.inherited_value", localized("settings.value.\($0)")) }
-                ?? localized("settings.inherit")
+            let value = displayed[field]
+            toggle.state = value == "true" ? .on : .off
+            toggle.isEnabled = value.flatMap(Bool.init) != nil
+            toggle.title = ""
             if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
         }
         for (field, popup) in popups {
-            popup.selectItem(at: 0)
-            if let value = settings.values[field] {
+            popup.selectItem(at: -1)
+            if let value = displayed[field] {
                 if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) {
                     popup.select(item)
                 } else {
@@ -732,21 +778,48 @@ private final class MediaSettingsPanel: NSObject {
                 }
             }
         }
+        if developer {
+            for (field, row) in rows {
+                row.cell(at: 1).contentView?.toolTip = localized("settings.\(field.labelKey).help")
+                    + "\n" + (field.runtimeKey ?? field.flag) + ": " + (displayed[field] ?? localized("settings.automatic"))
+                    + "\n" + (settings.values[field] == nil ? (inheritedSources[field] ?? "default") : "GUI")
+            }
+        }
+        updateVisibility()
     }
 
     private func draft() -> MediaSettings {
         var settings = restored
         for (field, text) in textFields {
-            settings.values[field] = text.stringValue.isEmpty ? nil : text.stringValue
+            if text.stringValue != (displayed[field] ?? "") {
+                settings.values[field] = text.stringValue.isEmpty ? nil : text.stringValue
+            }
         }
         for (field, toggle) in toggles {
-            if toggle.state == .mixed, let original = restored.values[field], Bool(original) == nil { continue }
-            settings.values[field] = toggle.state == .mixed ? nil : (toggle.state == .on ? "true" : "false")
+            let value = toggle.state == .on ? "true" : "false"
+            if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
-            settings.values[field] = popup.selectedItem?.representedObject as? String
+            if let value = popup.selectedItem?.representedObject as? String, value != displayed[field] {
+                settings.values[field] = value
+            }
         }
         return settings
+    }
+
+    @objc private func updateVisibility() {
+        let backend = (popups[.photosBackend]?.selectedItem?.representedObject as? String) ?? displayed[.photosBackend]
+        let adaptive = toggles[.photosAdaptive]?.state == .on
+        for (field, row) in rows {
+            var hidden = false
+            if field.range != nil && field.isPhotos { hidden = !developer && advanced.state != .on }
+            if field == .photosAppleScriptBatch { hidden = hidden || backend == "native" }
+            if [.photosNativeBatch, .photosAdaptive, .photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field) {
+                hidden = hidden || backend == "applescript"
+            }
+            if [.photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field) { hidden = hidden || !adaptive }
+            row.isHidden = hidden
+        }
     }
 
     @objc private func stepNumber(_ sender: NSStepper) {
@@ -758,7 +831,9 @@ private final class MediaSettingsPanel: NSObject {
     @objc private func resetTab() {
         var settings = draft()
         let section = tabs.selectedTabViewItem?.identifier as? String
-        for field in MediaSetting.allCases where field.section == section { settings.values.removeValue(forKey: field) }
+        for field in rows.keys where field.section == section || (section == "img" && field.isFastImage && !field.isDeveloper) {
+            settings.values.removeValue(forKey: field)
+        }
         restore(settings)
     }
 
@@ -796,10 +871,13 @@ private final class MediaSettingsPanel: NSObject {
 
     func validateForSelfTest() throws {
         var settings = MediaSettings()
-        settings.values = [.imgFallback: "strict", .imgJpegEffort: "9", .imgDatabase: "false",
+        let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
+        let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
+        let fallback: MediaSetting = fast ? .fastFallback : .imgFallback
+        settings.values = [fallback: "strict", effort: "9", database: "false",
                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         restore(settings)
-        guard draft().values == settings.values, textFields[.imgJpegEffort]?.stringValue == "9" else {
+        guard draft().values == settings.values, textFields[effort]?.stringValue == "9" else {
             throw HostError(message: "Settings controls did not restore explicit overrides")
         }
         try draft().save(to: preferences)
@@ -808,7 +886,7 @@ private final class MediaSettingsPanel: NSObject {
         }
         tabs.selectTabViewItem(at: 0)
         resetTab()
-        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], textFields[.imgJpegEffort]?.stringValue.isEmpty == true else {
+        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], textFields[effort]?.stringValue.isEmpty == true else {
             throw HostError(message: "Resetting image settings changed video settings")
         }
         for index in 0..<tabs.numberOfTabViewItems {
@@ -820,31 +898,40 @@ private final class MediaSettingsPanel: NSObject {
             }
             for rowIndex in 0..<grid.numberOfRows {
                 let row = grid.row(at: rowIndex)
+                if row.isHidden { continue }
                 guard let label = row.cell(at: 0).contentView, let control = row.cell(at: 1).contentView,
                       label.frame.width + 1 >= label.intrinsicContentSize.width,
                       !label.frame.intersects(control.frame) else {
                     throw HostError(message: "Settings labels overlap or clip")
                 }
             }
-            for (field, popup) in popups where field.section == tabs.selectedTabViewItem?.identifier as? String {
+            for (field, popup) in popups where rows[field]?.isHidden == false && popup.window != nil {
                 guard popup.bounds.width + 1 >= popup.intrinsicContentSize.width else {
                     throw HostError(message: "Settings choice clipped: \(field.rawValue)")
                 }
             }
         }
         var invalid = MediaSettings()
-        invalid.values = [.imgDatabase: "invalid"]
+        invalid.values = [database: "invalid"]
         restore(invalid)
-        guard draft().values[.imgDatabase] == "invalid" else {
+        guard draft().values[database] == "invalid" else {
             throw HostError(message: "Invalid saved checkbox was silently converted to a valid value")
         }
         var independent = MediaSettings()
         independent.values = [.imgJpegEffort: "11", .fastJpegEffort: "8", .photosNativeBatch: "250", .photosAlbum: "Selected"]
         restore(independent)
-        tabs.selectTabViewItem(withIdentifier: "fast")
+        tabs.selectTabViewItem(withIdentifier: "img")
         resetTab()
-        independent.values.removeValue(forKey: .fastJpegEffort)
+        independent.values.removeValue(forKey: effort)
         guard draft().values == independent.values else { throw HostError(message: "Fast IMG reset affected other groups") }
+        inherited[effort] = "11"
+        inherited[database] = "true"
+        restore(MediaSettings())
+        guard textFields[effort]?.stringValue == "11",
+              popups[database]?.selectedItem?.representedObject as? String == "true",
+              draft().values.isEmpty, toggles.values.allSatisfy({ !$0.allowsMixedState }) else {
+            throw HostError(message: "Effective values must not create overrides or mixed states")
+        }
         try MediaSettings().save(to: preferences)
         guard MediaSettings(preferences: preferences).values.isEmpty else {
             throw HostError(message: "Reset settings still override inherited configuration")
@@ -1383,6 +1470,10 @@ private enum ProcessorLocator {
         if let configured = environment["MFB_PROCESSOR_BINARY"], !configured.isEmpty {
             candidates.append(URL(fileURLWithPath: configured))
         }
+        if UserDefaults.standard.bool(forKey: developerPreferenceKey),
+           let configured = UserDefaults.standard.string(forKey: "MFBGuiCoreBinary") {
+            candidates.append(URL(fileURLWithPath: configured))
+        }
         if let executable {
             let executableDirectory = executable.deletingLastPathComponent()
             if executableDirectory.lastPathComponent == "MacOS" {
@@ -1586,7 +1677,8 @@ private final class NativeHost {
     }
 
     nonisolated func checkVersionAlignment() -> String {
-        guard let binary = ProcessorLocator.resolve() else {
+        guard let binary = ProcessorLocator.resolve(), ProcessorLocator.resolveTool(named: "img") != nil,
+              ProcessorLocator.resolveTool(named: "vid") != nil else {
             return localized("status.processor_unavailable")
         }
         let process = Process()
@@ -1957,6 +2049,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let backupField = NSTextField()
     private let processingPopup = NSPopUpButton()
     private let operationPopup = NSPopUpButton()
+    private let videoCodecPopup = NSPopUpButton()
+    private var videoCodecRow: NSGridRow?
+    private var processingRow: NSGridRow?
     private let languagePopup = NSPopUpButton()
     private let appearancePopup = NSPopUpButton()
     private let developerCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -1989,6 +2084,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let runButton = NSButton(title: "", target: nil, action: nil)
     private let historyButton = NSButton(title: "", target: nil, action: nil)
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
+    private let helpButton = NSButton(title: "", target: nil, action: nil)
     private var settingsPanel: MediaSettingsPanel?
     private let diagnosticsButton = NSButton(title: "", target: nil, action: nil)
     private let diagnosticsTextView = NSTextView()
@@ -2165,7 +2261,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         let preferenceGrid = NSGridView(views: [
             [languageLabel, languagePopup],
             [appearanceLabel, appearancePopup],
-            [NSView(), developerCheck],
         ])
         preferenceGrid.rowSpacing = 5
         preferenceGrid.columnSpacing = 8
@@ -2211,10 +2306,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         processingPopup.action = #selector(configurationChanged)
         operationPopup.target = self
         operationPopup.action = #selector(operationChanged)
+        videoCodecPopup.target = self
+        videoCodecPopup.action = #selector(videoCodecChanged)
         let grid = NSGridView(views: [
             [mediaLabel, processingPopup],
             [operationLabel, operationPopup],
         ])
+        videoCodecRow = grid.addRow(with: [NSTextField(labelWithString: localized("settings.vidCodec")), videoCodecPopup])
+        processingRow = grid.row(at: 0)
         grid.rowSpacing = 5
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
@@ -2291,6 +2390,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         settingsButton.imagePosition = .imageOnly
         settingsButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        helpButton.target = self
+        helpButton.action = #selector(openHelp)
+        helpButton.bezelStyle = .helpButton
+        helpButton.toolTip = localized("button.help")
+        helpButton.setAccessibilityLabel(localized("button.help"))
         diagnosticsButton.target = self
         diagnosticsButton.action = #selector(showDiagnostics)
         diagnosticsButton.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
@@ -2304,7 +2408,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stopButton.isEnabled = false
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actionRow = NSStackView(views: [settingsButton, historyButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
+        let actionRow = NSStackView(views: [settingsButton, helpButton, historyButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -2326,6 +2430,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(repairCore)))
+        statusLabel.toolTip = localized("status.core_help")
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .small
         progressIndicator.isDisplayedWhenStopped = false
@@ -2605,7 +2711,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                                  styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             panel.isReleasedWhenClosed = false
             panel.title = "\(localized("menu.about")) · \(appVersion)"
-            let scroll = NSScrollView(frame: panel.contentView!.bounds)
+            var scrollFrame = panel.contentView!.bounds
+            scrollFrame.origin.y = 48
+            scrollFrame.size.height -= 48
+            let scroll = NSScrollView(frame: scrollFrame)
             scroll.autoresizingMask = [.width, .height]
             scroll.hasVerticalScroller = true
             let textView = NSTextView(frame: scroll.bounds)
@@ -2618,6 +2727,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             textView.string = text
             scroll.documentView = textView
             panel.contentView?.addSubview(scroll)
+            developerCheck.removeFromSuperview()
+            developerCheck.frame = NSRect(x: 20, y: 14, width: 520, height: 24)
+            developerCheck.autoresizingMask = [.width, .maxYMargin]
+            panel.contentView?.addSubview(developerCheck)
             aboutWindow?.close()
             aboutWindow = panel
             panel.center()
@@ -2658,6 +2771,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             )
         }
         processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
+        processingRow?.isHidden = !capabilities.usesProcessingSelection
         // The launcher always enables --ultimate for supported operations.
         // Show the effective policy instead of an off switch it cannot honor.
         ultimateCheck.isEnabled = false
@@ -2676,6 +2790,18 @@ private final class AppController: NSObject, NSWindowDelegate {
             control.isEnabled = configurationControlsEnabled && capabilities.supportsStandardOptions
         }
         dryRunCheck.isEnabled = configurationControlsEnabled
+        ultimateCheck.isHidden = !developerMode || !capabilities.supportsUltimate
+        verboseCheck.isHidden = !developerMode
+        resumeCheck.isHidden = true
+        freshCheck.isHidden = true
+        retryCheck.isHidden = true
+        shortestPathCheck.isHidden = !capabilities.supportsShortestPath
+        archiveCheck.isHidden = !developerMode || !capabilities.supportsArchive
+        for control in [forceCheck, plainCheck, inPlaceCheck] {
+            control.isHidden = !developerMode || !capabilities.supportsStandardOptions
+        }
+        videoCodecRow?.isHidden = selectedOperation != .adjacent || processingPopup.indexOfSelectedItem == 1
+        videoCodecPopup.isEnabled = configurationControlsEnabled
         watchCheck.isHidden = !developerMode
         watchCheck.isEnabled = configurationControlsEnabled && developerMode
         if !developerMode { watchCheck.state = .off }
@@ -2740,10 +2866,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             ultimate: ultimateCheck.state == .on,
             verbose: true,
             shortestPath: shortestPathCheck.state == .on,
-            resume: resumeCheck.state == .on,
-            fresh: freshCheck.state == .on,
+            resume: developerMode && resumeCheck.state == .on,
+            fresh: developerMode && freshCheck.state == .on,
             archive: archiveCheck.state == .on,
-            retry: retryCheck.state == .on,
+            retry: developerMode && retryCheck.state == .on,
             force: forceCheck.state == .on,
             dryRun: dryRunCheck.state == .on,
             plain: plainCheck.state == .on,
@@ -2889,12 +3015,46 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func showSettings() {
         guard configurationControlsEnabled,
               [.adjacent, .fastImgJxl, .fastImgAvif].contains(selectedOperation) else { return }
-        settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode) { [weak self] in
+        settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
+            fast: selectedOperation.backendMode == "fast-img", videos: processingPopup.indexOfSelectedItem == 2) { [weak self] in
             self?.configurationChanged()
         }
         settingsPanel?.show(for: window, videos: selectedOperation == .fastVid
             || (selectedOperation == .adjacent && processingPopup.indexOfSelectedItem == 2),
             fast: selectedOperation.backendMode == "fast-img")
+    }
+
+    @objc private func videoCodecChanged() {
+        do {
+            var settings = MediaSettings(preferences: preferences)
+            settings.values[.vidCodec] = videoCodecPopup.indexOfSelectedItem == 1 ? "av1" : "hevc"
+            try settings.save(to: preferences)
+            configurationChanged()
+        } catch { present(error) }
+    }
+
+    @objc private func openHelp() {
+        if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost#readme") { NSWorkspace.shared.open(url) }
+    }
+
+    @objc private func repairCore() {
+        guard configurationControlsEnabled, processorStatus != localized("status.processor_ready") else { return }
+        if developerMode {
+            let chooser = NSOpenPanel()
+            chooser.canChooseDirectories = false
+            chooser.allowsMultipleSelection = false
+            chooser.beginSheetModal(for: window) { [weak self] response in
+                guard response == .OK, let self, let url = chooser.url else { return }
+                guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                    self.present(HostError(message: localized("status.processor_unavailable")))
+                    return
+                }
+                UserDefaults.standard.set(url.path, forKey: "MFBGuiCoreBinary")
+                self.show()
+            }
+        } else if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost/releases/tag/nightly") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func languageChanged() {
@@ -2949,6 +3109,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         historyButton.title = localized("button.history")
         settingsButton.toolTip = localized("settings.title")
         settingsButton.setAccessibilityLabel(localized("settings.title"))
+        helpButton.toolTip = localized("button.help")
+        helpButton.setAccessibilityLabel(localized("button.help"))
+        replaceTitles(videoCodecPopup, with: [localized("settings.value.hevc"), localized("settings.value.av1")])
+        videoCodecPopup.selectItem(at: MediaSettings(preferences: preferences).videoCodec == .av1 ? 1 : 0)
+        if let label = videoCodecRow?.cell(at: 0).contentView as? NSTextField { label.stringValue = localized("settings.vidCodec") }
         diagnosticsButton.toolTip = localized("button.photos_diagnostics")
         diagnosticsButton.setAccessibilityLabel(localized("button.photos_diagnostics"))
         diagnosticsPanel?.title = localized("button.photos_diagnostics")
@@ -3161,11 +3326,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetField.stringValue = "/tmp/media"
         let defaultArguments = try ProcessorCommand.arguments(from: request())
         guard defaultArguments.contains("--verbose"), defaultArguments.contains("--archive"),
-              defaultArguments.contains("--no-resume"), !defaultArguments.contains("--watch")
+              !defaultArguments.contains("--no-resume"), !defaultArguments.contains("--resume"),
+              !defaultArguments.contains("--retry"), !defaultArguments.contains("--watch")
         else { throw HostError(message: "Default checkbox flags disagree with the command") }
         let originalFrame = window.frame
         developerCheck.state = .on
         developerModeChanged()
+        guard try ProcessorCommand.arguments(from: request()).contains("--no-resume") else {
+            throw HostError(message: "Developer fresh-run selection was not forwarded")
+        }
         let longPath = "/tmp/" + String(repeating: "long folder name/", count: 160)
         targetField.stringValue = longPath + "test.photoslibrary"
         backupField.stringValue = longPath + "backup"
@@ -3651,6 +3820,8 @@ private func runSelfTest() -> Int32 {
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, developer: true, fast: true, applied: {}).validateForSelfTest()
         }
         print("native-host self-test passed")
         return 0

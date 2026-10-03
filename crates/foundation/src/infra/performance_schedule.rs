@@ -74,6 +74,15 @@ fn should_preemptive_tight() -> bool {
 
 #[must_use]
 pub fn perf_tier_from_env() -> Option<PerfGovernorTier> {
+    if let Some(config) = crate::runtime_config::active() {
+        use crate::runtime_config::PerformanceMode;
+        return match config.performance.mode {
+            PerformanceMode::Adaptive => None,
+            PerformanceMode::Relaxed => Some(PerfGovernorTier::Relaxed),
+            PerformanceMode::Balanced => Some(PerfGovernorTier::Balanced),
+            PerformanceMode::Tight => Some(PerfGovernorTier::Tight),
+        };
+    }
     match std::env::var(crate::constants::ENV_MFB_PERF_TIER) {
         Ok(value) => PerfGovernorTier::parse_env(&value),
         Err(std::env::VarError::NotPresent) => None,

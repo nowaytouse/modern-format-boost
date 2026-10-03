@@ -403,10 +403,14 @@ jobs:
           exit $exit_code
 
   health-check:
-    name: "2c · Shared Repository Health Check"
+    name: "2c · Shared ${{ matrix.group }}"
     needs: validation
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [format, compile, clippy, tests, audit, coverage]
     # Cold bench/fuzz builds reached coverage after 176 minutes. Leave time for
     # instrumented dependencies and final gates even when the cache is absent.
     timeout-minutes: 360
@@ -456,6 +460,7 @@ jobs:
           just-version: "1.39.0"
 
       - name: Just fmt check (early gate)
+        if: matrix.group == 'format'
         id: fmt_check
         continue-on-error: true
         run: just fmt-check
@@ -527,17 +532,15 @@ jobs:
           MFB_MPC_ONLY: "1"
         run: '"$RUNNER_TEMP/install_media_dependencies"'
 
-      - name: Just read-only quality gate (after MPC/GMP/MPFR for gmp-mpfr-sys)
-        id: fix_gate
-        continue-on-error: true
-        run: just fix-gate
-
       - name: Install check_all CI tools (llvm-cov, hack, bloat, fuzz)
+        if: matrix.group == 'audit' || matrix.group == 'coverage'
         run: cargo install cargo-llvm-cov cargo-hack cargo-bloat cargo-fuzz --locked
 
-      - name: Repository health (check_all --ci, collect all)
+      - name: Repository health (${{ matrix.group }})
         id: check_all
         continue-on-error: true
+        env:
+          MFB_CHECK_LOG_DIR: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
         run: |
           # SSOT: fmt, clippy_strict, check, CI tests, contract registry,
           # rustdoc -D warnings, llvm-cov LCOV, cargo fuzz smoke, cargo hack
@@ -545,14 +548,26 @@ jobs:
           # Records every reachable required/optional failure, then exits once
           # with a numbered summary. Coverage and rustdoc still run after an
           # earlier independent failure.
-          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke
+          mkdir -p "$MFB_CHECK_LOG_DIR"
+          set -o pipefail
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke --group "${{ matrix.group }}" 2>&1 | tee "$MFB_CHECK_LOG_DIR/runner.log"
+
+      - name: Upload check diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: check-all-${{ matrix.group }}-logs
+          path: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
+          if-no-files-found: warn
 
       - name: Verify LCOV artifact (fail-closed)
+        if: always() && matrix.group == 'coverage'
         id: verify_lcov
         continue-on-error: true
         run: test -s lcov.info
 
       - name: Upload LCOV artifact
+        if: always() && matrix.group == 'coverage'
         continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -566,10 +581,6 @@ jobs:
           exit_code=0
           if [ "${{ steps.fmt_check.outcome }}" = "failure" ]; then
             echo "::error::just fmt-check failed"
-            exit_code=1
-          fi
-          if [ "${{ steps.fix_gate.outcome }}" = "failure" ]; then
-            echo "::error::just fix-gate failed"
             exit_code=1
           fi
           if [ "${{ steps.check_all.outcome }}" = "failure" ]; then

@@ -1,4 +1,4 @@
-# Image Runtime Preferences
+# Runtime Preferences
 
 `img` loads versioned JSON preferences before database initialization, worker
 startup or media processing. The native GUI's image operations launch `img`
@@ -51,15 +51,16 @@ an existing file is never replaced. These commands do not access Photos.
 
 ### Native GUI Overrides
 
-The gear button opens Images, Fast IMG, Videos and Photos tabs. Standard and
-Fast IMG have independent JPEG transcoding effort (1 through 11), fallback,
+The gear button shows the image workflow currently selected, Photos settings
+for Fast IMG, and shared Performance settings. Standard and Fast IMG retain
+independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Existing shared image preferences
 migrate once to Fast IMG; subsequent edits and resets stay independent.
-Photos exposes backend selection, native/AppleScript/verification batch sizes,
+Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure
-policies appear only in Developer mode. Video exposes the existing HEVC/AV1
-codec selector and independent developer file-error mode. AV1 disables
+policies appear only in Developer mode, enabled in About. Video exposes HEVC/AV1
+on the main screen and an independent developer file-error mode. AV1 disables
 Apple compatibility; video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
 Video settings apply only to standard `vid run` processing. Fast Video uses
@@ -70,9 +71,12 @@ retains its existing checkpointed per-file failure handling; the launcher reject
 an explicit error-mode override there rather than pretending it controls the
 FastImg encoding waves. Its fallback, effort and other image preferences still apply.
 
-All controls start inherited. Image and Photos defaults are queried from the
-backend configuration, not duplicated in Swift. Numeric fields use steppers;
-binary settings use three-state checkboxes (mixed means inherited). Apply
+Image and Photos effective values are queried from the backend, not duplicated
+in Swift. The GUI displays the resolved value without an extra inherited choice;
+opening and applying unchanged controls does not create overrides. Developer
+tooltips include configuration keys and sources. Numeric fields use steppers;
+quality inference/database use Enabled/Disabled menus and Photos booleans use
+ordinary two-state checkboxes. Apply
 validates the resolved standard and Fast IMG profiles, including adaptive
 batch bounds, before persisting. Configuration query failures stay visible.
 Overrides are saved in native GUI preferences,
@@ -113,7 +117,8 @@ and nonzero exits are preserved even when a count summary is unavailable.
 | `img.fallback_policy` | `strict` | `strict`: one requested JPEG encode attempt. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. All delivery and exact reconstruction checks remain mandatory. |
 | `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |
 | `tools.paths` | `{}` | Tool-name to absolute executable-path overrides, also accepted as repeated `--tool NAME=PATH` flags. Existing tool health checks still apply. |
-| `photos.backend` | `auto` | Native PhotoKit when available, with observable AppleScript compatibility fallback before import intent; `native` requires PhotoKit, `applescript` explicitly selects compatibility. `photokit` is an alias for `native`. |
+| `performance.mode` | `adaptive` | Shared IMG/VID memory-aware scheduling. `relaxed`, `balanced`, and `tight` request fixed tiers without removing memory safety caps. `--performance` overrides JSON; legacy `MFB_PERF_TIER` remains lower priority. |
+| `photos.backend` | `native` | Requires PhotoKit with a proven target library. `auto` opts into observable AppleScript fallback before import intent; `applescript` explicitly selects compatibility. `photokit` is an alias for `native`. |
 | `photos.import_root` | `null` | Top-level Photos folder name. `null` keeps the existing default. |
 | `photos.album_name` | `null` | Base Photos album name. `null` keeps the source-derived name. |
 | `photos.preserve_folder_structure` | `true` | Appends relative source subfolders below the configured names. |
@@ -197,17 +202,26 @@ failure no longer silently requests e10 in `img`. No setting disables exact
 JPEG reconstruction, metadata preservation, source retention on failure or
 pre-delete Photos custody verification.
 
-This configuration layer currently belongs to `img` and its GUI-launched
-operations. It does not claim that every developer/debug environment variable
-or the separate `vid` configuration has been migrated. Database credentials
+Image policy belongs to `img`; the launcher and `vid` also resolve the shared
+performance policy. Not every developer/debug variable or separate video
+quality setting has been migrated. Database credentials
 remain in the existing private database configuration. Real-library throughput,
 TCC prompts, crash/restart acceptance and manual Photos comparisons are
 separate from parser and isolated regression checks.
 
-Native backend selection applies to the checkpointed output importer. The
-modern-original tier and the noncheckpoint compatibility importer currently
-support AppleScript only; explicit `native` selection fails before importing
-on those paths. `auto` retains their established compatibility behavior.
+Native backend selection applies to checkpointed outputs, modern originals and
+generic media import. Original imports have a separate durable journal namespace
+and persist verified UUIDs after each window. Ephemeral XMP staging paths may
+change on resume only when filename, resource type and original-byte hashes
+still match. Generic media are batched by source parent/album, with durable
+state outside user media folders. Previously verified assets are rechecked by
+UUID rather than filename; explicit Native failures never silently fall back.
+
+Fast IMG reports `MFB_FAST_IMG_RESULT` before propagating delivery/finalization
+errors. Known success/failure/skip/ignored counts survive a nonzero exit;
+unprocessed entries and unknown retention have explicit fields. Primary cleanup
+completion is persisted before the independent original import begins. Retained
+primary failures remain eligible for `--retry` even with pending original imports.
 
 ## Validation Status (2026-09-28)
 

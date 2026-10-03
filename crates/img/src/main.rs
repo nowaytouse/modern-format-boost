@@ -1,4 +1,5 @@
 use anyhow::Context;
+mod fast_img_result;
 mod runtime_cli;
 use clap::{Parser, Subcommand};
 use img::Rational;
@@ -768,7 +769,14 @@ fn main_inner() -> anyhow::Result<()> {
                 strategy: &strategy,
                 extreme_precision,
             };
-            run_fast_img(options)?;
+            if let Err(error) = run_fast_img(options) {
+                eprintln!("Error: {error:#}");
+                std::process::exit(if error.is::<fast_img_result::FileFailures>() {
+                    1
+                } else {
+                    2
+                });
+            }
         }
         Commands::PhotosAlbums { library, json } => {
             let containers =
@@ -3072,6 +3080,7 @@ struct FastImgSourceInventory {
     scan_failures: BTreeMap<String, String>,
     modern_lossy_candidates: Vec<ModernLossyStaticCandidate>,
     modern_probe_failure_count: usize,
+    ignored_count: usize,
     source_hashes: BTreeMap<String, String>,
     planned_encode_count: usize,
 }
@@ -3104,6 +3113,7 @@ fn scan_fast_img_sources(
     }
 
     let mut source_files = Vec::new();
+    let candidate_count = candidates.len();
     let mut scan_failures = BTreeMap::new();
     let format_identities =
         foundation::image::format_identity::resolve_format_identities(&candidates)
@@ -3197,6 +3207,13 @@ fn scan_fast_img_sources(
         );
     }
     Ok(FastImgSourceInventory {
+        ignored_count: candidate_count
+            .checked_sub(
+                source_files.len()
+                    + modern_lossy_scan.candidates.len()
+                    + modern_probe_failure_count,
+            )
+            .context("fast-img scan classifications overlap")?,
         source_files,
         scan_failures,
         modern_lossy_candidates: modern_lossy_scan.candidates,
@@ -3424,6 +3441,14 @@ fn fast_img_try_finish_tier2_delivery(
     if !tier2_pending {
         return Ok(false);
     }
+    if retry_requested
+        && existing_marker
+            .as_ref()
+            .is_some_and(|marker| !marker.failed_sources.is_empty())
+    {
+        // Retry retained encodes first; their delivery pipeline also resumes Tier 2.
+        return Ok(false);
+    }
     if dry_run.0 {
         println!(
             "[DRY-RUN ] would reconcile/import and custody-verify {} modern lossy static source(s)",
@@ -3630,6 +3655,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         modern_lossy_candidates,
         modern_probe_failure_count,
         source_hashes: current_source_hashes,
+        ignored_count,
         planned_encode_count,
     } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
     let marker_context = FastImgMarkerContext {
@@ -3641,248 +3667,277 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         remove_selected_root,
         strategy,
     };
-    fast_img_reconcile_saved_marker(
-        &mut existing_marker,
-        &marker_context,
-        dry_run,
-        retry_requested,
-    )?;
+    let execution = (|| -> anyhow::Result<()> {
+        fast_img_reconcile_saved_marker(
+            &mut existing_marker,
+            &marker_context,
+            dry_run,
+            retry_requested,
+        )?;
 
-    fast_img_confirm_resume_if_needed(
-        existing_marker.as_ref(),
-        modern_lossy_candidates.len(),
-        dry_run,
-        shortest_path,
-        &mut retry_requested,
-    )?;
-    if fast_img_try_finish_tier2_delivery(
-        &mut existing_marker,
-        &marker_context,
-        dry_run,
-        retry_requested,
-    )? {
-        return Ok(());
-    }
+        fast_img_confirm_resume_if_needed(
+            existing_marker.as_ref(),
+            modern_lossy_candidates.len(),
+            dry_run,
+            shortest_path,
+            &mut retry_requested,
+        )?;
+        if fast_img_try_finish_tier2_delivery(
+            &mut existing_marker,
+            &marker_context,
+            dry_run,
+            retry_requested,
+        )? {
+            return Ok(());
+        }
 
-    if existing_marker.is_none() && source_jpegs.is_empty() && modern_lossy_candidates.is_empty() {
-        if !working_copy_existed && working_copy.is_dir() {
-            std::fs::remove_dir(&working_copy).with_context(|| {
+        if existing_marker.is_none()
+            && source_jpegs.is_empty()
+            && modern_lossy_candidates.is_empty()
+        {
+            if !working_copy_existed && working_copy.is_dir() {
+                std::fs::remove_dir(&working_copy).with_context(|| {
+                    format!(
+                        "remove unused empty fast-img output directory {}",
+                        working_copy.display()
+                    )
+                })?;
+            }
+            if modern_probe_failure_count > 0 {
+                eprintln!(
+                    "fast-img retained all sources because {modern_probe_failure_count} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted"
+                );
+                return Ok(());
+            }
+            println!(
+                "[DONE    ] no eligible {output_format_name} input media found; no files, Photos assets, or directories were changed"
+            );
+            return Ok(());
+        }
+
+        if let Some(marker) = &existing_marker
+            && !retry_requested
+            && fast_img_requires_resume_decision(marker, shortest_path)
+        {
+            anyhow::bail!(
+                "MFB_RESUME_DECISION_REQUIRED: fast-img stopped at {}; rerun with --retry to continue or --no-resume to start in a new output directory",
+                marker.stage.as_str()
+            );
+        }
+
+        let Some(retry_plan) = fast_img_prepare_retry_plan(
+            &mut existing_marker,
+            &marker_context,
+            shortest_path,
+            retry_requested,
+        )?
+        else {
+            return Ok(());
+        };
+        let retry_failed_sources_from_cleanup = retry_plan.failed_from_cleanup;
+        let retry_failed_sources_before_cleanup = retry_plan.failed_before_cleanup;
+        let resume_local_delivery_for_shortest_path = retry_plan.resume_local_delivery;
+        if let Some(marker) = &existing_marker
+            && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
+            && !retry_requested
+        {
+            anyhow::bail!(
+                "fast-img previous run stopped at {}; inspect {} or rerun with --retry",
+                marker.stage.as_str(),
+                working_copy.display()
+            );
+        }
+        if dry_run.0 {
+            if strategy == "avif" {
+                println!(
+                    "[DRY-RUN ] would encode {} static images from {} into AVIF-only output {}",
+                    planned_encode_count,
+                    src_dir.display(),
+                    working_copy.display()
+                );
+            } else {
+                println!(
+                    "[DRY-RUN ] would encode {} JPEGs from {} into JXL-only output {}",
+                    source_jpegs.len(),
+                    src_dir.display(),
+                    working_copy.display()
+                );
+            }
+            if !modern_lossy_candidates.is_empty() {
+                println!(
+                    "[DRY-RUN ] would reconcile/import and custody-verify {} byte-preserved Tier 2 source(s) in Photos",
+                    modern_lossy_candidates.len()
+                );
+            }
+            return Ok(());
+        }
+
+        let reuse_marker_import_proof = existing_marker
+            .as_ref()
+            .is_some_and(fast_img_reuses_marker_import_proof_on_resume);
+        let saved_dir_timestamps =
+            foundation::save_directory_timestamps(&src_dir).with_context(|| {
+                format!("snapshot fast-img directory metadata {}", src_dir.display())
+            })?;
+
+        let mut marker = existing_marker.take().unwrap_or_else(|| {
+            WorkingCopyMarker::new(src_dir.clone(), working_copy.clone(), source_jpegs.len())
+                .with_strategy(strategy.to_string())
+        });
+        let execution = (|| -> anyhow::Result<()> {
+            if retry_failed_sources_from_cleanup {
+                validate_cleanup_retry_marker_source_state(
+                    &marker,
+                    &src_dir,
+                    source_jpegs.len(),
+                    &current_source_hashes,
+                )?;
+            } else if resume_local_delivery_for_shortest_path {
+                validate_cleanup_complete_marker(
+                    &marker,
+                    &src_dir,
+                    source_jpegs.len(),
+                    &current_source_hashes,
+                )?;
+            } else {
+                validate_fast_img_marker_source_state(
+                    &marker,
+                    &src_dir,
+                    source_jpegs.len(),
+                    &current_source_hashes,
+                )?;
+            }
+            let mut resume_stage = if resume_local_delivery_for_shortest_path {
+                FastImgStageName::Gate1Passed
+            } else {
+                retry_resume_stage(&marker.stage, retry_requested)
+            };
+            let refresh_jxl_metadata =
+                encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
+            let previous_resume_stage = marker.stage.clone();
+            if !resume_local_delivery_for_shortest_path
+                && fast_img_downgrade_resume_if_outputs_stale(&mut marker, &mut resume_stage)?
+            {
+                println!(
+                    "[RESUME  ] existing marker has missing/drifted {output_format_name} output; rebuilding local {output_format_name} outputs"
+                );
+                tracing::warn!(
+                    target: "fast_img",
+                    stage = %previous_resume_stage.as_str(),
+                    working_copy = %working_copy.display(),
+                    "fast-img marker output proof is not current; downgrading resume stage to output_prepared"
+                );
+            }
+            if !resume_local_delivery_for_shortest_path && !retry_failed_sources_from_cleanup {
+                marker.src_jpeg_count = source_jpegs.len();
+            }
+            marker.stage = if output_prepared_or_later(&resume_stage) {
+                resume_stage
+            } else {
+                FastImgStageName::ScanComplete
+            };
+            marker.error = None;
+            write_marker_atomic(&marker)?;
+
+            if marker.stage == FastImgStageName::ScanComplete {
+                let msg = fast_img_delete_notice_message(
+                    planned_encode_count,
+                    modern_lossy_candidates.len(),
+                    &src_dir,
+                    strategy,
+                );
+                println!("{msg}");
+                tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
+            }
+
+            if !output_prepared_or_later(&marker.stage) {
+                println!(
+                    "[PREPARE ] {output_format_name} output {}",
+                    working_copy.display()
+                );
+                prepare_jxl_output_dir(&working_copy).with_context(|| {
+                    format!(
+                        "create fast-img adjacent {output_format_name} output directory {}",
+                        working_copy.display()
+                    )
+                })?;
+                marker.stage = FastImgStageName::OutputPrepared;
+                write_marker_atomic(&marker)?;
+            }
+
+            fast_img_refresh_and_persist_marker_deliveries(
+                &mut marker,
+                &src_dir,
+                strategy,
+                refresh_jxl_metadata,
+            )?;
+
+            if !encode_complete_or_later(&marker.stage) {
+                fast_img_run_encode_phase(FastImgEncodeContext {
+                    marker: &mut marker,
+                    source_jpegs: &source_jpegs,
+                    current_source_hashes: &current_source_hashes,
+                    scan_failures: &scan_failures,
+                    src_dir: &src_dir,
+                    working_copy: &working_copy,
+                    retry_failed_sources_from_cleanup: RetryFlag(
+                        retry_failed_sources_from_cleanup || retry_failed_sources_before_cleanup,
+                    ),
+                    archive: ArchiveFlag(archive),
+                    allow_expert_options: ExpertOptionsFlag(allow_expert_options),
+                    strategy,
+                })?;
+            }
+
+            foundation::restore_delivery_directory_metadata(
+                &saved_dir_timestamps,
+                &src_dir,
+                &working_copy,
+            )
+            .with_context(|| {
                 format!(
-                    "remove unused empty fast-img output directory {}",
+                    "restore fast-img directory metadata {} -> {} before Gate 1",
+                    src_dir.display(),
                     working_copy.display()
                 )
             })?;
-        }
-        if modern_probe_failure_count > 0 {
-            anyhow::bail!(
-                "fast-img retained all sources because {modern_probe_failure_count} modern static candidate(s) could not be classified; no Photos import or cleanup was attempted"
-            );
-        }
-        println!(
-            "[DONE    ] no eligible {output_format_name} input media found; no files, Photos assets, or directories were changed"
-        );
-        return Ok(());
-    }
 
-    if let Some(marker) = &existing_marker
-        && !retry_requested
-        && fast_img_requires_resume_decision(marker, shortest_path)
-    {
-        anyhow::bail!(
-            "MFB_RESUME_DECISION_REQUIRED: fast-img stopped at {}; rerun with --retry to continue or --no-resume to start in a new output directory",
-            marker.stage.as_str()
-        );
-    }
+            fast_img_run_verification_and_delivery_pipeline(FastImgDeliveryContext {
+                marker: &mut marker,
+                source_jpegs: &source_jpegs,
+                current_source_hashes: &current_source_hashes,
+                src_dir: &src_dir,
+                working_copy: &working_copy,
+                saved_dir_timestamps: &saved_dir_timestamps,
+                retry_failed_sources_from_cleanup: RetryFlag(retry_failed_sources_from_cleanup),
+                resume_local_delivery_for_shortest_path: ResumeLocalDeliveryFlag(
+                    resume_local_delivery_for_shortest_path,
+                ),
+                shortest_path,
+                reuse_marker_import_proof: ReuseImportProofFlag(reuse_marker_import_proof),
+                modern_lossy_candidates: &modern_lossy_candidates,
+                remove_selected_root: RemoveSelectedRootFlag(remove_selected_root),
+                strategy,
+            })?;
 
-    let Some(retry_plan) = fast_img_prepare_retry_plan(
-        &mut existing_marker,
-        &marker_context,
-        shortest_path,
-        retry_requested,
-    )?
-    else {
-        return Ok(());
-    };
-    let retry_failed_sources_from_cleanup = retry_plan.failed_from_cleanup;
-    let retry_failed_sources_before_cleanup = retry_plan.failed_before_cleanup;
-    let resume_local_delivery_for_shortest_path = retry_plan.resume_local_delivery;
-    if let Some(marker) = &existing_marker
-        && foundation::pipeline::verification::stage_requires_retry(&marker.stage)
-        && !retry_requested
-    {
-        anyhow::bail!(
-            "fast-img previous run stopped at {}; inspect {} or rerun with --retry",
-            marker.stage.as_str(),
-            working_copy.display()
-        );
-    }
+            Ok(())
+        })();
+        existing_marker = Some(marker);
+        execution
+    })();
     if dry_run.0 {
-        if strategy == "avif" {
-            println!(
-                "[DRY-RUN ] would encode {} static images from {} into AVIF-only output {}",
-                planned_encode_count,
-                src_dir.display(),
-                working_copy.display()
-            );
-        } else {
-            println!(
-                "[DRY-RUN ] would encode {} JPEGs from {} into JXL-only output {}",
-                source_jpegs.len(),
-                src_dir.display(),
-                working_copy.display()
-            );
-        }
-        if !modern_lossy_candidates.is_empty() {
-            println!(
-                "[DRY-RUN ] would reconcile/import and custody-verify {} byte-preserved Tier 2 source(s) in Photos",
-                modern_lossy_candidates.len()
-            );
-        }
-        return Ok(());
+        return execution;
     }
-
-    let reuse_marker_import_proof = existing_marker
-        .as_ref()
-        .is_some_and(fast_img_reuses_marker_import_proof_on_resume);
-    let saved_dir_timestamps = foundation::save_directory_timestamps(&src_dir)
-        .with_context(|| format!("snapshot fast-img directory metadata {}", src_dir.display()))?;
-
-    let mut marker = existing_marker.unwrap_or_else(|| {
-        WorkingCopyMarker::new(src_dir.clone(), working_copy.clone(), source_jpegs.len())
-            .with_strategy(strategy.to_string())
-    });
-    if retry_failed_sources_from_cleanup {
-        validate_cleanup_retry_marker_source_state(
-            &marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-        )?;
-    } else if resume_local_delivery_for_shortest_path {
-        validate_cleanup_complete_marker(
-            &marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-        )?;
-    } else {
-        validate_fast_img_marker_source_state(
-            &marker,
-            &src_dir,
-            source_jpegs.len(),
-            &current_source_hashes,
-        )?;
-    }
-    let mut resume_stage = if resume_local_delivery_for_shortest_path {
-        FastImgStageName::Gate1Passed
-    } else {
-        retry_resume_stage(&marker.stage, retry_requested)
-    };
-    let refresh_jxl_metadata =
-        encode_complete_or_later(&resume_stage) && !gate1_complete_or_later(&resume_stage);
-    let previous_resume_stage = marker.stage.clone();
-    if !resume_local_delivery_for_shortest_path
-        && fast_img_downgrade_resume_if_outputs_stale(&mut marker, &mut resume_stage)?
-    {
-        println!(
-            "[RESUME  ] existing marker has missing/drifted {output_format_name} output; rebuilding local {output_format_name} outputs"
-        );
-        tracing::warn!(
-            target: "fast_img",
-            stage = %previous_resume_stage.as_str(),
-            working_copy = %working_copy.display(),
-            "fast-img marker output proof is not current; downgrading resume stage to output_prepared"
-        );
-    }
-    if !resume_local_delivery_for_shortest_path && !retry_failed_sources_from_cleanup {
-        marker.src_jpeg_count = source_jpegs.len();
-    }
-    marker.stage = if output_prepared_or_later(&resume_stage) {
-        resume_stage
-    } else {
-        FastImgStageName::ScanComplete
-    };
-    marker.error = None;
-    write_marker_atomic(&marker)?;
-
-    if marker.stage == FastImgStageName::ScanComplete {
-        let msg = fast_img_delete_notice_message(
-            planned_encode_count,
-            modern_lossy_candidates.len(),
-            &src_dir,
-            strategy,
-        );
-        println!("{msg}");
-        tracing::info!(target: "fast_img", message = %msg, "fast-img delete notice acknowledged automatically");
-    }
-
-    if !output_prepared_or_later(&marker.stage) {
-        println!(
-            "[PREPARE ] {output_format_name} output {}",
-            working_copy.display()
-        );
-        prepare_jxl_output_dir(&working_copy).with_context(|| {
-            format!(
-                "create fast-img adjacent {output_format_name} output directory {}",
-                working_copy.display()
-            )
-        })?;
-        marker.stage = FastImgStageName::OutputPrepared;
-        write_marker_atomic(&marker)?;
-    }
-
-    fast_img_refresh_and_persist_marker_deliveries(
-        &mut marker,
-        &src_dir,
-        strategy,
-        refresh_jxl_metadata,
-    )?;
-
-    if !encode_complete_or_later(&marker.stage) {
-        fast_img_run_encode_phase(FastImgEncodeContext {
-            marker: &mut marker,
-            source_jpegs: &source_jpegs,
-            current_source_hashes: &current_source_hashes,
-            scan_failures: &scan_failures,
-            src_dir: &src_dir,
-            working_copy: &working_copy,
-            retry_failed_sources_from_cleanup: RetryFlag(
-                retry_failed_sources_from_cleanup || retry_failed_sources_before_cleanup,
-            ),
-            archive: ArchiveFlag(archive),
-            allow_expert_options: ExpertOptionsFlag(allow_expert_options),
-            strategy,
-        })?;
-    }
-
-    foundation::restore_delivery_directory_metadata(&saved_dir_timestamps, &src_dir, &working_copy)
-        .with_context(|| {
-            format!(
-                "restore fast-img directory metadata {} -> {} before Gate 1",
-                src_dir.display(),
-                working_copy.display()
-            )
-        })?;
-
-    fast_img_run_verification_and_delivery_pipeline(FastImgDeliveryContext {
-        marker: &mut marker,
-        source_jpegs: &source_jpegs,
-        current_source_hashes: &current_source_hashes,
-        src_dir: &src_dir,
-        working_copy: &working_copy,
-        saved_dir_timestamps: &saved_dir_timestamps,
-        retry_failed_sources_from_cleanup: RetryFlag(retry_failed_sources_from_cleanup),
-        resume_local_delivery_for_shortest_path: ResumeLocalDeliveryFlag(
-            resume_local_delivery_for_shortest_path,
-        ),
-        shortest_path,
-        reuse_marker_import_proof: ReuseImportProofFlag(reuse_marker_import_proof),
-        modern_lossy_candidates: &modern_lossy_candidates,
-        remove_selected_root: RemoveSelectedRootFlag(remove_selected_root),
-        strategy,
-    })?;
-
-    Ok(())
+    let marker = existing_marker
+        .unwrap_or_else(|| WorkingCopyMarker::new(src_dir, working_copy, source_jpegs.len()));
+    fast_img_result::finish(
+        &marker,
+        shortest_path.0,
+        &modern_lossy_candidates,
+        modern_probe_failure_count,
+        ignored_count,
+        execution,
+    )
 }
 
 const fn fast_img_post_gate1_policy(shortest_path: ShortestPathFlag) -> FastImgPostGate1Policy {
@@ -9517,28 +9572,17 @@ fn fast_img_deliver_modern_lossy_static_tier(
             ..Default::default()
         }
     } else {
-        foundation::fast_img::import_modern_lossy_static_tier_in_library(
-            src_dir,
-            candidates,
-            marker.photos_library_path.as_deref(),
-        )
-        .map_err(|err| anyhow::anyhow!("fast-img modern lossy Photos delivery failed: {err}"))?
+        foundation::fast_img::import_modern_lossy_static_tier_checkpointed(marker, candidates)
+            .map_err(|err| anyhow::anyhow!("fast-img modern lossy Photos delivery failed: {err}"))?
     };
 
-    if library_handle.import_error_count != 0
-        || library_handle.imported_assets.len() != candidates.len()
-    {
-        anyhow::bail!(
-            "fast-img modern lossy Photos delivery incomplete: verified={} failed={} expected={}; all remaining sources retained",
-            library_handle.imported_assets.len(),
-            library_handle.import_error_count,
-            candidates.len()
-        );
-    }
     apply_tier2_library_assets_to_marker(marker, &library_handle)
         .map_err(|err| anyhow::anyhow!("fast-img modern lossy marker proof failed: {err}"))?;
     write_marker_atomic(marker)?;
     if marker.tier2_imported_assets.is_empty() {
+        if library_handle.import_error_count == candidates.len() && !candidates.is_empty() {
+            return Err(fast_img_result::FileFailures::originals(candidates.len()).into());
+        }
         anyhow::bail!(
             "fast-img tier-2 recovery has no persisted Photos custody proof; source files retained"
         );
@@ -9560,9 +9604,54 @@ fn fast_img_deliver_modern_lossy_static_tier(
     .map_err(|err| {
         anyhow::anyhow!("fast-img modern lossy empty-directory cleanup failed: {err}")
     })?;
+    if library_handle.import_error_count != 0
+        || library_handle.imported_assets.len() != candidates.len()
+    {
+        if library_handle.imported_assets.len() + library_handle.import_error_count
+            == candidates.len()
+        {
+            return Err(fast_img_result::FileFailures::originals(
+                library_handle.import_error_count,
+            )
+            .into());
+        }
+        anyhow::bail!(
+            "fast-img modern lossy Photos delivery incomplete: verified={} failed={} expected={}; verified sources cleaned, unverified sources retained",
+            library_handle.imported_assets.len(),
+            library_handle.import_error_count,
+            candidates.len()
+        );
+    }
     marker.tier2_in_progress = false;
     write_marker_atomic(marker)?;
     Ok((deleted, already_deleted, pruned))
+}
+
+fn fast_img_finalize_sources(
+    marker: &mut WorkingCopyMarker,
+    src_dir: &Path,
+    modern_lossy_candidates: &[ModernLossyStaticCandidate],
+    remove_selected_root: bool,
+    strategy: &str,
+) -> anyhow::Result<((usize, usize, usize), (usize, usize, usize))> {
+    fast_img_result::finalize_sources(
+        marker,
+        !modern_lossy_candidates.is_empty(),
+        |marker| {
+            let (deleted, absent) =
+                fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
+            let pruned = fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
+            Ok((deleted, absent, pruned))
+        },
+        |marker| {
+            fast_img_deliver_modern_lossy_static_tier(
+                marker,
+                src_dir,
+                modern_lossy_candidates,
+                remove_selected_root,
+            )
+        },
+    )
 }
 
 struct FastImgDeliveryContext<'a> {
@@ -9640,10 +9729,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         && modern_lossy_candidates.is_empty()
         && !marker.tier2_in_progress
     {
-        anyhow::bail!(
-            "All {} {source_kind}(s) failed during encoding; no outputs to verify. Check logs for per-file failure reasons.",
-            marker.failed_sources.len(),
-        );
+        return Err(fast_img_result::FileFailures::primary(marker.failed_sources.len()).into());
     }
 
     let output_format = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy);
@@ -9694,20 +9780,16 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 working_copy.display()
             )
         })?;
-        let (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned) =
-            fast_img_deliver_modern_lossy_static_tier(
-                marker,
-                src_dir,
-                modern_lossy_candidates,
-                remove_selected_root.0,
-            )?;
-        let (source_deleted, source_already_deleted) =
-            fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
-        let source_dirs_pruned =
-            fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root.0)?;
-        marker.stage = FastImgStageName::CleanupComplete;
-        marker.error = None;
-        write_marker_atomic(marker)?;
+        let (
+            (source_deleted, source_already_deleted, source_dirs_pruned),
+            (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned),
+        ) = fast_img_finalize_sources(
+            marker,
+            src_dir,
+            modern_lossy_candidates,
+            remove_selected_root.0,
+            strategy,
+        )?;
         println!(
             "[DELIVER ] Gate 1 passed; {mode_name} output at {}; source {source_type} deleted={} already_absent={} modern_lossy_deleted={} modern_lossy_already_absent={} empty_dirs_pruned={}",
             working_copy.display(),
@@ -9846,17 +9928,16 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 working_copy.display()
             )
         })?;
-    let (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned) =
-        fast_img_deliver_modern_lossy_static_tier(
-            marker,
-            src_dir,
-            modern_lossy_candidates,
-            remove_selected_root.0,
-        )?;
-    let (source_deleted, source_already_deleted) =
-        fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
-    let source_dirs_pruned =
-        fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root.0)?;
+    let (
+        (source_deleted, source_already_deleted, source_dirs_pruned),
+        (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned),
+    ) = fast_img_finalize_sources(
+        marker,
+        src_dir,
+        modern_lossy_candidates,
+        remove_selected_root.0,
+        strategy,
+    )?;
     tracing::info!(
         target: "fast_img",
         deleted = source_deleted,
@@ -13147,6 +13228,91 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn fast_img_primary_cleanup_survives_later_backend_failure() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let _state = fast_img_marker_state_test_env(root.path());
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::create_dir_all(&source)?;
+        std::fs::create_dir_all(&output)?;
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 4);
+        marker.stage = FastImgStageName::Gate3Passed;
+        for name in ["A", "B", "C", "D"] {
+            let input = source.join(format!("{name}.jpg"));
+            std::fs::write(&input, format!("synthetic-{name}"))?;
+            let src = foundation::common_utils::calculate_blake3_hash(&input)?;
+            if name == "C" {
+                marker.failed_sources.insert(
+                    "C.jpg".into(),
+                    SkippedSourceEntry {
+                        src,
+                        reason: "missing EOI".into(),
+                    },
+                );
+            } else {
+                let out_rel = format!("{name}.jxl");
+                let path = output.join(&out_rel);
+                std::fs::write(&path, format!("synthetic-output-{name}"))?;
+                let out = foundation::common_utils::calculate_blake3_hash(&path)?;
+                marker.blake3_log.insert(
+                    format!("{name}.jpg"),
+                    Blake3Entry {
+                        out_rel: Some(out_rel),
+                        src,
+                        library_asset: Some(out.clone()),
+                        out,
+                    },
+                );
+            }
+        }
+        let result = super::fast_img_result::finalize_sources(
+            &mut marker,
+            true,
+            |marker| {
+                fast_img_delete_verified_source_jpegs_with(marker, &source, |input, output| {
+                    Ok(IntegrityResult::FinalModernDelivery {
+                        source_hash: foundation::common_utils::calculate_blake3_hash(input)?,
+                        output_hash: foundation::common_utils::calculate_blake3_hash(output)?,
+                    })
+                })
+            },
+            |marker| -> anyhow::Result<()> {
+                assert_eq!(marker.stage, FastImgStageName::CleanupComplete);
+                let persisted = super::read_marker(&marker.working_copy)?;
+                assert_eq!(persisted.stage, FastImgStageName::CleanupComplete);
+                assert!(persisted.tier2_in_progress);
+                anyhow::bail!("native backend unavailable for subsequent originals")
+            },
+        );
+        assert!(result.is_err());
+        for name in ["A", "B", "D"] {
+            assert!(!source.join(format!("{name}.jpg")).exists());
+        }
+        assert!(source.join("C.jpg").exists());
+        assert_eq!(marker.failed_sources.len(), 1);
+        let context = super::FastImgMarkerContext {
+            src_dir: &source,
+            working_copy: &output,
+            source_jpegs: &[],
+            source_hashes: &BTreeMap::new(),
+            modern_lossy_candidates: &[],
+            remove_selected_root: false,
+            strategy: "hevc",
+        };
+        let mut saved = Some(marker);
+        assert!(
+            !super::fast_img_try_finish_tier2_delivery(
+                &mut saved,
+                &context,
+                super::DryRunFlag(false),
+                true,
+            )?,
+            "pending original delivery must not bypass failed primary retries"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn verified_source_deletion_proceeds_with_incomplete_disposition() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let src_root = root.path().join("Photos");
@@ -14252,11 +14418,8 @@ mod fast_img_hardening_tests {
         })
         .expect_err("malformed GIF must remain an explicit failed source");
 
-        assert!(
-            run_error
-                .to_string()
-                .contains("All 1 static image(s) failed")
-        );
+        assert!(run_error.is::<super::fast_img_result::FileFailures>());
+        assert!(run_error.to_string().contains("1 failed source(s)"));
         let working_copy = foundation::pipeline::verification::working_copy_dir(&src_root);
         let marker_dir = root.path().join("fast_img/markers");
         let marker_files = std::fs::read_dir(&marker_dir)?

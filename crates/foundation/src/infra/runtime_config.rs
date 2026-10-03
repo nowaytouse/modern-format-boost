@@ -11,8 +11,8 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum PhotosBackend {
-    #[default]
     Auto,
+    #[default]
     #[serde(alias = "photokit")]
     #[value(alias = "photokit")]
     Native,
@@ -35,6 +35,60 @@ pub enum ToolPolicy {
     Single,
     #[default]
     Fallback,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceMode {
+    #[default]
+    Adaptive,
+    Relaxed,
+    Balanced,
+    Tight,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PerformancePolicy {
+    pub mode: PerformanceMode,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct PerformanceArgs {
+    /// Adaptive scheduling is the default; fixed tiers still obey memory safety caps.
+    #[arg(
+        id = "performance_mode",
+        long = "performance",
+        global = true,
+        value_enum
+    )]
+    mode: Option<PerformanceMode>,
+}
+
+impl PerformanceArgs {
+    pub fn cli_arguments(&self) -> Vec<String> {
+        self.mode.map_or_else(Vec::new, |mode| {
+            vec![
+                "--performance".into(),
+                match mode {
+                    PerformanceMode::Adaptive => "adaptive",
+                    PerformanceMode::Relaxed => "relaxed",
+                    PerformanceMode::Balanced => "balanced",
+                    PerformanceMode::Tight => "tight",
+                }
+                .into(),
+            ]
+        })
+    }
+
+    pub fn apply_to(&self, loaded: &mut LoadedConfig) {
+        if let Some(mode) = self.mode {
+            loaded.config.performance.mode = mode;
+            loaded
+                .sources
+                .insert("performance.mode".into(), "CLI".into());
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +130,7 @@ pub struct PhotosPolicy {
 impl Default for PhotosPolicy {
     fn default() -> Self {
         Self {
-            backend: PhotosBackend::Auto,
+            backend: PhotosBackend::Native,
             import_root: None,
             album_name: None,
             preserve_folder_structure: true,
@@ -105,6 +159,7 @@ pub struct RuntimeConfig {
     pub img: ImgPolicy,
     pub photos: PhotosPolicy,
     pub tools: ToolsPolicy,
+    pub performance: PerformancePolicy,
 }
 
 impl Default for RuntimeConfig {
@@ -114,6 +169,7 @@ impl Default for RuntimeConfig {
             img: ImgPolicy::default(),
             photos: PhotosPolicy::default(),
             tools: ToolsPolicy::default(),
+            performance: PerformancePolicy::default(),
         }
     }
 }
@@ -334,6 +390,22 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     let mut value = serde_json::to_value(RuntimeConfig::default())?;
     let mut sources = BTreeMap::new();
     default_sources(&value, "", &mut sources);
+    if let Some(mode) = legacy_env(crate::constants::ENV_MFB_PERF_TIER)? {
+        let mode = match mode.trim().to_ascii_lowercase().as_str() {
+            "adaptive" => PerformanceMode::Adaptive,
+            "relaxed" | "wide" => PerformanceMode::Relaxed,
+            "balanced" | "normal" | "default" => PerformanceMode::Balanced,
+            "tight" | "strict" | "conservative" => PerformanceMode::Tight,
+            _ => bail!("MFB_PERF_TIER must be adaptive, relaxed, balanced or tight"),
+        };
+        merge(
+            &mut value,
+            json!({"performance":{"mode":mode}}),
+            "env:MFB_PERF_TIER",
+            "",
+            &mut sources,
+        );
+    }
     if let Some(backend) = legacy_env("MFB_PHOTOS_IMPORT_BACKEND")? {
         merge(
             &mut value,
@@ -446,6 +518,29 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_and_explicit_performance_keep_one_policy() {
+        let config = RuntimeConfig::default();
+        assert_eq!(config.photos.backend, PhotosBackend::Native);
+        assert_eq!(config.performance.mode, PerformanceMode::Adaptive);
+        let mut loaded = LoadedConfig {
+            config,
+            sources: BTreeMap::new(),
+        };
+        let args = PerformanceArgs {
+            mode: Some(PerformanceMode::Tight),
+        };
+        args.apply_to(&mut loaded);
+        assert_eq!(loaded.config.performance.mode, PerformanceMode::Tight);
+        assert_eq!(loaded.sources["performance.mode"], "CLI");
+        assert_eq!(args.cli_arguments(), ["--performance", "tight"]);
+        assert!(PerformanceArgs::default().cli_arguments().is_empty());
+        assert!(
+            serde_json::from_value::<RuntimeConfig>(json!({"performance":{"mode":"unknown"}}))
+                .is_err()
+        );
+    }
 
     #[test]
     fn legacy_tool_names_match_resolver_names() {

@@ -1458,7 +1458,6 @@ fn bind_photos_import_naming_policy_with(
 
 /// Bind a legacy marker only after its existing custody is proved in the selected library.
 pub fn bind_marker_to_selected_photos_library(marker: &mut WorkingCopyMarker) -> Result<()> {
-    require_applescript_only_import_backend()?;
     let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
     let naming_bound = bind_photos_import_naming_policy(marker)?;
     if marker.photos_library_path == selected && !naming_bound {
@@ -1565,10 +1564,15 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
 pub fn import_media_outputs_with_library_verifier(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
-    require_applescript_only_import_backend()?;
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(None)?;
     require_active_photos_library(selected.as_deref())?;
+    #[cfg(target_os = "macos")]
+    if let Some(handle) = native_checkpoint::try_import_candidates(candidates, selected.as_deref())?
+    {
+        return Ok(handle);
+    }
+    require_applescript_only_import_backend()?;
     let import_report = import_media_outputs_with_photos_applescript_with(
         candidates,
         photos_import_fail_fast_enabled(),
@@ -1959,7 +1963,38 @@ pub fn import_modern_lossy_static_tier_in_library(
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
     bound_library: Option<&Path>,
 ) -> Result<LibraryHandle> {
-    require_applescript_only_import_backend()?;
+    #[cfg(target_os = "macos")]
+    {
+        let library = selected_photos_library(bound_library)?;
+        let mut marker =
+            native_checkpoint::candidate_marker(src_dir, &"tier2", library.as_deref())?;
+        import_modern_lossy_static_tier_checkpointed(&mut marker, candidates)
+    }
+    #[cfg(not(target_os = "macos"))]
+    import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library, None)
+}
+
+/// Import originals using the same durable native receipts as converted outputs.
+pub fn import_modern_lossy_static_tier_checkpointed(
+    marker: &mut WorkingCopyMarker,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+) -> Result<LibraryHandle> {
+    let source = marker.src_dir.clone();
+    let library = marker.photos_library_path.clone();
+    import_modern_lossy_static_tier_with_checkpoint(
+        &source,
+        candidates,
+        library.as_deref(),
+        Some(marker),
+    )
+}
+
+fn import_modern_lossy_static_tier_with_checkpoint(
+    src_dir: &Path,
+    candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
+    bound_library: Option<&Path>,
+    checkpoint: Option<&mut WorkingCopyMarker>,
+) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(bound_library)?;
     if candidates.is_empty() {
@@ -2190,6 +2225,21 @@ pub fn import_modern_lossy_static_tier_in_library(
         }
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(marker) = checkpoint
+        && let Some(mut handle) = native_checkpoint::try_import_originals(
+            marker,
+            &import_candidates,
+            &enriched_proofs,
+            selected.as_deref(),
+        )?
+    {
+        apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
+        handle.import_error_count = metadata_failures;
+        return Ok(handle);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = checkpoint;
     let mut handle = import_or_reconcile_modern_lossy_static_candidates(
         &import_candidates,
         selected.as_deref(),
@@ -2247,10 +2297,14 @@ fn apply_tier2_enriched_delivery_proofs(
 pub fn import_or_reconcile_verified_media_candidates(
     candidates: &[PhotosImportCandidate],
 ) -> Result<LibraryHandle> {
-    require_applescript_only_import_backend()?;
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(None)?;
     require_active_photos_library(selected.as_deref())?;
+    #[cfg(target_os = "macos")]
+    if let Some(handle) = native_checkpoint::try_import_candidates(candidates, selected.as_deref())?
+    {
+        return Ok(handle);
+    }
     import_or_reconcile_modern_lossy_static_candidates(candidates, selected.as_deref())
 }
 
@@ -8767,7 +8821,7 @@ mod tests {
             anyhow::ensure!(output.status.success(), "Photos asset count failed");
             Ok(String::from_utf8(output.stdout)?.trim().parse()?)
         };
-        let _lock = acquire_photos_import_lock()?;
+        let primary_lock = acquire_photos_import_lock()?;
         let before = count_assets()?;
         let scratch = tempfile::Builder::new()
             .prefix("mfb-photos-smoke-")
@@ -8854,6 +8908,7 @@ mod tests {
             let mut config = crate::runtime_config::load(None, true)?.config;
             config.photos.native_batch_size = 1;
             config.photos.verification_batch_size = 1;
+            config.photos.adaptive_batching = false;
             crate::runtime_config::install(config)?;
             let failed = import_marker_outputs_with_photos_checkpoint_in_library(
                 &marker,
@@ -8922,12 +8977,7 @@ mod tests {
         }
         verify_jxl_roundtrip_integrity(&jpeg, &input)?;
 
-        // The explicit-native run isolates native commit/recovery; Tier 2 is
-        // exercised by the compatibility smoke below, not silently switched.
-        if std::env::var("MFB_PHOTOS_IMPORT_BACKEND").as_deref() == Ok("photokit") {
-            return Ok(());
-        }
-
+        drop(primary_lock);
         // Exercise Tier 2 with a genuinely lossy JXL carrying metadata, not the
         // reversible JPEG output above. Original custody includes every box.
         let tier2_root = scratch.path().join("tier2");
@@ -8955,12 +9005,22 @@ mod tests {
         crate::metadata::append_xmp_overlay_to_jxl(&xmp, &tier2_input)?;
         let admitted = super::super::modern_lossy_static::probe_modern_lossy_static(&tier2_input)?
             .ok_or_else(|| anyhow::anyhow!("lossy Tier-2 fixture was not admitted"))?;
-        let candidates = build_modern_lossy_static_import_candidates(&tier2_root, &[admitted]);
+        let candidates = build_modern_lossy_static_import_candidates(
+            &tier2_root,
+            std::slice::from_ref(&admitted),
+        );
+        let tier2_wc = scratch.path().join("tier2-checkpoint");
+        std::fs::create_dir(&tier2_wc)?;
+        let mut tier2_marker = WorkingCopyMarker::new(tier2_root.clone(), tier2_wc, 0);
+        bind_photos_library_proof(&mut tier2_marker, Some(&library))?;
+        bind_photos_import_naming_policy(&mut tier2_marker)?;
         let mut tier2_uuid = None;
         for operation in ["import", "reconcile"] {
             assert_debug_library_active()?;
-            let handle =
-                import_or_reconcile_modern_lossy_static_candidates(&candidates, Some(&library))?;
+            let handle = import_modern_lossy_static_tier_checkpointed(
+                &mut tier2_marker,
+                std::slice::from_ref(&admitted),
+            )?;
             assert_eq!(handle.import_error_count, 0);
             assert_eq!(handle.imported_assets.len(), 1);
             let asset = &handle.imported_assets[0];

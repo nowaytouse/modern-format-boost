@@ -17,6 +17,8 @@ use vid::{
 #[command(name = "vid")]
 #[command(version, about = "High-performance video and animated media converter", long_about = None)]
 struct Cli {
+    #[command(flatten)]
+    performance: foundation::runtime_config::PerformanceArgs,
     #[command(subcommand)]
     command: Commands,
 }
@@ -759,6 +761,9 @@ fn main() -> anyhow::Result<()> {
     foundation::ctrlc_guard::init();
 
     let cli = Cli::parse();
+    let mut runtime = foundation::runtime_config::load(None, false)?;
+    cli.performance.apply_to(&mut runtime);
+    foundation::runtime_config::install(runtime.config)?;
     validate_command_strategy(&cli.command)?;
     if command_requires_database(&cli.command) {
         // Enforce PostgreSQL dependency as mandatory for the DB-backed video toolchain.
