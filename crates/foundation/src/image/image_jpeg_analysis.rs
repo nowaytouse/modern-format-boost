@@ -778,7 +778,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
     }
 }
 
-fn extract_xmp_from_jpeg_markers(
+pub(crate) fn extract_xmp_from_jpeg_markers(
     data: &[u8],
 ) -> Result<Option<Vec<String>>, (usize, &'static str)> {
     if data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {

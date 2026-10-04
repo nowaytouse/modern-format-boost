@@ -96,6 +96,8 @@ pub struct IntegritySummaryMachine {
     pub failed_count: usize,
     pub source_remaining_count: usize,
     pub verified_deleted_count: usize,
+    #[serde(default)]
+    pub count_status: Option<String>,
 }
 
 /// Block system/user root paths (mirrors Python `safety_check`).
@@ -1207,6 +1209,19 @@ mod tests {
         assert_eq!(summary.source_count, 56);
         assert_eq!(summary.optimized_count, 56);
         assert_eq!(summary.verified_deleted_count, 56);
+        assert_eq!(summary.count_status, None);
+        let current = stdout.replace(
+            "\"verified_deleted_count\":56}",
+            "\"verified_deleted_count\":56,\"count_status\":\"MATCH (1 expected handoff gap)\"}",
+        );
+        assert_eq!(
+            parse_machine_integrity_summary(&current)
+                .unwrap()
+                .1
+                .count_status
+                .as_deref(),
+            Some("MATCH (1 expected handoff gap)")
+        );
         assert!(parse_machine_integrity_summary("Integrity: CLEAN\n").is_err());
     }
 

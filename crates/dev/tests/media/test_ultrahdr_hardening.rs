@@ -1,5 +1,68 @@
 use foundation::image_jpeg_analysis::{extract_gainmap_from_jpeg, is_ultra_hdr_jpeg};
 
+fn download_ultrahdr_sample(path: &std::path::Path) -> anyhow::Result<()> {
+    const EXPECTED_BLAKE3: &str =
+        "4a10e63837ba6e01b8957d2448b6cd4bd31cbebe7546497a3eecb8e7afaa2037";
+    const EXPECTED_BYTES: u64 = 2_746_718;
+    // Both official endpoints identify the unchanged fixture; a mirror cannot
+    // silently replace it with a different JPEG or an HTTP error page.
+    let urls = [
+        "https://raw.githubusercontent.com/MishaalRahmanGH/Ultra_HDR_Samples/1bc32bb721d821224c2e4e0c012183b932be379b/Originals/Ultra_HDR_Samples_Originals_01.jpg",
+        "https://api.github.com/repos/MishaalRahmanGH/Ultra_HDR_Samples/git/blobs/3355b466fee1f1bc59e40463f8aadcf2d216dca3",
+    ];
+    let mut failures = Vec::new();
+    for url in urls {
+        let output = std::process::Command::new("curl")
+            .args([
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "30",
+                "--retry",
+                "1",
+                "--retry-max-time",
+                "30",
+                "--retry-all-errors",
+                "--header",
+                "Accept: application/vnd.github.raw+json",
+            ])
+            .arg("--max-filesize")
+            .arg(EXPECTED_BYTES.to_string())
+            .arg(url)
+            .arg("--output")
+            .arg(path)
+            .output()?;
+        let reason = if output.status.success() {
+            let length = std::fs::metadata(path)?.len();
+            if length != EXPECTED_BYTES {
+                format!("fixture length mismatch: expected {EXPECTED_BYTES}, got {length}")
+            } else {
+                let hash = foundation::common_utils::calculate_blake3_hash(path)?;
+                if hash == EXPECTED_BLAKE3 {
+                    return Ok(());
+                }
+                format!("fixture BLAKE3 mismatch: {hash}")
+            }
+        } else {
+            format!(
+                "download failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )
+        };
+        eprintln!("Ultra HDR fixture endpoint {url}: {reason}");
+        failures.push(format!("{url}: {reason}"));
+    }
+    anyhow::bail!(
+        "All official Ultra HDR fixture endpoints failed: {}",
+        failures.join("; ")
+    )
+}
+
 #[test]
 fn ultrahdr_hardening_suite() -> anyhow::Result<()> {
     test_ultrahdr_absolute_offset_fallback()?;
@@ -23,33 +86,17 @@ fn test_ultrahdr_to_jxl_conversion() -> anyhow::Result<()> {
     use std::process::Command;
     use tempfile::TempDir;
 
-    if Command::new("cjxl").arg("--version").output().is_err() {
-        println!("cargo:warning=cjxl is not available, skipping conversion test.");
-        return Ok(());
-    }
+    let version = Command::new("cjxl").arg("--version").output()?;
+    anyhow::ensure!(
+        version.status.success(),
+        "Required cjxl tool failed ({}): {}",
+        version.status,
+        String::from_utf8_lossy(&version.stderr)
+    );
 
     let temp = TempDir::new()?;
-    let sample_url = "https://raw.githubusercontent.com/MishaalRahmanGH/Ultra_HDR_Samples/main/Originals/Ultra_HDR_Samples_Originals_01.jpg";
     let sample_path = temp.path().join("ultrahdr_sample_convert.jpg");
-
-    let status = Command::new("curl")
-        .arg("-sSL")
-        .arg(sample_url)
-        .arg("-o")
-        .arg(&sample_path)
-        .status()?;
-
-    if !status.success() {
-        println!(
-            "cargo:warning=failed to download Ultra HDR sample, skipping conversion test due to \
-             network issue."
-        );
-        return Ok(());
-    }
-    anyhow::ensure!(
-        std::fs::metadata(&sample_path)?.len() >= 1000,
-        "downloaded Ultra HDR sample is too small to be valid"
-    );
+    download_ultrahdr_sample(&sample_path)?;
 
     let output_jxl = temp.path().join("output.jxl");
 
@@ -74,21 +121,6 @@ fn test_ultrahdr_to_jxl_conversion() -> anyhow::Result<()> {
                 artifacts.sidecar_count() >= 1,
                 "UltraHDR synthesis should preserve at least one sidecar artifact"
             );
-
-            // Copy to stable path for user inspection
-            let dest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join(".modern_format_boost")
-                .join("artifacts");
-            let _ = std::fs::create_dir_all(&dest_dir);
-            let dest_jxl = dest_dir.join("ultrahdr_test_output.jxl");
-            let dest_jpg = dest_dir.join("ultrahdr_test_input.jpg");
-            let _ = std::fs::copy(&sample_path, &dest_jpg);
-            let _ = std::fs::copy(&output_jxl, &dest_jxl);
-            println!(
-                "cargo:warning=Copied output files to {}",
-                dest_dir.display()
-            );
         }
         Err(e) => {
             panic!("❌ Conversion failed: {e}");
@@ -99,33 +131,13 @@ fn test_ultrahdr_to_jxl_conversion() -> anyhow::Result<()> {
 }
 
 fn test_real_ultrahdr_samples_from_github() -> anyhow::Result<()> {
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp = TempDir::new()?;
-    let sample_url = "https://raw.githubusercontent.com/MishaalRahmanGH/Ultra_HDR_Samples/main/Originals/Ultra_HDR_Samples_Originals_01.jpg";
     let sample_path = temp.path().join("ultrahdr_sample_01.jpg");
-
-    let status = Command::new("curl")
-        .arg("-sSL")
-        .arg(sample_url)
-        .arg("-o")
-        .arg(&sample_path)
-        .status()?;
-
-    if !status.success() {
-        println!(
-            "cargo:warning=failed to download Ultra HDR sample, skipping extraction test due to \
-             network issue."
-        );
-        return Ok(());
-    }
+    download_ultrahdr_sample(&sample_path)?;
 
     let data = std::fs::read(&sample_path)?;
-    anyhow::ensure!(
-        data.len() >= 1000,
-        "downloaded Ultra HDR sample is too small to be valid"
-    );
 
     assert!(
         is_ultra_hdr_jpeg(&data),

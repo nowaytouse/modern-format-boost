@@ -92,7 +92,7 @@ impl HdrArtifacts {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct GainMapParams {
     pub gain_map_max: f32,
@@ -372,8 +372,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 
     let needs_p3_conversion = false;
 
-    let params = parse_gainmap_params_from_jpeg_xmp(&data)?
-        .ok_or_else(|| anyhow::anyhow!("No valid XMP gainmap parameters found in the image"))?;
+    let params = parse_ultrahdr_gainmap_params(&data, &gainmap_jpeg)?;
 
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_GAINMAP_AUDIT,
@@ -1081,15 +1080,42 @@ pub fn persist_hdr_artifacts(output: &Path, artifacts: &HdrArtifacts) -> Result<
 }
 
 pub(crate) fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Result<Option<GainMapParams>> {
-    let Some(xmp_blocks) = crate::image_jpeg_analysis::extract_xmp_from_jpeg_data(data) else {
+    let Some(xmp_blocks) = crate::image_jpeg_analysis::extract_xmp_from_jpeg_markers(data)
+        .map_err(|(position, reason)| {
+            anyhow!("JPEG XMP marker walk failed at {position}: {reason}")
+        })?
+    else {
         return Ok(None);
     };
+    let mut parsed: Option<GainMapParams> = None;
     for xmp_bytes in xmp_blocks {
         if let Some(params) = parse_gainmap_from_xmp(xmp_bytes.as_bytes())? {
-            return Ok(Some(params));
+            if parsed.is_some_and(|previous| previous != params) {
+                anyhow::bail!("Conflicting XMP gainmap parameters in JPEG metadata packets");
+            }
+            parsed = Some(params);
         }
     }
-    Ok(None)
+    Ok(parsed)
+}
+
+fn parse_ultrahdr_gainmap_params(base_jpeg: &[u8], gainmap_jpeg: &[u8]) -> Result<GainMapParams> {
+    // Adobe gainmap parameters normally belong to the MPF-selected auxiliary
+    // JPEG, not the base JPEG's container directory. Never scan arbitrary tails.
+    let base = parse_gainmap_params_from_jpeg_xmp(base_jpeg)
+        .context("Failed to parse base JPEG gainmap metadata")?;
+    let gainmap = parse_gainmap_params_from_jpeg_xmp(gainmap_jpeg)
+        .context("Failed to parse auxiliary JPEG gainmap metadata")?;
+    match (base, gainmap) {
+        (Some(base), Some(gainmap)) if base != gainmap => {
+            anyhow::bail!("Conflicting gainmap parameters in base and auxiliary JPEG metadata")
+        }
+        (_, Some(gainmap)) => Ok(gainmap),
+        (Some(base), None) => Ok(base),
+        (None, None) => anyhow::bail!(
+            "No valid XMP gainmap parameters found in the base or MPF-selected auxiliary JPEG"
+        ),
+    }
 }
 
 /// # Errors
@@ -2055,6 +2081,12 @@ mod tests {
 
         // 4. Run synthesis
         let result = synthesize(&sdr, &gain, &params, false).expect("Synthesis failed");
+        let smaller_gain = DynamicImage::ImageLuma8(ImageBuffer::from_pixel(1, 1, Luma([128])));
+        assert_eq!(
+            synthesize(&sdr, &smaller_gain, &params, false)
+                .expect("Smaller gainmap must be resized before synthesis"),
+            result
+        );
 
         assert_eq!(result.len(), 2 * 2 * 3);
         // Mid-gray (128/255) sRGB -> Linear is ~0.215
@@ -2099,6 +2131,73 @@ mod tests {
             .is_none()
         );
         Ok(())
+    }
+
+    fn jpeg_with_xmp_packets(packets: &[&str]) -> Vec<u8> {
+        let mut jpeg = vec![0xff, 0xd8];
+        for packet in packets {
+            let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+            payload.extend_from_slice(packet.as_bytes());
+            jpeg.extend_from_slice(&[0xff, 0xe1]);
+            jpeg.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+            jpeg.extend_from_slice(&payload);
+        }
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+        jpeg
+    }
+
+    #[test]
+    fn ultrahdr_gainmap_params_use_the_selected_auxiliary_jpeg() -> anyhow::Result<()> {
+        let directory = jpeg_with_xmp_packets(&[
+            r#"<rdf:Description xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:Version="1.0"/>"#,
+        ]);
+        let gainmap = jpeg_with_xmp_packets(&[
+            r#"<rdf:Description xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/" hdrgm:GainMapMax="2.656715" hdrgm:GainMapMin="0" hdrgm:OffsetHDR="0" hdrgm:OffsetSDR="0"/>"#,
+        ]);
+        assert!(parse_gainmap_params_from_jpeg_xmp(&directory)?.is_none());
+        let expected = parse_gainmap_params_from_jpeg_xmp(&gainmap)?.unwrap();
+        assert_eq!(
+            parse_ultrahdr_gainmap_params(&directory, &gainmap)?,
+            expected
+        );
+        assert_eq!(
+            parse_ultrahdr_gainmap_params(&gainmap, &directory)?,
+            expected
+        );
+        assert_eq!(parse_ultrahdr_gainmap_params(&gainmap, &gainmap)?, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn ultrahdr_gainmap_params_reject_conflicts_malformed_values_and_unselected_tails() {
+        let first = r#"<rdf:Description GainMapMax="2"/>"#;
+        let second = r#"<rdf:Description GainMapMax="3"/>"#;
+        let base = jpeg_with_xmp_packets(&[first]);
+        let gainmap = jpeg_with_xmp_packets(&[second]);
+        let conflict = parse_ultrahdr_gainmap_params(&base, &gainmap).unwrap_err();
+        assert!(
+            conflict
+                .to_string()
+                .contains("Conflicting gainmap parameters")
+        );
+        let duplicate_packets = jpeg_with_xmp_packets(&[first, second]);
+        assert!(parse_gainmap_params_from_jpeg_xmp(&duplicate_packets).is_err());
+        let identical_packets = jpeg_with_xmp_packets(&[first, first]);
+        assert!(
+            parse_gainmap_params_from_jpeg_xmp(&identical_packets)
+                .unwrap()
+                .is_some()
+        );
+        let malformed = jpeg_with_xmp_packets(&[r#"<rdf:Description GainMapMax="invalid"/>"#]);
+        let error = parse_ultrahdr_gainmap_params(&base, &malformed).unwrap_err();
+        assert!(format!("{error:#}").contains("invalid"));
+        let truncated = [0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10, 0xff, 0xd9];
+        let error = parse_ultrahdr_gainmap_params(&base, &truncated).unwrap_err();
+        assert!(format!("{error:#}").contains("marker walk failed"));
+        let empty = jpeg_with_xmp_packets(&[]);
+        let mut unselected_tail = empty.clone();
+        unselected_tail.extend_from_slice(&gainmap);
+        assert!(parse_ultrahdr_gainmap_params(&unselected_tail, &empty).is_err());
     }
 
     #[test]

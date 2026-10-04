@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Native recent-batch history inspector (2026-10-04)
+
+- Replace the native GUI's folder-only history action with a read-only batch
+  inspector: recent records, search, attention filtering, selectable details,
+  processor outcome counts and source/output paths, with direct log access.
+  Keep native AppKit controls, semantic system colors and compact layout.
+- Persist versioned context, summary, verification and terminal-result events in
+  the existing session audit. Interactive and watch runs have separate contexts;
+  preserve the original processing error if recording its terminal result fails.
+  Archive completed or failed entry paths without treating archival as success.
+- Reuse the verifier's existing count-status formatter for machine evidence, so
+  MATCH, expected handoff gaps, EXPLAINED and MISMATCH retain the same meaning in
+  the GUI and CLI. Processing outcomes, unique source inventories and Photos
+  assets remain separate counts. A match does not erase individual failures.
+- Keep missing, invalid, future-schema and legacy results explicit instead of
+  inventing successful zero counts. Read only bounded recent audit files,
+  deduplicate active/archive copies and reject linked archive entries.
+  Retain later unfinished interactive batches when an earlier archived copy is
+  already complete; contradictory copies do not produce trusted counts.
+  Remember the backend-resolved history path between GUI launches.
+- Preserve the incoming checksum-pinned OSS-Fuzz Rust builder image update after
+  verifying its digest against the upstream registry. No processing policy,
+  media encoder or ImageMagick security policy is weakened.
+
+### Deep audit parity and Ultra HDR parameter location (2026-10-04)
+
+- Fix Ultra HDR conversion when the base JPEG contains only the gain-map
+  version/container directory and the parameters reside in the MPF-selected
+  auxiliary JPEG. Preserve legacy base-JPEG metadata support, reject conflicting
+  packets or base/auxiliary parameters, and never search arbitrary appended
+  bytes for replacement metadata. Add offline carrier-location regressions.
+  Reject malformed auxiliary JPEG structure explicitly; bound fixture downloads
+  and fail tests on HTTP/tool failures instead of reporting a skipped success.
+  Pin the original public fixture and verify its full BLAKE3 before use; an
+  official same-blob API fallback handles raw-download transport failures.
+- Bring the deep workspace audit onto checksum-pinned ExifTool 13.59 as well as
+  shared/image checks. Install the requested cargo-fuzz tool, preserve the
+  audit runner's exit status through pipefail, and upload complete audit logs
+  even after failure rather than relying on the final console excerpt.
+
 ### Shared CI parser parity and development-tool compatibility (2026-10-04)
 
 - Fix the latest shared-test/coverage failure caused by Ubuntu ExifTool 12.76

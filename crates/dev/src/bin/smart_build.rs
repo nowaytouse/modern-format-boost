@@ -1476,6 +1476,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
             "CoreServices",
         ])
         .arg(&swift_src)
+        .arg(native_dir.join("ProcessingHistory.swift"))
         .arg("-o")
         .arg(&host_binary)
         .status()
@@ -2324,7 +2325,10 @@ mod tests {
         assert!(!gui_needs_rebuild(root));
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        fs::write(&native_source, "import AppKit\n// updated")?;
+        fs::write(
+            root.join("crates/gui/src-macos/ProcessingHistory.swift"),
+            "import AppKit\n// updated history inspector",
+        )?;
         assert!(gui_needs_rebuild(root));
         Ok(())
     }

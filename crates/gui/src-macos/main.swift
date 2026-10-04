@@ -10,6 +10,7 @@ private let maxProcessLogBatchEntries = 256
 private let languagePreferenceKey = "MFBGuiLanguage"
 private let appearancePreferenceKey = "MFBGuiAppearance"
 private let developerPreferenceKey = "MFBGuiDeveloperMode"
+private let historyPreferenceKey = "MFBGuiHistoryDirectory"
 private let mainWindowContentSize = NSSize(width: 980, height: 720)
 private let mainWindowStyleMask: NSWindow.StyleMask = [
     .titled, .closable, .miniaturizable, .fullSizeContentView,
@@ -20,7 +21,24 @@ private var appVersion: String {
 }
 
 private var historyDirectory: URL {
-    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".modern_format_boost", isDirectory: true)
+    FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".modern_format_boost/logs", isDirectory: true)
+}
+
+private func initialHistoryDirectory(
+    preferences: UserDefaults,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> URL {
+    if let path = environment["MFB_LOG_DIR"], path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    if let path = environment["MFB_HOME_ROOT"], path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("logs", isDirectory: true)
+    }
+    if let path = preferences.string(forKey: historyPreferenceKey), path.hasPrefix("/") {
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+    return historyDirectory
 }
 
 private func bundledLicenseText() throws -> String {
@@ -123,13 +141,13 @@ private final class LocalizationCatalog {
     }
 }
 
-private func localized(_ key: String, _ arguments: CVarArg...) -> String {
+func localized(_ key: String, _ arguments: CVarArg...) -> String {
     let format = LocalizationCatalog.shared.text(key)
     guard !arguments.isEmpty else { return format }
     return String(format: format, locale: Locale.current, arguments: arguments)
 }
 
-private struct HostError: LocalizedError {
+struct HostError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
@@ -2270,6 +2288,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let helpButton = NSButton(title: "", target: nil, action: nil)
     private var settingsPanel: MediaSettingsPanel?
+    private var historyPanel: ProcessingHistoryPanel?
     private let diagnosticsButton = NSButton(title: "", target: nil, action: nil)
     private let diagnosticsTextView = NSTextView()
     private var diagnosticsPanel: NSPanel?
@@ -2328,6 +2347,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
+        resolvedHistoryDirectory = initialHistoryDirectory(preferences: preferences)
         window = NSWindow(
             contentRect: NSRect(
                 x: 0,
@@ -2578,6 +2598,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.keyEquivalent = "\r"
         historyButton.target = self
         historyButton.action = #selector(openHistory)
+        historyButton.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
+        historyButton.imagePosition = .imageLeading
         settingsButton.target = self
         settingsButton.action = #selector(showSettings)
         settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
@@ -2836,11 +2858,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openHistory() {
-        do {
-            if !NSWorkspace.shared.open(resolvedHistoryDirectory) {
-                throw HostError(message: localized("error.open_history", resolvedHistoryDirectory.path))
-            }
-        } catch { present(error) }
+        if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory) }
+        historyPanel?.refresh(directory: resolvedHistoryDirectory)
+        historyPanel?.show()
     }
 
     @objc private func showDiagnostics() {
@@ -3094,6 +3114,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             let encoded = Data(line.dropFirst("MFB_LOG_DIRECTORY=".count).utf8)
             if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
                 resolvedHistoryDirectory = URL(fileURLWithPath: path, isDirectory: true)
+                preferences.set(path, forKey: historyPreferenceKey)
                 historyButton.toolTip = path
             }
         }
@@ -3432,7 +3453,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         appendLog("previous batch sentinel")
         clearBatchLog()
-        guard !logView.string.contains("previous batch sentinel"), logView.string.contains(historyDirectory.path) else {
+        guard !logView.string.contains("previous batch sentinel"),
+              logView.string.contains(initialHistoryDirectory(preferences: preferences).path) else {
             throw HostError(message: "Batch logs were not cleared with a history location")
         }
         appendLog("MFB_LOG_DIRECTORY=\"/tmp/backend-resolved-logs\"")
@@ -3775,6 +3797,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        try runProcessingHistorySelfTests()
         guard !mainWindowStyleMask.contains(.resizable),
               mainWindowContentSize == NSSize(width: 980, height: 720)
         else {
@@ -4133,6 +4156,16 @@ private func runSelfTest() -> Int32 {
             let suite = "MFBGuiSelfTest.\(UUID().uuidString)"
             let preferences = UserDefaults(suiteName: suite)!
             defer { preferences.removePersistentDomain(forName: suite) }
+            guard initialHistoryDirectory(preferences: preferences, environment: [:]) == historyDirectory else {
+                throw HostError(message: "History default did not resolve the logs directory")
+            }
+            preferences.set("/tmp/saved-history", forKey: historyPreferenceKey)
+            guard initialHistoryDirectory(preferences: preferences, environment: [:]).path == "/tmp/saved-history",
+                  initialHistoryDirectory(preferences: preferences, environment: ["MFB_HOME_ROOT": "/tmp/custom-home"]).path == "/tmp/custom-home/logs",
+                  initialHistoryDirectory(preferences: preferences, environment: ["MFB_LOG_DIR": "/tmp/explicit-logs", "MFB_HOME_ROOT": "/tmp/custom-home"]).path == "/tmp/explicit-logs" else {
+                throw HostError(message: "History directory overrides or remembered backend path regressed")
+            }
+            preferences.removeObject(forKey: historyPreferenceKey)
             preferences.set("8", forKey: MediaSetting.imgJpegEffort.preferenceKey)
             guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == "8" else {
                 throw HostError(message: "Existing shared image settings did not migrate")
@@ -4147,6 +4180,7 @@ private func runSelfTest() -> Int32 {
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
+            try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/tmp/history-self-test")).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()

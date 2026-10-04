@@ -404,8 +404,17 @@ and uses **unknown** when a child did not report a count. A nonzero child exit
 or a reported file failure cannot become an all-success completion message.
 
 The GUI always enables detailed logs and starts each batch with a clean log
-view. **Log History** opens the backend's resolved log directory (normally under
-`~/.modern_format_boost`); clearing the view does not delete stored logs.
+view. **Processing History** opens a read-only recent-batch inspector with search,
+attention filtering, processor outcome counts, source/output paths and the
+verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a
+batch to inspect its details or open its corresponding log without browsing
+unrelated files. Processor outcomes are not unique source-file or Photos asset
+counts. Missing counts, unsupported records and sessions without a confirmed
+terminal result remain explicitly unknown or incomplete, including legacy
+sessions; an archived bundle alone is not proof of successful processing.
+The inspector reads the resolved log directory (normally
+`~/.modern_format_boost/logs`) and remembers backend-resolved overrides;
+clearing the live view does not delete stored logs or history.
 Result, control and error records have a separate bounded delivery reserve, so
 routine log bursts cannot displace them. If that reserve is also exhausted, the
 GUI marks completion as unconfirmed rather than reporting a misleading success.

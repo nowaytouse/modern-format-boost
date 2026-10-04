@@ -81,6 +81,23 @@ export MFB_LOG_PTY_PROGRESS=1      # include indicatif/progress lines in MFB_Ses
 
 On exit, drag-and-drop moves worker `img_*` / `vid_*` logs and jsonl traces, `MFB_Session_*`, `verbose_*`, `session_audit_*`, and `diagnostic_report_*` from the session window into `Bundle_{stamp}/` with a `manifest.json` file list.
 
+## Native history inspection
+
+The GUI reads `session_audit_{stamp}.jsonl` in the resolved log root and its
+`Bundle_{stamp}` archives. Versioned `MFB_HISTORY_CONTEXT`,
+`MFB_HISTORY_SUMMARY`, `MFB_HISTORY_VERIFICATION` and `MFB_HISTORY_FINISHED`
+payloads live inside the existing `{ts,event}` records; no extra files are
+written into source media directories. Each context identifies one operation
+within a session, including repeated interactive/watch operations.
+
+Summary counts retain nullable processor outcomes. Verification retains the
+source/output inventories and the exact verifier count-status label; neither
+is interpreted as a Photos asset count. A terminal error remains an error even
+after a clean verification. Missing terminal evidence, old summaries, malformed
+or unsupported records cannot become confirmed-success records merely because
+the files were archived. The history window is read-only and does not access
+Photos, rerun processing or delete logs.
+
 ## Training corpus thresholds
 
 Python SSOT: `crates/dev/scripts/mfb_corpus_thresholds.py`  

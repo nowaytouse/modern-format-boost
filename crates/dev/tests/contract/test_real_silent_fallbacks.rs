@@ -18438,7 +18438,7 @@ fn libheif_builds_use_the_security_release_not_the_old_embedded_source() {
 }
 
 #[test]
-fn shared_metadata_tests_use_the_pinned_exiftool_parser() {
+fn metadata_ci_tests_use_the_pinned_exiftool_parser() {
     let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
         .expect("ci-quality workflow must be readable");
     let health = workflow
@@ -18446,32 +18446,90 @@ fn shared_metadata_tests_use_the_pinned_exiftool_parser() {
         .and_then(|(_, tail)| tail.split_once("\n  security-audit:"))
         .map(|(health, _)| health)
         .expect("shared health job must exist");
-    let installation = health
-        .split_once("- name: Install pinned stable ExifTool for health checks")
-        .and_then(|(_, tail)| tail.split_once("\n      - name:"))
-        .map(|(step, _)| step)
-        .expect("shared metadata tests must not fall back to the distro parser");
-    for required in [
-        "EXIFTOOL_VERSION: \"13.59\"",
-        "EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac",
-        "sha256sum --check -",
-        "export PERL5LIB=",
-        "/usr/local/bin/exiftool",
-        "exiftool -ver | grep -Fx",
-        "set -euo pipefail",
+    let deep = workflow
+        .split_once("\n  deep-audit:")
+        .map(|(_, deep)| deep)
+        .expect("deep audit job must exist");
+    for (job, install_step, runner_step) in [
+        (
+            health,
+            "Install pinned stable ExifTool for health checks",
+            "Repository health",
+        ),
+        (
+            deep,
+            "Install pinned stable ExifTool for deep audit",
+            "Run Expensive Workspace Audit",
+        ),
     ] {
+        let installation = job
+            .split_once(&format!("- name: {install_step}"))
+            .and_then(|(_, tail)| tail.split_once("\n      - name:"))
+            .map(|(step, _)| step)
+            .expect("metadata tests must not fall back to the distro parser");
+        for required in [
+            "EXIFTOOL_VERSION: \"13.59\"",
+            "EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac",
+            "sha256sum --check -",
+            "export PERL5LIB=",
+            "/usr/local/bin/exiftool",
+            "exiftool -ver | grep -Fx",
+            "set -euo pipefail",
+        ] {
+            assert!(
+                installation.contains(required),
+                "{install_step} lacks {required}"
+            );
+        }
+        assert!(!installation.contains("continue-on-error"));
         assert!(
-            installation.contains(required),
-            "ExifTool install lacks {required}"
+            job.find(install_step).expect("ExifTool step")
+                < job.find(runner_step).expect("metadata test runner"),
+            "the validated parser must be available before running metadata regressions"
         );
     }
-    assert!(!installation.contains("continue-on-error"));
+}
+
+#[test]
+fn deep_audit_preserves_complete_failure_evidence_and_runs_fuzz() {
+    let workflow = fs::read_to_string(workspace_root().join(".github/workflows/ci-quality.yml"))
+        .expect("ci-quality workflow must be readable");
+    let deep = workflow
+        .split_once("\n  deep-audit:")
+        .map(|(_, deep)| deep)
+        .expect("deep audit job must exist");
+    let audit = deep
+        .split_once("- name: Run Expensive Workspace Audit")
+        .and_then(|(_, tail)| tail.split_once("\n      - name:"))
+        .map(|(audit, _)| audit)
+        .expect("deep audit must precede its diagnostic upload");
+    for required in [
+        "MFB_CHECK_LOG_DIR: ${{ runner.temp }}/mfb-check-deep-audit",
+        "mkdir -p \"$MFB_CHECK_LOG_DIR\"",
+        "set -o pipefail",
+        "--collect-all --build --fuzz-smoke",
+        "2>&1 | tee \"$MFB_CHECK_LOG_DIR/runner.log\"",
+    ] {
+        assert!(audit.contains(required), "deep audit lacks {required}");
+    }
+    assert!(!audit.contains("continue-on-error"));
+    let upload = deep
+        .split_once("- name: Upload deep audit diagnostics")
+        .map(|(_, upload)| upload)
+        .expect("deep audit logs must survive test failures");
+    for required in [
+        "if: always()",
+        "uses: actions/upload-artifact@",
+        "name: check-all-deep-audit-logs",
+        "path: ${{ runner.temp }}/mfb-check-deep-audit",
+    ] {
+        assert!(
+            upload.contains(required),
+            "deep audit upload lacks {required}"
+        );
+    }
     assert!(
-        health
-            .find("Install pinned stable ExifTool")
-            .expect("ExifTool step")
-            < health.find("Repository health").expect("health runner"),
-        "the validated parser must be available before running metadata regressions"
+        deep.contains("cargo install cargo-hack cargo-bloat cargo-nextest cargo-fuzz --locked")
     );
 }
 

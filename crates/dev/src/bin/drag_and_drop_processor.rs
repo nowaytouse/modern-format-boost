@@ -48,7 +48,7 @@ use foundation::BatchErrorMode;
 use foundation::infra::runtime_config::FallbackPolicy;
 use foundation::process_lock::DirLock;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -300,6 +300,41 @@ impl DragDropSession {
             .with_context(|| format!("write drag/drop log {}", path.display()))
     }
 
+    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+        let event = format!("{name}={payload}");
+        append_jsonl_audit_record(&self.session_audit, &event)?;
+        Ok(())
+    }
+
+    fn record_history_verification(
+        &self,
+        verify: &dev::infra::drag_drop::VerifyOutcome,
+        source: &Path,
+        output: &Path,
+    ) -> Result<()> {
+        let counts = verify
+            .integrity_summary
+            .as_ref()
+            .context("history verification requires the machine integrity summary")?;
+        self.append_history_event(
+            "MFB_HISTORY_VERIFICATION",
+            serde_json::json!({
+                "schema_version": 1,
+                "source_path": serde_json::to_value(source).context("encode history verification source path")?,
+                "output_path": serde_json::to_value(output).context("encode history verification output path")?,
+                "has_warnings": counts.has_warnings,
+                "issue_count": counts.issue_count,
+                "source_count": counts.source_count,
+                "optimized_count": counts.optimized_count,
+                "skipped_count": counts.skipped_count,
+                "failed_count": counts.failed_count,
+                "source_remaining_count": counts.source_remaining_count,
+                "verified_deleted_count": counts.verified_deleted_count,
+                "count_status": counts.count_status,
+            }),
+        )
+    }
+
     /// Rename session log to include project folder name (mirrors Python
     /// `rename_log_to_project`).
     fn rename_log_to_project(&mut self, target: &Path) -> Result<()> {
@@ -329,6 +364,7 @@ impl DragDropSession {
     /// Write final statistics block to session log (mirrors Python
     /// `finish_log`).
     fn finish_log(&self, summary: &PipelineSummary, size_summary: Option<&str>) -> Result<()> {
+        self.append_history_event("MFB_HISTORY_SUMMARY", history_summary_payload(summary))?;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1215,27 +1251,50 @@ fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
     }
 }
 
-fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
+fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json::Value {
     let inventory_valid = !stats.unprocessed_invalid
         && stats.checked_total().is_some_and(|total| {
             stats
                 .unprocessed
                 .is_none_or(|pending| total.checked_add(pending).is_some())
         });
-    let count = |index: usize, value| (stats.reported[index] && inventory_valid).then_some(value);
-    format!(
-        "MFB_BATCH_RESULT={}",
-        serde_json::json!({
-            "schema_version": 1,
-            "media": media,
-            "succeeded": count(0, stats.succeeded),
-            "skipped": count(1, stats.skipped),
-            "ignored": count(2, stats.ignored),
-            "failed": count(3, stats.failed),
-            "unprocessed": stats.unprocessed.filter(|_| inventory_valid),
-            "exit_code": stats.exit_code,
-        })
-    )
+    let count =
+        |index: usize, value| (active && stats.reported[index] && inventory_valid).then_some(value);
+    serde_json::json!({
+        "active": active,
+        "succeeded": count(0, stats.succeeded),
+        "skipped": count(1, stats.skipped),
+        "ignored": count(2, stats.ignored),
+        "failed": count(3, stats.failed),
+        "unprocessed": stats.unprocessed.filter(|_| active && inventory_valid),
+        "exit_code": active.then_some(stats.exit_code),
+    })
+}
+
+fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "count_scope": "processor_outcomes",
+        "img": processor_history_counts(&summary.img, summary.has_image_stats()),
+        "vid": processor_history_counts(&summary.vid, summary.has_video_stats()),
+        "integrity": {
+            "state": summary.integrity_state,
+            "issue_count": summary.integrity_state.map(|_| summary.integrity_issue_count),
+        },
+        "failed_files": summary.failed_file_names,
+        "skipped_files": summary.skipped_file_names,
+    })
+}
+
+fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
+    let mut counts = processor_history_counts(stats, true);
+    let payload = counts
+        .as_object_mut()
+        .expect("processor history counts object");
+    payload.remove("active");
+    payload.insert("schema_version".to_owned(), serde_json::json!(1));
+    payload.insert("media".to_owned(), serde_json::json!(media));
+    format!("MFB_BATCH_RESULT={counts}")
 }
 
 fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
@@ -1369,6 +1428,7 @@ fn run_post_adjacent_steps(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, &output)?;
     Ok(())
 }
 
@@ -1410,6 +1470,7 @@ fn run_fast_img_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, output_dir)?;
     let counts = verify
         .integrity_summary
         .as_ref()
@@ -1480,6 +1541,7 @@ fn run_fast_img_restore_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, output_dir)?;
     let counts = verify
         .integrity_summary
         .as_ref()
@@ -1936,6 +1998,91 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    run_with_history(args, session, || {
+        run_drag_drop_inner(args, session, dir_lock)
+    })
+}
+
+fn run_with_history(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    run: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let absolute = |path: &Path| -> Result<PathBuf> {
+        if path.is_absolute() {
+            Ok(path.to_path_buf())
+        } else {
+            Ok(std::env::current_dir()
+                .context("resolve history working directory")?
+                .join(path))
+        }
+    };
+    let context_result = match session {
+        Some(session) => (|| {
+            let inputs = args
+                .inputs
+                .iter()
+                .map(|path| absolute(path))
+                .collect::<Result<Vec<_>>>()?;
+            let output = args.output.as_deref().map(absolute).transpose()?;
+            let backup = args.backup.as_deref().map(absolute).transpose()?;
+            session.append_history_event(
+                "MFB_HISTORY_CONTEXT",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "inputs": serde_json::to_value(inputs).context("encode history input paths")?,
+                    "output": serde_json::to_value(output).context("encode history output path")?,
+                    "backup": serde_json::to_value(backup).context("encode history backup path")?,
+                    "mode": args.mode.to_possible_value().context("history mode has no CLI name")?.get_name(),
+                    "dry_run": args.dry_run,
+                    "in_place": args.in_place,
+                    "shortest_path": args.shortest_path,
+                }),
+            )
+        })(),
+        None => Ok(()),
+    };
+    let context_failed = context_result.is_err();
+    let result = context_result.and_then(|()| run());
+    if let Some(session) = session {
+        let cancelled = if result.is_err() && !context_failed {
+            match foundation::batch_control::is_cancelled() {
+                Ok(cancelled) => cancelled,
+                Err(error) => {
+                    eprintln!("history cancellation state unavailable: {error:#}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        let finished = session.append_history_event(
+            "MFB_HISTORY_FINISHED",
+            serde_json::json!({
+                "schema_version": 1,
+                "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
+                "error": result.as_ref().err().map(|error| format!("{error:#}")),
+            }),
+        );
+        if let Err(error) = finished {
+            if result.is_ok() {
+                return Err(error).context("write history terminal outcome");
+            }
+            eprintln!("history terminal outcome write failed: {error:#}");
+        }
+    }
+    result
+}
+
+fn run_drag_drop_inner(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    dir_lock: Option<&DirLock>,
+) -> Result<()> {
+    let verbose_offset = session
+        .map(|session| fs::metadata(&session.verbose_log).map(|metadata| metadata.len()))
+        .transpose()
+        .context("record per-run verbose log boundary")?;
     foundation::batch_control::checkpoint()?;
     validate_media_options(args)?;
     if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
@@ -2112,7 +2259,10 @@ fn run_drag_drop(
             match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
-                    match fs::read_to_string(&session.expect("session").verbose_log) {
+                    match read_session_verbose_since(
+                        &session.expect("session").verbose_log,
+                        verbose_offset.context("fast-img run has no verbose log boundary")?,
+                    ) {
                         Ok(text) => {
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
@@ -2401,6 +2551,20 @@ fn run_drag_drop(
     }
 
     Ok(())
+}
+
+fn read_session_verbose_since(path: &Path, offset: u64) -> Result<String> {
+    let mut file = fs::File::open(path).context("open current-run verbose log")?;
+    anyhow::ensure!(
+        file.metadata()?.len() >= offset,
+        "session verbose log was truncated during the current run"
+    );
+    file.seek(SeekFrom::Start(offset))
+        .context("seek current-run verbose log")?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .context("read current-run verbose log")?;
+    Ok(text)
 }
 
 fn finalize_handoff_preservation(
@@ -3060,40 +3224,33 @@ fn main() -> Result<()> {
     );
     let mut dir_lock = None;
 
-    // ALWAYS show interactive menu when terminal (matches Python's unconditional
-    // select_mode())
-    if io::stdin().is_terminal() {
-        return interactive_menu(&args, &mut session);
-    }
-
-    // Non-interactive: require inputs
-    if args.inputs.is_empty() {
-        bail!("at least one input path is required");
-    }
-
-    session.rename_log_to_project(&args.inputs[0])?;
-
-    if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
-        dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
-    }
-
-    let run_result = run_drag_drop(&args, Some(&session), dir_lock.as_ref());
-    if args.watch {
-        if run_result.is_err() {
-            if foundation::batch_control::is_cancelled()? {
-                std::process::exit(130);
+    // All entry paths share archival, including a failed interactive or watch run.
+    let run_result = if io::stdin().is_terminal() {
+        interactive_menu(&args, &mut session)
+    } else {
+        (|| {
+            if args.inputs.is_empty() {
+                return run_with_history(&args, Some(&session), || {
+                    bail!("at least one input path is required")
+                });
             }
-            report_drag_drop_failure(&run_result);
-            return run_result;
-        }
-        if let Err(error) = run_watch_loop(&args, &session) {
-            if foundation::batch_control::is_cancelled()? {
-                std::process::exit(130);
+            let setup_result: Result<()> = (|| {
+                session.rename_log_to_project(&args.inputs[0])?;
+                if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
+                    dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
+                }
+                Ok(())
+            })();
+            if let Err(error) = setup_result {
+                return run_with_history(&args, Some(&session), || Err(error));
             }
-            return Err(error);
-        }
-        return Ok(());
-    }
+            run_drag_drop(&args, Some(&session), dir_lock.as_ref())?;
+            if args.watch {
+                run_watch_loop(&args, &session)?;
+            }
+            Ok(())
+        })()
+    };
 
     match session.archive() {
         Ok(Some(bundle)) => {
@@ -3134,6 +3291,203 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::path::{Path, PathBuf};
+
+    fn history_payloads(session: &DragDropSession, name: &str) -> Vec<serde_json::Value> {
+        let prefix = format!("{name}=");
+        fs::read_to_string(&session.session_audit)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter_map(|record| {
+                record["event"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix(&prefix)
+                    .map(|payload| serde_json::from_str(payload).unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn history_preserves_escaped_context_and_separate_run_outcomes() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "collect"]).unwrap();
+        args.inputs = vec![PathBuf::from("/tmp/source with spaces\nsecond line")];
+        args.output = Some(PathBuf::from("/tmp/output \"quoted\""));
+        args.backup = Some(PathBuf::from("/tmp/backup"));
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let error = run_with_history(&args, Some(&session), || {
+            bail!("synthetic processing failure")
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "synthetic processing failure");
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[0]["inputs"][0],
+            "/tmp/source with spaces\nsecond line"
+        );
+        assert_eq!(contexts[0]["output"], "/tmp/output \"quoted\"");
+        assert_eq!(contexts[0]["backup"], "/tmp/backup");
+        assert_eq!(contexts[0]["mode"], "collect");
+        let outcomes = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0]["outcome"], "completed");
+        assert!(outcomes[0]["error"].is_null());
+        assert_eq!(outcomes[1]["outcome"], "failed");
+        assert_eq!(outcomes[1]["error"], "synthetic processing failure");
+        args.inputs = vec![PathBuf::from("synthetic-relative-input")];
+        args.output = Some(PathBuf::from("synthetic-relative-output"));
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let context = history_payloads(&session, "MFB_HISTORY_CONTEXT")
+            .pop()
+            .unwrap();
+        assert_eq!(
+            context["inputs"][0],
+            serde_json::to_value(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("synthetic-relative-input")
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            context["output"],
+            serde_json::to_value(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("synthetic-relative-output")
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn history_retains_primary_error_when_terminal_audit_write_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        let error = run_with_history(&args, Some(&session), || {
+            fs::remove_file(&session.session_audit)?;
+            fs::create_dir(&session.session_audit)?;
+            bail!("primary processing failure")
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "primary processing failure");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_invalid_utf8_paths_fail_explicitly_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        args.inputs = vec![PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/invalid\xff".to_vec(),
+        ))];
+        let called = AtomicBool::new(false);
+        let error = run_with_history(&args, Some(&session), || {
+            called.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("encode history input paths"));
+        assert!(!called.load(Ordering::Relaxed));
+        let outcomes = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(outcomes[0]["outcome"], "failed");
+        assert!(
+            outcomes[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("encode history input paths")
+        );
+    }
+
+    #[test]
+    fn history_requires_context_and_terminal_audit_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        let called = AtomicBool::new(false);
+        fs::remove_file(&session.session_audit).unwrap();
+        fs::create_dir(&session.session_audit).unwrap();
+        assert!(
+            run_with_history(&args, Some(&session), || {
+                called.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called.load(Ordering::Relaxed));
+        fs::remove_dir(&session.session_audit).unwrap();
+        assert!(
+            run_with_history(&args, Some(&session), || {
+                fs::remove_file(&session.session_audit)?;
+                fs::create_dir(&session.session_audit)?;
+                Ok(())
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("write history terminal outcome")
+        );
+    }
+
+    #[test]
+    fn history_summary_keeps_unknown_counts_and_integrity_separate() {
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 7,
+            failed: 1,
+            reported: [true, false, true, true],
+            ..ProcessorStats::default()
+        });
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["count_scope"], "processor_outcomes");
+        assert_eq!(payload["img"]["succeeded"], 7);
+        assert!(payload["img"]["skipped"].is_null());
+        assert_eq!(payload["img"]["failed"], 1);
+        assert!(payload["img"]["unprocessed"].is_null());
+        assert_eq!(payload["vid"]["active"], false);
+        assert!(payload["vid"]["succeeded"].is_null());
+        assert!(payload["vid"]["exit_code"].is_null());
+        assert!(payload["integrity"]["state"].is_null());
+        assert!(payload["integrity"]["issue_count"].is_null());
+        summary.integrity_state = Some("WARNINGS");
+        summary.integrity_issue_count = 4;
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["img"]["succeeded"], 7);
+        assert_eq!(payload["integrity"]["issue_count"], 4);
+        summary.img.succeeded = usize::MAX;
+        assert!(history_summary_payload(&summary)["img"]["succeeded"].is_null());
+    }
+
+    #[test]
+    fn history_verbose_boundary_excludes_previous_run_retained_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut log = fs::OpenOptions::new()
+            .append(true)
+            .open(&session.verbose_log)
+            .unwrap();
+        writeln!(log, "[FAIL    ]   prior\u{00e9}.jpg: old failure").unwrap();
+        let offset = log.metadata().unwrap().len();
+        writeln!(log, "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]").unwrap();
+        let current = read_session_verbose_since(&session.verbose_log, offset).unwrap();
+        assert_eq!(
+            fast_img_retained_file_names(&current),
+            vec![("current.jpg: no gain".to_owned(), "skipped".to_owned())]
+        );
+        assert!(!current.contains("prior"));
+        log.set_len(0).unwrap();
+        assert!(
+            read_session_verbose_since(&session.verbose_log, offset)
+                .unwrap_err()
+                .to_string()
+                .contains("truncated")
+        );
+    }
 
     #[test]
     fn media_settings_are_typed_scoped_and_forwarded() {
@@ -3928,6 +4282,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let stamp = session.stamp.clone();
+        let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
+        run_with_history(&args, Some(&session), || {
+            session.finish_log(&PipelineSummary::default(), None)
+        })
+        .unwrap();
 
         let bundle = session.archive().unwrap().expect("bundle created");
 
@@ -3939,6 +4298,9 @@ mod tests {
         assert!(audit_content.contains("SESSION_STARTED"));
         assert!(audit_content.contains("SESSION_ARCHIVE_BEGIN"));
         assert!(audit_content.contains("SESSION_ARCHIVE_DONE"));
+        assert!(audit_content.contains("MFB_HISTORY_CONTEXT="));
+        assert!(audit_content.contains("MFB_HISTORY_SUMMARY="));
+        assert!(audit_content.contains("MFB_HISTORY_FINISHED="));
         let manifest = std::fs::read_to_string(bundle.join("manifest.json")).unwrap();
         assert!(manifest.contains(&format!("MFB_Session_{stamp}.log")));
     }

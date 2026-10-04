@@ -253,6 +253,50 @@ struct IntegrityStats {
     tier2_verified_deleted: usize,
 }
 
+fn integrity_count_status(stats: &IntegrityStats) -> String {
+    let delta = stats.count_delta;
+    let mut delta_text = "MATCH".to_string();
+    if stats.integrity_failures > 0 {
+        let issue_count = stats.integrity_failures;
+        delta_text = format!(
+            "MISMATCH ({} invariant issue{})",
+            issue_count,
+            if issue_count == 1 { "" } else { "s" }
+        );
+    } else if stats.count_matches_with_handoff {
+        let handoff_n = stats.pipeline_handoff;
+        if handoff_n > 0 && delta == stats.expected_count_delta {
+            delta_text = format!(
+                "MATCH ({} expected handoff gap{})",
+                handoff_n,
+                if handoff_n == 1 { "" } else { "s" }
+            );
+        }
+    } else if stats.count_fully_explained {
+        let direction = if delta > 0 { "more" } else { "fewer" };
+        let explained = stats.explained_gaps;
+        delta_text = format!(
+            "EXPLAINED ({} {}; all {} listed below)",
+            delta.abs(),
+            direction,
+            explained
+        );
+    } else {
+        let direction = if delta > 0 { "more" } else { "fewer" };
+        let explained = stats.explained_gaps;
+        let unexplained = delta.unsigned_abs() - explained;
+        if unexplained > 0 {
+            delta_text = format!(
+                "MISMATCH ({} {direction}; {unexplained} still unexplained)",
+                delta.abs()
+            );
+        } else {
+            delta_text = format!("MISMATCH ({} {direction} in optimized)", delta.abs());
+        }
+    }
+    delta_text
+}
+
 fn same_path(p1: &Path, p2: &Path) -> bool {
     let c1 = match p1.canonicalize() {
         Ok(c) => c,
@@ -2496,46 +2540,7 @@ fn main() -> Result<()> {
 
     if args.print_integrity_summary {
         if let Some(ref stats) = integrity_stats {
-            let delta = stats.count_delta;
-            let mut delta_text = "MATCH".to_string();
-            if stats.integrity_failures > 0 {
-                let issue_count = stats.integrity_failures;
-                delta_text = format!(
-                    "MISMATCH ({} invariant issue{})",
-                    issue_count,
-                    if issue_count == 1 { "" } else { "s" }
-                );
-            } else if stats.count_matches_with_handoff {
-                let handoff_n = stats.pipeline_handoff;
-                if handoff_n > 0 && delta == stats.expected_count_delta {
-                    delta_text = format!(
-                        "MATCH ({} expected handoff gap{})",
-                        handoff_n,
-                        if handoff_n == 1 { "" } else { "s" }
-                    );
-                }
-            } else if stats.count_fully_explained {
-                let direction = if delta > 0 { "more" } else { "fewer" };
-                let explained = stats.explained_gaps;
-                delta_text = format!(
-                    "EXPLAINED ({} {}; all {} listed below)",
-                    delta.abs(),
-                    direction,
-                    explained
-                );
-            } else {
-                let direction = if delta > 0 { "more" } else { "fewer" };
-                let explained = stats.explained_gaps;
-                let unexplained = delta.unsigned_abs() - explained;
-                if unexplained > 0 {
-                    delta_text = format!(
-                        "MISMATCH ({} {direction}; {unexplained} still unexplained)",
-                        delta.abs()
-                    );
-                } else {
-                    delta_text = format!("MISMATCH ({} {direction} in optimized)", delta.abs());
-                }
-            }
+            let delta_text = integrity_count_status(stats);
 
             println!("{} Integrity summary", pick_symbol("🔎", "[CHECK]"));
             println!("   Source:    {}", stats.source);
@@ -2642,6 +2647,7 @@ fn main() -> Result<()> {
             failed_count: stats.failed_sources,
             source_remaining_count: stats.source_remaining_files,
             verified_deleted_count: stats.verified_deleted_sources,
+            count_status: Some(integrity_count_status(stats)),
         };
         println!(
             "{INTEGRITY_SUMMARY_JSON_PREFIX}{}",
@@ -2672,6 +2678,41 @@ mod tests {
     use super::*;
     use foundation::ToolBuilder;
     use serial_test::serial;
+
+    #[test]
+    fn machine_history_count_status_preserves_existing_verifier_labels() {
+        let mut stats = IntegrityStats {
+            count_matches_with_handoff: true,
+            ..IntegrityStats::default()
+        };
+        assert_eq!(integrity_count_status(&stats), "MATCH");
+        stats.pipeline_handoff = 1;
+        stats.count_delta = -1;
+        stats.expected_count_delta = -1;
+        assert_eq!(
+            integrity_count_status(&stats),
+            "MATCH (1 expected handoff gap)"
+        );
+        stats.integrity_failures = 1;
+        assert_eq!(
+            integrity_count_status(&stats),
+            "MISMATCH (1 invariant issue)"
+        );
+        stats.integrity_failures = 0;
+        stats.count_matches_with_handoff = false;
+        stats.count_fully_explained = true;
+        stats.explained_gaps = 1;
+        assert_eq!(
+            integrity_count_status(&stats),
+            "EXPLAINED (1 fewer; all 1 listed below)"
+        );
+        stats.count_fully_explained = false;
+        stats.count_delta = -3;
+        assert_eq!(
+            integrity_count_status(&stats),
+            "MISMATCH (3 fewer; 2 still unexplained)"
+        );
+    }
 
     #[test]
     fn test_restore_audit_marker_exemption_is_scoped_to_owned_session() {
