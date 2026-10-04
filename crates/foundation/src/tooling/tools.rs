@@ -6,6 +6,14 @@
 use std::fmt::Write;
 use std::process::{Command, Output};
 
+const FFMPEG_MIN_RELEASE: &str = "6.1";
+// Minimum library versions declared by the upstream FFmpeg n6.1 headers.
+const FFMPEG_MIN_LIBRARY_VERSIONS: &[(&str, [u32; 3])] = &[
+    ("libavutil", [58, 29, 100]),
+    ("libavcodec", [60, 31, 102]),
+    ("libavformat", [60, 16, 100]),
+];
+
 #[derive(Debug, Clone)]
 pub struct ToolCheck {
     pub name: &'static str,
@@ -48,53 +56,44 @@ pub fn check_tool_alt(name: &str) -> bool {
     )
 }
 
-#[must_use]
-pub fn get_tool_version(name: &str) -> Option<String> {
-    let path = crate::common_utils::resolve_tool_path_or_audit(name);
+fn version_probe_arg(name: &str) -> &'static str {
+    match name {
+        "exiftool" => "-ver",
+        "ffmpeg" | "ffprobe" => "-version",
+        _ => "--version",
+    }
+}
 
-    // Tool-specific version flags (some tools don't follow --version convention)
-    let output = match name {
-        "exiftool" => match Command::new(&path).arg("-ver").output() {
-            Ok(output) => Some(output),
-            Err(e) => {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "tool_version",
-                    format!("tool version probe failed for {name} via -ver: {e}"),
-                );
-                None
-            }
-        },
-        "ffmpeg" => match Command::new(&path).arg("-version").output() {
-            Ok(output) => Some(output),
-            Err(e) => {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "tool_version",
-                    format!("tool version probe failed for {name} via -version: {e}"),
-                );
-                None
-            }
-        },
-        _ => match Command::new(&path)
-            .arg("--version")
+fn get_tool_version_output(name: &str) -> Option<Output> {
+    let path = crate::common_utils::resolve_tool_path_or_audit(name);
+    let probe_arg = version_probe_arg(name);
+    let result = match name {
+        "exiftool" | "ffmpeg" | "ffprobe" => Command::new(&path).arg(probe_arg).output(),
+        _ => Command::new(&path)
+            .arg(probe_arg)
             .output()
-            .or_else(|_| Command::new(&path).arg("-version").output())
-        {
-            Ok(output) => Some(output),
-            Err(e) => {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "tool_version",
-                    format!("tool version probe failed for {name}: {e}"),
-                );
-                None
-            }
-        },
+            .or_else(|_| Command::new(&path).arg("-version").output()),
     };
 
-    let output = output?;
+    match result {
+        Ok(output) => Some(output),
+        Err(error) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_version",
+                format!("tool version probe failed for {name} via {probe_arg}: {error}"),
+            );
+            None
+        }
+    }
+}
+
+#[must_use]
+pub fn get_tool_version(name: &str) -> Option<String> {
+    let output = get_tool_version_output(name)?;
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().next().map(std::string::ToString::to_string)
+        first_version_line(&stdout)
     } else {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "tool_version",
@@ -105,6 +104,10 @@ pub fn get_tool_version(name: &str) -> Option<String> {
         );
         None
     }
+}
+
+fn first_version_line(output: &str) -> Option<String> {
+    output.lines().next().map(std::string::ToString::to_string)
 }
 
 #[must_use]
@@ -182,7 +185,7 @@ pub fn check_video() -> Vec<ToolCheck> {
 /// Minimum version requirements for external tools to ensure compatibility with
 /// modern features.
 const MIN_VERSIONS: &[(&str, &str)] = &[
-    ("ffmpeg", "6.1"),
+    ("ffmpeg", FFMPEG_MIN_RELEASE),
     ("exiftool", "12.70"),
     ("magick", "7.1.1"),
     ("cjxl", "0.9.0"),
@@ -206,13 +209,39 @@ pub fn require(tool_names: &[&str]) -> Result<(), String> {
 
         // Version locking: Check if the tool meets the minimum version requirement
         if let Some(&(target_name, min_ver)) = MIN_VERSIONS.iter().find(|(n, _)| n == name) {
-            match get_tool_version(target_name) {
-                Some(current_ver_full) if !is_version_at_least(&current_ver_full, min_ver) => {
-                    outdated.push(format!(
-                        "{target_name} (found {current_ver_full}, required ≥{min_ver})"
-                    ));
+            match get_tool_version_output(target_name) {
+                Some(output) if output.status.success() => {
+                    let full_output = String::from_utf8_lossy(&output.stdout);
+                    let current_ver = full_output
+                        .lines()
+                        .next()
+                        .map(std::string::ToString::to_string);
+                    match current_ver {
+                        Some(ref version)
+                            if version_meets_minimum(
+                                target_name,
+                                version,
+                                &full_output,
+                                min_ver,
+                            ) => {}
+                        Some(version) => outdated.push(format!(
+                            "{target_name} (found {version}, required ≥{min_ver})"
+                        )),
+                        None => {
+                            outdated.push(format!("{target_name} (version output was empty)"));
+                        }
+                    }
                 }
-                Some(_) => {}
+                Some(output) => {
+                    crate::media_conversion_gate::delivery_runtime_batch_audit(
+                        "tool_version",
+                        format!(
+                            "tool version probe returned non-zero status for {target_name}: {stderr}",
+                            stderr = String::from_utf8_lossy(&output.stderr).trim()
+                        ),
+                    );
+                    outdated.push(format!("{target_name} (version probe failed)"));
+                }
                 None => {
                     outdated.push(format!("{target_name} (version probe failed)"));
                 }
@@ -228,7 +257,7 @@ pub fn require(tool_names: &[&str]) -> Result<(), String> {
         if !outdated.is_empty() {
             let _ = write!(
                 err_msg,
-                "Tools out of date: {}. Please upgrade to the latest versions.",
+                "Tool version requirements not verified: {}. Upgrade outdated tools or repair the reported version-probe evidence.",
                 outdated.join(", ")
             );
         }
@@ -241,6 +270,10 @@ pub fn require(tool_names: &[&str]) -> Result<(), String> {
 /// Robust version comparison helper.
 /// Extracts the first semantic version string (e.g. "7.1.1") and compares it.
 fn is_version_at_least(current_full: &str, required: &str) -> bool {
+    if current_full.starts_with("ffmpeg version N-") {
+        return false;
+    }
+
     let extract_version = |s: &str| -> String {
         let mut result = String::new();
         let mut started = false;
@@ -288,6 +321,98 @@ fn is_version_at_least(current_full: &str, required: &str) -> bool {
     }
     // Current is shorter: check if remaining required parts are all 0
     required_parts.iter().skip(cur_len).all(|r| *r == 0)
+}
+
+fn version_meets_minimum(tool: &str, first_line: &str, full_output: &str, minimum: &str) -> bool {
+    if tool == "ffmpeg" && first_line.starts_with("ffmpeg version N-") {
+        if minimum != FFMPEG_MIN_RELEASE {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_version",
+                format!("no verified FFmpeg snapshot API baseline for minimum {minimum}"),
+            );
+            return false;
+        }
+        return ffmpeg_snapshot_meets_minimum(full_output);
+    }
+    is_version_at_least(first_line, minimum)
+}
+
+fn ffmpeg_snapshot_meets_minimum(full_output: &str) -> bool {
+    for (library, minimum) in FFMPEG_MIN_LIBRARY_VERSIONS {
+        let mut evidence = full_output.lines().filter_map(|line| {
+            line.strip_prefix(library)
+                .filter(|remainder| remainder.starts_with(char::is_whitespace))
+        });
+        let Some(remainder) = evidence.next() else {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_version",
+                format!("FFmpeg snapshot is missing {library} version evidence"),
+            );
+            return false;
+        };
+        if evidence.next().is_some() {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_version",
+                format!("FFmpeg snapshot has duplicate {library} version evidence"),
+            );
+            return false;
+        }
+        match parse_ffmpeg_library_version(remainder) {
+            Some((compiled, runtime)) if compiled == runtime && compiled >= *minimum => {}
+            Some((compiled, runtime)) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "tool_version",
+                    format!(
+                        "FFmpeg snapshot {library} compiled/runtime versions {compiled:?} / {runtime:?} must match and meet n6.1 API baseline {minimum:?}"
+                    ),
+                );
+                return false;
+            }
+            None => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "tool_version",
+                    format!("FFmpeg snapshot has malformed {library} version evidence"),
+                );
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn parse_ffmpeg_library_version(remainder: &str) -> Option<([u32; 3], [u32; 3])> {
+    let (runtime, linked) = match remainder.split_once('/') {
+        Some(versions) => versions,
+        None => return None,
+    };
+    let runtime = match parse_ffmpeg_version_components(runtime) {
+        Some(version) => version,
+        None => return None,
+    };
+    let linked = match parse_ffmpeg_version_components(linked) {
+        Some(version) => version,
+        None => return None,
+    };
+    Some((runtime, linked))
+}
+
+fn parse_ffmpeg_version_components(value: &str) -> Option<[u32; 3]> {
+    let compact = value
+        .split('.')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(".");
+    match parse_version_parts(&compact, "FFmpeg library")?.try_into() {
+        Ok(version) => Some(version),
+        Err(parts) => {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "tool_version",
+                format!("FFmpeg library version must have three components: {parts:?}"),
+            );
+            None
+        }
+    }
 }
 
 fn parse_version_parts(version: &str, label: &str) -> Option<Vec<u32>> {
@@ -338,6 +463,125 @@ mod tests {
         assert!(!is_version_at_least("ffmpeg version 6.1..git", "6.1"));
         assert!(!is_version_at_least("ffmpeg version 6.1.", "6.1"));
         assert!(!is_version_at_least("ffmpeg version 6.1. Copyright", "6.1"));
+        assert!(!is_version_at_least(
+            "ffmpeg version N-127165-g12c589a37d",
+            "6.1"
+        ));
+    }
+
+    #[test]
+    fn ffmpeg_n_snapshot_uses_complete_library_api_versions() {
+        let current_snapshot = concat!(
+            "ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers\n",
+            "libavutil      61. 10.100 / 61. 10.100\n",
+            "libavcodec     63. 16.100 / 63. 16.100\n",
+            "libavformat    63.  7.100 / 63.  7.100\n",
+        );
+        assert!(version_meets_minimum(
+            "ffmpeg",
+            "ffmpeg version N-127165-g12c589a37d",
+            current_snapshot,
+            "6.1"
+        ));
+        assert!(!version_meets_minimum(
+            "ffmpeg",
+            "ffmpeg version N-127165-g12c589a37d",
+            current_snapshot,
+            "999.0"
+        ));
+        let exact_baseline = concat!(
+            "ffmpeg version N-1-gabcdef0123\n",
+            "libavutil      58. 29.100 / 58. 29.100\n",
+            "libavcodec     60. 31.102 / 60. 31.102\n",
+            "libavformat    60. 16.100 / 60. 16.100\n",
+        );
+        assert!(ffmpeg_snapshot_meets_minimum(exact_baseline));
+
+        let old_snapshot = concat!(
+            "ffmpeg version N-999999-gabcdef0123 Copyright (c) FFmpeg developers\n",
+            "libavutil      58. 28.100 / 58. 28.100\n",
+            "libavcodec     60. 30.102 / 60. 30.102\n",
+            "libavformat    60. 15.100 / 60. 15.100\n",
+        );
+        assert!(!version_meets_minimum(
+            "ffmpeg",
+            "ffmpeg version N-999999-gabcdef0123",
+            old_snapshot,
+            "6.1"
+        ));
+    }
+
+    #[test]
+    fn ffmpeg_n_snapshot_requires_complete_consistent_library_evidence() {
+        let missing_library = concat!(
+            "ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers\n",
+            "libavutil      63.  8.100 / 63.  8.100\n",
+            "libavcodec     63. 16.100 / 63. 16.100\n",
+        );
+        assert!(!ffmpeg_snapshot_meets_minimum(missing_library));
+
+        let conflicting_library = concat!(
+            "ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers\n",
+            "libavutil      63.  8.100 / 63.  8.100\n",
+            "libavcodec     63. 16.100 / 63. 15.100\n",
+            "libavformat    63.  6.103 / 63.  6.103\n",
+        );
+        assert!(!ffmpeg_snapshot_meets_minimum(conflicting_library));
+
+        let malformed_library = concat!(
+            "ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers\n",
+            "libavutil      unknown / unknown\n",
+            "libavcodec     63. 16.100 / 63. 16.100\n",
+            "libavformat    63.  6.103 / 63.  6.103\n",
+        );
+        assert!(!ffmpeg_snapshot_meets_minimum(malformed_library));
+        for malformed in [
+            "60..31.102 / 60.31.102",
+            "60.31.102. / 60.31.102",
+            "60.31 / 60.31.102",
+            "60.31.102 / 60.31.102 / 60.31.102",
+            "6 0.31.102 / 60.31.102",
+        ] {
+            assert!(
+                parse_ffmpeg_library_version(malformed).is_none(),
+                "{malformed}"
+            );
+        }
+        let duplicate_instead_of_missing = concat!(
+            "ffmpeg version N-127165-g12c589a37d\n",
+            "libavutil      61.10.100 / 61.10.100\n",
+            "libavutil      61.10.100 / 61.10.100\n",
+            "libavcodec     63.16.100 / 63.16.100\n",
+        );
+        assert!(!ffmpeg_snapshot_meets_minimum(duplicate_instead_of_missing));
+        let valid = format!("{missing_library}libavformat    63.  6.103 / 63.  6.103\n");
+        assert!(ffmpeg_snapshot_meets_minimum(&valid));
+        assert!(!ffmpeg_snapshot_meets_minimum(&format!(
+            "{valid}libavformat    63.  6.103 / 63.  6.103\n"
+        )));
+    }
+
+    #[test]
+    fn ffprobe_uses_its_supported_version_flag() {
+        assert_eq!(version_probe_arg("ffprobe"), "-version");
+        assert_eq!(version_probe_arg("ffmpeg"), "-version");
+        assert_eq!(version_probe_arg("cjxl"), "--version");
+        let version =
+            get_tool_version("ffprobe").expect("ffprobe must report its installed version");
+        assert!(version.starts_with("ffprobe version "), "{version}");
+        require(&["ffmpeg"]).expect("the installed FFmpeg must meet the version gate");
+    }
+
+    #[test]
+    fn public_version_display_remains_single_line() {
+        let full_output = concat!(
+            "ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers\n",
+            "libavcodec     63. 16.100 / 63. 16.100\n",
+        );
+        assert_eq!(
+            first_version_line(full_output),
+            Some("ffmpeg version N-127165-g12c589a37d Copyright (c) FFmpeg developers".into())
+        );
     }
 
     #[test]

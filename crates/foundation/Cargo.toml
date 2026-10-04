@@ -50,7 +50,6 @@ crc32fast = { workspace = true }
 infer = { workspace = true }
 quick-xml = { workspace = true }
 exr = { workspace = true }
-proptest = { workspace = true }
 serial_test = ">= 3.0"
 arbitrary = { features = ["derive"], optional = true, version = ">= 1.0" }
 rug = { workspace = true, optional = true }
@@ -59,6 +58,8 @@ gif = ">= 0.12"
 webp = ">= 0.2"
 jxl-oxide = { git = "https://github.com/tirr-c/jxl-oxide.git", version = ">= 0.12" }
 
+[dev-dependencies]
+proptest = { workspace = true }
 
 [[bin]]
 name = "train_knn"

@@ -744,6 +744,19 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 | **dovi_tool**        |  Optional   | Dolby Vision RPU extraction                          | `cargo install dovi_tool`                                                                   |
 | **hdr10plus_tool**   |  Optional   | HDR10+ metadata extraction                           | `cargo install hdr10plus_tool`                                                              |
 
+FFmpeg development builds named `N-<revision>-g<sha>` are checked against the
+complete libavutil/libavcodec/libavformat API versions declared by the official
+6.1 headers, not their revision counter. Missing, duplicate, malformed or
+conflicting version evidence fails the check; `ffprobe` uses its supported
+`-version` flag. The displayed tool version remains one line.
+
+The shared metadata CI uses the same checksum-pinned ExifTool 13.59 release as
+the image-package checks, including its adjacent Perl modules. The older Ubuntu
+parser does not recognize the Samsung capture-info regression fixture. Keep
+external tools current for input-safety fixes; newer ImageMagick path policies
+must authorize both the supplied path and its resolved destination. MFB does
+not disable these policies to make a conversion succeed.
+
 #### macOS (Homebrew)
 
 ```bash

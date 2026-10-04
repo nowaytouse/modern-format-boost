@@ -452,15 +452,26 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 | 工具                 | 必需？ | 用途                            | 安装命令                                                                                    |
 | :------------------- | :----: | :------------------------------ | :------------------------------------------------------------------------------------------ |
 | **Rust** (nightly)   |   ✅   | 构建与安装                      | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh && rustup default nightly` |
-| **FFmpeg** (5.0+)    |   ✅   | 视频处理与指标计算              | `brew install ffmpeg` / `apt install ffmpeg`                                                |
+| **FFmpeg** (6.1+)    |   ✅   | 视频处理与指标计算              | `brew install ffmpeg` / `apt install ffmpeg`                                                |
 | **libjxl**           |   ✅   | JXL 编码核心                    | `brew install jpeg-xl`                                                                      |
 | **ExifTool**         |   ✅   | 元数据保留                      | `brew install exiftool`                                                                     |
 | **ImageMagick**      |   ✅   | 图像迂回路径                    | `brew install imagemagick`                                                                  |
 | **libwebp**          |   ✅   | WebP 原生解码                   | `brew install webp`                                                                         |
-| **libheif**          |   ✅   | HEIC/HEIF 解码                  | `brew install libheif`                                                                      |
+| **libheif >=1.23.5** |   ✅   | HEIC/HEIF 解码；要求安全修复版本 | `brew install libheif`                                                                      |
 | **PostgreSQL** (12+) |  按需  | Vid、训练、缓存及可选质量启发式 | `brew install postgresql pgvector` / `apt install postgresql`                               |
 | **dovi_tool**        |  可选  | 杜比视界 RPU 提取               | `cargo install dovi_tool`                                                                   |
 | **hdr10plus_tool**   |  可选  | HDR10+ 元数据提取               | `cargo install hdr10plus_tool`                                                              |
+
+FFmpeg 的 `N-<修订号>-g<提交号>` 开发版本不按修订号判断新旧，而是核对
+libavutil、libavcodec、libavformat 的完整 API 版本是否达到官方 6.1 基线。
+版本证据缺失、重复、格式错误或编译与运行版本不一致时，检查不会放行。
+`ffprobe` 使用其支持的 `-version` 参数，界面里的工具版本仍保持单行显示。
+
+共享元数据 CI 与图像包检查统一使用经过校验和核对的 ExifTool 13.59，
+并使用该版本配套的 Perl 模块。Ubuntu 的旧解析器无法识别三星截图字段的
+回归测试样本。建议及时更新外部工具以获得异常输入的安全修复；新版
+ImageMagick 会同时检查传入路径与解析后的真实路径，MFB 不会关闭安全策略
+来强行完成转换。
 
 #### macOS (Homebrew)
 

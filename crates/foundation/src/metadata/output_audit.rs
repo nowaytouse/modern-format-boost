@@ -311,11 +311,27 @@ fn jpeg_reconstruction_tag_key(location: &str) -> Option<String> {
         return None;
     }
     let carrier = parts.next()?;
-    let jpeg_only = matches!(carrier, "Trailer" | "COM")
-        || carrier
-            .strip_prefix("APP")
-            .and_then(|number| number.parse::<u8>().ok())
-            .is_some_and(|number| number <= 15);
+    let jpeg_only = matches!(
+        carrier,
+        "Trailer"
+            | "COM"
+            | "APP0"
+            | "APP1"
+            | "APP2"
+            | "APP3"
+            | "APP4"
+            | "APP5"
+            | "APP6"
+            | "APP7"
+            | "APP8"
+            | "APP9"
+            | "APP10"
+            | "APP11"
+            | "APP12"
+            | "APP13"
+            | "APP14"
+            | "APP15"
+    );
     // MakerNotes nested inside native EXIF are not a JPEG-only carrier.
     if !jpeg_only
         || parts.any(|part| {
@@ -819,6 +835,8 @@ mod tests {
                 "Photoshop:Copy1:IPTCDigest",
             ),
             ("File:File::JPEG-COM:Comment", "File:Comment"),
+            ("File:File::JPEG-APP0:VendorTag", "File:VendorTag"),
+            ("File:File::JPEG-APP15:VendorTag", "File:VendorTag"),
         ] {
             assert_eq!(jpeg_reconstruction_tag_key(location).as_deref(), Some(key));
         }
@@ -830,6 +848,11 @@ mod tests {
             "MakerNotes:Samsung::PNG-Trailer-Samsung:VendorTag",
             "MakerNotes:Samsung::HEIC-sefd-Samsung:VendorTag",
             "MakerNotes:Samsung::JPEG-APP99:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP16:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP01:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP+1:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP1x:VendorTag",
             "MakerNotes:Samsung:unknown:JPEG-APP5:VendorTag",
             "MakerNotes:Samsung::unknown:VendorTag",
             "Samsung:VendorTag",
@@ -1301,7 +1324,13 @@ mod tests {
         );
         let src_tags = preservable_tag_map(&src).unwrap();
         let dst_tags = preservable_tag_map(&dst).unwrap();
-        assert_eq!(src_tags["Samsung:SamsungCaptureInfo"], "Screenshot");
+        assert_eq!(
+            src_tags
+                .get("Samsung:SamsungCaptureInfo")
+                .map(String::as_str),
+            Some("Screenshot"),
+            "ExifTool must recognize the synthetic SEFT record; observed tags: {src_tags:?}"
+        );
         assert!(!dst_tags.contains_key("Samsung:SamsungCaptureInfo"));
         for policy in [
             MetadataOutputPolicy::Preserve,

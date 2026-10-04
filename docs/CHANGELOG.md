@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Shared CI parser parity and development-tool compatibility (2026-10-04)
+
+- Fix the latest shared-test/coverage failure caused by Ubuntu ExifTool 12.76
+  not recognizing the synthetic Samsung SEFT capture-info record. Install the
+  same checksum-pinned ExifTool 13.59 used by image-package checks, keep its Perl
+  modules adjacent, assert the selected executable/version before tests, and
+  retain the complete mandatory metadata/reconstruction regression. A failed
+  fixture now reports the observed metadata instead of a missing-key panic.
+- Match canonical JPEG APP0 through APP15 carriers directly rather than
+  discarding a numeric parse failure. Reject out-of-range, empty and malformed
+  carrier names; keep physical-provenance and exact-reconstruction requirements.
+- Handle FFmpeg `N-<revision>-g<sha>` snapshots using full, unique and consistent
+  libavutil/libavcodec/libavformat API evidence from the official n6.1 baseline.
+  Do not interpret a revision counter as a release version or guess the release
+  from a single library major. Reject missing/duplicate/malformed evidence and
+  unverified minimum baselines. Preserve single-line public version display and
+  probe ffprobe with its supported `-version` parameter.
+- Preserve the incoming proptest 1.11.0 git update to `4b0594e`. Its upstream
+  changes only disable fail-fast in proptest's own CI matrix; there is no library
+  API or MFB runtime change. Move foundation's exclusively test-only proptest
+  usage into dev-dependencies instead of the production dependency graph.
+  Keep local FFmpeg/ImageMagick HEAD input-safety improvements without weakening
+  ImageMagick's resolved-path authorization or
+  replacing reproducible CI tools with moving HEAD downloads. Align the Chinese
+  prerequisites with the existing FFmpeg and libheif minimums.
+- Validation: 22 metadata and 9 tool-version regressions plus all 397 silent-error
+  contracts passed, with no ignored tests in these runs. Scoped foundation
+  all-target/all-feature Clippy, formatting and actionlint passed. These local
+  results do not assert hosted-CI coverage or full-batch delivery acceptance;
+  no Photos library or user media was modified.
+
 ### Metadata carrier provenance and defensive JPEG probing (2026-10-04)
 
 - Replace the JPEG reconstruction tag-name exception with verified physical

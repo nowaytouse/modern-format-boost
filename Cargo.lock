@@ -2192,7 +2192,7 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.11.0"
-source = "git+https://github.com/proptest-rs/proptest#0d1cc6623fcff0f127a95000a93f277d6867ca05"
+source = "git+https://github.com/proptest-rs/proptest#4b0594eb07c53695dc3c24d3fa06bdceb98540e9"
 dependencies = [
  "bit-set",
  "bit-vec",
