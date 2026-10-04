@@ -509,12 +509,16 @@ without `--shortest-path` they are delivered only to the adjacent working tree;
 with `--strategy jxl --shortest-path`, the same checkpointed Photos import and
 live-library verification gates run before source cleanup.
 
-JPEG-only APP13 metadata and Samsung's SEFT `SamsungCaptureInfo` record may be
-held in the reconstruction payload rather than a native JXL metadata channel.
-For these specific absent tags, the metadata gate requires reconstruction of
-the current output into a complete JPEG with the paired source's exact bytes.
-Native EXIF/XMP omissions, contradictory values and other vendor tags are not
-exempted. A mandatory gate failure leaves encoded work unprocessed, blocks
+JPEG-only metadata in APP segments, comments and trailers may be held in the
+reconstruction payload rather than a native JXL metadata channel. For absent
+fields, the metadata gate checks ExifTool's physical source location and the
+original field value, then requires reconstruction of the current output into
+a complete JPEG with the paired source's exact bytes. This covers vendor
+headers and trailers without a growing list of vendor tag names. Native
+EXIF/XMP/ICC omissions, EXIF-contained MakerNotes, sidecar overrides,
+contradictory values and unknown locations are not exempted. Duplicate field
+instances are retained for comparison; incomplete metadata reads fail closed.
+A mandatory gate failure leaves encoded work unprocessed, blocks
 delivery/cleanup and preserves source files; it is not counted as a new
 per-file encoding failure.
 

@@ -287,6 +287,7 @@ fn detect_encoder(
 const MARKER_SOI: u8 = 0xD8;
 const MARKER_DQT: u8 = 0xDB;
 const MARKER_SOS: u8 = 0xDA;
+const MARKER_DNL: u8 = 0xDC;
 const MARKER_EOI: u8 = 0xD9;
 
 /// Extract quantization tables from JPEG raw bytes.
@@ -753,78 +754,129 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> std::io::Result<bool> {
 /// Searches for XMP segment (APP1) starting with "<http://ns.adobe.com/xap/1.0/\0>".
 ///
 /// # Returns
-/// - `Some(String)`: XMP metadata content
-/// - `None`: No XMP segment found
+/// - `Some(Vec<String>)`: XMP packets from real JPEG marker segments
+/// - `None`: No XMP segment found, or malformed structure reported by probe audit
 #[must_use]
 pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
-    let mut xmp_blocks = Vec::new();
-    let mut pos = 0;
-
-    while pos < data.len() {
-        // Look for APP1 marker 0xFF 0xE1
-        if data.get(pos..pos + 2) == Some(&[0xFF, 0xE1]) {
-            if pos + 3 >= data.len() {
-                break;
-            }
-            let seg_len = if let Some((b1, b2)) = data.get(pos + 2).zip(data.get(pos + 3)) {
-                usize::from(u16::from_be_bytes([*b1, *b2]))
-            } else {
-                crate::media_conversion_gate::probe_image_format_batch_audit(
-                    "probe_jpeg",
-                    format!("JPEG segment length bytes missing at position {pos}"),
-                );
-                break;
-            };
-            if seg_len < 2 || pos + 2 + seg_len > data.len() {
-                pos += 1;
-                continue;
-            }
-
-            let payload = crate::media_conversion_gate::probe_jpeg_buffer_slice(
-                data,
-                (pos + 4)..(pos + 2 + seg_len),
-                &format!("JPEG segment payload truncated at position {}", pos + 4),
+    let result = extract_xmp_from_jpeg_markers(data);
+    match result {
+        Ok(Some(xmp_blocks)) => {
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_JPEG,
+                &format!("Extracted {} XMP blocks from JPEG stream", xmp_blocks.len())
             );
-
-            // APP1 (0xE1): XMP Standard
-            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp =
-                    String::from_utf8_lossy(crate::media_conversion_gate::probe_jpeg_buffer_slice(
-                        payload,
-                        29..payload.len(),
-                        "APP1 XMP standard payload truncated (standard XMP metadata will be lost)",
-                    ))
-                    .to_string();
-                xmp_blocks.push(xmp);
-            }
-            // APP1 (0xE1): XMP Extended
-            else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
-                && payload.len() > 35 + 32 + 8
-            {
-                let xmp =
-                    String::from_utf8_lossy(crate::media_conversion_gate::probe_jpeg_buffer_slice(
-                        payload,
-                        (35 + 32 + 8)..payload.len(),
-                        "APP1 XMP extended payload truncated (extended XMP metadata will be lost)",
-                    ))
-                    .to_string();
-                xmp_blocks.push(xmp);
-            }
-            pos += 2 + seg_len;
-        } else {
-            pos += 1;
+            Some(xmp_blocks)
+        }
+        Ok(None) => None,
+        Err((pos, reason)) => {
+            crate::media_conversion_gate::probe_image_format_batch_audit(
+                "probe_jpeg",
+                format!("JPEG XMP marker walk failed at position {pos}: {reason}"),
+            );
+            None
         }
     }
+}
 
-    if xmp_blocks.is_empty() {
-        None
-    } else {
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_JPEG,
-            &format!("Extracted {} XMP blocks from JPEG stream", xmp_blocks.len())
-        );
-        Some(xmp_blocks)
+fn extract_xmp_from_jpeg_markers(
+    data: &[u8],
+) -> Result<Option<Vec<String>>, (usize, &'static str)> {
+    if data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {
+        return Err((0, "missing SOI marker"));
     }
+
+    let mut xmp_blocks = Vec::new();
+    let mut pos = 2;
+    let mut in_scan = false;
+    let mut saw_eoi = false;
+    while pos < data.len() {
+        if in_scan {
+            // Scan data is opaque except for stuffed FF00 bytes and restart markers.
+            loop {
+                let Some(relative_ff) = data[pos..].iter().position(|byte| *byte == 0xFF) else {
+                    return Err((pos, "scan ended without a marker"));
+                };
+                pos = pos
+                    .checked_add(relative_ff)
+                    .ok_or((pos, "scan marker offset overflow"))?;
+                let marker_start = pos;
+                while data.get(pos) == Some(&0xFF) {
+                    pos += 1;
+                }
+                let Some(marker) = data.get(pos).copied() else {
+                    return Err((marker_start, "truncated marker after scan data"));
+                };
+                pos += 1;
+                if marker == 0x00 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+                    continue;
+                }
+                pos = marker_start;
+                in_scan = false;
+                break;
+            }
+        }
+
+        let marker_start = pos;
+        if data.get(pos) != Some(&0xFF) {
+            return Err((pos, "expected marker prefix"));
+        }
+        while data.get(pos) == Some(&0xFF) {
+            pos += 1;
+        }
+        let Some(marker) = data.get(pos).copied() else {
+            return Err((marker_start, "truncated marker code"));
+        };
+        pos += 1;
+
+        if marker == MARKER_EOI {
+            saw_eoi = true;
+            break;
+        }
+        if marker == 0x01 {
+            continue;
+        }
+        if marker == 0x00 || (0xD0..=0xD7).contains(&marker) || marker == MARKER_SOI {
+            return Err((marker_start, "unexpected standalone marker"));
+        }
+
+        let Some(length_end) = pos.checked_add(2) else {
+            return Err((marker_start, "segment length offset overflow"));
+        };
+        let Some(length_bytes) = data.get(pos..length_end) else {
+            return Err((marker_start, "truncated segment length"));
+        };
+        let segment_length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        if segment_length < 2 {
+            return Err((marker_start, "invalid segment length below two bytes"));
+        }
+        let Some(segment_end) = pos.checked_add(segment_length) else {
+            return Err((marker_start, "segment end offset overflow"));
+        };
+        let Some(payload_start) = pos.checked_add(2) else {
+            return Err((marker_start, "segment payload offset overflow"));
+        };
+        let Some(payload) = data.get(payload_start..segment_end) else {
+            return Err((marker_start, "segment exceeds input boundary"));
+        };
+
+        if marker == 0xE1 {
+            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
+                xmp_blocks.push(String::from_utf8_lossy(&payload[29..]).to_string());
+            } else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
+                && payload.len() > 35 + 32 + 8
+            {
+                xmp_blocks.push(String::from_utf8_lossy(&payload[(35 + 32 + 8)..]).to_string());
+            }
+        }
+
+        pos = segment_end;
+        in_scan = marker == MARKER_SOS || marker == MARKER_DNL;
+    }
+
+    if !saw_eoi {
+        return Err((pos, "missing EOI marker"));
+    }
+    Ok((!xmp_blocks.is_empty()).then_some(xmp_blocks))
 }
 
 /// Extract gainmap image from `UltraHDR` JPEG.
@@ -2246,6 +2298,7 @@ mod tests {
         jpeg_with_xmp.extend_from_slice(xmp_header);
         jpeg_with_xmp.extend_from_slice(xmp_content);
         jpeg_with_xmp.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        jpeg_with_xmp.extend_from_slice(&synthetic_xmp_app1_segment());
 
         let extracted = extract_xmp_from_jpeg_data(&jpeg_with_xmp);
         assert!(extracted.is_some());
@@ -2253,7 +2306,109 @@ mod tests {
         assert_eq!(xmp_blocks.len(), 1);
         let xmp_str = xmp_blocks.first().expect("extracted XMP has one block");
         assert!(xmp_str.contains("test content"));
+        assert!(!xmp_str.contains("synthetic"));
         Ok(())
+    }
+
+    #[test]
+    fn xmp_extractor_accepts_marker_fill_and_tem() {
+        let xmp = synthetic_xmp_app1_segment();
+        let mut jpeg = vec![0xFF, MARKER_SOI, 0xFF, 0xFF, 0x01];
+        jpeg.extend_from_slice(&[0xFF, 0xFF]);
+        jpeg.extend_from_slice(&xmp[1..]);
+        jpeg.extend_from_slice(&[0xFF, MARKER_EOI]);
+
+        assert_eq!(
+            extract_xmp_from_jpeg_data(&jpeg)
+                .expect("top-level XMP should be found")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn xmp_extractor_finds_app1_between_progressive_scans() {
+        let xmp = synthetic_xmp_app1_segment();
+        let mut jpeg = vec![0xFF, MARKER_SOI];
+        jpeg.extend_from_slice(&[
+            0xFF, MARKER_SOS, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
+        ]);
+        jpeg.extend_from_slice(b"scan-one");
+        jpeg.extend_from_slice(&[0xFF, 0x01]);
+        jpeg.extend_from_slice(&[0xFF, 0xD0]);
+        jpeg.extend_from_slice(&[0xFF, 0x00]);
+        jpeg.extend_from_slice(&xmp);
+        jpeg.extend_from_slice(&[
+            0xFF, MARKER_SOS, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
+        ]);
+        jpeg.extend_from_slice(b"scan-two");
+        jpeg.extend_from_slice(&[0xFF, MARKER_EOI]);
+
+        assert_eq!(
+            extract_xmp_from_jpeg_data(&jpeg).expect("inter-scan XMP should be found"),
+            vec!["<x:xmpmeta>synthetic</x:xmpmeta>".to_string()]
+        );
+    }
+
+    #[test]
+    fn xmp_extractor_ignores_app1_bytes_inside_app2_payload() {
+        let fake_app1 = synthetic_xmp_app1_segment();
+        let app2_length = u16::try_from(fake_app1.len() + 2).expect("APP2 length fits");
+        let mut jpeg = vec![0xFF, MARKER_SOI, 0xFF, 0xE2];
+        jpeg.extend_from_slice(&app2_length.to_be_bytes());
+        jpeg.extend_from_slice(&fake_app1);
+        jpeg.extend_from_slice(&[0xFF, MARKER_EOI]);
+
+        assert!(extract_xmp_from_jpeg_data(&jpeg).is_none());
+    }
+
+    #[test]
+    fn xmp_extractor_ignores_app1_bytes_in_entropy_and_after_eoi() {
+        let fake_app1 = synthetic_xmp_app1_segment();
+        let mut stuffed_app1 = Vec::with_capacity(fake_app1.len() + 1);
+        for &byte in &fake_app1 {
+            stuffed_app1.push(byte);
+            if byte == 0xFF {
+                stuffed_app1.push(0x00);
+            }
+        }
+        let mut jpeg = vec![
+            0xFF, MARKER_SOI, 0xFF, MARKER_SOS, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
+        ];
+        jpeg.extend_from_slice(&stuffed_app1);
+        jpeg.extend_from_slice(&[0xFF, MARKER_EOI]);
+        assert!(extract_xmp_from_jpeg_data(&jpeg).is_none());
+
+        let mut jpeg = vec![0xFF, MARKER_SOI, 0xFF, MARKER_EOI];
+        jpeg.extend_from_slice(&fake_app1);
+        assert!(extract_xmp_from_jpeg_data(&jpeg).is_none());
+    }
+
+    #[test]
+    fn xmp_extractor_rejects_malformed_or_truncated_segments() {
+        let fake_app1 = synthetic_xmp_app1_segment();
+        let mut truncated_app2 = vec![0xFF, MARKER_SOI, 0xFF, 0xE2, 0xFF, 0xFF];
+        truncated_app2.extend_from_slice(&fake_app1);
+        assert!(extract_xmp_from_jpeg_data(&truncated_app2).is_none());
+
+        let mut invalid_length = vec![0xFF, MARKER_SOI, 0xFF, 0xE1, 0x00, 0x01];
+        invalid_length.extend_from_slice(&fake_app1);
+        assert!(extract_xmp_from_jpeg_data(&invalid_length).is_none());
+
+        let mut missing_eoi = vec![0xFF, MARKER_SOI];
+        missing_eoi.extend_from_slice(&fake_app1);
+        assert!(extract_xmp_from_jpeg_data(&missing_eoi).is_none());
+    }
+
+    fn synthetic_xmp_app1_segment() -> Vec<u8> {
+        let header = b"http://ns.adobe.com/xap/1.0/\0";
+        let content = b"<x:xmpmeta>synthetic</x:xmpmeta>";
+        let length = u16::try_from(header.len() + content.len() + 2).expect("APP1 length fits");
+        let mut segment = vec![0xFF, 0xE1];
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(header);
+        segment.extend_from_slice(content);
+        segment
     }
 
     #[test]
@@ -2496,15 +2651,16 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_xmp_stops_at_sos() {
+    fn xmp_extractor_rejects_truncated_inter_scan_app1() {
         let mut data = vec![0xFF, 0xD8];
         // SOS before APP1
         data.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00]);
-        // Compressed data (would look like markers if not skipped)
+        // A real inter-scan APP1 marker without its declared payload.
         data.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x10]);
 
         let result = extract_xmp_from_jpeg_data(&data);
-        assert!(result.is_none()); // Should stop at SOS and not find the "fake" APP1 in scan data
+        assert!(result.is_none());
+        assert!(extract_xmp_from_jpeg_markers(&data).is_err());
     }
 
     #[test]

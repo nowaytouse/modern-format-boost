@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Metadata carrier provenance and defensive JPEG probing (2026-10-04)
+
+- Replace the JPEG reconstruction tag-name exception with verified physical
+  source provenance. Only missing, unchanged source values in JPEG-only APP,
+  comment or trailer carriers can consume exact current-output reconstruction
+  proof. Keep native EXIF/XMP/ICC, EXIF-contained MakerNotes, sidecar overlays,
+  contradictory values, unknown locations and other source formats strict.
+  Matching normal metadata does not trigger a second provenance query.
+- Include JPEG comments in preservation/clearing checks. Add uniform synthetic
+  vendor-header, comment and opaque-header/trailer fixtures; changes to opaque
+  bytes fail the complete reconstruction comparison even when pixels match.
+- Keep duplicate metadata instances in ExifTool JSON using family-4 groups.
+  Reject duplicate JSON members rather than silently overwriting them. Request
+  tool diagnostics explicitly; reject read errors and unknown warnings without
+  confusing ordinary metadata fields named `Error` with tool failures. Surface
+  the known stale-IPTC-digest consistency warning while checking actual IPTC/XMP
+  values independently.
+- Walk real JPEG marker boundaries for XMP probing. Do not scan inside other
+  segment payloads, stuffed entropy bytes or post-EOI trailers. Preserve valid
+  APP1 metadata between progressive scans and report malformed boundaries.
+- Validation: all 78 focused metadata, JPEG-analysis and logging regressions
+  passed, with strict scoped linting and formatting. Smart-build refreshed all
+  nine bundled processors; three native-language self-tests and strict bundle
+  signature verification passed. Regression payloads are synthetic; no Photos
+  library or user media was modified, and no production batch was rerun.
+
 ### Samsung JPEG trailer custody and clearer gate failures (2026-10-04)
 
 - Fix a false metadata-gate failure for Samsung screenshot JPEGs containing the

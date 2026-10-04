@@ -63,6 +63,7 @@ const PRESERVABLE_TAG_ARGS: &[&str] = &[
     "-Keys:all",
     "-ItemList:all",
     "-UserData:all",
+    "-Comment",
 ];
 
 /// Groups that must be empty under [`MetadataOutputPolicy::Clear`].
@@ -76,6 +77,7 @@ const CLEARABLE_TAG_ARGS: &[&str] = &[
     "-Keys:all",
     "-ItemList:all",
     "-UserData:all",
+    "-Comment",
 ];
 
 /// Codec-layout fields describe how the source container stores pixels. They
@@ -225,10 +227,9 @@ pub fn verify_output_embedded_metadata(
     }
 }
 
-/// JPEG APP13 and Samsung's capture-info SEFT trailer are not native JXL
-/// metadata channels. Only these absent tags may use exact reconstruction
-/// custody; native EXIF/XMP, sidecars, and contradictory output tags still
-/// require direct agreement.
+/// Missing tags can use reconstruction custody only when `ExifTool` identifies
+/// their actual source carrier as JPEG-only metadata. Native EXIF/XMP/ICC,
+/// sidecar overrides and contradictory output values remain directly checked.
 fn verify_reconstruction_only_metadata(
     src: &Path,
     dst: &Path,
@@ -237,26 +238,31 @@ fn verify_reconstruction_only_metadata(
 ) -> io::Result<()> {
     use crate::image::format_detect::{FormatKind, detect_true_format};
 
-    let reconstruction_tags = src_tags
-        .keys()
-        .filter(|key| {
-            (key.as_str() == "Samsung:SamsungCaptureInfo"
-                || key.starts_with("Photoshop:")
-                || key.strip_prefix("IPTC").is_some_and(|rest| {
-                    rest.split_once(':').is_some_and(|(instance, _)| {
-                        instance.bytes().all(|byte| byte.is_ascii_digit())
-                    })
-                }))
-                && !dst_tags.contains_key(*key)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if reconstruction_tags.is_empty() {
+    if src_tags.keys().all(|key| dst_tags.contains_key(key)) {
         return Ok(());
     }
     if detect_true_format(src).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jpeg
         || detect_true_format(dst).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jxl
     {
+        return Ok(());
+    }
+    // Request physical provenance only on the exceptional missing-tag path.
+    // The leading colon keeps all group families, including the empty primary
+    // instance, so no heuristic is needed to recover the field's identity.
+    let [located] = metadata_tag_maps_with_groups(
+        [src],
+        PRESERVABLE_TAG_ARGS,
+        "JPEG metadata provenance",
+        "-G:0:1:4:5",
+    )?;
+    let reconstruction_tags = located
+        .iter()
+        .filter_map(|(location, value)| {
+            let key = jpeg_reconstruction_tag_key(location)?;
+            (!dst_tags.contains_key(&key) && src_tags.get(&key) == Some(value)).then_some(key)
+        })
+        .collect::<Vec<_>>();
+    if reconstruction_tags.is_empty() {
         return Ok(());
     }
     // Neither a filename nor an advertised JBRD box is proof. Reconstruct the
@@ -277,6 +283,52 @@ fn verify_reconstruction_only_metadata(
         src_tags.remove(&key);
     }
     Ok(())
+}
+
+fn jpeg_reconstruction_tag_key(location: &str) -> Option<String> {
+    let mut groups = location.split(':');
+    let (general, specific, instance, path, tag) = (
+        groups.next()?,
+        groups.next()?,
+        groups.next()?,
+        groups.next()?,
+        groups.next()?,
+    );
+    if groups.next().is_some()
+        || general.is_empty()
+        || specific.is_empty()
+        || tag.is_empty()
+        || matches!(general, "EXIF" | "XMP" | "ICC_Profile")
+        || (!instance.is_empty()
+            && !instance.strip_prefix("Copy").is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            }))
+    {
+        return None;
+    }
+    let mut parts = path.split('-');
+    if parts.next()? != "JPEG" {
+        return None;
+    }
+    let carrier = parts.next()?;
+    let jpeg_only = matches!(carrier, "Trailer" | "COM")
+        || carrier
+            .strip_prefix("APP")
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| number <= 15);
+    // MakerNotes nested inside native EXIF are not a JPEG-only carrier.
+    if !jpeg_only
+        || parts.any(|part| {
+            part.starts_with("IFD") || part.starts_with("SubIFD") || part.ends_with("IFD")
+        })
+    {
+        return None;
+    }
+    Some(if instance.is_empty() {
+        format!("{specific}:{tag}")
+    } else {
+        format!("{specific}:{instance}:{tag}")
+    })
 }
 
 fn preserve_mismatches(
@@ -447,6 +499,15 @@ fn metadata_tag_maps<const N: usize>(
     tag_args: &[&str],
     label: &str,
 ) -> io::Result<[BTreeMap<String, String>; N]> {
+    metadata_tag_maps_with_groups(paths, tag_args, label, "-G1:4")
+}
+
+fn metadata_tag_maps_with_groups<const N: usize>(
+    paths: [&Path; N],
+    tag_args: &[&str],
+    label: &str,
+    groups: &str,
+) -> io::Result<[BTreeMap<String, String>; N]> {
     let mut requested = BTreeMap::<std::path::PathBuf, Vec<usize>>::new();
     let mut maps = std::array::from_fn(|_| BTreeMap::new());
     for (index, path) in paths.iter().enumerate() {
@@ -464,10 +525,12 @@ fn metadata_tag_maps<const N: usize>(
     builder
         .arg("-n")
         .arg("-j")
-        .arg("-G1")
+        .arg(groups)
         .arg("-a")
         .arg("-s")
-        .arg("-b");
+        .arg("-b")
+        .arg("-Warning")
+        .arg("-Error");
     for arg in tag_args {
         builder.arg(*arg);
     }
@@ -595,20 +658,71 @@ pub(super) fn stripped_embedded_metadata_size(path: &Path) -> io::Result<u64> {
 fn parse_metadata_records(
     raw: &[u8],
 ) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
-    let records: Vec<serde_json::Map<String, Value>> = serde_json::from_slice(raw)?;
+    struct UniqueRecord(serde_json::Map<String, Value>);
+    impl<'de> serde::Deserialize<'de> for UniqueRecord {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct RecordVisitor;
+            impl<'de> serde::de::Visitor<'de> for RecordVisitor {
+                type Value = UniqueRecord;
+
+                fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    formatter.write_str("a metadata record with unique member names")
+                }
+
+                fn visit_map<M: serde::de::MapAccess<'de>>(
+                    self,
+                    mut access: M,
+                ) -> Result<Self::Value, M::Error> {
+                    let mut object = serde_json::Map::new();
+                    while let Some((key, value)) = access.next_entry::<String, Value>()? {
+                        if object.insert(key.clone(), value).is_some() {
+                            return Err(serde::de::Error::custom(format!(
+                                "duplicate metadata member {key}"
+                            )));
+                        }
+                    }
+                    Ok(UniqueRecord(object))
+                }
+            }
+            deserializer.deserialize_map(RecordVisitor)
+        }
+    }
+
+    let records: Vec<UniqueRecord> = serde_json::from_slice(raw)?;
     let mut maps = BTreeMap::new();
-    for object in records {
+    for UniqueRecord(object) in records {
         let path = object
             .get("SourceFile")
             .and_then(Value::as_str)
             .ok_or_else(|| io::Error::other("metadata response has no SourceFile"))?;
-        if object.keys().any(|key| {
-            key.rsplit(':')
-                .next()
-                .is_some_and(|key| key.eq_ignore_ascii_case("Error"))
+        for (key, diagnostic) in object.iter().filter(|(key, _)| {
+            (key.starts_with("ExifTool:") || !key.contains(':'))
+                && key.rsplit(':').next().is_some_and(|tag| {
+                    tag.eq_ignore_ascii_case("Error") || tag.eq_ignore_ascii_case("Warning")
+                })
         }) {
+            // A stale digest warns about source consistency, not an unreadable
+            // metadata field. Compare the actual IPTC/XMP values independently.
+            if key.ends_with(":Warning")
+                && diagnostic.as_str().is_some_and(|message| {
+                    const STALE_DIGEST: &str = "IPTCDigest is not current. XMP may be out of sync";
+                    message == STALE_DIGEST
+                        || message.strip_prefix(STALE_DIGEST).is_some_and(|suffix| {
+                            suffix
+                                .strip_prefix(" [x")
+                                .and_then(|s| s.strip_suffix(']'))
+                                .is_some_and(|number| {
+                                    !number.is_empty()
+                                        && number.bytes().all(|byte| byte.is_ascii_digit())
+                                })
+                        })
+                })
+            {
+                tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}");
+                continue;
+            }
             return Err(io::Error::other(format!(
-                "exiftool reported a metadata read error for {path}"
+                "exiftool reported {key} for {path}: {diagnostic}"
             )));
         }
         if maps
@@ -658,6 +772,9 @@ mod tests {
             br#"[{"XMP:Title":"unbound"}]"#,
             br#"[{"SourceFile":"a"},{"SourceFile":"a"}]"#,
             br#"[{"SourceFile":"a","ExifTool:Error":"read failed"}]"#,
+            br#"[{"SourceFile":"a","ExifTool:Copy1:Warning":"partial extraction"}]"#,
+            br#"[{"SourceFile":"a","IFD0:Artist":"first","IFD0:Artist":"second"}]"#,
+            br#"[{"SourceFile":"a","SourceFile":"b"}]"#,
         ] {
             assert!(parse_metadata_records(invalid).is_err());
         }
@@ -667,6 +784,92 @@ mod tests {
         .unwrap();
         assert_eq!(records[Path::new("a")]["XMP:Title"], "A");
         assert_eq!(records[Path::new("b")]["XMP:Title"], "B");
+        let records = parse_metadata_records(
+            br#"[{"SourceFile":"a","XMP:Error":"ordinary metadata","IFD0:Artist":"primary","IFD0:Copy1:Artist":"other"}]"#,
+        )
+        .unwrap();
+        assert_eq!(records[Path::new("a")]["XMP:Error"], "ordinary metadata");
+        assert_eq!(records[Path::new("a")]["IFD0:Copy1:Artist"], "other");
+        let records = parse_metadata_records(
+            br#"[{"SourceFile":"a","ExifTool:Warning":"IPTCDigest is not current. XMP may be out of sync [x2]","IPTC:Caption-Abstract":"preserved"}]"#,
+        ).unwrap();
+        assert_eq!(
+            records[Path::new("a")]["IPTC:Caption-Abstract"],
+            "preserved"
+        );
+        assert!(parse_metadata_records(
+            br#"[{"SourceFile":"a","ExifTool:Warning":"IPTCDigest is not current. XMP may be out of sync [x2]; read failed"}]"#,
+        ).is_err());
+    }
+
+    #[test]
+    fn jpeg_reconstruction_custody_requires_jpeg_only_physical_provenance() {
+        for (location, key) in [
+            (
+                "MakerNotes:Samsung::JPEG-Trailer-Samsung:VendorTag",
+                "Samsung:VendorTag",
+            ),
+            ("MakerNotes:Samsung::JPEG-APP5:UniqueID", "Samsung:UniqueID"),
+            (
+                "IPTC:IPTC2::JPEG-APP13-Photoshop-IPTC:ObjectName",
+                "IPTC2:ObjectName",
+            ),
+            (
+                "Photoshop:Photoshop:Copy1:JPEG-APP13-Photoshop:IPTCDigest",
+                "Photoshop:Copy1:IPTCDigest",
+            ),
+            ("File:File::JPEG-COM:Comment", "File:Comment"),
+        ] {
+            assert_eq!(jpeg_reconstruction_tag_key(location).as_deref(), Some(key));
+        }
+        for location in [
+            "EXIF:IFD0::JPEG-APP1-IFD0:Artist",
+            "XMP:XMP-dc::JPEG-Trailer-XMP:Title",
+            "ICC_Profile:ICC-header::JPEG-APP2-ICC:ProfileID",
+            "MakerNotes:Samsung::JPEG-APP1-IFD0-MakerNotes:VendorTag",
+            "MakerNotes:Samsung::PNG-Trailer-Samsung:VendorTag",
+            "MakerNotes:Samsung::HEIC-sefd-Samsung:VendorTag",
+            "MakerNotes:Samsung::JPEG-APP99:VendorTag",
+            "MakerNotes:Samsung:unknown:JPEG-APP5:VendorTag",
+            "MakerNotes:Samsung::unknown:VendorTag",
+            "Samsung:VendorTag",
+        ] {
+            assert!(
+                jpeg_reconstruction_tag_key(location).is_none(),
+                "{location}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_dump_keeps_repeated_same_group_tags_and_rejects_partial_copy() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("duplicate.tiff");
+        let dst = root.path().join("single.tiff");
+        let fixture = |values: &[u8]| {
+            let mut tiff = b"II".to_vec();
+            tiff.extend_from_slice(&42_u16.to_le_bytes());
+            tiff.extend_from_slice(&8_u32.to_le_bytes());
+            tiff.extend_from_slice(&u16::try_from(values.len()).unwrap().to_le_bytes());
+            for &value in values {
+                tiff.extend_from_slice(&0x010f_u16.to_le_bytes());
+                tiff.extend_from_slice(&2_u16.to_le_bytes());
+                tiff.extend_from_slice(&2_u32.to_le_bytes());
+                tiff.extend_from_slice(&[value, 0, 0, 0]);
+            }
+            tiff.extend_from_slice(&0_u32.to_le_bytes());
+            tiff
+        };
+        std::fs::write(&src, fixture(b"AB")).unwrap();
+        std::fs::write(&dst, fixture(b"B")).unwrap();
+        let tags = preservable_tag_map(&src).unwrap();
+        assert_eq!(tags["IFD0:Make"], "B");
+        assert_eq!(tags["IFD0:Copy1:Make"], "A");
+        let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
+            .unwrap_err();
+        assert!(error.to_string().contains("Copy1:Make"), "{error}");
+        std::fs::copy(&src, &dst).unwrap();
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).unwrap();
     }
 
     #[test]
@@ -877,19 +1080,20 @@ mod tests {
             "{src_tags:?}"
         );
         assert!(!dst_tags.contains_key("Photoshop:IPTCDigest"));
-        let mut repeated_iptc = BTreeMap::from([
-            ("IPTC2:ApplicationRecordVersion".into(), "2".into()),
-            ("IPTC2:CodedCharacterSet".into(), "\u{1b}%G".into()),
-            ("IPTC2:ObjectName".into(), "未命名作品".into()),
-        ]);
+        let mut repeated_iptc = src_tags
+            .iter()
+            .filter(|(key, _)| key.starts_with("IPTC2:"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         verify_reconstruction_only_metadata(&src, &dst, &mut repeated_iptc, &dst_tags).unwrap();
         assert!(
             preserve_source_mismatches(&repeated_iptc, &dst_tags).is_empty(),
             "reconstruction-owned second IPTC instance must pass"
         );
         let mut contradictory_iptc = dst_tags.clone();
-        contradictory_iptc.insert("IPTC2:ObjectName".into(), "different".into());
-        let mut expected_iptc = BTreeMap::from([("IPTC2:ObjectName".into(), "未命名作品".into())]);
+        contradictory_iptc.insert("IPTC2:Caption-Abstract".into(), "different".into());
+        let mut expected_iptc =
+            BTreeMap::from([("IPTC2:Caption-Abstract".into(), "archival caption".into())]);
         verify_reconstruction_only_metadata(&src, &dst, &mut expected_iptc, &contradictory_iptc)
             .unwrap();
         assert!(
@@ -897,6 +1101,9 @@ mod tests {
                 .iter()
                 .any(|mismatch| mismatch.contains("wrong-source"))
         );
+        let mut invented = BTreeMap::from([("IPTC999:Imaginary".into(), "not in source".into())]);
+        verify_reconstruction_only_metadata(&src, &dst, &mut invented, &dst_tags).unwrap();
+        assert!(invented.contains_key("IPTC999:Imaginary"));
         verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .expect("APP13 retained by exact JPEG reconstruction must pass metadata gate");
         crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();
@@ -964,6 +1171,85 @@ mod tests {
             error.to_string().contains("roundtrip hash mismatch"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn preserve_vendor_header_comment_and_opaque_jpeg_bytes_via_reconstruction() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let dst = temp.path().join("archive.jxl");
+        write_minimal_jpeg(&src);
+        write_metadata_tag(&src, "-Comment=synthetic container comment");
+        let jpeg = std::fs::read(&src).unwrap();
+        let mut decorated = jpeg[..2].to_vec();
+        let mut unique_id = b"ssuniqueid\0".to_vec();
+        unique_id.extend_from_slice(&[0; 32]);
+        for (marker, payload) in [
+            (0xe5_u8, unique_id.as_slice()),
+            (0xef, b"MFB opaque header\0".as_slice()),
+        ] {
+            decorated.extend_from_slice(&[0xff, marker]);
+            decorated.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+            decorated.extend_from_slice(payload);
+        }
+        decorated.extend_from_slice(&jpeg[2..]);
+        decorated.extend_from_slice(b"MFB opaque trailer\0");
+        std::fs::write(&src, &decorated).unwrap();
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let source = preservable_tag_map(&src).unwrap();
+        assert!(source.contains_key("Samsung:UniqueID"), "{source:?}");
+        assert!(
+            source
+                .values()
+                .any(|value| value == "synthetic container comment")
+        );
+        for policy in [
+            MetadataOutputPolicy::Preserve,
+            MetadataOutputPolicy::PreserveSource,
+        ] {
+            verify_output_embedded_metadata(&src, &dst, policy).unwrap();
+        }
+        let pixel_only = temp.path().join("pixel-only.jxl");
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&pixel_only)
+            .lossless_jpeg(true)
+            .allow_jpeg_reconstruction(false)
+            .build()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            verify_output_embedded_metadata(&src, &pixel_only, MetadataOutputPolicy::Preserve)
+                .is_err()
+        );
+
+        for opaque in [b"MFB opaque header".as_slice(), b"MFB opaque trailer"] {
+            let mut changed = decorated.clone();
+            let index = changed
+                .windows(opaque.len())
+                .position(|bytes| bytes == opaque)
+                .unwrap();
+            changed[index] = b'X';
+            std::fs::write(&src, changed).unwrap();
+            let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("roundtrip hash mismatch"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
