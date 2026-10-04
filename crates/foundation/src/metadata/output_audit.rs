@@ -197,7 +197,7 @@ pub fn verify_output_embedded_metadata(
             ),
         };
         tracing::info!(
-            target: "mfb.metadata",
+            target: "mfb::report",
             src = %src.display(),
             dst = %dst.display(),
             policy = ?policy,
@@ -225,9 +225,10 @@ pub fn verify_output_embedded_metadata(
     }
 }
 
-/// JPEG APP13 is not a native JXL metadata channel. Only absent IPTC/Photoshop
-/// tags may use exact reconstruction custody; native EXIF/XMP, sidecars, and
-/// contradictory tags exposed by the output still require direct agreement.
+/// JPEG APP13 and Samsung's capture-info SEFT trailer are not native JXL
+/// metadata channels. Only these absent tags may use exact reconstruction
+/// custody; native EXIF/XMP, sidecars, and contradictory output tags still
+/// require direct agreement.
 fn verify_reconstruction_only_metadata(
     src: &Path,
     dst: &Path,
@@ -239,7 +240,8 @@ fn verify_reconstruction_only_metadata(
     let reconstruction_tags = src_tags
         .keys()
         .filter(|key| {
-            (key.starts_with("Photoshop:")
+            (key.as_str() == "Samsung:SamsungCaptureInfo"
+                || key.starts_with("Photoshop:")
                 || key.strip_prefix("IPTC").is_some_and(|rest| {
                     rest.split_once(':').is_some_and(|(instance, _)| {
                         instance.bytes().all(|byte| byte.is_ascii_digit())
@@ -269,7 +271,7 @@ fn verify_reconstruction_only_metadata(
         source = %src.display(),
         output = %dst.display(),
         tags = ?reconstruction_tags,
-        "JPEG APP13 metadata preserved via verified byte-exact JPEG reconstruction"
+        "JPEG-only metadata preserved via verified byte-exact JPEG reconstruction"
     );
     for key in reconstruction_tags {
         src_tags.remove(&key);
@@ -410,7 +412,7 @@ pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
             dst.display()
         );
         tracing::info!(
-            target: "mfb.metadata",
+            target: "mfb::report",
             src = %src.display(),
             xmp = %xmp.display(),
             dst = %dst.display(),
@@ -956,6 +958,136 @@ mod tests {
 
         // Same pixels but different APP13 source is not acceptable reconstruction.
         write_metadata_tag(&src, "-IPTC:Caption-Abstract=another source");
+        let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("roundtrip hash mismatch"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preserve_samsung_capture_info_via_exact_jxl_reconstruction() {
+        use crate::pipeline::verification::VerificationGate as _;
+
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let working_copy = temp.path().join("delivery");
+        std::fs::create_dir(&working_copy).unwrap();
+        let dst = working_copy.join("archive.jxl");
+        write_minimal_jpeg(&src);
+        write_metadata_tag(&src, "-EXIF:Artist=synthetic source");
+
+        // Synthetic SEFT record using ExifTool's Samsung trailer layout.
+        // No real screenshot bytes or device metadata are part of this fixture.
+        let name = b"Samsung_Capture_Info";
+        let mut record = Vec::new();
+        record.extend_from_slice(&0_u16.to_le_bytes());
+        record.extend_from_slice(&0x0c51_u16.to_le_bytes());
+        record.extend_from_slice(&u32::try_from(name.len()).unwrap().to_le_bytes());
+        record.extend_from_slice(name);
+        record.extend_from_slice(b"Screenshot");
+        let record_size = u32::try_from(record.len()).unwrap();
+        let mut jpeg = std::fs::read(&src).unwrap();
+        jpeg.extend_from_slice(&record);
+        jpeg.extend_from_slice(b"SEFH");
+        jpeg.extend_from_slice(&101_u32.to_le_bytes());
+        jpeg.extend_from_slice(&1_u32.to_le_bytes());
+        jpeg.extend_from_slice(&0_u16.to_le_bytes());
+        jpeg.extend_from_slice(&0x0c51_u16.to_le_bytes());
+        jpeg.extend_from_slice(&record_size.to_le_bytes());
+        jpeg.extend_from_slice(&record_size.to_le_bytes());
+        jpeg.extend_from_slice(&24_u32.to_le_bytes());
+        jpeg.extend_from_slice(b"SEFT");
+        std::fs::write(&src, &jpeg).unwrap();
+
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let src_tags = preservable_tag_map(&src).unwrap();
+        let dst_tags = preservable_tag_map(&dst).unwrap();
+        assert_eq!(src_tags["Samsung:SamsungCaptureInfo"], "Screenshot");
+        assert!(!dst_tags.contains_key("Samsung:SamsungCaptureInfo"));
+        for policy in [
+            MetadataOutputPolicy::Preserve,
+            MetadataOutputPolicy::PreserveSource,
+        ] {
+            verify_output_embedded_metadata(&src, &dst, policy).unwrap();
+        }
+        crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();
+        let gate = crate::pipeline::verification::Gate1Local.run(
+            &crate::pipeline::verification::PipelineCtx {
+                working_copy,
+                src_dir: temp.path().to_path_buf(),
+                blake3_log: BTreeMap::from([(
+                    "source.jpg".into(),
+                    crate::pipeline::verification::Blake3Entry {
+                        out_rel: Some("archive.jxl".into()),
+                        src: crate::common_utils::calculate_blake3_hash(&src).unwrap(),
+                        out: crate::common_utils::calculate_blake3_hash(&dst).unwrap(),
+                        library_asset: None,
+                    },
+                )]),
+                expected_count: 1,
+                library_handle: None,
+                output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+            },
+        );
+        assert!(gate.passed, "{gate:?}");
+
+        let mut contradictory = dst_tags.clone();
+        contradictory.insert("Samsung:SamsungCaptureInfo".into(), "Other".into());
+        let mut expected = src_tags.clone();
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory).unwrap();
+        assert!(
+            preserve_mismatches(&expected, &contradictory)
+                .iter()
+                .any(|m| m.contains("wrong-source"))
+        );
+
+        let mut missing_native = dst_tags;
+        missing_native.remove("IFD0:Artist");
+        expected = src_tags;
+        expected.insert(
+            "Samsung:OtherVendorTag".into(),
+            "must remain checked".into(),
+        );
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &missing_native).unwrap();
+        let mismatches = preserve_mismatches(&expected, &missing_native);
+        assert!(mismatches.iter().any(|m| m.contains("Artist")));
+        assert!(mismatches.iter().any(|m| m.contains("OtherVendorTag")));
+
+        let pixel_only = temp.path().join("pixel-only.jxl");
+        let output = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&pixel_only)
+            .lossless_jpeg(true)
+            .allow_jpeg_reconstruction(false)
+            .build()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            verify_output_embedded_metadata(&src, &pixel_only, MetadataOutputPolicy::Preserve)
+                .is_err()
+        );
+
+        // Identical image pixels are insufficient when the trailer differs.
+        let capture = jpeg
+            .windows(b"Screenshot".len())
+            .position(|w| w == b"Screenshot")
+            .unwrap();
+        jpeg[capture] = b'X';
+        std::fs::write(&src, jpeg).unwrap();
         let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .unwrap_err();
         assert!(

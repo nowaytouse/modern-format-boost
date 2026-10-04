@@ -557,31 +557,24 @@ pub fn print_menu_hint() {
     flush();
 }
 
-/// Critical error panel (mirrors Python `stream_and_log_process` failure UX).
-pub fn print_critical_error_panel(processor: &str, exit_code: i32) {
-    println!();
-    if colors_enabled() {
-        println!(
-            "{RED}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}"
-        );
-        println!(
-            "{RED}{BOLD}│  🚨 CRITICAL ERROR — '{processor}' exited with code {exit_code}  \
-             │{RESET}"
-        );
-        println!(
-            "{RED}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}"
-        );
-        println!(
-            "  {YELLOW}Review the terminal output above for the specific error message.{RESET}\n"
-        );
-    } else {
-        println!(
-            "[CRITICAL ERROR] The '{processor}' processor exited unexpectedly with code \
-             {exit_code}."
-        );
-        println!("Review the terminal output above for the specific error message.\n");
-    }
+/// Summarize a propagated pipeline error without inventing a child exit code.
+pub fn print_pipeline_failure_panel() {
+    println!("\n{}", render_pipeline_failure_panel(colors_enabled()));
     flush();
+}
+
+fn render_pipeline_failure_panel(colored: bool) -> String {
+    let detail = "The batch did not complete. Review the error details above.";
+    if colored {
+        format!(
+            "{RED}{BOLD}╭──────────────────────────────────────────────────────────────╮{RESET}\n\
+             {RED}{BOLD}│  PROCESSING FAILED                                           │{RESET}\n\
+             {RED}{BOLD}╰──────────────────────────────────────────────────────────────╯{RESET}\n\
+               {YELLOW}{detail}{RESET}\n"
+        )
+    } else {
+        format!("[PROCESSING FAILED] {detail}\n")
+    }
 }
 
 /// Hold terminal open after GUI/double-click failures (mirrors Python keypress
@@ -608,6 +601,19 @@ pub fn pause_before_gui_exit() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipeline_failure_panel_does_not_invent_a_processor_crash_or_exit_code() {
+        for colored in [false, true] {
+            let panel = render_pipeline_failure_panel(colored);
+            assert!(panel.contains("PROCESSING FAILED"));
+            assert!(panel.contains("batch did not complete"));
+            assert!(panel.contains("error details above"));
+            assert!(!panel.contains("unexpectedly"));
+            assert!(!panel.contains("exited"));
+            assert!(!panel.contains("code 1"));
+        }
+    }
 
     #[test]
     fn pipeline_summary_totals() {

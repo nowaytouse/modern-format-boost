@@ -509,6 +509,15 @@ without `--shortest-path` they are delivered only to the adjacent working tree;
 with `--strategy jxl --shortest-path`, the same checkpointed Photos import and
 live-library verification gates run before source cleanup.
 
+JPEG-only APP13 metadata and Samsung's SEFT `SamsungCaptureInfo` record may be
+held in the reconstruction payload rather than a native JXL metadata channel.
+For these specific absent tags, the metadata gate requires reconstruction of
+the current output into a complete JPEG with the paired source's exact bytes.
+Native EXIF/XMP omissions, contradictory values and other vendor tags are not
+exempted. A mandatory gate failure leaves encoded work unprocessed, blocks
+delivery/cleanup and preserves source files; it is not counted as a new
+per-file encoding failure.
+
 `img run` and FastImg share the same low-level integrity, metadata, path-safety
 and final-commit primitives, but they are not the same processing strategy:
 

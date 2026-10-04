@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Samsung JPEG trailer custody and clearer gate failures (2026-10-04)
+
+- Fix a false metadata-gate failure for Samsung screenshot JPEGs containing the
+  SEFT `SamsungCaptureInfo` record. This JPEG-only tag is not exposed as native
+  JXL EXIF, but can be preserved in the exact JPEG reconstruction payload. Accept
+  an absent output tag only after reconstructing the current delivered JXL and
+  matching its complete JPEG bytes against the paired source.
+- Keep this exception limited to the capture-info tag. Missing native EXIF/XMP,
+  contradictory output values, unknown vendor tags, missing reconstruction data
+  and a different source JPEG still fail closed. Add a synthetic SEFT regression
+  exercising both preserve policies and the full local delivery gate, without
+  committing private screenshots or device metadata.
+- Display each successful metadata audit once in the terminal/GUI. Keep the
+  structured source/output/policy evidence in durable logs; reconstruction proof
+  and metadata failures remain visible.
+- Describe propagated launcher errors as an incomplete batch, not an invented
+  processor crash with a hard-coded child exit code. Preserve the actual child
+  error, outcome counts, failed completion and source-retention behavior.
+- Validation: 69 focused Rust regressions, strict scoped linting and formatting
+  passed. Smart-build refreshed all nine bundled processors; English, Simplified
+  Chinese and Japanese native self-tests and strict bundle signature checks
+  passed. Read-only reconstruction of the reported existing JXL matched its
+  original JPEG byte for byte. No production Photos import or full-batch
+  delivery acceptance was performed.
+
 ### Persistent Photos settings and compact option rows (2026-10-04)
 
 - Keep Settings accessible in every idle native workflow and always include the

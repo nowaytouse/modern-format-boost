@@ -477,6 +477,14 @@ fn log_layer_accepts_metadata(metadata: &tracing::Metadata<'_>) -> bool {
     log_file_includes_progress() || metadata.target() != "mfb::progress"
 }
 
+fn terminal_layer_accepts_metadata(metadata: &tracing::Metadata<'_>) -> bool {
+    metadata.level() <= &tracing::Level::INFO
+        && !matches!(
+            metadata.target(),
+            "mfb::ui" | "mfb::report" | "mfb::tool_output"
+        )
+}
+
 /// Returns true if an event at this level should be logged. Uses tracing order:
 /// TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
 ///
@@ -1153,16 +1161,7 @@ pub fn init(program_name: &str, config: &LogConfig) -> Result<()> {
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .event_format(ModernFormatter)
-        .with_filter(FilterFn::new(|m: &tracing::Metadata| {
-            // Only show INFO, WARN, ERROR in terminal (no DEBUG or TRACE)
-            // Also exclude events with target "mfb::ui" as they are handled manually via
-            // emit_stderr Also exclude verbose reports with target
-            // "mfb::report" to keep terminal clean
-            m.level() <= &tracing::Level::INFO
-                && m.target() != "mfb::ui"
-                && m.target() != "mfb::report"
-                && m.target() != "mfb::tool_output"
-        }));
+        .with_filter(FilterFn::new(terminal_layer_accepts_metadata));
 
     let json_layer = fmt::layer()
         .json()
@@ -1672,6 +1671,62 @@ mod tests {
         assert_eq!(config.max_file_size, 30 * 1024 * 1024);
         assert_eq!(config.max_files, DEFAULT_MAX_LOG_FILES);
         assert_eq!(config.level, Level::TRACE);
+    }
+
+    #[test]
+    fn metadata_success_is_visible_once_and_keeps_structured_evidence() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let dst = temp.path().join("output.jpg");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save(&src)
+            .unwrap();
+        fs::copy(&src, &dst).unwrap();
+        crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();
+        let terminal = CaptureWriter::default();
+        let durable = CaptureWriter::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                fmt::layer()
+                    .event_format(ModernFormatter)
+                    .with_writer(terminal.clone())
+                    .with_filter(FilterFn::new(terminal_layer_accepts_metadata)),
+            )
+            .with(
+                fmt::layer()
+                    .json()
+                    .with_writer(durable.clone())
+                    .with_filter(FilterFn::new(log_layer_accepts_metadata)),
+            );
+        tracing::subscriber::with_default(subscriber, || {
+            crate::metadata::verify_exact_metadata_copy(&src, &dst).unwrap();
+            crate::metadata::verify_output_embedded_metadata(
+                &src,
+                &dst,
+                crate::metadata::MetadataOutputPolicy::Preserve,
+            )
+            .unwrap();
+            tracing::info!(target: "mfb.metadata", "reconstruction proof remains visible");
+            tracing::error!(target: "mfb.metadata", "metadata failure remains visible");
+        });
+        let read =
+            |writer: &CaptureWriter| String::from_utf8(writer.0.lock().unwrap().clone()).unwrap();
+        let visible = read(&terminal);
+        let records = read(&durable);
+        for message in [
+            "exact metadata copy verified",
+            "portable embedded metadata verified",
+        ] {
+            assert_eq!(visible.matches(message).count(), 1, "{visible}");
+            assert_eq!(records.matches(message).count(), 2, "{records}");
+        }
+        assert!(
+            records.contains("\"src\":")
+                && records.contains("\"dst\":")
+                && records.contains("\"policy\":\"Preserve\"")
+        );
+        assert!(visible.contains("reconstruction proof remains visible"));
+        assert!(visible.contains("metadata failure remains visible"));
     }
 
     #[test]

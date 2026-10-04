@@ -26,7 +26,7 @@ use dev::infra::log_paths::{
 use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
-    pause_before_gui_exit, print_critical_error_panel, print_menu_hint, print_menu_row,
+    pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
     print_runtime_panel, print_summary_report,
 };
 use dev::infra::signal_handlers::{install_signal_handlers, set_child_active};
@@ -3124,7 +3124,7 @@ fn main() -> Result<()> {
 fn report_drag_drop_failure(result: &Result<()>) {
     if let Err(err) = result {
         eprintln!("{err:#}");
-        print_critical_error_panel("pipeline", 1);
+        print_pipeline_failure_panel();
         pause_before_gui_exit();
     }
 }

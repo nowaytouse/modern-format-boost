@@ -996,7 +996,7 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
             dst.display()
         );
         tracing::info!(
-            target: "mfb.metadata",
+            target: "mfb::report",
             src = %src.display(),
             dst = %dst.display(),
             "{detail}"
