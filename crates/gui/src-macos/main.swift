@@ -568,26 +568,32 @@ private struct EffectiveRuntimeSettings {
     subscript(key: String) -> String? { values[key] }
 }
 
-private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntimeSettings {
-    guard let binary = ProcessorLocator.resolveTool(named: "img") else {
-        throw HostError(message: localized("error.img_backend_missing"))
-    }
+private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval = 10) throws -> Data {
     let process = Process()
     process.executableURL = binary
-    process.arguments = ["config", "show", "--effective"] + arguments
+    process.arguments = arguments
     let output = Pipe()
     process.standardOutput = output
     process.standardError = output
     try process.run()
     let watchdog = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
     defer { watchdog.cancel() }
     let capture = try readBoundedProcessOutput(output.fileHandleForReading, limit: 1024 * 1024)
     process.waitUntilExit()
     guard !capture.exceeded, process.terminationStatus == 0 else {
-        throw HostError(message: String(decoding: capture.data.prefix(8192), as: UTF8.self))
+        let detail = String(decoding: capture.data.prefix(8192), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        throw HostError(message: detail.isEmpty ? localized("settings.backend_failed", process.terminationStatus) : detail)
     }
-    guard let document = try JSONSerialization.jsonObject(with: capture.data) as? [String: Any],
+    return capture.data
+}
+
+private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntimeSettings {
+    guard let binary = ProcessorLocator.resolveTool(named: "img") else {
+        throw HostError(message: localized("error.img_backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: ["config", "show", "--effective"] + arguments)
+    guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let config = document["config"] as? [String: Any] else {
         throw HostError(message: localized("settings.config_invalid"))
     }
@@ -603,6 +609,60 @@ private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntim
         }
     }
     return EffectiveRuntimeSettings(values: result, sources: document["sources"] as? [String: String] ?? [:])
+}
+
+private struct LocalCacheStatus: Decodable {
+    struct Namespace: Decodable {
+        let name: String
+        let rows: UInt64
+        let payloadBytes: UInt64
+        let rebuildable: Bool
+    }
+    let schemaVersion: Int
+    let cacheDirectory: String
+    let storeBytes: UInt64
+    let namespaces: [Namespace]
+    let legacyAnalysisBytes: UInt64
+    let legacyAnalysisFiles: UInt64
+    let removedRows: UInt64
+    let removedFiles: UInt64
+
+    func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
+        var rows: UInt64 = 0, bytes: UInt64 = 0
+        for namespace in namespaces where namespace.rebuildable == rebuildable {
+            let count = rows.addingReportingOverflow(namespace.rows)
+            let size = bytes.addingReportingOverflow(namespace.payloadBytes)
+            guard !count.overflow, !size.overflow, size.partialValue <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+            rows = count.partialValue
+            bytes = size.partialValue
+        }
+        return (rows, bytes)
+    }
+
+    static func decode(_ data: Data) throws -> LocalCacheStatus {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let status = try decoder.decode(Self.self, from: data)
+        guard status.schemaVersion == 1, status.cacheDirectory.hasPrefix("/"),
+              status.storeBytes <= UInt64(Int64.max), status.legacyAnalysisBytes <= UInt64(Int64.max),
+              Set(status.namespaces.map(\.name)).count == status.namespaces.count,
+              status.namespaces.allSatisfy({ !$0.name.isEmpty && $0.rebuildable == ($0.name == "path_tree") }) else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
+        _ = try status.totals(rebuildable: true)
+        _ = try status.totals(rebuildable: false)
+        return status
+    }
+}
+
+private func queryLocalCache(clear: Bool) throws -> LocalCacheStatus {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    return try LocalCacheStatus.decode(settingsToolOutput(binary,
+        arguments: clear ? ["--yes", "--json"] : ["--stats", "--json"], timeout: 30))
 }
 
 @MainActor
@@ -630,6 +690,17 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     private var grids: [String: NSGridView] = [:]
     private var applying = false
     private var applyGeneration = UUID()
+    private let resetButton = NSButton()
+    private let cancelButton = NSButton()
+    private let applyButton = NSButton()
+    private let cacheRefresh = NSButton()
+    private let cacheClear = NSButton()
+    private var cacheLabels: [String: NSTextField] = [:]
+    private let cacheMessage = NSTextField(wrappingLabelWithString: "")
+    private var cacheMessageRow: NSGridRow?
+    private var cacheLoaded = false
+    private var cacheBusy = false
+    private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
@@ -731,6 +802,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             tab.view = content
             tabs.addTabViewItem(tab)
         }
+        addCacheTab()
         root.addArrangedSubview(tabs)
         tabHeight = tabs.heightAnchor.constraint(equalToConstant: 210)
         tabHeight?.isActive = true
@@ -746,18 +818,138 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         status.isHidden = true
         root.addArrangedSubview(status)
         status.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        let reset = NSButton(title: localized("settings.reset"), target: self, action: #selector(resetTab))
-        let cancel = NSButton(title: localized("alert.cancel"), target: self, action: #selector(cancel))
-        cancel.keyEquivalent = "\u{1b}"
-        let apply = NSButton(title: localized("settings.apply"), target: self, action: #selector(apply))
-        apply.keyEquivalent = "\r"
+        resetButton.title = localized("settings.reset")
+        resetButton.bezelStyle = .rounded
+        resetButton.target = self
+        resetButton.action = #selector(resetTab)
+        cancelButton.title = localized("alert.cancel")
+        cancelButton.bezelStyle = .rounded
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel)
+        cancelButton.keyEquivalent = "\u{1b}"
+        applyButton.title = localized("settings.apply")
+        applyButton.bezelStyle = .rounded
+        applyButton.target = self
+        applyButton.action = #selector(apply)
+        applyButton.keyEquivalent = "\r"
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actions = NSStackView(views: [reset, spacer, cancel, apply])
+        let actions = NSStackView(views: [resetButton, spacer, cancelButton, applyButton])
         actions.distribution = .fill
         root.addArrangedSubview(actions)
         actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         restore(MediaSettings(preferences: preferences))
+    }
+
+    private func addCacheTab() {
+        let tab = NSTabViewItem(identifier: "cache")
+        tab.label = localized("settings.section.cache")
+        let grid = NSGridView()
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        for key in ["path", "rebuildable", "retained", "store", "obsolete"] {
+            let value = NSTextField(labelWithString: localized("settings.cache.not_loaded"))
+            value.isSelectable = true
+            value.lineBreakMode = .byTruncatingMiddle
+            value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            cacheLabels[key] = value
+            grid.addRow(with: [NSTextField(labelWithString: localized("settings.cache.\(key)")), value]).yPlacement = .center
+        }
+        cacheRefresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: localized("settings.cache.refresh"))
+        cacheRefresh.bezelStyle = .rounded
+        cacheRefresh.toolTip = localized("settings.cache.refresh")
+        cacheRefresh.setAccessibilityLabel(localized("settings.cache.refresh"))
+        cacheRefresh.target = self
+        cacheRefresh.action = #selector(refreshCache)
+        cacheRefresh.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        cacheClear.title = localized("settings.cache.clear")
+        cacheClear.bezelStyle = .rounded
+        cacheClear.target = self
+        cacheClear.action = #selector(clearCache)
+        cacheClear.isEnabled = false
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheClear])]).yPlacement = .center
+        cacheMessage.font = .systemFont(ofSize: 11)
+        cacheMessage.maximumNumberOfLines = 3
+        cacheMessageRow = grid.addRow(with: [NSView(), cacheMessage])
+        cacheMessageRow?.isHidden = true
+        grid.column(at: 0).width = 240
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 1).xPlacement = .fill
+        grids["cache"] = grid
+        let content = NSView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+        ])
+        tab.view = content
+        tabs.addTabViewItem(tab)
+    }
+
+    private func displayCache(_ snapshot: LocalCacheStatus) throws {
+        let cache = try snapshot.totals(rebuildable: true)
+        let retained = try snapshot.totals(rebuildable: false)
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        cacheLabels["path"]?.stringValue = snapshot.cacheDirectory
+        cacheLabels["path"]?.toolTip = snapshot.cacheDirectory
+        cacheLabels["rebuildable"]?.stringValue = localized("settings.cache.records", String(cache.rows), size(cache.bytes))
+        cacheLabels["retained"]?.stringValue = localized("settings.cache.records", String(retained.rows), size(retained.bytes))
+        cacheLabels["retained"]?.toolTip = snapshot.namespaces.filter { !$0.rebuildable }.map { "\($0.name): \($0.rows)" }.joined(separator: "\n")
+        cacheLabels["store"]?.stringValue = size(snapshot.storeBytes)
+        cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
+        cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
+        cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
+        cacheLoaded = true
+    }
+
+    @objc private func refreshCache() { updateCache(clear: false) }
+
+    @objc private func clearCache() {
+        guard !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("settings.cache.confirm")
+        alert.informativeText = localized("settings.cache.confirm_detail")
+        alert.addButton(withTitle: localized("settings.cache.clear"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.updateCache(clear: true) }
+        }
+    }
+
+    private func updateCache(clear: Bool) {
+        guard !cacheBusy else { return }
+        cacheBusy = true
+        cacheRefresh.isEnabled = false
+        cacheClear.isEnabled = false
+        cacheMessage.stringValue = localized(clear ? "settings.cache.clearing" : "settings.cache.loading")
+        cacheMessage.textColor = .secondaryLabelColor
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try queryLocalCache(clear: clear) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cacheBusy = false
+                self.cacheRefresh.isEnabled = true
+                do {
+                    let snapshot = try result.get()
+                    try self.displayCache(snapshot)
+                    self.cacheMessage.stringValue = clear
+                        ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
+                    self.cacheMessageRow?.isHidden = !clear
+                } catch {
+                    self.cacheLoaded = false
+                    for label in self.cacheLabels.values { label.stringValue = localized("settings.cache.unavailable"); label.toolTip = nil }
+                    self.cacheMessage.stringValue = error.localizedDescription
+                    self.cacheMessage.textColor = .systemRed
+                    self.cacheMessageRow?.isHidden = false
+                }
+                self.updatePanelSize()
+            }
+        }
     }
 
     func show(for window: NSWindow) {
@@ -768,17 +960,30 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
 
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
         updatePanelSize()
+        if tabViewItem?.identifier as? String == "cache", !cacheLoaded && !validatingLayout { refreshCache() }
     }
 
     private func updatePanelSize() {
         guard let section = tabs.selectedTabViewItem?.identifier as? String,
               let grid = grids[section], let tabHeight else { return }
         advanced.isHidden = developer || section != "photos"
+        resetButton.isHidden = section == "cache"
+        applyButton.isHidden = section == "cache"
+        cancelButton.title = localized(section == "cache" ? "settings.cache.close" : "alert.cancel")
+        cancelButton.isEnabled = !cacheBusy
+        resetButton.isEnabled = !cacheBusy
+        applyButton.isEnabled = !cacheBusy && !applying
         status.isHidden = status.stringValue.isEmpty
         let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
-        let rowsHeight = visibleRows.reduce(CGFloat(0)) { height, row in
-            height + max(24, row.cell(at: 1).contentView?.fittingSize.height ?? 24)
-        } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
+        let rowsHeight: CGFloat
+        if section == "cache" {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            rowsHeight = grid.frame.height
+        } else {
+            rowsHeight = visibleRows.reduce(CGFloat(0)) { height, row in
+                height + max(24, row.cell(at: 1).contentView?.fittingSize.height ?? 24)
+            } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
+        }
         tabHeight.constant = rowsHeight + 64
         let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52)
         panel.setContentSize(NSSize(width: 720, height: tabHeight.constant + 76 + extras))
@@ -923,13 +1128,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     }
 
     @objc private func cancel() {
+        guard !cacheBusy else { return }
         applyGeneration = UUID()
         applying = false
         panel.sheetParent?.endSheet(panel)
     }
 
     @objc private func apply() {
-        guard !applying else { return }
+        guard !applying, !cacheBusy else { return }
         do {
             let settings = draft()
             try settings.validate()
@@ -955,6 +1161,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     }
 
     func validateForSelfTest() throws {
+        validatingLayout = true
+        defer { validatingLayout = false }
+        try validateCacheForSelfTest()
         try validatePhotosForSelfTest()
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
@@ -1056,6 +1265,61 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
               MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
             throw HostError(message: "Photos import settings disappeared outside Fast IMG")
         }
+    }
+
+    private func validateCacheForSelfTest() throws {
+        let document: [String: Any] = ["schema_version": 1, "cache_directory": "/synthetic/cache",
+            "store_bytes": 1024, "legacy_analysis_bytes": 64, "legacy_analysis_files": 1,
+            "removed_rows": 0, "removed_files": 0, "namespaces": [
+                ["name": "path_tree", "rows": 3, "payload_bytes": 512, "rebuildable": true],
+                ["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": false],
+                ["name": "future_state", "rows": 4, "payload_bytes": 256, "rebuildable": false]]]
+        let snapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: document))
+        guard try snapshot.totals(rebuildable: true).rows == 3,
+              try snapshot.totals(rebuildable: false).rows == 6 else {
+            throw HostError(message: "Cache and retained state counts were mixed")
+        }
+        try displayCache(snapshot)
+        tabs.selectTabViewItem(withIdentifier: "cache")
+        guard cacheClear.isEnabled, resetButton.isHidden, applyButton.isHidden,
+              cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
+            throw HostError(message: "Cache controls were not placed in Settings")
+        }
+        cacheBusy = true
+        try displayCache(snapshot)
+        updatePanelSize()
+        guard !cacheClear.isEnabled, !cancelButton.isEnabled else {
+            throw HostError(message: "Cache commands stayed enabled while busy")
+        }
+        cacheBusy = false
+        try displayCache(snapshot)
+        cacheLabels["path"]?.stringValue = "/synthetic/" + String(repeating: "long-directory/", count: 30)
+        cacheMessage.stringValue = String(repeating: "Synthetic cache error. ", count: 30)
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let content = tabs.selectedTabViewItem?.view, let grid = grids["cache"],
+              content.bounds.contains(grid.frame),
+              cacheLabels.values.allSatisfy({ grid.bounds.contains($0.alignmentRect(forFrame: $0.frame)) }) else {
+            let labels = cacheLabels.map { "\($0.key)=\($0.value.frame)" }.joined(separator: ", ")
+            throw HostError(message: "Long cache paths or errors escaped the Settings tab: content=\(String(describing: tabs.selectedTabViewItem?.view?.bounds)), grid=\(String(describing: grids["cache"]?.frame)), labels=\(labels)")
+        }
+        cacheMessageRow?.isHidden = true
+        try displayCache(snapshot)
+        for version in [0, 2] {
+            var invalid = document
+            invalid["schema_version"] = version
+            do {
+                _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid))
+            } catch { continue }
+            throw HostError(message: "Unsupported cache status schema was accepted")
+        }
+        var invalid = document
+        invalid["namespaces"] = [["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": true]]
+        do {
+            _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid))
+        } catch { return }
+        throw HostError(message: "Recovery state was mislabeled as rebuildable cache")
     }
 }
 

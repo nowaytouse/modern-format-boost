@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Cache-only cleanup and native Settings storage (2026-10-07)
+
+- Add a compact native Settings cache tab with asynchronous inspection, refresh,
+  confirmed cleanup, retained-record counts, explicit errors and busy controls.
+  Reuse the same bounded backend reader as effective settings and localize the new
+  controls in English, Simplified Chinese and Japanese.
+- Make default and path-scoped cleanup delete only `path_tree` cache rows and
+  retired analysis-cache files. Retain checkpoint/processed/unknown namespaces,
+  history, models, verification and unrecognized files. Remove checkpoint payload
+  rewriting without digest updates, broad cache-directory deletion and automatic
+  post-cleanup builds. PostgreSQL cleanup is an explicit advanced option, not a
+  core dependency; non-interactive deletion requires affirmative `--yes`.
+- Expose versioned `--stats --json` and cleanup results with actual removed row/file
+  counts. Reject unsupported/corrupt stores and linked managed paths; inspection
+  does not create a store. Display payload sizes separately from database file
+  lengths rather than claiming SQLite free pages are reclaimed disk space.
+- Use literal, component-delimited prefixes in shared SQLite/PostgreSQL path-tree
+  deletion and targeted analysis cleanup, preventing `%`/`_` filenames from
+  matching unrelated records, and preserve quotes/backslashes in advanced psql
+  path literals even with nonstandard server string settings. Use checked, nonnegative deletion counters and
+  propagate cleanup failures instead of reporting complete after ignored errors.
+- This completes the safe local cleanup/Settings entry phase, not the entire cache
+  redesign: remaining namespace inventory, stronger keys, capacity limits, TTL,
+  LRU and core worker-log/state migration remain follow-up design work.
+- Validation: 13 cache unit tests, two real CLI regressions, three shared SQLite
+  regressions and 398 anti-fallback contracts pass, together with strict Clippy and
+  the complete native-host self-test. Real-window inspection confirms the cache
+  tab, read-only refresh and disabled cleanup for empty cache. Tests use synthetic
+  state; no Photos library, source media or real recovery marker is modified.
+
 ### Durable SQLite processing history (2026-10-07)
 
 - Move new launcher history context, processor counts, verification and terminal

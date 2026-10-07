@@ -219,21 +219,22 @@ pub fn save_path_tree_snapshot<T: Serialize>(
 /// # Errors
 /// Returns an error if either backend purge fails.
 pub fn purge_path_tree_under(target: &Path) -> Result<u64> {
-    let mut deleted = 0u64;
     let mut client = open_pg_client()?;
     ensure_path_tree_table(&mut client)?;
-    let target_abs = target.to_string_lossy().into_owned();
-    let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
+    let target_abs = target
+        .to_str()
+        .context("path-tree deletion target is not valid UTF-8")?;
+    let prefix = format!("{}/", target_abs.trim_end_matches('/'));
     let pg_rows = client.execute(
-        "DELETE FROM path_tree_snapshots WHERE root_path = $1 OR root_path LIKE $2",
-        &[&target_abs, &pattern],
+        "DELETE FROM path_tree_snapshots WHERE root_path = $1 OR left(root_path, length($2)) = $2",
+        &[&target_abs, &prefix],
     )?;
-    deleted = deleted.saturating_add(pg_rows);
-    deleted = deleted.saturating_add(mfb_sqlite_store::blob_delete_under_root(
-        NS_PATH_TREE,
-        target,
-    )?);
-    Ok(deleted)
+    pg_rows
+        .checked_add(mfb_sqlite_store::blob_delete_under_root(
+            NS_PATH_TREE,
+            target,
+        )?)
+        .context("path-tree deletion count overflow")
 }
 
 /// Remove all path-tree snapshots.
@@ -241,13 +242,12 @@ pub fn purge_path_tree_under(target: &Path) -> Result<u64> {
 /// # Errors
 /// Returns an error if either backend purge fails.
 pub fn purge_all_path_tree_snapshots() -> Result<u64> {
-    let mut deleted = 0u64;
     let mut client = open_pg_client()?;
     ensure_path_tree_table(&mut client)?;
     let pg_rows = client.execute("DELETE FROM path_tree_snapshots", &[])?;
-    deleted = deleted.saturating_add(pg_rows);
-    deleted = deleted.saturating_add(mfb_sqlite_store::blob_delete_namespace(NS_PATH_TREE)?);
-    Ok(deleted)
+    pg_rows
+        .checked_add(mfb_sqlite_store::blob_delete_namespace(NS_PATH_TREE)?)
+        .context("path-tree deletion count overflow")
 }
 
 #[cfg(test)]

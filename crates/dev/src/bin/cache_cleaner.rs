@@ -4,7 +4,8 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use dev::infra::ui_tokens::pick_symbol;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags, params};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
@@ -53,19 +54,29 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
 #[derive(Parser, Debug)]
 #[command(name = "cache_cleaner", about = "Modern Format Boost Cache Cleaner")]
 struct Args {
+    #[arg(long, conflicts_with_all = ["path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Inspect local cache without deleting or rebuilding anything")]
+    stats: bool,
+
+    #[arg(long, conflicts_with_all = ["postgres", "purge_animation_cache", "purge_session_state"], help = "Return versioned local cache statistics as JSON")]
+    json: bool,
+
+    #[arg(long, conflicts_with_all = ["purge_animation_cache", "purge_session_state"], help = "Also purge advanced PostgreSQL analysis and inference caches (requires PostgreSQL)")]
+    postgres: bool,
+
     #[arg(
         long = "purge-animation-cache",
+        conflicts_with = "path",
         help = "Remove cache rows for animation-capable image formats"
     )]
     purge_animation_cache: bool,
 
     #[arg(
-        long = "purge-session-state",
+        long = "purge-session-state", conflicts_with_all = ["path", "purge_animation_cache"],
         help = "Remove session logs, progress trackers, temp files, and stale locks"
     )]
     purge_session_state: bool,
 
-    #[arg(help = "Target file or directory for fine-grained cleanup")]
+    #[arg(help = "Target file or directory for cache-only cleanup; resume records are retained")]
     path: Option<String>,
 
     #[arg(long = "yes", short = 'y', help = "Skip interactive confirmation")]
@@ -73,15 +84,6 @@ struct Args {
 }
 
 fn get_mfb_state_root() -> Result<PathBuf> {
-    match std::env::var("MFB_HOME_ROOT") {
-        Ok(env_root) => {
-            if !env_root.trim().is_empty() {
-                return Ok(PathBuf::from(env_root.trim()));
-            }
-        }
-        Err(_err) => {}
-    }
-    // Shared utils has get_mfb_root helper
     foundation::process_lock::get_mfb_root().map_err(|e| anyhow!("Failed to resolve MFB root: {e}"))
 }
 
@@ -106,6 +108,7 @@ fn pg_connstr() -> String {
 fn check_postgres_reachable() -> Result<()> {
     let conn_str = pg_connstr();
     let status = Command::new("psql")
+        .arg("-X")
         .arg(&conn_str)
         .arg("-c")
         .arg("SELECT 1;")
@@ -129,6 +132,7 @@ fn check_postgres_reachable() -> Result<()> {
 fn run_pg_query(query: &str) -> Result<String> {
     let conn_str = pg_connstr();
     let output = Command::new("psql")
+        .arg("-X")
         .arg(&conn_str)
         .arg("-c")
         .arg(query)
@@ -154,78 +158,6 @@ fn get_project_root() -> Result<PathBuf> {
     // Fallback to current working directory
     let cwd = std::env::current_dir()?;
     Ok(cwd)
-}
-
-#[derive(Debug, Clone)]
-struct CommandSpec {
-    program: PathBuf,
-    args: Vec<String>,
-    cwd: PathBuf,
-}
-
-impl CommandSpec {
-    fn display(&self) -> String {
-        let mut parts = Vec::with_capacity(self.args.len() + 1);
-        parts.push(self.program.display().to_string());
-        parts.extend(self.args.iter().cloned());
-        parts.join(" ")
-    }
-
-    fn run(&self) -> Result<std::process::ExitStatus> {
-        Command::new(&self.program)
-            .args(&self.args)
-            .current_dir(&self.cwd)
-            .status()
-            .with_context(|| format!("run {}", self.display()))
-    }
-}
-
-fn smart_build_command_spec(project_root: &Path, force: bool) -> CommandSpec {
-    // Always use release profile for smart_build to ensure production-optimized
-    // builds
-    let profile = "release";
-    let sibling = project_root
-        .join("target")
-        .join(profile)
-        .join("smart_build");
-    let mut args = Vec::new();
-    let program = if sibling.is_file() {
-        sibling
-    } else {
-        args.extend([
-            "run".to_string(),
-            "--release".to_string(),
-            "--locked".to_string(),
-            "-p".to_string(),
-            "dev".to_string(),
-            "--bin".to_string(),
-            "smart_build".to_string(),
-            "--".to_string(),
-        ]);
-        PathBuf::from("cargo")
-    };
-    if force {
-        args.push("--force".to_string());
-    }
-    CommandSpec {
-        program,
-        args,
-        cwd: project_root.to_path_buf(),
-    }
-}
-
-fn run_post_cleanup_rebuild(project_root: &Path, force: bool) -> Result<()> {
-    println!("\n{BOLD} Verifying img/vid binaries after cache purge...");
-    println!("{DIM} Running smart_build (incremental if artifacts are current)...{RESET}");
-
-    let spec = smart_build_command_spec(project_root, force);
-    let status = spec.run()?;
-    if !status.success() {
-        return Err(anyhow!("Rebuild failed with exit status: {status}"));
-    }
-
-    println!("\n{GREEN} smart_build finished (img/vid binaries verified)");
-    Ok(())
 }
 
 fn is_lock_stale(path: &Path) -> bool {
@@ -275,21 +207,30 @@ fn ensure_no_training_tables(tables: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
-    let target_abs = target_path.canonicalize()?.to_string_lossy().into_owned();
-    let escaped_abs = target_abs.replace('\'', "''");
-    let mut total = 0;
+fn postgres_path_literal(path: &str) -> String {
+    // E literals preserve filesystem backslashes regardless of server string settings.
+    format!("E'{}'", path.replace('\\', "\\\\").replace('\'', "''"))
+}
+
+fn purge_postgres_for_path(target_path: &Path) -> Result<u64> {
+    let absolute = target_path.canonicalize()?;
+    let target_abs = absolute
+        .to_str()
+        .context("PostgreSQL cache target is not valid UTF-8")?;
+    let absolute_literal = postgres_path_literal(target_abs);
+    let mut total = 0u64;
 
     if target_path.is_dir() {
-        let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
-        let escaped_pattern = pattern.replace('\'', "''");
+        let prefix = postgres_path_literal(&format!("{}/", target_abs.trim_end_matches('/')));
 
         let q1 = format!(
-            "DELETE FROM path_index WHERE file_path = '{escaped_abs}' OR file_path LIKE \
-             '{escaped_pattern}';"
+            "DELETE FROM path_index WHERE file_path = {absolute_literal} OR \
+             left(file_path, length({prefix})) = {prefix};"
         );
         let out1 = run_pg_query(&q1)?;
-        total += parse_row_count(&out1)?;
+        total = total
+            .checked_add(parse_row_count(&out1)?)
+            .context("PostgreSQL purge count overflow")?;
 
         for table in &["analysis_records", "quality_records", "video_records"] {
             let q = format!(
@@ -297,12 +238,16 @@ fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
                  path_index);"
             );
             let out = run_pg_query(&q)?;
-            total += parse_row_count(&out)?;
+            total = total
+                .checked_add(parse_row_count(&out)?)
+                .context("PostgreSQL purge count overflow")?;
         }
     } else {
-        let q1 = format!("DELETE FROM path_index WHERE file_path = '{escaped_abs}';");
+        let q1 = format!("DELETE FROM path_index WHERE file_path = {absolute_literal};");
         let out1 = run_pg_query(&q1)?;
-        total += parse_row_count(&out1)?;
+        total = total
+            .checked_add(parse_row_count(&out1)?)
+            .context("PostgreSQL purge count overflow")?;
 
         for table in &["analysis_records", "quality_records", "video_records"] {
             let q = format!(
@@ -310,9 +255,16 @@ fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
                  path_index);"
             );
             let out = run_pg_query(&q)?;
-            total += parse_row_count(&out)?;
+            total = total
+                .checked_add(parse_row_count(&out)?)
+                .context("PostgreSQL purge count overflow")?;
         }
     }
+
+    let prefix = postgres_path_literal(&format!("{}/", target_abs.trim_end_matches('/')));
+    total = total.checked_add(parse_row_count(&run_pg_query(&format!(
+        "DELETE FROM path_tree_snapshots WHERE root_path = {absolute_literal} OR left(root_path, length({prefix})) = {prefix};"
+    ))?)?).context("PostgreSQL purge count overflow")?;
 
     if total > 0 {
         println!(
@@ -328,24 +280,28 @@ fn purge_postgres_for_path(target_path: &Path) -> Result<i32> {
     Ok(total)
 }
 
-fn purge_postgres_inference_logs_for_path(target_path: &Path) -> Result<i32> {
-    let target_abs = target_path.canonicalize()?.to_string_lossy().into_owned();
-    let escaped_abs = target_abs.replace('\'', "''");
-    let mut total = 0;
+fn purge_postgres_inference_logs_for_path(target_path: &Path) -> Result<u64> {
+    let absolute = target_path.canonicalize()?;
+    let target_abs = absolute
+        .to_str()
+        .context("PostgreSQL inference target is not valid UTF-8")?;
+    let absolute_literal = postgres_path_literal(target_abs);
+    let mut total = 0u64;
 
     for table in PG_INFERENCE_LOG_TABLES {
         let q = if target_path.is_dir() {
-            let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
-            let escaped_pattern = pattern.replace('\'', "''");
+            let prefix = postgres_path_literal(&format!("{}/", target_abs.trim_end_matches('/')));
             format!(
-                "DELETE FROM {table} WHERE source_path = '{escaped_abs}' OR source_path LIKE \
-                 '{escaped_pattern}';"
+                "DELETE FROM {table} WHERE source_path = {absolute_literal} OR \
+                 left(source_path, length({prefix})) = {prefix};"
             )
         } else {
-            format!("DELETE FROM {table} WHERE source_path = '{escaped_abs}';")
+            format!("DELETE FROM {table} WHERE source_path = {absolute_literal};")
         };
         let out = run_pg_query(&q)?;
-        total += parse_row_count(&out)?;
+        total = total
+            .checked_add(parse_row_count(&out)?)
+            .context("PostgreSQL inference purge count overflow")?;
     }
 
     if total > 0 {
@@ -362,7 +318,7 @@ fn purge_postgres_inference_logs_for_path(target_path: &Path) -> Result<i32> {
     Ok(total)
 }
 
-fn purge_postgres_animation_cache() -> Result<i32> {
+fn purge_postgres_animation_cache() -> Result<u64> {
     let mut array_elems = Vec::new();
     for ext in ANIMATION_CACHE_EXTENSIONS {
         array_elems.push(format!("'%.{ext}'"));
@@ -406,264 +362,238 @@ fn purge_postgres_animation_cache() -> Result<i32> {
     Ok(total)
 }
 
-fn parse_row_count(stdout: &str) -> Result<i32> {
-    // psql DELETE or TRUNCATE output is like: "DELETE 5" or "TRUNCATE TABLE"
-    // We can parse numbers from the output lines
-    let mut count = 0;
+fn parse_row_count(stdout: &str) -> Result<u64> {
+    let mut count = 0u64;
+    let mut received = false;
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            if parts[0] == "DELETE" {
-                let c = parts[1].parse::<i32>().context("parse DELETE count")?;
-                count += c;
-            } else if parts[0] == "INSERT" {
-                let val = if parts.len() >= 3 { parts[2] } else { parts[1] };
-                let c = val.parse::<i32>().context("parse INSERT count")?;
-                count += c;
+        let value = match parts.first().copied() {
+            Some("DELETE") => Some(parts.get(1).context("missing DELETE count")?),
+            Some("INSERT") => Some(parts.get(2).context("missing INSERT count")?),
+            Some("TRUNCATE") => {
+                received = true;
+                None
             }
+            _ => None,
+        };
+        if let Some(value) = value {
+            received = true;
+            count = count
+                .checked_add(
+                    value
+                        .parse::<u64>()
+                        .context("invalid PostgreSQL row count")?,
+                )
+                .context("PostgreSQL row count overflow")?;
         }
     }
+    anyhow::ensure!(
+        received,
+        "PostgreSQL did not return a mutation-count receipt"
+    );
     Ok(count)
 }
 
-fn sqlite_store_path() -> Result<PathBuf> {
-    let root = get_mfb_state_root()?;
-    Ok(root.join("cache").join("mfb_store.sqlite"))
+#[derive(Debug, Serialize)]
+struct CacheNamespace {
+    name: String,
+    rows: u64,
+    payload_bytes: u64,
+    rebuildable: bool,
 }
 
-fn purge_sqlite_blob_namespace_all(namespace: &str) -> Result<i32> {
-    let store = sqlite_store_path()?;
-    if !store.is_file() {
-        return Ok(0);
+#[derive(Debug, Serialize)]
+struct CacheStatus {
+    schema_version: u8,
+    cache_directory: String,
+    store_bytes: u64,
+    namespaces: Vec<CacheNamespace>,
+    legacy_analysis_bytes: u64,
+    legacy_analysis_files: u64,
+    removed_rows: u64,
+    removed_files: u64,
+}
+
+fn ensure_cache_directory(cache_dir: &Path) -> Result<()> {
+    match fs::symlink_metadata(cache_dir) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
+        Ok(_) => Err(anyhow!(
+            "cache directory is not a regular directory: {}",
+            cache_dir.display()
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspect {}", cache_dir.display())),
     }
-    let conn = Connection::open(&store)?;
-    let deleted = conn.execute("DELETE FROM blob_store WHERE namespace = ?", [namespace])?;
-    Ok(deleted as i32)
 }
 
-fn purge_sqlite_blob_namespace_under(namespace: &str, target_path: &Path) -> Result<i32> {
-    let store = sqlite_store_path()?;
-    if !store.is_file() {
-        return Ok(0);
+fn regular_file_size(path: &Path) -> Result<Option<u64>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            Ok(Some(metadata.len()))
+        }
+        Ok(_) => Err(anyhow!(
+            "refusing non-regular cache file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("inspect {}", path.display())),
     }
-    let target_abs = target_path.canonicalize()?.to_string_lossy().into_owned();
-    let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
-    let conn = Connection::open(&store)?;
-    let deleted = conn.execute(
-        "DELETE FROM blob_store WHERE namespace = ? AND (root_path = ? OR root_path LIKE ?)",
-        [namespace.to_string(), target_abs, pattern],
-    )?;
-    Ok(deleted as i32)
 }
 
-fn invoke_purge_path_tree_cache(cli_args: &[&str]) -> Result<i32> {
-    let project_root = get_project_root()?;
-    let bin_path = project_root.join("target/release/purge_path_tree_cache");
-
-    let mut cmd = if bin_path.is_file() {
-        Command::new(bin_path)
+fn open_cache_store(store: &Path, read_only: bool) -> Result<Connection> {
+    let directory = store
+        .parent()
+        .context("cache database has no parent")?
+        .canonicalize()?;
+    let store = directory.join(
+        store
+            .file_name()
+            .context("cache database has no filename")?,
+    );
+    let mode = if read_only {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
     } else {
-        let mut c = Command::new("cargo");
-        c.arg("run")
-            .arg("--release")
-            .arg("-p")
-            .arg("foundation")
-            .arg("--bin")
-            .arg("purge_path_tree_cache")
-            .arg("--");
-        c
+        OpenFlags::SQLITE_OPEN_READ_WRITE
     };
-
-    cmd.args(cli_args);
-    let output = cmd.current_dir(&project_root).output()?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(anyhow!("purge_path_tree_cache failed: {}", err.trim()));
+    let conn = Connection::open_with_flags(store, mode | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    if read_only {
+        conn.pragma_update(None, "query_only", true)?;
     }
+    let version: i32 = conn.query_row(
+        "SELECT value FROM store_metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        version == foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION,
+        "unsupported cache store schema {version}; database retained"
+    );
+    Ok(conn)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let mut last_val = 0;
-    for line in stdout.lines() {
-        match line.trim().parse::<i32>() {
-            Ok(val) => {
-                last_val = val;
-            }
-            Err(_err) => {}
+fn legacy_analysis_sqlite_paths(cache_dir: &Path) -> Vec<PathBuf> {
+    ["image_analysis_v2.db", "image_analysis_v2_main.db"]
+        .into_iter()
+        .flat_map(|name| {
+            ["", "-wal", "-shm", "-journal"].map(|suffix| cache_dir.join(format!("{name}{suffix}")))
+        })
+        .collect()
+}
+
+fn nonnegative_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+}
+
+fn cache_status(cache_dir: &Path) -> Result<CacheStatus> {
+    ensure_cache_directory(cache_dir)?;
+    let mut status = CacheStatus {
+        schema_version: 1,
+        cache_directory: cache_dir
+            .to_str()
+            .context("cache path is not valid UTF-8")?
+            .to_owned(),
+        store_bytes: 0,
+        namespaces: Vec::new(),
+        legacy_analysis_bytes: 0,
+        legacy_analysis_files: 0,
+        removed_rows: 0,
+        removed_files: 0,
+    };
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        if let Some(bytes) =
+            regular_file_size(&cache_dir.join(format!("mfb_store.sqlite{suffix}")))?
+        {
+            status.store_bytes = status
+                .store_bytes
+                .checked_add(bytes)
+                .context("cache store size overflow")?;
         }
     }
-    Ok(last_val)
-}
-
-fn clean_mfb_progress(target_path: &Path) -> Result<(i32, i32)> {
-    let store = sqlite_store_path()?;
-    if !store.is_file() {
-        return Ok((0, 0));
+    let store = cache_dir.join("mfb_store.sqlite");
+    if regular_file_size(&store)?.is_some() {
+        let mut conn = open_cache_store(&store, true)?;
+        let snapshot = conn.transaction()?;
+        {
+            let mut statement = snapshot.prepare(
+                "SELECT namespace, COUNT(*), SUM(length(payload)) FROM blob_store GROUP BY namespace ORDER BY namespace",
+            )?;
+            status.namespaces = statement
+                .query_map([], |row| {
+                    let name: String = row.get(0)?;
+                    Ok(CacheNamespace {
+                        rebuildable: name == foundation::mfb_sqlite_store::NS_PATH_TREE,
+                        name,
+                        rows: nonnegative_column(row, 1)?,
+                        payload_bytes: nonnegative_column(row, 2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+        }
+        snapshot.commit()?;
     }
-    let progress_root = get_mfb_progress_root()?;
-    let target_abs = target_path.canonicalize()?.to_string_lossy().into_owned();
-    let is_dir = target_path.is_dir();
-
-    let mut conn = Connection::open(&store)?;
-    let mut deleted_count = 0;
-    let mut modified_count = 0;
-
-    let mut stmt =
-        conn.prepare("SELECT cache_key, payload FROM blob_store WHERE namespace = 'checkpoint'")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-
-    let mut to_delete = Vec::new();
-    let mut to_update = Vec::new();
-
-    for r in rows {
-        let (cache_key, payload) = r?;
-        match serde_json::from_str::<serde_json::Value>(&payload) {
-            Ok(mut blob) => {
-                let target_dir = blob
-                    .get("header")
-                    .and_then(|h| h.get("target_dir"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
-
-                if is_dir
-                    && (target_abs == target_dir
-                        || target_dir.starts_with(&format!("{target_abs}/")))
-                {
-                    to_delete.push(cache_key.clone());
-                    let lock_file = progress_root.join(format!("{cache_key}.lock"));
-                    if lock_file.is_file() {
-                        let _ = fs::remove_file(lock_file);
-                    }
-                    println!("   {GREEN} Removed checkpoint tracker: {target_dir}");
-                    continue;
-                }
-
-                if !is_dir
-                    && (target_abs == target_dir
-                        || target_abs.starts_with(&format!("{target_dir}/")))
-                    && let Some(entries) = blob.get_mut("entries").and_then(|e| e.as_object_mut())
-                    && entries.remove(&target_abs).is_some()
-                {
-                    to_update.push((cache_key, blob));
-                }
-            }
-            Err(_err) => {}
+    for path in legacy_analysis_sqlite_paths(cache_dir) {
+        if let Some(bytes) = regular_file_size(&path)? {
+            status.legacy_analysis_bytes = status
+                .legacy_analysis_bytes
+                .checked_add(bytes)
+                .context("legacy cache size overflow")?;
+            status.legacy_analysis_files += 1;
         }
     }
-    stmt.finalize()?;
-
-    let tx = conn.transaction()?;
-    for key in to_delete {
-        tx.execute(
-            "DELETE FROM blob_store WHERE namespace = 'checkpoint' AND cache_key = ?",
-            [&key],
-        )?;
-        deleted_count += 1;
-    }
-
-    for (key, blob) in to_update {
-        let payload = serde_json::to_string(&blob)?;
-        tx.execute(
-            "UPDATE blob_store SET payload = ? WHERE namespace = 'checkpoint' AND cache_key = ?",
-            [payload, key],
-        )?;
-        modified_count += 1;
-        println!(
-            "   {} Pruned file from checkpoint: {}",
-            GREEN,
-            target_path
-                .file_name()
-                .unwrap_or(std::ffi::OsStr::new(""))
-                .to_string_lossy()
-        );
-    }
-    tx.commit()?;
-
-    if progress_root.is_dir() {
-        for entry in fs::read_dir(&progress_root)? {
-            let path = entry?.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("txt") {
-                let _ = fs::remove_file(&path);
-                deleted_count += 1;
-                println!(
-                    "   {} Removed orphan legacy progress file: {}",
-                    GREEN,
-                    path.file_name()
-                        .unwrap_or(std::ffi::OsStr::new(""))
-                        .to_string_lossy()
-                );
-            }
-        }
-    }
-
-    Ok((deleted_count, modified_count))
+    Ok(status)
 }
 
-fn clean_path_tree(target_path: &Path) -> Result<i32> {
-    let target_abs = target_path.canonicalize()?.to_string_lossy().into_owned();
-    let deleted = invoke_purge_path_tree_cache(&["--under", &target_abs])?;
-    if deleted > 0 {
-        println!(
-            "   {} path_tree_snapshots (PG + SQLite): removed {} row(s) under {}",
-            GREEN,
-            deleted,
-            target_path
-                .file_name()
-                .unwrap_or(std::ffi::OsStr::new(""))
-                .to_string_lossy()
-        );
-    }
-    Ok(deleted)
-}
-
-fn clean_all_path_tree() -> Result<i32> {
-    let deleted = invoke_purge_path_tree_cache(&["--all"])?;
-    if deleted > 0 {
-        println!("   {GREEN} Removed {deleted} path-tree cache entries (PG + SQLite)");
-    }
-    Ok(deleted)
-}
-
-fn legacy_analysis_sqlite_paths() -> Result<Vec<PathBuf>> {
-    let root = get_mfb_state_root()?;
-    let cache_dir = root.join("cache");
-    Ok(vec![
-        cache_dir.join("image_analysis_v2.db"),
-        cache_dir.join("image_analysis_v2_main.db"),
-    ])
-}
-
-fn remove_legacy_analysis_sqlite_files() -> Result<i32> {
+fn remove_legacy_analysis_sqlite_files(cache_dir: &Path) -> Result<u64> {
     let mut removed = 0;
-    for path in legacy_analysis_sqlite_paths()? {
-        if path.is_file() {
-            fs::remove_file(&path)?;
+    for path in legacy_analysis_sqlite_paths(cache_dir) {
+        if regular_file_size(&path)?.is_some() {
+            fs::remove_file(&path)
+                .with_context(|| format!("remove obsolete analysis cache {}", path.display()))?;
             removed += 1;
-            println!(
-                "   {} Removed legacy analysis DB: {}",
-                GREEN,
-                path.file_name()
-                    .unwrap_or(std::ffi::OsStr::new(""))
-                    .to_string_lossy()
-            );
         }
     }
     Ok(removed)
 }
 
-fn purge_mfb_store_blob_namespaces_full() -> Result<i32> {
-    let mut total = 0;
-    for namespace in &["path_tree", "checkpoint", "processed"] {
-        total += purge_sqlite_blob_namespace_all(namespace)?;
+fn purge_local_cache(cache_dir: &Path, target: Option<&Path>) -> Result<CacheStatus> {
+    // Validate the entire managed scope before deleting; unknown namespaces/files are state, not cache.
+    cache_status(cache_dir)?;
+    let store = cache_dir.join("mfb_store.sqlite");
+    let mut removed_rows = 0;
+    if regular_file_size(&store)?.is_some() {
+        let mut conn = open_cache_store(&store, false)?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let rows = if let Some(target) = target {
+            let absolute = target.canonicalize()?;
+            let absolute = absolute
+                .to_str()
+                .context("target path is not valid UTF-8")?;
+            let prefix = format!("{}/", absolute.trim_end_matches('/'));
+            tx.execute(
+                "DELETE FROM blob_store WHERE namespace = ?1 AND (root_path = ?2 OR substr(root_path, 1, length(?3)) = ?3)",
+                params![foundation::mfb_sqlite_store::NS_PATH_TREE, absolute, prefix],
+            )?
+        } else {
+            tx.execute(
+                "DELETE FROM blob_store WHERE namespace = ?1",
+                [foundation::mfb_sqlite_store::NS_PATH_TREE],
+            )?
+        };
+        removed_rows = u64::try_from(rows).context("cache deletion count overflow")?;
+        tx.commit()?;
     }
-    if total > 0 {
-        println!(
-            "   {GREEN} mfb_store.sqlite: purged {total} blob_store row(s) \
-             (path_tree/checkpoint/processed)"
-        );
-    }
-    Ok(total)
+    let removed_files = if target.is_none() {
+        remove_legacy_analysis_sqlite_files(cache_dir)?
+    } else {
+        0
+    };
+    let mut status = cache_status(cache_dir)?;
+    status.removed_rows = removed_rows;
+    status.removed_files = removed_files;
+    Ok(status)
 }
 
 fn purge_conversion_resume_state(
@@ -673,14 +603,14 @@ fn purge_conversion_resume_state(
 ) -> Result<()> {
     if progress_dir.is_dir() {
         println!("{DIM}   Removing MFB progress directory...{RESET}");
-        let _ = fs::remove_dir_all(progress_dir);
+        fs::remove_dir_all(progress_dir)?;
         println!("   {GREEN} MFB progress purged");
     }
 
     if tmp_dir.is_dir() {
         println!("{DIM}   Purging isolated temp directory...{RESET}");
-        let _ = fs::remove_dir_all(tmp_dir);
-        let _ = fs::create_dir_all(tmp_dir);
+        fs::remove_dir_all(tmp_dir)?;
+        fs::create_dir_all(tmp_dir)?;
         println!("   {GREEN} Isolated temp space cleared");
     }
 
@@ -693,7 +623,7 @@ fn purge_conversion_resume_state(
             let path = entry?.path();
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("lock") {
                 if is_lock_stale(&path) {
-                    let _ = fs::remove_file(&path);
+                    fs::remove_file(&path)?;
                     deleted_locks += 1;
                 } else {
                     active_locks += 1;
@@ -801,40 +731,33 @@ fn purge_log_dir_session_artifacts(target: &Path) -> Result<(i32, i32)> {
         if path.is_file() {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if ext == "log" || ext == "jsonl" {
-                    remove_session_file(&path, &mut removed_logs);
+                    remove_session_file(&path, &mut removed_logs)?;
                 }
             } else if let Some(name) = path.file_name().and_then(|f| f.to_str())
                 && ((name.starts_with("diagnostic_report_") && name.ends_with(".txt"))
                     || name == "deleted_offending_files.txt")
             {
-                remove_session_file(&path, &mut removed_logs);
+                remove_session_file(&path, &mut removed_logs)?;
             }
         } else if path.is_dir()
             && let Some(name) = path.file_name().and_then(|f| f.to_str())
             && (name.starts_with("Bundle_") || name == "dev_verify")
         {
-            match fs::remove_dir_all(&path) {
-                Ok(()) => removed_dirs += 1,
-                Err(err) => warn_cleanup_failure(&path, &err),
-            }
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("remove session artifacts {}", path.display()))?;
+            removed_dirs += 1;
         }
     }
 
     Ok((removed_logs, removed_dirs))
 }
 
-fn remove_session_file(path: &Path, removed_logs: &mut i32) {
-    match fs::remove_file(path) {
-        Ok(()) => *removed_logs += 1,
-        Err(err) => warn_cleanup_failure(path, &err),
-    }
-}
-
-fn warn_cleanup_failure(path: &Path, err: &std::io::Error) {
-    eprintln!(
-        "  {YELLOW}WARN:{RESET} cleanup failed for {}: {err}",
-        path.display()
-    );
+fn remove_session_file(path: &Path, removed_logs: &mut i32) -> Result<()> {
+    fs::remove_file(path).with_context(|| format!("remove session artifact {}", path.display()))?;
+    *removed_logs = removed_logs
+        .checked_add(1)
+        .context("session removal count overflow")?;
+    Ok(())
 }
 
 fn purge_session_logs_only(log_dir: &Path) -> Result<()> {
@@ -980,10 +903,7 @@ fn draw_header(targeted: bool) {
     let mode_text = if targeted {
         format!("{} TARGETED CACHE CLEANUP", pick_symbol("🧹", "[SWEEP]"))
     } else {
-        format!(
-            "{} CACHE & LOG CLEANUP UTILITY v1.1",
-            pick_symbol("🧹", "[SWEEP]")
-        )
+        format!("{} CACHE CLEANUP", pick_symbol("🧹", "[SWEEP]"))
     };
     println!(
         "{}  {:<62} {}",
@@ -994,20 +914,26 @@ fn draw_header(targeted: bool) {
     println!("{BLUE}╰{line}╯{RESET}");
     if !targeted {
         println!(
-            "   {RED}  WARNING: Critical processing data will be permanently deleted.{RESET}\n"
+            "   {GREEN} History, resume records, verification state and models are retained.{RESET}\n"
         );
     }
 }
 
-fn perform_animation_cache_cleanup() -> Result<()> {
+fn perform_animation_cache_cleanup(yes: bool) -> Result<()> {
     check_postgres_reachable()?;
+    if !confirm_cleanup(
+        yes,
+        "Clear advanced animation cache? History and resume records are retained.",
+    )? {
+        anyhow::bail!("animation cache cleanup cancelled; no action taken");
+    }
     draw_header(true);
     println!("   {BOLD}Target:{RESET} {DIM}animation-capable cache entries{RESET}");
     println!("   {YELLOW}Purging cached static/unknown verdicts and routing snapshots...{RESET}\n");
 
     purge_postgres_animation_cache()?;
-    clean_all_path_tree()?;
-    remove_legacy_analysis_sqlite_files()?;
+    run_pg_query("DELETE FROM path_tree_snapshots;")?;
+    purge_local_cache(&get_mfb_state_root()?.join("cache"), None)?;
     println!("\n{GREEN} Animation Cache Cleanup Complete\n");
     Ok(())
 }
@@ -1019,7 +945,7 @@ fn perform_session_state_cleanup(yes: bool) -> Result<()> {
     let progress_dir = get_mfb_progress_root()?;
     let tmp_dir = state_root.join("tmp");
     let lock_dir = state_root.join("locks");
-    let store_file = sqlite_store_path()?;
+    let store_file = cache_dir.join("mfb_store.sqlite");
 
     draw_header(true);
     show_stats(&cache_dir, &store_file, &log_dir, &progress_dir)?;
@@ -1028,16 +954,11 @@ fn perform_session_state_cleanup(yes: bool) -> Result<()> {
          locks){RESET}\n"
     );
 
-    if !yes && sys_stdin_stdout_isatty() {
-        println!("{YELLOW}  CONFIRM: Clear session state artifacts only?{RESET}");
-        print!("   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if input.trim().to_lowercase() != "yes" && input.trim().to_lowercase() != "y" {
-            println!("\n{RED} Session-state cleanup cancelled by user.\n");
-            return Ok(());
-        }
+    if !confirm_cleanup(
+        yes,
+        "Delete session diagnostics, filesystem progress and temporary state?",
+    )? {
+        return Ok(());
     }
 
     purge_session_logs_only(&log_dir)?;
@@ -1051,111 +972,54 @@ fn sys_stdin_stdout_isatty() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
-fn perform_full_cleanup(yes: bool) -> Result<(bool, bool)> {
-    let state_root = get_mfb_state_root()?;
-    let cache_dir = state_root.join("cache");
-    let store_file = sqlite_store_path()?;
-    let log_dir = dev::infra::log_paths::unified_log_dir();
-    let progress_dir = get_mfb_progress_root()?;
-    let tmp_dir = state_root.join("tmp");
-    let lock_dir = state_root.join("locks");
-
-    draw_header(false);
-    show_stats(&cache_dir, &store_file, &log_dir, &progress_dir)?;
-
-    if let Err(pg_err) = check_postgres_reachable() {
-        println!("\n{RED} PostgreSQL is required before cache cleanup can run.{RESET}");
-        println!("   {DIM}Reason: {pg_err}{RESET}");
-        println!(
-            "   {}Connection: {} (override with MFB_PG_CONNSTR){}\n",
-            DIM,
-            pg_connstr(),
-            RESET
-        );
-        return Ok((false, false));
+fn confirm_cleanup(yes: bool, prompt: &str) -> Result<bool> {
+    if yes {
+        return Ok(true);
     }
-
-    println!("{RED}  The following caches will be PERMANENTLY cleared:{RESET}");
-    println!(
-        "   - PostgreSQL analysis cache (records, path_index, path_tree_snapshots, cache_metadata)"
+    anyhow::ensure!(
+        sys_stdin_stdout_isatty(),
+        "cleanup requires --yes in non-interactive mode; use --stats to inspect only"
     );
-    println!("   - PostgreSQL inference-log telemetry (loop/image/animated/video)");
-    println!("   - Legacy analysis SQLite files (image_analysis_v2*.db, if present)");
-    println!("   - mfb_store.sqlite (path-tree, checkpoint, processed blobs)");
-    println!("   - Batch resume state (~/.mfb_progress/, tmp/, stale locks)");
-    println!(
-        "   {GREEN} - Training corpora (loop_samples, *_quality_samples, metadata) are \
-         preserved{RESET}"
-    );
-    println!("   {GREEN} - Training lane logs and local training SQLite are preserved{RESET}");
-    println!();
-
-    if !yes && sys_stdin_stdout_isatty() {
-        println!("{YELLOW}  CONFIRM: Start full cache cleanup?{RESET}");
-        print!("   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        if input.trim().to_lowercase() != "yes" && input.trim().to_lowercase() != "y" {
-            println!("\n{RED} Cleanup cancelled by user.{RESET}");
-            println!("{DIM}   No action taken.{RESET}");
-            return Ok((false, false));
-        }
-    }
-
-    println!("\n{YELLOW} Executing full cache cleanup...{RESET}");
-    purge_postgres_full()?;
-    let _ = remove_legacy_analysis_sqlite_files();
-    let _ = purge_mfb_store_blob_namespaces_full();
-
-    if cache_dir.is_dir() {
-        println!("{DIM}   Clearing cache directory (preserving models)...{RESET}");
-        for entry in fs::read_dir(&cache_dir)? {
-            let path = entry?.path();
-            if path.file_name().and_then(|f| f.to_str()) == Some("models") {
-                continue;
-            }
-            if path.is_dir() {
-                let _ = fs::remove_dir_all(&path);
-            } else {
-                let _ = fs::remove_file(&path);
-            }
-        }
-        println!("   {GREEN} Local cache directory cleared");
-    }
-
-    purge_conversion_resume_state(&progress_dir, &tmp_dir, &lock_dir)?;
-    println!("\n{GREEN} Full Cache Cleanup Complete\n");
-    Ok((true, true))
+    println!("{YELLOW}{prompt}{RESET}");
+    print!("   {CYAN}Type 'yes' to proceed: {RESET}");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim().to_lowercase().as_str(), "yes" | "y"))
 }
 
-fn perform_targeted_cleanup(target_path: &Path) -> Result<()> {
-    if !target_path.exists() {
-        return Err(anyhow!("Path does not exist: {}", target_path.display()));
+fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(status)?);
+    } else {
+        println!("Cache: {}", status.cache_directory);
+        println!(
+            "Store on disk (includes retained state): {}",
+            format_size(status.store_bytes)
+        );
+        for namespace in &status.namespaces {
+            println!(
+                "  {}: {} rows, {} payload [{}]",
+                namespace.name,
+                namespace.rows,
+                format_size(namespace.payload_bytes),
+                if namespace.rebuildable {
+                    "rebuildable cache"
+                } else {
+                    "retained state"
+                }
+            );
+        }
+        println!(
+            "Obsolete analysis cache: {} files, {}",
+            status.legacy_analysis_files,
+            format_size(status.legacy_analysis_bytes)
+        );
+        println!(
+            "Removed: {} cache rows, {} obsolete cache files",
+            status.removed_rows, status.removed_files
+        );
     }
-
-    check_postgres_reachable()?;
-    draw_header(true);
-    println!("   {BOLD}Target:{RESET} {DIM}");
-    println!("   {YELLOW}Scanning metadata associated with this path...{RESET}\n");
-
-    // 0. PostgreSQL targeted purge
-    purge_postgres_for_path(target_path)?;
-    purge_postgres_inference_logs_for_path(target_path)?;
-
-    // 1. Progress Tracker
-    let _ = clean_mfb_progress(target_path);
-
-    // 2. Path Tree Cache
-    let _ = clean_path_tree(target_path);
-
-    // 3. Processed list blobs
-    let removed = purge_sqlite_blob_namespace_under("processed", target_path)?;
-    if removed > 0 {
-        println!("   {GREEN} mfb_store processed blobs: removed {removed} row(s)");
-    }
-
-    println!("\n{GREEN} Targeted Cleanup Complete\n");
     Ok(())
 }
 
@@ -1163,7 +1027,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.purge_animation_cache {
-        perform_animation_cache_cleanup()?;
+        perform_animation_cache_cleanup(args.yes)?;
         return Ok(());
     }
 
@@ -1172,25 +1036,244 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(target) = args.path {
-        perform_targeted_cleanup(Path::new(&target))?;
-    } else {
-        let (completed, rebuild) = perform_full_cleanup(args.yes)?;
-        if !completed {
-            std::process::exit(1);
-        }
-        if rebuild {
-            let root = get_project_root()?;
-            let _ = run_post_cleanup_rebuild(&root, false);
+    let cache_dir = get_mfb_state_root()?.join("cache");
+    let before = cache_status(&cache_dir)?;
+    if args.stats {
+        return print_cache_status(&before, args.json);
+    }
+    let target = args
+        .path
+        .as_deref()
+        .map(Path::new)
+        .map(Path::canonicalize)
+        .transpose()?;
+    if args.postgres {
+        check_postgres_reachable().context("PostgreSQL is required for --postgres cleanup")?;
+    }
+    if !args.json {
+        print_cache_status(&before, false)?;
+    }
+    if !confirm_cleanup(
+        args.yes,
+        "Clear rebuildable cache only? History and resume state are retained.",
+    )? {
+        anyhow::bail!("cache cleanup cancelled; no action taken");
+    }
+    if args.postgres {
+        if let Some(target) = &target {
+            purge_postgres_for_path(target)?;
+            purge_postgres_inference_logs_for_path(target)?;
+        } else {
+            purge_postgres_full()?;
         }
     }
-
-    Ok(())
+    let status = purge_local_cache(&cache_dir, target.as_deref())?;
+    print_cache_status(&status, args.json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cache_fixture(root: &Path) -> PathBuf {
+        let cache = root.join("cache");
+        fs::create_dir(&cache).unwrap();
+        let conn = Connection::open(cache.join("mfb_store.sqlite")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE store_metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+             INSERT INTO store_metadata VALUES ('schema_version', 2);
+             CREATE TABLE blob_store (namespace TEXT NOT NULL, cache_key TEXT NOT NULL,
+                 schema_version INTEGER NOT NULL, root_path TEXT, payload BLOB NOT NULL,
+                 payload_blake3 BLOB NOT NULL, updated_at INTEGER NOT NULL,
+                 PRIMARY KEY(namespace, cache_key));",
+        )
+        .unwrap();
+        for namespace in [
+            "path_tree",
+            "checkpoint",
+            "processed",
+            "future_verification_state",
+        ] {
+            conn.execute(
+                "INSERT INTO blob_store VALUES (?1, 'key', 2, '/synthetic', ?2, ?3, 123)",
+                params![namespace, b"payload", &[7u8; 32]],
+            )
+            .unwrap();
+        }
+        cache
+    }
+
+    #[test]
+    fn local_cleanup_retains_resume_proofs_history_models_and_unknown_files() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        fs::create_dir(root.path().join("logs")).unwrap();
+        dev::infra::history_store::append_history_event(
+            &root.path().join("logs"),
+            "run",
+            "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"completed\"}",
+        )
+        .unwrap();
+        let retained = [
+            cache.join("models/weights.bin"),
+            cache.join("unknown.sqlite"),
+            root.path().join("tmp/recovery.bin"),
+            root.path().join("locks/active.lock"),
+        ];
+        for path in &retained {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"retained").unwrap();
+        }
+        fs::write(cache.join("image_analysis_v2.db"), b"obsolete").unwrap();
+        fs::write(cache.join("image_analysis_v2.db-wal"), b"obsolete wal").unwrap();
+        let history = root.path().join("logs/history.sqlite3");
+        let history_before = fs::read(&history).unwrap();
+        let before = cache_status(&cache).unwrap();
+        assert_eq!(before.namespaces.len(), 4);
+        assert_eq!(before.legacy_analysis_files, 2);
+        assert_eq!(before.legacy_analysis_bytes, 20);
+        assert_eq!(
+            before
+                .namespaces
+                .iter()
+                .filter(|row| row.rebuildable)
+                .count(),
+            1
+        );
+        let status = purge_local_cache(&cache, None).unwrap();
+        assert_eq!((status.removed_rows, status.removed_files), (1, 2));
+        assert_eq!(status.namespaces.len(), 3);
+        let conn = Connection::open(cache.join("mfb_store.sqlite")).unwrap();
+        let state: Vec<(String, Vec<u8>, Vec<u8>, i64)> = conn.prepare(
+            "SELECT namespace, payload, payload_blake3, updated_at FROM blob_store ORDER BY namespace",
+        ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(state.len(), 3);
+        for (_, payload, proof, updated_at) in state {
+            assert_eq!(payload, b"payload");
+            assert_eq!(proof, [7u8; 32]);
+            assert_eq!(updated_at, 123);
+        }
+        for path in retained {
+            assert_eq!(fs::read(path).unwrap(), b"retained");
+        }
+        assert_eq!(fs::read(history).unwrap(), history_before);
+        let again = purge_local_cache(&cache, None).unwrap();
+        assert_eq!((again.removed_rows, again.removed_files), (0, 0));
+    }
+
+    #[test]
+    fn targeted_cache_cleanup_matches_literal_components_without_resetting_state() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        let target = root.path().join("photos_100%");
+        fs::create_dir(&target).unwrap();
+        let absolute = target.canonicalize().unwrap().to_str().unwrap().to_owned();
+        let conn = Connection::open(cache.join("mfb_store.sqlite")).unwrap();
+        for (key, path) in [
+            ("exact", absolute.clone()),
+            ("child", format!("{absolute}/child")),
+            ("sibling", format!("{absolute}other")),
+            ("wildcard", absolute.replace("_100%", "X1000")),
+        ] {
+            conn.execute(
+                "INSERT INTO blob_store VALUES ('path_tree', ?1, 2, ?2, ?3, ?4, 123)",
+                params![key, path, b"cache", &[3u8; 32]],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let status = purge_local_cache(&cache, Some(&target)).unwrap();
+        assert_eq!(status.removed_rows, 2);
+        assert_eq!(
+            status
+                .namespaces
+                .iter()
+                .find(|row| row.name == "path_tree")
+                .unwrap()
+                .rows,
+            3
+        );
+        assert_eq!(
+            status
+                .namespaces
+                .iter()
+                .filter(|row| !row.rebuildable)
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn cache_inspection_does_not_create_a_store_or_modify_existing_database() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("absent-cache");
+        let empty = cache_status(&missing).unwrap();
+        assert_eq!(empty.store_bytes, 0);
+        assert!(empty.namespaces.is_empty() && !missing.exists());
+        let cache = cache_fixture(root.path());
+        let store = cache.join("mfb_store.sqlite");
+        let before = fs::read(&store).unwrap();
+        let stats = cache_status(&cache).unwrap();
+        assert_eq!(stats.store_bytes, u64::try_from(before.len()).unwrap());
+        assert_eq!(fs::read(store).unwrap(), before);
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 1);
+        let json = serde_json::to_value(stats).unwrap();
+        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["removed_rows"], 0);
+    }
+
+    #[test]
+    fn unknown_or_corrupt_cache_schema_fails_before_any_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        let legacy = cache.join("image_analysis_v2.db");
+        fs::write(&legacy, b"retain until validated").unwrap();
+        let store = cache.join("mfb_store.sqlite");
+        Connection::open(&store)
+            .unwrap()
+            .execute("UPDATE store_metadata SET value = 99", [])
+            .unwrap();
+        let before = fs::read(&store).unwrap();
+        assert!(
+            purge_local_cache(&cache, None)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported cache store schema")
+        );
+        assert_eq!(fs::read(&store).unwrap(), before);
+        fs::write(&store, b"not a sqlite database").unwrap();
+        assert!(purge_local_cache(&cache, None).is_err());
+        assert_eq!(fs::read(&store).unwrap(), b"not a sqlite database");
+        assert_eq!(fs::read(legacy).unwrap(), b"retain until validated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_cleanup_refuses_symlinked_managed_files_and_directories() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        let outside = root.path().join("outside.db");
+        fs::write(&outside, b"do not touch").unwrap();
+        symlink(&outside, cache.join("image_analysis_v2.db")).unwrap();
+        assert!(purge_local_cache(&cache, None).is_err());
+        assert!(
+            cache_status(&cache)
+                .unwrap_err()
+                .to_string()
+                .contains("non-regular")
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"do not touch");
+        let alias = root.path().join("cache-alias");
+        symlink(&cache, &alias).unwrap();
+        assert!(purge_local_cache(&alias, None).is_err());
+        fs::remove_file(cache.join("image_analysis_v2.db")).unwrap();
+        fs::remove_file(cache.join("mfb_store.sqlite")).unwrap();
+        symlink(&outside, cache.join("mfb_store.sqlite")).unwrap();
+        assert!(purge_local_cache(&cache, None).is_err());
+        assert_eq!(fs::read(outside).unwrap(), b"do not touch");
+    }
 
     #[test]
     fn test_parse_row_count() {
@@ -1198,6 +1281,20 @@ mod tests {
         assert_eq!(parse_row_count("INSERT 0 10").unwrap(), 10);
         assert_eq!(parse_row_count("TRUNCATE TABLE").unwrap(), 0);
         assert_eq!(parse_row_count("DELETE 2\nDELETE 3").unwrap(), 5);
+        assert_eq!(parse_row_count("DELETE 4294967296").unwrap(), 4_294_967_296);
+        assert!(parse_row_count("DELETE -1").is_err());
+        assert!(parse_row_count("DELETE").is_err());
+        assert!(parse_row_count("").is_err());
+        assert!(parse_row_count("unexpected command output").is_err());
+        assert!(parse_row_count("DELETE 18446744073709551615\nDELETE 1").is_err());
+    }
+
+    #[test]
+    fn postgres_paths_preserve_quotes_backslashes_and_wildcard_characters() {
+        assert_eq!(
+            postgres_path_literal(r"C:\media\it's 100%_"),
+            r"E'C:\\media\\it''s 100%_'"
+        );
     }
 
     #[test]
@@ -1237,13 +1334,14 @@ mod tests {
     }
 
     #[test]
-    fn test_post_cleanup_rebuild_uses_rust_smart_build_not_python() {
-        let spec = smart_build_command_spec(Path::new("/repo"), true);
-        let rendered = spec.display();
-        assert!(rendered.contains("smart_build"));
-        assert!(rendered.contains("--force"));
-        assert!(!rendered.contains("python"));
-        assert!(!rendered.contains(".py"));
+    fn test_cache_inspection_and_purge_modes_are_explicit() {
+        let inspect = Args::try_parse_from(["cache_cleaner", "--stats", "--json"]).unwrap();
+        assert!(inspect.stats && inspect.json && !inspect.postgres && !inspect.yes);
+        assert!(
+            Args::try_parse_from(["cache_cleaner", "--stats", "--purge-session-state"]).is_err()
+        );
+        assert!(Args::try_parse_from(["cache_cleaner", "--json", "--postgres"]).is_err());
+        assert!(confirm_cleanup(true, "synthetic").unwrap());
     }
 
     #[test]

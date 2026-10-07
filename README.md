@@ -61,6 +61,24 @@ Matching output cardinalities do not replace identity or content verification.
 See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
 receipt uniqueness, error handling and regression boundaries.
 
+### Cache management
+
+The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
+separates rebuildable payloads from retained records and database file size. Its
+confirmed cleanup removes only local path-tree snapshots and obsolete analysis
+cache files. History, checkpoints, processed-file receipts, verification state,
+models and unrecognized namespaces/files remain intact. SQLite reuses deleted
+pages, so database file size is not a promise of immediately reclaimable space.
+
+CLI: `cache_cleaner --stats --json` inspects local cache; `cache_cleaner --yes
+--json` clears the managed local cache; a positional path scopes snapshot deletion
+to that exact path and its descendants. Normal cleanup does not require PostgreSQL
+or rebuild binaries. `--postgres` explicitly includes advanced analysis/inference
+caches and fails if that service is unavailable. `--purge-session-state` remains a
+separate destructive maintenance command, never used by GUI Clear Cache; unattended
+cleanup requires `--yes`. Unknown/corrupt schemas and linked managed cache files
+are rejected without resetting the database.
+
 ### What it guarantees—and what it does not
 
 - A conversion candidate is delivered only after its route-specific decode,

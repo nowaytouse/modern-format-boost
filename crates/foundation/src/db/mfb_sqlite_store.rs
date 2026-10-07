@@ -319,12 +319,14 @@ pub fn blob_put(
 /// # Errors
 /// Returns an error if the delete fails.
 pub fn blob_delete_under_root(namespace: &str, target: &Path) -> Result<u64> {
-    let target_abs = target.to_string_lossy().into_owned();
-    let pattern = format!("{}/%", target_abs.trim_end_matches('/'));
+    let target_abs = target
+        .to_str()
+        .context("blob deletion target is not valid UTF-8")?;
+    let prefix = format!("{}/", target_abs.trim_end_matches('/'));
     with_conn(|conn| {
         let rows = conn.execute(
-            "DELETE FROM blob_store WHERE namespace = ?1 AND (root_path = ?2 OR root_path LIKE ?3)",
-            params![namespace, target_abs, pattern],
+            "DELETE FROM blob_store WHERE namespace = ?1 AND (root_path = ?2 OR substr(root_path, 1, length(?3)) = ?3)",
+            params![namespace, target_abs, prefix],
         )?;
         rows_affected_u64(rows)
     })
@@ -401,6 +403,39 @@ mod tests {
         blob_put(NS_PATH_TREE, "abc", 1, None, b"payload").expect("put"); // audited: db module unit-test fixture assertion; not production DB runtime path
         let got = blob_get(NS_PATH_TREE, "abc", 1).expect("get"); // audited: db module unit-test fixture assertion; not production DB runtime path
         assert_eq!(got.as_deref(), Some(b"payload" as &[u8]));
+    }
+
+    #[test]
+    fn deletion_under_root_uses_literal_paths_and_retains_other_namespaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let target = "/media/图片_100%";
+        for (key, root) in [
+            ("exact", target),
+            ("child", "/media/图片_100%/child"),
+            ("wildcard", "/media/图片X1000/child"),
+            ("sibling", "/media/图片_100%other"),
+        ] {
+            blob_put(NS_PATH_TREE, key, 2, Some(Path::new(root)), b"cache").unwrap();
+        }
+        blob_put(
+            NS_CHECKPOINT,
+            "resume",
+            2,
+            Some(Path::new(target)),
+            b"state",
+        )
+        .unwrap();
+        assert_eq!(
+            blob_delete_under_root(NS_PATH_TREE, Path::new(target)).unwrap(),
+            2
+        );
+        assert!(blob_get(NS_PATH_TREE, "wildcard", 2).unwrap().is_some());
+        assert!(blob_get(NS_PATH_TREE, "sibling", 2).unwrap().is_some());
+        assert_eq!(
+            blob_get(NS_CHECKPOINT, "resume", 2).unwrap().as_deref(),
+            Some(&b"state"[..])
+        );
     }
 
     #[test]

@@ -110,6 +110,9 @@ path = "tests/runtime/ignored_static.rs"
 [[test]]
 name = "ignored_semantics"
 path = "tests/runtime/ignored_semantics.rs"
+[[test]]
+name = "cache_cleanup"
+path = "tests/runtime/cache_cleanup.rs"
 
 [lints]
 [lints.clippy]

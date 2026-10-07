@@ -9274,8 +9274,12 @@ fn media_conversion_processed_list_m215() {
         "cache_cleaner full purge must truncate PostgreSQL cache_metadata"
     );
     assert!(
-        cleaner.contains("check_postgres_reachable") && cleaner.contains("PostgreSQL is required"),
-        "cache_cleaner must require PostgreSQL for cache purge (no skip-on-unavailable)"
+        cleaner.contains("if args.postgres")
+            && cleaner.contains("PostgreSQL is required for --postgres cleanup")
+            && cleaner.contains("purge_local_cache(&cache_dir, target.as_deref())?")
+            && !cleaner.contains("clean_mfb_progress")
+            && !cleaner.contains("run_post_cleanup_rebuild"),
+        "core cache cleanup must preserve resume state and remain independent of optional PostgreSQL and builds"
     );
 
     let drag = fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
