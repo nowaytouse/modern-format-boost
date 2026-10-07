@@ -33,8 +33,20 @@ APP13 reconstruction custody. Absent `IPTC:*` and `Photoshop:*` tags are accepte
 only for content-detected JPEG-to-JXL pairs after freshly reconstructing the
 delivered JXL and matching the original JPEG's complete BLAKE3. This is not an
 IPTC ignore list: changed tags exposed by the output still fail, as do missing
-native EXIF/XMP, conflicting sidecars, pixel-only JXL, and mismatched source
-pairings. Metadata-clear mode and other format pairs retain their existing rules.
+native EXIF or the primary XMP packet, conflicting sidecars, pixel-only JXL, and
+mismatched source pairings. Metadata-clear mode and other format pairs retain
+their existing rules.
+
+ExifTool Family 4 `CopyN` values distinguish occurrences within one dump, not
+identities across containers. Compare Family 1 plus tag with value multiplicity
+preserved. Do not remove IFD1 resolution metadata to accommodate ordinal changes.
+An appended sidecar does not replace reconstruction-owned XMP: the primary native
+packet must match, every exposed packet must belong to the paired source or
+sidecar, the final overlay must retain the complete current sidecar, and a fresh
+byte-exact JPEG reconstruction proves custody of secondary original packets.
+Only pre-existing unrecognized-MakerNotes or invalid-UserComment-encoding warnings
+may use identical complete EXIF payload evidence; retain the warning in logs.
+Unknown diagnostics, errors, missing payloads and changed duplicate counts fail.
 
 ## Archival source routing
 

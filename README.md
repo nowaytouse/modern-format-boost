@@ -86,6 +86,12 @@ receipt uniqueness, error handling and regression boundaries.
   recheck, atomic rename and file/parent flush. A versioned audit chain records
   JBRD, overlay, final-container and reconstruction hashes without storing
   media content; see the [archive contract](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md).
+- Duplicate metadata is compared by location, tag, value and multiplicity;
+  ExifTool's per-dump `CopyN` ordinal is not a stable cross-container identity.
+  For reversible JPEG archives, the original native XMP packet, any additional
+  reconstruction-owned packets and the current sidecar are verified separately.
+  Pre-existing MakerNotes/UserComment decoding warnings require unchanged full
+  EXIF payloads; new warnings, incomplete reads and changed payloads still fail.
 - Modern-container metadata is handled positively but only with proof.
   Lossless AVIF, HEIC/HEIF, WebP, and JP2 are routed through the JXL path; their
   XMP is carried into the JXL container and the output is checked for pixels,

@@ -9,7 +9,7 @@
 use crate::builder_base::ToolBuilder;
 use crate::path_safety::exiftool_path_arg;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
 use std::path::Path;
 
@@ -140,16 +140,30 @@ pub fn verify_output_embedded_metadata(
         MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => {
             let src_sidecar = super::find_xmp_sidecar(src);
             let dst_sidecar = super::find_xmp_sidecar(dst);
-            let [mut src_tags, dst_tags, mut source_xmp, output_xmp] = preservable_tag_maps([
-                src,
-                dst,
-                src_sidecar.as_deref().unwrap_or(src),
-                dst_sidecar.as_deref().unwrap_or(dst),
-            ])?;
+            let jpeg_archive = is_jpeg_archive_pair(src, dst)?;
+            let [mut src_tags, mut dst_tags, mut source_xmp, output_xmp] =
+                preservable_delivery_tag_maps(
+                    [
+                        src,
+                        dst,
+                        src_sidecar.as_deref().unwrap_or(src),
+                        dst_sidecar.as_deref().unwrap_or(dst),
+                    ],
+                    jpeg_archive,
+                )?;
             if src_sidecar.is_some() {
-                src_tags.extend(source_xmp.clone());
+                overlay_metadata(&mut src_tags, &source_xmp);
             } else {
                 source_xmp.clear();
+            }
+            if jpeg_archive {
+                verify_jpeg_xmp_layers(
+                    src,
+                    dst,
+                    src_sidecar.as_deref(),
+                    &mut src_tags,
+                    &mut dst_tags,
+                )?;
             }
             verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
             let mut mismatches = if matches!(policy, MetadataOutputPolicy::Preserve) {
@@ -227,6 +241,81 @@ pub fn verify_output_embedded_metadata(
     }
 }
 
+fn is_jpeg_archive_pair(src: &Path, dst: &Path) -> io::Result<bool> {
+    use crate::image::format_detect::{FormatKind, detect_true_format};
+    Ok(
+        detect_true_format(src).map_err(io::Error::other)? == FormatKind::Jpeg
+            && detect_true_format(dst).map_err(io::Error::other)? == FormatKind::Jxl,
+    )
+}
+
+fn verify_jpeg_xmp_layers(
+    src: &Path,
+    dst: &Path,
+    sidecar: Option<&Path>,
+    expected: &mut BTreeMap<String, String>,
+    actual: &mut BTreeMap<String, String>,
+) -> io::Result<()> {
+    let (missing, extra) = unmatched_metadata_instances(expected, actual);
+    if !missing
+        .iter()
+        .chain(&extra)
+        .any(|(key, _)| key.starts_with("XMP-"))
+    {
+        return Ok(());
+    }
+    let [source, output, overlay] = metadata_tag_maps_with_exif_custody(
+        [src, dst, sidecar.unwrap_or(src)],
+        &["-XMP"],
+        "JPEG XMP packet custody",
+        "-G1:4",
+        Some([src, dst]),
+    )?;
+    // libjxl exposes the first original packet natively; additional JPEG
+    // packets remain reconstruction-owned. An appended sidecar is a separate
+    // authoritative layer, not an in-place rewrite of the original packet.
+    let primary = source.get("XMP:XMP");
+    if primary.is_some() && primary != output.get("XMP:XMP") {
+        return Err(io::Error::other(
+            "original primary XMP packet is not preserved in native JXL metadata",
+        ));
+    }
+    let mut allowed = source
+        .iter()
+        .filter(|(key, _)| metadata_comparison_key(key) == "XMP:XMP")
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    if let Some(sidecar) = sidecar {
+        super::verify_jxl_xmp_sidecar_custody(sidecar, dst)?;
+        allowed.push(
+            overlay
+                .get("XMP:XMP")
+                .ok_or_else(|| io::Error::other("sidecar XMP packet is unreadable"))?,
+        );
+    }
+    for (_, value) in output
+        .iter()
+        .filter(|(key, _)| metadata_comparison_key(key) == "XMP:XMP")
+    {
+        let Some(index) = allowed.iter().position(|candidate| *candidate == value) else {
+            return Err(io::Error::other(
+                "unexpected or duplicated native JXL XMP packet",
+            ));
+        };
+        allowed.remove(index);
+    }
+    crate::image::fast_img::verify_jxl_roundtrip_integrity(src, dst).map_err(|error| {
+        io::Error::other(format!(
+            "layered XMP requires exact JPEG reconstruction: {error}"
+        ))
+    })?;
+    expected.retain(|key, _| !key.starts_with("XMP-"));
+    actual.retain(|key, _| !key.starts_with("XMP-"));
+    tracing::info!(target: "mfb.metadata", source = %src.display(), output = %dst.display(),
+        has_sidecar = sidecar.is_some(), "XMP layers verified against native packets, exact JPEG reconstruction and any current sidecar");
+    Ok(())
+}
+
 /// Missing tags can use reconstruction custody only when `ExifTool` identifies
 /// their actual source carrier as JPEG-only metadata. Native EXIF/XMP/ICC,
 /// sidecar overrides and contradictory output values remain directly checked.
@@ -238,9 +327,15 @@ fn verify_reconstruction_only_metadata(
 ) -> io::Result<()> {
     use crate::image::format_detect::{FormatKind, detect_true_format};
 
-    if src_tags.keys().all(|key| dst_tags.contains_key(key)) {
+    let (missing, unexpected) = unmatched_metadata_instances(src_tags, dst_tags);
+    if missing.is_empty() {
         return Ok(());
     }
+    let missing_keys = missing.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
+    let contradictory = unexpected
+        .iter()
+        .map(|(key, _)| metadata_comparison_key(key))
+        .collect::<BTreeSet<_>>();
     if detect_true_format(src).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jpeg
         || detect_true_format(dst).map_err(|e| io::Error::other(e.to_string()))? != FormatKind::Jxl
     {
@@ -259,7 +354,10 @@ fn verify_reconstruction_only_metadata(
         .iter()
         .filter_map(|(location, value)| {
             let key = jpeg_reconstruction_tag_key(location)?;
-            (!dst_tags.contains_key(&key) && src_tags.get(&key) == Some(value)).then_some(key)
+            (missing_keys.contains(key.as_str())
+                && !contradictory.contains(&metadata_comparison_key(&key))
+                && src_tags.get(&key) == Some(value))
+            .then_some(key)
         })
         .collect::<Vec<_>>();
     if reconstruction_tags.is_empty() {
@@ -351,15 +449,139 @@ fn preserve_mismatches(
     src: &BTreeMap<String, String>,
     dst: &BTreeMap<String, String>,
 ) -> Vec<String> {
-    let mut mismatches = preserve_source_mismatches(src, dst);
-    for (key, actual) in dst {
-        if !src.contains_key(key) {
-            mismatches.push(format!(
-                "metadata {key} unexpected on output actual={actual:?} (possible cross-product metadata)"
-            ));
-        }
+    let (missing, unexpected) = unmatched_metadata_instances(src, dst);
+    let mut mismatches = source_instance_mismatches(&missing, &unexpected);
+    for (key, actual) in unexpected {
+        mismatches.push(format!(
+            "metadata {key} unexpected on output actual={actual:?} (possible cross-product metadata)"
+        ));
     }
     mismatches
+}
+
+fn metadata_comparison_key(key: &str) -> String {
+    let mut parts = key.split(':');
+    if let (Some(group), Some(instance), Some(tag), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+        && !group.is_empty()
+        && !tag.is_empty()
+        && instance.strip_prefix("Copy").is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        // Family 4 numbers distinguish a dump's instances, not cross-file identity.
+        return format!("{group}:{tag}");
+    }
+    key.to_owned()
+}
+
+fn overlay_metadata(base: &mut BTreeMap<String, String>, overlay: &BTreeMap<String, String>) {
+    let replaced = overlay
+        .keys()
+        .map(|key| metadata_comparison_key(key))
+        .collect::<BTreeSet<_>>();
+    base.retain(|key, _| !replaced.contains(&metadata_comparison_key(key)));
+    base.extend(overlay.clone());
+}
+
+type MetadataInstance<'a> = (&'a str, &'a str);
+
+fn metadata_instance_groups(
+    map: &BTreeMap<String, String>,
+) -> BTreeMap<String, Vec<MetadataInstance<'_>>> {
+    let mut grouped = BTreeMap::<String, Vec<MetadataInstance<'_>>>::new();
+    for (key, value) in map {
+        grouped
+            .entry(metadata_comparison_key(key))
+            .or_default()
+            .push((key.as_str(), value.as_str()));
+    }
+    grouped
+}
+
+fn unmatched_metadata_instances<'a>(
+    src: &'a BTreeMap<String, String>,
+    dst: &'a BTreeMap<String, String>,
+) -> (Vec<MetadataInstance<'a>>, Vec<MetadataInstance<'a>>) {
+    let mut missing = Vec::new();
+    let mut unexpected = Vec::new();
+    let mut actual_groups = metadata_instance_groups(dst);
+    for (key, expected) in metadata_instance_groups(src) {
+        let actual = actual_groups.remove(&key).unwrap_or_default();
+        let mut source_matches = vec![None; expected.len()];
+        let mut output_matches: Vec<Option<usize>> = vec![None; actual.len()];
+        for start in 0..expected.len() {
+            let mut pending = VecDeque::from([start]);
+            let mut seen_source = vec![false; expected.len()];
+            let mut seen_output = vec![false; actual.len()];
+            let mut parent = vec![0; actual.len()];
+            seen_source[start] = true;
+            // Augment the matching so tolerated numeric values cannot steal the
+            // only compatible instance of another duplicate. No recursive stack.
+            'search: while let Some(source) = pending.pop_front() {
+                for (output, (_, value)) in actual.iter().enumerate() {
+                    if seen_output[output]
+                        || !metadata_values_equivalent(&key, expected[source].1, value)
+                    {
+                        continue;
+                    }
+                    seen_output[output] = true;
+                    parent[output] = source;
+                    if let Some(previous) = output_matches[output] {
+                        if !seen_source[previous] {
+                            seen_source[previous] = true;
+                            pending.push_back(previous);
+                        }
+                    } else {
+                        let mut cursor = Some(output);
+                        while let Some(output) = cursor {
+                            let source = parent[output];
+                            cursor = source_matches[source].replace(output);
+                            output_matches[output] = Some(source);
+                        }
+                        break 'search;
+                    }
+                }
+            }
+        }
+        missing.extend(
+            expected
+                .into_iter()
+                .zip(source_matches)
+                .filter_map(|(instance, matched)| matched.is_none().then_some(instance)),
+        );
+        unexpected.extend(
+            actual
+                .into_iter()
+                .zip(output_matches)
+                .filter_map(|(instance, matched)| matched.is_none().then_some(instance)),
+        );
+    }
+    unexpected.extend(actual_groups.into_values().flatten());
+    (missing, unexpected)
+}
+
+fn source_instance_mismatches(
+    missing: &[MetadataInstance<'_>],
+    unexpected: &[MetadataInstance<'_>],
+) -> Vec<String> {
+    missing
+        .iter()
+        .map(|(key, expected)| {
+            let canonical = metadata_comparison_key(key);
+            match unexpected
+                .iter()
+                .find(|(actual, _)| metadata_comparison_key(actual) == canonical)
+            {
+                Some((_, actual)) => format!(
+                    "metadata {key} expected={expected:?} actual={actual:?} (possible wrong-source metadata)"
+                ),
+                None => format!(
+                    "metadata {key} missing from output (expected={expected:?})"
+                ),
+            }
+        })
+        .collect()
 }
 
 fn metadata_values_equivalent(key: &str, expected: &str, actual: &str) -> bool {
@@ -389,16 +611,17 @@ fn preserve_source_mismatches(
     src: &BTreeMap<String, String>,
     dst: &BTreeMap<String, String>,
 ) -> Vec<String> {
-    let mut mismatches = Vec::new();
-    for (key, expected) in src {
-        match dst.get(key) {
-            Some(actual) if metadata_values_equivalent(key, expected, actual) => {}
-            Some(actual) => mismatches.push(format!(
-                "metadata {key} expected={expected:?} actual={actual:?} (possible wrong-source metadata)"
-            )),
-            None => mismatches.push(format!(
-                "metadata {key} missing from output (expected={expected:?})"
-            )),
+    let (missing, unexpected) = unmatched_metadata_instances(src, dst);
+    let mut mismatches = source_instance_mismatches(&missing, &unexpected);
+    let source_groups = metadata_instance_groups(src);
+    for (key, value) in unexpected {
+        let canonical = metadata_comparison_key(key);
+        if let Some(expected) = source_groups.get(&canonical)
+            && !expected
+                .iter()
+                .any(|(_, source)| metadata_values_equivalent(&canonical, source, value))
+        {
+            mismatches.push(format!("metadata {key} introduces conflicting duplicate value={value:?} (possible wrong-source metadata)"));
         }
     }
     mismatches
@@ -438,6 +661,28 @@ fn preservable_tag_maps<const N: usize>(
     Ok(maps)
 }
 
+fn preservable_delivery_tag_maps(
+    paths: [&Path; 4],
+    jpeg_archive: bool,
+) -> io::Result<[BTreeMap<String, String>; 4]> {
+    if !jpeg_archive {
+        return preservable_tag_maps(paths);
+    }
+    let mut maps = metadata_tag_maps_with_exif_custody(
+        paths,
+        PRESERVABLE_TAG_ARGS,
+        "preservable",
+        "-G1:4",
+        Some([paths[0], paths[1]]),
+    )?;
+    for map in &mut maps {
+        map.retain(|key, _| {
+            !preserve_audit_excludes_tag(key) && metadata_comparison_key(key) != "EXIF:EXIF"
+        });
+    }
+    Ok(maps)
+}
+
 fn has_no_portable_embedded_metadata_channel(path: &Path) -> io::Result<bool> {
     crate::image::format_detect::detect_true_format(path)
         .map(|format| matches!(format, crate::image::format_detect::FormatKind::Pnm))
@@ -466,11 +711,8 @@ pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
     }
 
     let [mut expected, sidecar, actual] = preservable_tag_maps([src, xmp, dst])?;
-    for (key, value) in sidecar {
-        // The native merge applies the explicit sidecar after embedded source
-        // metadata, so sidecar values are authoritative for duplicate tags.
-        expected.insert(key, value);
-    }
+    // The native merge applies the explicit sidecar after embedded metadata.
+    overlay_metadata(&mut expected, &sidecar);
     let mismatches = preserve_source_mismatches(&expected, &actual);
     if mismatches.is_empty() {
         let detail = format!(
@@ -524,6 +766,16 @@ fn metadata_tag_maps_with_groups<const N: usize>(
     label: &str,
     groups: &str,
 ) -> io::Result<[BTreeMap<String, String>; N]> {
+    metadata_tag_maps_with_exif_custody(paths, tag_args, label, groups, None)
+}
+
+fn metadata_tag_maps_with_exif_custody<const N: usize>(
+    paths: [&Path; N],
+    tag_args: &[&str],
+    label: &str,
+    groups: &str,
+    pair: Option<[&Path; 2]>,
+) -> io::Result<[BTreeMap<String, String>; N]> {
     let mut requested = BTreeMap::<std::path::PathBuf, Vec<usize>>::new();
     let mut maps = std::array::from_fn(|_| BTreeMap::new());
     for (index, path) in paths.iter().enumerate() {
@@ -550,6 +802,9 @@ fn metadata_tag_maps_with_groups<const N: usize>(
     for arg in tag_args {
         builder.arg(*arg);
     }
+    if pair.is_some() {
+        builder.arg("-EXIF");
+    }
     let mut command = builder.build();
     command.args(requested.keys());
     let output = crate::process_runner::run_command_with_liveness_timeout(
@@ -564,7 +819,17 @@ fn metadata_tag_maps_with_groups<const N: usize>(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    let objects = parse_metadata_records(&output.stdout)?;
+    let objects = if let Some([src, dst]) = pair {
+        parse_metadata_records_with_exif_custody(
+            &output.stdout,
+            Some([
+                Path::new(exiftool_path_arg(src).as_ref()),
+                Path::new(exiftool_path_arg(dst).as_ref()),
+            ]),
+        )?
+    } else {
+        parse_metadata_records(&output.stdout)?
+    };
     if objects.len() != requested.len() {
         return Err(io::Error::other("incomplete metadata response"));
     }
@@ -580,6 +845,8 @@ fn metadata_tag_maps_with_groups<const N: usize>(
 }
 
 fn preserve_audit_excludes_tag(key: &str) -> bool {
+    let canonical = metadata_comparison_key(key);
+    let key = canonical.as_str();
     let tag = key.rsplit(':').next().unwrap_or(key);
     tag.eq_ignore_ascii_case("Orientation")
         || tag.eq_ignore_ascii_case("XMPToolkit")
@@ -674,6 +941,13 @@ pub(super) fn stripped_embedded_metadata_size(path: &Path) -> io::Result<u64> {
 fn parse_metadata_records(
     raw: &[u8],
 ) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
+    parse_metadata_records_with_exif_custody(raw, None)
+}
+
+fn parse_metadata_records_with_exif_custody(
+    raw: &[u8],
+    pair: Option<[&Path; 2]>,
+) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
     struct UniqueRecord(serde_json::Map<String, Value>);
     impl<'de> serde::Deserialize<'de> for UniqueRecord {
         fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -705,6 +979,54 @@ fn parse_metadata_records(
     }
 
     let records: Vec<UniqueRecord> = serde_json::from_slice(raw)?;
+    let allowed_warnings = pair
+        .and_then(|[src, dst]| {
+            let record = |path: &Path| {
+                records
+                    .iter()
+                    .find(|record| {
+                        record
+                            .0
+                            .get("SourceFile")
+                            .and_then(Value::as_str)
+                            .map(Path::new)
+                            == Some(path)
+                    })
+                    .map(|record| &record.0)
+            };
+            let source = record(src)?;
+            let output = record(dst)?;
+            let exif = |record: &serde_json::Map<String, Value>| {
+                metadata_object_map(record)
+                    .into_iter()
+                    .filter(|(key, _)| metadata_comparison_key(key) == "EXIF:EXIF")
+                    .collect::<BTreeMap<_, _>>()
+            };
+            let source_exif = exif(source);
+            let output_exif = exif(output);
+            if source_exif.is_empty()
+                || source_exif.get("EXIF:EXIF") != output_exif.get("EXIF:EXIF")
+                || !preserve_mismatches(&source_exif, &output_exif).is_empty()
+            {
+                return None;
+            }
+            Some(
+                source
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("ExifTool:") && key.ends_with(":Warning"))
+                    .filter_map(|(_, value)| value.as_str())
+                    .filter(|message| {
+                        matches!(
+                            *message,
+                            "[minor] Unrecognized MakerNotes"
+                                | "Invalid EXIF text encoding for UserComment"
+                        )
+                    })
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .unwrap_or_default();
     let mut maps = BTreeMap::new();
     for UniqueRecord(object) in records {
         let path = object
@@ -717,6 +1039,15 @@ fn parse_metadata_records(
                     tag.eq_ignore_ascii_case("Error") || tag.eq_ignore_ascii_case("Warning")
                 })
         }) {
+            if key.ends_with(":Warning")
+                && pair.is_some_and(|pair| pair.contains(&Path::new(path)))
+                && diagnostic
+                    .as_str()
+                    .is_some_and(|message| allowed_warnings.contains(message))
+            {
+                tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}; original EXIF payload preserved byte-for-byte");
+                continue;
+            }
             // A stale digest warns about source consistency, not an unreadable
             // metadata field. Compare the actual IPTC/XMP values independently.
             if key.ends_with(":Warning")
@@ -819,6 +1150,105 @@ mod tests {
     }
 
     #[test]
+    fn exif_warning_custody_requires_original_warning_and_complete_equal_payloads() {
+        let pair = [Path::new("source"), Path::new("output")];
+        let records = serde_json::json!([
+            {"SourceFile":"source", "EXIF:EXIF":"base64:YWJj", "ExifTool:Warning":"[minor] Unrecognized MakerNotes"},
+            {"SourceFile":"output", "EXIF:EXIF":"base64:YWJj", "ExifTool:Warning":"[minor] Unrecognized MakerNotes"}
+        ]);
+        let raw = serde_json::to_vec(&records).unwrap();
+        assert!(parse_metadata_records(&raw).is_err());
+        assert!(parse_metadata_records_with_exif_custody(&raw, Some(pair)).is_ok());
+        let mut swapped = records.clone();
+        swapped[0]["EXIF:Copy1:EXIF"] = Value::from("base64:YWJk");
+        swapped[1]["EXIF:EXIF"] = Value::from("base64:YWJk");
+        swapped[1]["EXIF:Copy1:EXIF"] = Value::from("base64:YWJj");
+        assert!(
+            parse_metadata_records_with_exif_custody(
+                &serde_json::to_vec(&swapped).unwrap(),
+                Some(pair)
+            )
+            .is_err()
+        );
+        for (index, key, value) in [
+            (1, "EXIF:EXIF", Value::from("base64:YWJk")),
+            (0, "EXIF:EXIF", Value::Null),
+            (0, "ExifTool:Warning", Value::Null),
+            (1, "ExifTool:Warning", Value::from("Truncated EXIF data")),
+            (1, "ExifTool:Error", Value::from("read failed")),
+            (1, "SourceFile", Value::from("unrelated")),
+            (1, "EXIF:Copy1:EXIF", Value::from("base64:YWJj")),
+        ] {
+            let mut invalid = records.clone();
+            invalid[index][key] = value;
+            assert!(
+                parse_metadata_records_with_exif_custody(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    Some(pair)
+                )
+                .is_err(),
+                "{index} {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn jpeg_repeated_xmp_and_authoritative_overlay_have_separate_custody() {
+        if !crate::CjxlBuilder::check_available() || !crate::DjxlBuilder::check_available() {
+            eprintln!("SKIP: cjxl/djxl unavailable for layered XMP regression");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let dst = temp.path().join("output.jxl");
+        let sidecar = src.with_extension("xmp");
+        write_minimal_jpeg(&src);
+        write_metadata_tag(&src, "-XMP-dc:Title=secondary original");
+        let packet = |title: &str| {
+            format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" dc:title=\"{title}\"/></rdf:RDF></x:xmpmeta>"
+            )
+        };
+        let primary = packet("primary original");
+        let mut app1 = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        app1.extend_from_slice(primary.as_bytes());
+        let jpeg = std::fs::read(&src).unwrap();
+        let mut repeated = jpeg[..2].to_vec();
+        repeated.extend_from_slice(&[0xff, 0xe1]);
+        repeated.extend_from_slice(&u16::try_from(app1.len() + 2).unwrap().to_be_bytes());
+        repeated.extend_from_slice(&app1);
+        repeated.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&src, repeated).unwrap();
+        let encoded = crate::CjxlBuilder::new()
+            .input(&src)
+            .output(&dst)
+            .lossless_jpeg(true)
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        std::fs::write(&sidecar, packet("current sidecar")).unwrap();
+        super::super::append_xmp_overlay_to_jxl(&sidecar, &dst).unwrap();
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).unwrap();
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::PreserveSource).unwrap();
+        std::fs::write(&sidecar, packet("newer sidecar")).unwrap();
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).is_err()
+        );
+        std::fs::write(&sidecar, packet("current sidecar")).unwrap();
+        let foreign = temp.path().join("foreign.xmp");
+        std::fs::write(&foreign, packet("foreign product")).unwrap();
+        super::super::append_xmp_overlay_to_jxl(&foreign, &dst).unwrap();
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).is_err()
+        );
+    }
+
+    #[test]
     fn jpeg_reconstruction_custody_requires_jpeg_only_physical_provenance() {
         for (location, key) in [
             (
@@ -893,6 +1323,13 @@ mod tests {
         assert!(error.to_string().contains("Copy1:Make"), "{error}");
         std::fs::copy(&src, &dst).unwrap();
         verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).unwrap();
+        std::fs::write(&dst, fixture(b"BA")).unwrap();
+        verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).unwrap();
+        std::fs::write(&src, fixture(b"AA")).unwrap();
+        std::fs::write(&dst, fixture(b"A")).unwrap();
+        assert!(
+            verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve).is_err()
+        );
     }
 
     #[test]
@@ -962,6 +1399,102 @@ mod tests {
     }
 
     #[test]
+    fn copy_ordinals_do_not_change_metadata_identity() {
+        let mut src = BTreeMap::new();
+        let mut dst = BTreeMap::new();
+        for (tag, value) in [
+            ("XResolution", "72"),
+            ("YResolution", "72"),
+            ("ResolutionUnit", "2"),
+        ] {
+            src.insert(format!("IFD1:Copy2:{tag}"), value.to_owned());
+            dst.insert(format!("IFD1:Copy1:{tag}"), value.to_owned());
+        }
+        assert_eq!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        assert_eq!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("IFD1:Copy1:XResolution".into(), "96".into());
+        assert_ne!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        for invalid in [
+            "IFD1:Copy:XResolution",
+            "IFD1:CopyX:XResolution",
+            "Copy1:XResolution",
+            "EXIF:IFD1:Copy1:XResolution",
+        ] {
+            assert_eq!(metadata_comparison_key(invalid), invalid);
+        }
+    }
+
+    #[test]
+    fn duplicate_metadata_values_and_counts_remain_mandatory() {
+        let src = BTreeMap::from([
+            ("XMP-dc:Title".into(), "A".into()),
+            ("XMP-dc:Copy1:Title".into(), "B".into()),
+        ]);
+        let mut dst = BTreeMap::from([
+            ("XMP-dc:Copy2:Title".into(), "A".into()),
+            ("XMP-dc:Title".into(), "B".into()),
+        ]);
+        assert_eq!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        dst.remove("XMP-dc:Copy2:Title");
+        assert_ne!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+        let src = BTreeMap::from([
+            ("XMP-dc:Title".into(), "A".into()),
+            ("XMP-dc:Copy1:Title".into(), "A".into()),
+        ]);
+        dst.insert("XMP-dc:Title".into(), "A".into());
+        assert_ne!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("XMP-dc:Copy3:Title".into(), "A".into());
+        assert_eq!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("XMP-dc:Copy4:Title".into(), "A".into());
+        assert_ne!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        assert_eq!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("XMP-dc:Copy3:Title".into(), "other".into());
+        dst.remove("XMP-dc:Copy4:Title");
+        assert_ne!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("XMP-dc:Copy4:Title".into(), "A".into());
+        assert_ne!(preserve_source_mismatches(&src, &dst), Vec::<String>::new());
+    }
+
+    #[test]
+    fn duplicate_matching_keeps_location_and_numeric_tolerance() {
+        let src = BTreeMap::from([("IFD0:Copy1:Artist".into(), "A".into())]);
+        let dst = BTreeMap::from([("IFD1:Copy2:Artist".into(), "A".into())]);
+        assert_ne!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        let src = BTreeMap::from([
+            ("IFD0:Copy1:WhitePoint".into(), "0 0 0".into()),
+            ("IFD0:WhitePoint".into(), "0.000000009 0 0".into()),
+        ]);
+        let mut dst = BTreeMap::from([
+            ("IFD0:Copy2:WhitePoint".into(), "0 0 0".into()),
+            ("IFD0:WhitePoint".into(), "-0.000000009 0 0".into()),
+        ]);
+        assert_eq!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+        dst.insert("IFD0:WhitePoint".into(), "-0.00000002 0 0".into());
+        assert_ne!(preserve_mismatches(&src, &dst), Vec::<String>::new());
+    }
+
+    #[test]
+    fn sidecar_overrides_metadata_by_tag_not_copy_ordinal() {
+        let mut embedded = BTreeMap::from([
+            ("XMP-dc:Copy2:Title".into(), "embedded".into()),
+            ("XMP-dc:Title".into(), "also embedded".into()),
+            ("IFD0:Artist".into(), "artist".into()),
+        ]);
+        let sidecar = BTreeMap::from([("XMP-dc:Copy1:Title".into(), "sidecar".into())]);
+        overlay_metadata(&mut embedded, &sidecar);
+        assert_eq!(embedded.len(), 2);
+        assert_eq!(embedded["IFD0:Artist"], "artist");
+        let output = BTreeMap::from([
+            ("XMP-dc:Title".into(), "sidecar".into()),
+            ("IFD0:Artist".into(), "artist".into()),
+        ]);
+        assert_eq!(
+            preserve_mismatches(&embedded, &output),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
     fn preserve_mismatches_detects_unexpected_cross_product_metadata() {
         let src = BTreeMap::new();
         let mut dst = BTreeMap::new();
@@ -1001,12 +1534,14 @@ mod tests {
             "IFD0:Orientation",
             "XMP-x:XMPToolkit",
             "IFD1:ThumbnailOffset",
+            "IFD1:Copy2:ThumbnailOffset",
             "IFD0:BitsPerSample",
             "IFD0:SMaxSampleValue",
             "IFD0:SMinSampleValue",
             "IFD0:StripOffsets",
             "IFD0:YCbCrPositioning",
             "Keys:CompatibleBrands",
+            "Keys:Copy1:CompatibleBrands",
             "Keys:MajorBrand",
             "Keys:MinorVersion",
             "UserData:SoftwareVersion",

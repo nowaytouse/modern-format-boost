@@ -1,4 +1,4 @@
-FROM gcr.io/oss-fuzz-base/base-builder-rust:latest@sha256:4d4bf15466807b053a811794c2ea980057e7b219010dcdcf7d6a1d4135a37d00
+FROM gcr.io/oss-fuzz-base/base-builder-rust:latest@sha256:412929965850a4c232f4191fece4f44d6726de53249698e95e5d4134117f38e4
 
 # Install system dependencies needed for foundation
 RUN apt-get update && apt-get install -y \

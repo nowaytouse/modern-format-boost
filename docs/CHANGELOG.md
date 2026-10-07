@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Metadata occurrence identity and layered JPEG archives (2026-10-07)
+
+- Stop treating ExifTool Family 4 `CopyN` ordinals as cross-container identities.
+  Match each location/tag by values and multiplicity, including ambiguous numeric
+  tolerance matches; missing, changed and unexpected duplicate values still fail.
+  Keep IFD1 resolution fields verified rather than adding them to an ignore list.
+- Apply sidecar overrides by stable tag identity. For reconstructible JPEG-to-JXL
+  archives, verify native XMP packets, exact JPEG reconstruction and the complete
+  final sidecar independently instead of flattening their ownership layers.
+- Retain pre-existing MakerNotes/UserComment decoding warnings only with complete
+  byte-identical EXIF payload evidence. Unknown/new diagnostics and payload changes
+  remain errors. Lock these boundaries with synthetic metadata regressions.
+- Fix GNU MPC CI downloads after both GNU endpoints timed out: prefer independent
+  official-list mirrors, bound connection/transfer time, verify the pinned 1.4.1
+  SHA-256, and publish atomically. Failed mirrors cannot overwrite an existing
+  archive or leave staged downloads behind.
+- Preserve the incoming dependency refresh (including arbitrary 1.5, either 1.19,
+  objc2 0.6.5 and rolling clap/flate2/indicatif/zerocopy commits) and pinned OSS-Fuzz
+  builder digest. No new dependency or source-media repair policy is introduced.
+- Validation: 94 metadata-module regressions, two MPC downloader regressions and
+  the truncated-JPEG integration regression pass locally, with focused Clippy
+  and formatting checks. A read-only recheck of 1,163 retained outputs passes all
+  six Gate 1 checks (including all 409 previously rejected metadata pairs).
+  The separate incomplete source JPEG remains a failure under strict policy;
+  no Photos import, source cleanup or checkpoint rewrite was performed.
+
 ### Native recent-batch history inspector (2026-10-04)
 
 - Replace the native GUI's folder-only history action with a read-only batch
