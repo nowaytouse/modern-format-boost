@@ -15,6 +15,7 @@ const FAILURE_PREVIEW: usize = 10;
 #[derive(Parser, Debug)]
 #[command(
     name = "collect_optimized",
+    version,
     about = "Collect audited JXL recovery originals from an exact backup"
 )]
 struct Args {

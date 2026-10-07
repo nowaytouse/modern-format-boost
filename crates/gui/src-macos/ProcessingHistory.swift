@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SQLite3
+import Darwin
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -21,6 +22,11 @@ private struct HistoryContext: Decodable, Equatable {
     let dry_run: Bool
     let in_place: Bool
     let shortest_path: Bool
+    let version: String?
+    let retry: Bool?
+    let resume: Bool?
+    let no_resume: Bool?
+    let output_sequence: Int64?
 }
 
 private struct HistoryMedia: Decodable, Equatable {
@@ -78,6 +84,7 @@ private struct HistoryFinished: Decodable, Equatable {
     let schema_version: Int
     let outcome: String
     let error: String?
+    let output_sequence: Int64?
 }
 
 private struct HistoryVerification: Decodable, Equatable {
@@ -119,6 +126,9 @@ private struct HistoryEntry {
     var issues: [String] = []
     var logs: [URL] = []
     var contradictoryFields: Set<String> = []
+    var outputUpperSequence: Int64?
+
+    var hasStoredOutput: Bool { audit.lastPathComponent == "history.sqlite3" && context?.output_sequence != nil }
 
     var hasProcessorError: Bool {
         [summary?.img, summary?.vid].compactMap { $0 }.contains { $0.active && ($0.exit_code ?? 0) != 0 }
@@ -193,6 +203,14 @@ private enum HistoryStore {
     static let maximumEntriesPerSession = 1_000
     static let maximumRecordsPerSession = 100_000
     static let maximumScanBytes = 64 * 1024 * 1024
+    static let maximumOutputLines = 1_000
+    static let maximumOutputBytes = 2 * 1024 * 1024
+
+    struct Output {
+        let text: String
+        let shown: Int
+        let total: Int64
+    }
 
     struct Candidate {
         let stamp: String
@@ -249,19 +267,21 @@ private enum HistoryStore {
             let event = record.event
             do {
                 if event.hasPrefix("MFB_HISTORY_CONTEXT=") {
+                    let context = try decode(HistoryContext.self, from: event, prefix: "MFB_HISTORY_CONTEXT=")
+                    guard context.schema_version == 1, !context.mode.isEmpty,
+                          context.output_sequence.map({ $0 >= 0 }) ?? true else { throw HistoryParseError.invalid }
                     if hasContext {
                         guard entries.count < maximumEntriesPerSession - 1 else {
                             current.issues.append(localized("history.issue.entry_limit"))
                             break
                         }
+                        current.outputUpperSequence = context.output_sequence
                         entries.append(current)
                         current = HistoryEntry(id: stamp + ":\(entries.count)", stamp: stamp, audit: audit, timestamp: record.ts)
                     }
                     hasContext = true
                     current.legacy = false
                     current.timestamp = record.ts
-                    let context = try decode(HistoryContext.self, from: event, prefix: "MFB_HISTORY_CONTEXT=")
-                    guard context.schema_version == 1, !context.mode.isEmpty else { throw HistoryParseError.invalid }
                     current.context = context
                     current.legacy = false
                 } else if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
@@ -285,6 +305,8 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
+                          current.context?.output_sequence == nil || finished.output_sequence != nil,
+                          finished.output_sequence.map({ $0 >= (current.context?.output_sequence ?? 0) }) ?? true,
                           !current.contradictoryFields.contains("finished")
                     else { throw HistoryParseError.invalid }
                     if let previous = current.finished, previous != finished {
@@ -369,6 +391,73 @@ private enum HistoryStore {
               let text = String(data: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8)
         else { throw databaseError(database, "invalid text record") }
         return text
+    }
+
+    private static func databasePath(_ url: URL) throws -> String {
+        // Foundation preserves the /var alias; SQLite NOFOLLOW needs the real parent.
+        let parent = url.deletingLastPathComponent().withUnsafeFileSystemRepresentation { path -> String? in
+            guard let path, let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        guard let parent else { throw databaseError(nil, "resolve database parent directory") }
+        return parent + "/" + url.lastPathComponent
+    }
+
+    static func output(for entry: HistoryEntry) throws -> Output {
+        guard entry.hasStoredOutput, let start = entry.context?.output_sequence, start >= 0,
+              regularFile(entry.audit) else { throw databaseError(nil, "processing output is unavailable") }
+        let end = entry.finished?.output_sequence ?? entry.outputUpperSequence ?? Int64.max
+        guard end >= start else { throw databaseError(nil, "invalid processing output range") }
+        let path = try databasePath(entry.audit)
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let database = handle else {
+            let error = databaseError(handle, "open \(path): \(String(cString: sqlite3_errmsg(handle))) (\(sqlite3_extended_errcode(handle)))")
+            if let handle { sqlite3_close(handle) }
+            throw error
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
+        guard sqlite3_busy_timeout(database, 1_000) == SQLITE_OK,
+              sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        let version = try statement(database, "PRAGMA user_version")
+        defer { sqlite3_finalize(version) }
+        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
+            throw databaseError(database, "unsupported output schema")
+        }
+        func bind(_ query: OpaquePointer) throws {
+            guard entry.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+                  sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
+                throw databaseError(database)
+            }
+        }
+        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+        defer { sqlite3_finalize(count) }
+        try bind(count)
+        guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER,
+              sqlite3_column_int64(count, 0) >= 0 else { throw databaseError(database, "invalid output count") }
+        let total = sqlite3_column_int64(count, 0)
+        let query = try statement(database, "SELECT ts, pipeline, line FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence DESC LIMIT \(maximumOutputLines)")
+        defer { sqlite3_finalize(query) }
+        try bind(query)
+        var lines: [String] = []
+        var bytes = 0
+        while true {
+            let result = sqlite3_step(query)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw databaseError(database) }
+            let ts = try databaseText(query, 0, database: database)
+            let pipeline = try databaseText(query, 1, database: database)
+            let line = try databaseText(query, 2, database: database)
+            let text = "[\(ts)] \(pipeline): \(line)"
+            let size = text.utf8.count + 1
+            guard size <= maximumOutputBytes - bytes else { break }
+            bytes += size
+            lines.append(text)
+        }
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        return Output(text: lines.reversed().joined(separator: "\n"), shown: lines.count, total: total)
     }
 
     private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
@@ -471,15 +560,20 @@ private enum HistoryStore {
         if manager.fileExists(atPath: databaseURL.path)
             || (try? databaseURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
             guard regularFile(databaseURL) else { throw databaseError(nil, "not a regular file") }
-            guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
-                  let database else { throw databaseError(database) }
+            let path = try databasePath(databaseURL)
+            guard sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+                  let database else { throw databaseError(database, "open \(path): \(String(cString: sqlite3_errmsg(database))) (\(sqlite3_extended_errcode(database)))") }
             sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
             guard sqlite3_exec(database, "BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
             let version = try statement(database, "PRAGMA user_version")
             defer { sqlite3_finalize(version) }
             guard sqlite3_step(version) == SQLITE_ROW else { throw databaseError(database) }
             let schema = sqlite3_column_int(version, 0)
-            guard schema == 1 else { throw databaseError(database, "unsupported schema \(schema)") }
+            guard schema == 1 || schema == 2 else { throw databaseError(database, "unsupported schema \(schema)") }
+            if schema == 2 {
+                let outputSchema = try statement(database, "SELECT sequence, session_id, ts, pipeline, line FROM history_output LIMIT 0")
+                sqlite3_finalize(outputSchema)
+            }
             let eventSchema = try statement(database, "SELECT sequence, session_id, ts, event FROM history_events LIMIT 0")
             sqlite3_finalize(eventSchema)
             let sessions = try statement(database, "SELECT session_id, updated_at FROM history_sessions ORDER BY updated_at DESC, session_id DESC LIMIT \(maximumSessions + 1)")
@@ -646,12 +740,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var displayed: [HistoryEntry] = []
     private var directory: URL
     private var generation = UUID()
+    private var outputGeneration = UUID()
     private var loadIssues: [String] = []
     private var limited = false
     private var initialDividerConfigured = false
 
     init(directory: URL) {
         self.directory = directory
+        outputGeneration = UUID()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 620),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
@@ -926,6 +1022,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func showSelected() {
+        outputGeneration = UUID()
         detail.string = selected.map(Self.render) ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select")
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
@@ -944,6 +1041,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             lines += [row("dry_run", localized(context.dry_run ? "settings.value.true" : "settings.value.false")),
                       row("in_place", localized(context.in_place ? "settings.value.true" : "settings.value.false")),
                       row("shortest_path", localized(context.shortest_path ? "settings.value.true" : "settings.value.false"))]
+            lines.append(row("version", context.version ?? unknown))
+            for (key, value) in [("retry", context.retry), ("resume", context.resume), ("no_resume", context.no_resume)] {
+                lines.append(row(key, value.map { localized($0 ? "settings.value.true" : "settings.value.false") } ?? unknown))
+            }
         }
         lines += ["", localized("history.processor_counts")]
         for (key, media) in [("img", entry.summary?.img), ("vid", entry.summary?.vid)] {
@@ -980,11 +1081,35 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        logButton.isEnabled = selected?.logs.isEmpty == false
+        logButton.isEnabled = selected?.hasStoredOutput == true || selected?.logs.isEmpty == false
         revealButton.isEnabled = selected != nil
         copyButton.isEnabled = selected?.context?.inputs.isEmpty == false
     }
     @objc private func openLog() {
+        if let entry = selected, entry.hasStoredOutput {
+            let token = UUID()
+            outputGeneration = token
+            status.stringValue = localized("history.output.loading")
+            logButton.isEnabled = false
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Swift.Result { try HistoryStore.output(for: entry) }
+                DispatchQueue.main.async {
+                    guard let self, self.outputGeneration == token, self.selected?.id == entry.id else { return }
+                    self.updateActions()
+                    switch result {
+                    case let .success(output):
+                        let label = localized("history.output.count", output.shown, output.total)
+                        self.detail.string = Self.render(entry) + "\n\n" + label + "\n" + output.text
+                        self.detail.scrollToEndOfDocument(nil)
+                        self.status.stringValue = label
+                    case let .failure(error):
+                        self.status.stringValue = error.localizedDescription
+                        self.detail.string = Self.render(entry) + "\n\n" + error.localizedDescription
+                    }
+                }
+            }
+            return
+        }
         guard let url = selected?.logs.first, HistoryStore.regularFile(url), NSWorkspace.shared.open(url) else {
             status.stringValue = localized("history.issue.open_log"); return
         }
@@ -1066,6 +1191,30 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         guard displayed.allSatisfy(\.needsAttention), displayed.count == entries.filter(\.needsAttention).count else {
             throw HostError(message: "Database history attention filter lost counted states")
+        }
+    }
+
+    func validateOutputForSelfTest() throws {
+        entries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "output" }
+            .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
+        applyFilter()
+        guard entries.count == 2, logButton.isEnabled else { throw HostError(message: "Stored output action is unavailable") }
+        openLog()
+        let deadline = Date().addingTimeInterval(5)
+        while !logButton.isEnabled, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard logButton.isEnabled, detail.string.contains("synthetic first failure"), !detail.string.contains("synthetic next run") else {
+            throw HostError(message: "History output action did not display the selected batch")
+        }
+        openLog()
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        showSelected()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard !detail.string.contains("synthetic first failure") else { throw HostError(message: "Stale output replaced a new selection") }
+        openLog()
+        let nextDeadline = Date().addingTimeInterval(5)
+        while !logButton.isEnabled, Date() < nextDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard logButton.isEnabled, detail.string.contains("synthetic next run 1002"), !detail.string.contains("synthetic first failure") else {
+            throw HostError(message: "History output action lost its bounded latest records")
         }
     }
 }
@@ -1220,12 +1369,14 @@ func runProcessingHistorySelfTests() throws {
               let database else { throw HostError(message: "Unable to create synthetic history database") }
         defer { sqlite3_close(database) }
         let setup = """
+        DROP TABLE IF EXISTS history_output;
         DROP TABLE IF EXISTS history_events;
         DROP TABLE IF EXISTS history_sessions;
         CREATE TABLE history_sessions(session_id TEXT PRIMARY KEY, updated_at TEXT NOT NULL);
         CREATE TABLE history_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, event TEXT NOT NULL);
         CREATE INDEX history_events_session_sequence ON history_events(session_id, sequence);
         CREATE INDEX history_sessions_updated_at ON history_sessions(updated_at);
+        \(schema == 2 ? "CREATE TABLE history_output(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, pipeline TEXT NOT NULL, line TEXT NOT NULL); CREATE INDEX history_output_session_sequence ON history_output(session_id, sequence);" : "")
         PRAGMA user_version = \(schema);
         BEGIN;
         """
@@ -1333,7 +1484,49 @@ func runProcessingHistorySelfTests() throws {
         catch { return }
         throw HostError(message: message)
     }
-    try writeDatabase([("test", [context, summary, completed])], schema: 2)
+    var outputContext: [String: Any] = ["schema_version": 1, "inputs": ["/synthetic/input"], "mode": "fast-img",
+        "dry_run": false, "in_place": false, "shortest_path": false, "version": "0.12.0", "retry": true,
+        "resume": false, "no_resume": false, "output_sequence": 0]
+    let firstContext = try payload("MFB_HISTORY_CONTEXT", outputContext)
+    outputContext["output_sequence"] = 1
+    let secondContext = try payload("MFB_HISTORY_CONTEXT", outputContext)
+    let firstFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed", "output_sequence": 1, "error": "synthetic failure"])
+    let secondFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "completed", "output_sequence": HistoryStore.maximumOutputLines + 3])
+    try writeDatabase([("output", [firstContext, firstFinished, secondContext, summary, secondFinished])], schema: 2)
+    var outputDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &outputDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let outputDB else {
+        throw HostError(message: "Synthetic output database open failed")
+    }
+    let outputSQL = """
+    INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('output', '2026-10-07T01:02:03Z', 'IMG', 'synthetic first failure');
+    WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<=\(HistoryStore.maximumOutputLines + 1))
+    INSERT INTO history_output(session_id, ts, pipeline, line) SELECT 'output', '2026-10-07T01:02:04Z', 'IMG', 'synthetic next run ' || n FROM rows;
+    """
+    let inserted = sqlite3_exec(outputDB, outputSQL, nil, nil, nil)
+    sqlite3_close(outputDB)
+    try require(inserted == SQLITE_OK, "Synthetic output insert failed")
+    let outputBytes = try Data(contentsOf: databaseURL)
+    let outputEntries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "output" }
+        .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
+    try require(outputEntries.count == 2, "Output sessions merged watch-mode batches")
+    let firstOutput = try HistoryStore.output(for: outputEntries[0])
+    try require(firstOutput.total == 1 && firstOutput.shown == 1 && firstOutput.text.contains("first failure")
+                && !firstOutput.text.contains("next run"), "Output leaked another batch")
+    let nextOutput = try HistoryStore.output(for: outputEntries[1])
+    try require(nextOutput.total == Int64(HistoryStore.maximumOutputLines + 2)
+                && nextOutput.shown == HistoryStore.maximumOutputLines
+                && !nextOutput.text.contains("first failure") && nextOutput.text.hasSuffix("synthetic next run 1002"),
+                "Bounded output lost latest records or invented a count")
+    let interrupted = HistoryStore.parse(data: try records([firstContext, secondContext, secondFinished]), stamp: "output", audit: databaseURL)
+    try require(try HistoryStore.output(for: interrupted.entries[0]).total == 1,
+                "An incomplete earlier batch leaked later output")
+    let missingBoundary = try parsed([firstContext, completed])
+    try require(missingBoundary.entries[0].finished == nil && missingBoundary.entries[0].needsAttention,
+                "Missing terminal output boundary appeared complete")
+    try require(try Data(contentsOf: databaseURL) == outputBytes, "Output view mutated the history database")
+    try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateOutputForSelfTest() }
+    try require(try Data(contentsOf: databaseURL) == outputBytes, "Output action mutated the history database")
+    try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")
     try require(try Data(contentsOf: databaseURL) == futureDatabase, "History reader migrated an unsupported schema")

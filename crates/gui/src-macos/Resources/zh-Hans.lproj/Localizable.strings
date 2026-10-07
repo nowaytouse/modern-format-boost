@@ -277,7 +277,13 @@
 "history.filter" = "批次筛选";
 "history.details" = "批次详情";
 "history.refresh" = "刷新记录";
-"history.open_log" = "打开会话日志";
+"history.open_log" = "查看处理输出";
+"history.output.loading" = "正在读取处理输出...";
+"history.output.count" = "处理输出：最近 %ld / %lld 条记录";
+"history.detail.version" = "MFB 版本";
+"history.detail.retry" = "请求重试失败项";
+"history.detail.resume" = "显式请求继续运行";
+"history.detail.no_resume" = "请求丢弃保存的进度";
 "history.reveal" = "在访达中显示审计记录";
 "history.copy_sources" = "复制源路径";
 "history.loading" = "正在读取记录…";

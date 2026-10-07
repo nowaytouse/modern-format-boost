@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser, Debug)]
 #[command(
     name = "merge_xmp",
+    version,
     about = "Merge adjacent XMP sidecars (JXL overlay/reconstruction-safe; timestamp-safe)"
 )]
 struct Args {

@@ -5,7 +5,8 @@
 <key>CFBundleName</key><string>MFB Photos Import</string>
 <key>CFBundleExecutable</key><string>mfb-photos-import</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$(MFB_VERSION)</string>
+<key>CFBundleVersion</key><string>$(MFB_VERSION)</string>
 <key>LSUIElement</key><true/>
 <key>NSPhotoLibraryUsageDescription</key><string>MFB imports your selected originals into Photos and verifies their local asset identities before cleanup.</string>
 </dict></plist>

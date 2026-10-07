@@ -169,7 +169,7 @@ struct Args {
 
     /// Skip compilation — just sync existing target/release binaries to the .app bundle.
     /// Fast path after a manual cargo build.
-    #[arg(long, short = 's')]
+    #[arg(long, short = 's', conflicts_with_all = ["gui", "all"])]
     sync: bool,
 }
 
@@ -518,6 +518,7 @@ fn get_newest_binary_source_mtime(
 fn gui_needs_rebuild(project_root: &Path) -> bool {
     let newest_input =
         newest_source_mtime_in_dir(&native_gui_dir(project_root), GUI_SOURCE_EXTENSIONS);
+    let newest_input = newest_input.max(get_mtime(&project_root.join("Cargo.toml")));
     let newest_input = NATIVE_APP_BUNDLE_RESOURCES
         .iter()
         .map(|(source, _)| get_mtime(&project_root.join(source)))
@@ -527,6 +528,15 @@ fn gui_needs_rebuild(project_root: &Path) -> bool {
     !contents.join("MacOS/Modern Format Boost").is_file()
         || !completed.is_file()
         || newest_input > get_mtime(&completed)
+}
+
+fn quiet_can_skip(args: &Args, project_root: &Path, targets: &[(&str, String, bool)]) -> bool {
+    args.quiet
+        && !args.force
+        && (!(args.gui || args.all) || args.rust_only || !gui_needs_rebuild(project_root))
+        && targets.iter().all(|(project_dir, binary_name, _)| {
+            decide_build_action(project_root, project_dir, binary_name, false).0 == "skip"
+        })
 }
 
 fn clean_old_binaries(project_root: &Path, targets: &[&str], style: Style) -> Result<i32> {
@@ -1426,6 +1436,20 @@ fn app_bundle_codesign_identity() -> Result<String> {
     ))
 }
 
+fn stamp_bundle_version(info_path: &Path) -> Result<()> {
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+        let status = Command::new("plutil")
+            .args(["-replace", key, "-string", env!("CARGO_PKG_VERSION")])
+            .arg(info_path)
+            .status()
+            .with_context(|| format!("set {key} in {}", info_path.display()))?;
+        if !status.success() {
+            anyhow::bail!("plutil failed setting {key} in {}", info_path.display());
+        }
+    }
+    Ok(())
+}
+
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
@@ -1509,10 +1533,12 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     if !status.success() {
         anyhow::bail!("PhotoKit helper compilation failed");
     }
+    let helper_info = photos_helper.join("Contents/Info.plist");
     fs::copy(
         native_dir.join("PhotosImportHelper-Info.plist"),
-        photos_helper.join("Contents/Info.plist"),
+        &helper_info,
     )?;
+    stamp_bundle_version(&helper_info)?;
     let status = Command::new("codesign")
         .args(["--force", "--sign"])
         .arg(app_bundle_codesign_identity()?)
@@ -1527,6 +1553,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     let info_dst = bundle.join("Contents").join("Info.plist");
     fs::copy(&info_src, &info_dst)
         .with_context(|| format!("copy Info.plist to {}", info_dst.display()))?;
+    stamp_bundle_version(&info_dst)?;
 
     let icon_src = native_dir.join("icon.icns");
     let icon_dst = resources_dir.join("icon.icns");
@@ -1877,28 +1904,18 @@ fn main() -> Result<()> {
         targets_to_build.push(("crates/dev", "drag_and_drop_processor".to_string(), false));
     }
 
-    // Quiet mode check
-    if args.quiet && !args.force {
-        let mut needs_work = false;
-        for (project_dir, binary_name, _) in &targets_to_build {
-            let (action, _) = decide_build_action(&project_root, project_dir, binary_name, false);
-            if action != "skip" {
-                needs_work = true;
-                break;
-            }
-        }
-        if !needs_work {
-            return Ok(());
-        }
+    if quiet_can_skip(&args, &project_root, &targets_to_build) {
+        return Ok(());
     }
 
     // Print header
     println!();
     println!(
-        "{}{}{} Smart Build System v0.12.0 (Rust Edition){}",
+        "{}{}{} Smart Build System v{} (Rust Edition){}",
         style.cyan,
         style.bold,
         pick_symbol("📦", "[BUILD]"),
+        env!("CARGO_PKG_VERSION"),
         style.reset
     );
     println!(
@@ -2070,21 +2087,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sync_rejects_native_build_requests() {
+        assert!(Args::try_parse_from(["smart_build", "--sync"]).is_ok());
+        for flag in ["--gui", "--all"] {
+            let error = Args::try_parse_from(["smart_build", "--sync", flag]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
+
+    #[test]
     fn incomplete_native_build_cannot_be_reused() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let root = tempdir.path();
+        let binary = root.join("target/release/img");
+        fs::create_dir_all(binary.parent().unwrap())?;
+        fs::write(binary, b"current")?;
+        let targets = [("crates/img", "img".to_owned(), false)];
+        let quiet_gui = Args::try_parse_from(["smart_build", "--quiet", "--gui"])?;
+        let quiet_all = Args::try_parse_from(["smart_build", "--quiet", "--all"])?;
         let contents = native_app_bundle_path(root).join("Contents");
         fs::create_dir_all(contents.join("MacOS"))?;
         fs::write(contents.join("MacOS/Modern Format Boost"), b"partial")?;
         assert!(gui_needs_rebuild(root));
+        assert!(!quiet_can_skip(&quiet_gui, root, &targets));
+        assert!(!quiet_can_skip(&quiet_all, root, &targets));
         fs::create_dir_all(contents.join("Resources"))?;
         fs::write(contents.join("Resources/native-build-complete.txt"), b"1\n")?;
         assert!(!gui_needs_rebuild(root));
+        assert!(quiet_can_skip(&quiet_gui, root, &targets));
+        assert!(quiet_can_skip(&quiet_all, root, &targets));
         std::thread::sleep(std::time::Duration::from_millis(20));
         let input = native_gui_dir(root).join("main.swift");
         fs::create_dir_all(input.parent().unwrap())?;
         fs::write(input, "changed")?;
         assert!(gui_needs_rebuild(root));
+        assert!(!quiet_can_skip(&quiet_gui, root, &targets));
+        assert!(!quiet_can_skip(&quiet_all, root, &targets));
+        let rust_only = Args::try_parse_from(["smart_build", "--quiet", "--all", "--rust-only"])?;
+        assert!(quiet_can_skip(&rust_only, root, &targets));
         Ok(())
     }
 
@@ -2243,6 +2283,38 @@ mod tests {
         ] {
             assert!(plist.contains("<key>NSPhotoLibraryUsageDescription</key>"));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn stamp_bundle_version_updates_main_and_helper_templates() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        for (name, template) in [
+            (
+                "main.plist",
+                include_str!("../../../gui/src-macos/Info.plist"),
+            ),
+            (
+                "helper.plist",
+                include_str!("../../../gui/src-macos/PhotosImportHelper-Info.plist"),
+            ),
+        ] {
+            let path = temp.path().join(name);
+            fs::write(&path, template)?;
+            stamp_bundle_version(&path)?;
+            for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+                let output = Command::new("plutil")
+                    .args(["-extract", key, "raw"])
+                    .arg(&path)
+                    .output()?;
+                assert!(output.status.success());
+                assert_eq!(
+                    String::from_utf8(output.stdout)?.trim(),
+                    env!("CARGO_PKG_VERSION")
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

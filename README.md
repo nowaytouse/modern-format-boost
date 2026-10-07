@@ -445,7 +445,15 @@ queries recent sessions read-only with bounded records and bytes; older JSONL
 history remains readable without rewriting it. Database records take precedence
 over a session's legacy audit, so archiving cannot duplicate its counts. Unknown
 database versions and write failures are explicit errors, never automatic resets.
-Detailed worker logs and recovery checkpoints have not yet migrated to this store.
+The launcher's captured combined worker output is now buffered into the same
+database, not duplicated into session and verbose text logs. **View processing
+output** reads the selected batch's latest 1,000 records, bounded to 2 MB, and
+shows the displayed/total record count. Batch sequence boundaries keep watch-mode
+runs separate; output is not interpreted as authoritative failure/warning counts.
+History schema v1 upgrades transactionally to v2 while retaining earlier events.
+Batch details also retain the running version and explicit retry/resume requests.
+Internal tracing, pipeline audit files and recovery checkpoints have not yet fully
+migrated; this phase is not the entire core logging/state migration.
 Result, control and error records have a separate bounded delivery reserve, so
 routine log bursts cannot displace them. If that reserve is also exhausted, the
 GUI marks completion as unconfirmed rather than reporting a misleading success.

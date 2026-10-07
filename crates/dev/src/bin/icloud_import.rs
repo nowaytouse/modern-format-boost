@@ -37,6 +37,7 @@ enum ImportMode {
 #[derive(Parser, Debug)]
 #[command(
     name = "icloud_import",
+    version,
     about = "Import processed media into Apple Photos / iCloud via osxphotos"
 )]
 struct Args {

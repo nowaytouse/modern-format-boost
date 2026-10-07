@@ -18,6 +18,7 @@ use walkdir::WalkDir;
 #[derive(Parser, Debug)]
 #[command(
     name = "verify",
+    version,
     about = "MFB Conversion Analyzer & Integrity Verifier"
 )]
 struct Args {

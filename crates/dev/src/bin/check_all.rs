@@ -451,7 +451,7 @@ fn install_nightly() -> Result<bool> {
 fn parse_plist_string_key(content: &str, key: &str) -> Option<String> {
     let key_tag = format!("<key>{key}</key>");
     let idx = content.find(&key_tag)?;
-    let after_key = &content[idx + key_tag.len()..];
+    let after_key = content[idx + key_tag.len()..].split("<key>").next()?;
     let string_start = after_key.find("<string>")?;
     let string_end = after_key.find("</string>")?;
     if string_end > string_start + 8 {
@@ -459,6 +459,17 @@ fn parse_plist_string_key(content: &str, key: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn plist_version_errors(content: &str, expected: &str, label: &str) -> Vec<String> {
+    ["CFBundleShortVersionString", "CFBundleVersion"]
+        .into_iter()
+        .filter_map(|key| match parse_plist_string_key(content, key) {
+            Some(value) if value == expected => None,
+            Some(value) => Some(format!("{label} {key}: expected {expected}, got {value}")),
+            None => Some(format!("{label} {key}: missing string value")),
+        })
+        .collect()
 }
 
 fn verify_normalize_stale_embed_measurement_slots(repo_root: &std::path::Path) -> Result<()> {
@@ -642,10 +653,25 @@ fn run_python_syntax_check(repo_root: &Path, py_files: &[String]) -> Result<()> 
 }
 
 fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Result<()> {
+    let source = fs::read_to_string(repo_root.join("crates/gui/src-macos/Info.plist"))
+        .context("read source Info.plist")?;
+    let helper_source =
+        fs::read_to_string(repo_root.join("crates/gui/src-macos/PhotosImportHelper-Info.plist"))
+            .context("read source PhotosImportHelper-Info.plist")?;
+    let mut source_errors = plist_version_errors(&source, "$(MFB_VERSION)", "source app plist");
+    source_errors.extend(plist_version_errors(
+        &helper_source,
+        "$(MFB_VERSION)",
+        "source Photos helper plist",
+    ));
+    if !source_errors.is_empty() {
+        bail!("Bundle version template: {}", source_errors.join("; "));
+    }
+
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (repo_root, version, hard_fail);
-        println!("  Skipped: macOS App bundle metadata (non-macOS platform)");
+        println!("  Skipped: assembled macOS App bundle metadata (non-macOS platform)");
         Ok(())
     }
     #[cfg(target_os = "macos")]
@@ -656,21 +682,33 @@ fn check_bundle_metadata(repo_root: &Path, version: &str, hard_fail: bool) -> Re
             .join("Contents")
             .join("Info.plist");
         if !plist_path.is_file() {
-            println!("  Skipped: Info.plist not found (building outside app scope)");
+            println!("  Skipped: assembled App bundle not found (source templates checked)");
             return Ok(());
         }
         let plist_content = fs::read_to_string(&plist_path).context("read Info.plist")?;
-        let bundle_version = parse_plist_string_key(&plist_content, "CFBundleShortVersionString");
         let bundle_exec = parse_plist_string_key(&plist_content, "CFBundleExecutable");
-        let mut errors = Vec::new();
-        if let Some(ref bv) = bundle_version
-            && bv != version
-            && !version.is_empty()
-        {
-            errors.push(format!(
-                "Version mismatch: Cargo.toml={version} vs Info.plist={bv}"
+        let mut version_errors = plist_version_errors(&plist_content, version, "app bundle plist");
+        let helper_path = repo_root.join(
+            "Modern Format Boost.app/Contents/Helpers/MFB Photos Import.app/Contents/Info.plist",
+        );
+        if helper_path.is_file() {
+            let helper_content = fs::read_to_string(&helper_path)
+                .context("read bundled PhotosImportHelper-Info.plist")?;
+            version_errors.extend(plist_version_errors(
+                &helper_content,
+                version,
+                "Photos helper bundle plist",
+            ));
+        } else {
+            version_errors.push(format!(
+                "Photos helper bundle plist missing at {}",
+                helper_path.display()
             ));
         }
+        if !version_errors.is_empty() {
+            bail!("Bundle version mismatch: {}", version_errors.join("; "));
+        }
+        let mut errors = Vec::new();
         if let Some(ref be) = bundle_exec
             && be != "Modern Format Boost"
         {
@@ -1822,6 +1860,29 @@ mod tests {
             Some("Modern Format Boost".to_string())
         );
         assert_eq!(parse_plist_string_key(content, "NonExistentKey"), None);
+        assert_eq!(
+            parse_plist_string_key(
+                "<key>CFBundleVersion</key><key>Next</key><string>1</string>",
+                "CFBundleVersion"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn version_keys_reject_missing_or_different_values() {
+        let template = "<key>CFBundleShortVersionString</key><string>$(MFB_VERSION)</string><key>CFBundleVersion</key><string>$(MFB_VERSION)</string>";
+        assert!(plist_version_errors(template, "$(MFB_VERSION)", "source").is_empty());
+        assert_eq!(plist_version_errors(template, "0.12.0", "bundle").len(), 2);
+        assert_eq!(
+            plist_version_errors(
+                "<key>CFBundleVersion</key><string>0.12.0</string>",
+                "0.12.0",
+                "bundle"
+            )
+            .len(),
+            1
+        );
     }
 
     #[test]

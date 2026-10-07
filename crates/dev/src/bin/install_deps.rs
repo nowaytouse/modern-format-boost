@@ -82,8 +82,9 @@ fn main() -> Result<()> {
     print_c(
         BLUE,
         &format!(
-            "{} Modern Format Boost - Dependency Installer v0.11.3",
-            pick_symbol("🚀", "[LAUNCH]")
+            "{} Modern Format Boost - Dependency Installer v{}",
+            pick_symbol("🚀", "[LAUNCH]"),
+            env!("CARGO_PKG_VERSION")
         ),
     );
     println!("--------------------------------------------------------");

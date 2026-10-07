@@ -277,7 +277,13 @@
 "history.filter" = "バッチの絞り込み";
 "history.details" = "バッチの詳細";
 "history.refresh" = "履歴を更新";
-"history.open_log" = "セッションログを開く";
+"history.open_log" = "処理出力を表示";
+"history.output.loading" = "処理出力を読み込み中...";
+"history.output.count" = "処理出力：最近の %ld / %lld 件";
+"history.detail.version" = "MFB バージョン";
+"history.detail.retry" = "再試行の要求";
+"history.detail.resume" = "再開の要求";
+"history.detail.no_resume" = "保存した進捗の破棄要求";
 "history.reveal" = "監査記録を Finder に表示";
 "history.copy_sources" = "元のパスをコピー";
 "history.loading" = "履歴を読み込み中…";

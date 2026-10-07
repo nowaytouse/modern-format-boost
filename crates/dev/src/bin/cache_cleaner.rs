@@ -52,7 +52,11 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     &["gif", "webp", "png", "apng", "avif", "heic", "heif", "jxl"];
 
 #[derive(Parser, Debug)]
-#[command(name = "cache_cleaner", about = "Modern Format Boost Cache Cleaner")]
+#[command(
+    name = "cache_cleaner",
+    version,
+    about = "Modern Format Boost Cache Cleaner"
+)]
 struct Args {
     #[arg(long, conflicts_with_all = ["path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Inspect local cache without deleting or rebuilding anything")]
     stats: bool,

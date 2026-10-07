@@ -860,6 +860,13 @@ fn show_menu() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("--version")])
+    {
+        println!("database_manager {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if !check_psql() {
         let c = colors();
         println!(

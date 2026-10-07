@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.12.0] - 2026-10-07
+
+### Version consistency and batch output history
+
+- Make the workspace package version the release source of truth. CLI packages,
+  lockfile members, helper banners and both native app bundle version keys now
+  use 0.12.0; About reads the stamped bundle metadata. Version changes invalidate
+  native bundle assembly, and CI checks package inheritance, lock versions and
+  the plist template contract.
+- Store the launcher's captured combined worker output in `history.sqlite3`, with
+  a persistent writer and bounded transactional batches rather than reopening and
+  appending two text logs for each line. Explicitly flush before terminal history;
+  persistence errors fail the launcher after draining the child output, not by
+  interrupting its safe completion. Internal tracing/audit files remain separate
+  until a later migration phase.
+- Upgrade history schema v1 to v2 transactionally without resetting existing
+  records. Preserve batch start/end output sequence boundaries, including multiple
+  runs in watch mode, so prior failures cannot leak into the next run's metrics.
+- View selected batch output directly inside native Processing History, using a
+  background read-only query, rendering the latest 1,000 records within 2 MB, with
+  displayed/total counts and explicit read errors. Keep authoritative processor
+  and verification counts separate from combined terminal text. Store the actual
+  launcher version and explicit retry/resume requests in batch details.
+- Resolve the real parent directory before opening read-only native history on
+  macOS, preserving SQLite's no-follow protection while accepting the `/var`
+  system alias. Cover batch isolation, bounded latest output, asynchronous
+  selection changes and unchanged database bytes in the native self-test.
+- Validation: six SQLite history tests, 33 launcher tests, 398 anti-fallback
+  contracts and the complete native-host self-test pass. All nine packaged CLI
+  tools report 0.12.0 and match their release Mach-O UUIDs; both app/helper bundle
+  version keys are 0.12.0, and deep strict signature verification passes.
+- Reject conflicting sync-only/native-build requests instead of silently skipping
+  the GUI. Quiet mode now checks native inputs as well as Rust binary freshness;
+  27 build-helper tests cover the version stamp and incremental-build boundaries.
+
 ## [Unreleased] - 2026-09-28
 
 ### Cache-only cleanup and native Settings storage (2026-10-07)

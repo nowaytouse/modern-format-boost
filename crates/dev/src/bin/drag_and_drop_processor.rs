@@ -48,7 +48,7 @@ use foundation::BatchErrorMode;
 use foundation::infra::runtime_config::FallbackPolicy;
 use foundation::process_lock::DirLock;
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -115,6 +115,7 @@ impl VideoCodecOption {
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "drag_and_drop_processor",
+    version,
     about = "Modern Format Boost CLI-first drag/drop launcher"
 )]
 struct Args {
@@ -623,8 +624,8 @@ impl LaunchCommand {
             cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
         }
         let stats = if let Some(sess) = session {
-            let verbose = sess.verbose_log.clone();
-            let session_log = sess.session_log.clone();
+            let mut output =
+                dev::infra::history_store::HistoryOutputWriter::open(&sess.log_dir, &sess.stamp)?;
             let heartbeat = sess.session_audit.clone();
             let mut last_heartbeat = Instant::now();
             let pipeline_label = self.pipeline_label().to_string();
@@ -639,17 +640,13 @@ impl LaunchCommand {
             let mut session_log_error = None;
             let result = stream_process_with_pty_with_env(
                 &argv,
-                Some(&verbose),
+                None,
                 &env_overrides,
                 |line| {
                     println!("{line}");
                     let _ = io::stdout().flush();
-                    if let Err(error) = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&session_log)
-                        .and_then(|mut file| writeln!(file, "{line}"))
-                        && session_log_error.is_none()
+                    if session_log_error.is_none()
+                        && let Err(error) = output.push_line(&pipeline_label, line)
                     {
                         session_log_error = Some(error);
                     }
@@ -666,12 +663,15 @@ impl LaunchCommand {
                 },
             );
             set_child_active(false);
+            if session_log_error.is_none()
+                && let Err(error) = output.flush()
+            {
+                session_log_error = Some(error);
+            }
             match result {
                 Ok(_) if session_log_error.is_some() => {
-                    return Err(anyhow::Error::from(
-                        session_log_error.expect("checked session stream log error"),
-                    ))
-                    .context("write session child output log");
+                    return Err(session_log_error.expect("checked session stream log error"))
+                        .context("write session child output to processing history");
                 }
                 Ok(stats) => stats,
                 Err(error) => {
@@ -680,21 +680,11 @@ impl LaunchCommand {
                         pipeline_started_at.elapsed().as_secs()
                     );
                     let _ = append_jsonl_audit_record(&heartbeat, &event);
-                    if let Err(log_error) = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&session_log)
-                        .and_then(|mut file| writeln!(file, "[LOG] {event}"))
-                    {
-                        eprintln!("[LOG] session stream error write failed: {log_error}");
+                    if let Some(log_error) = session_log_error {
+                        eprintln!("[LOG] processing history output write failed: {log_error:#}");
                     }
-                    if let Err(log_error) = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&verbose)
-                        .and_then(|mut file| writeln!(file, "[LOG] {event}"))
-                    {
-                        eprintln!("[LOG] verbose stream error write failed: {log_error}");
+                    if let Err(log_error) = sess.append_line(&sess.session_log, &event) {
+                        eprintln!("[LOG] session stream error write failed: {log_error:#}");
                     }
                     return Err(error);
                 }
@@ -2047,6 +2037,11 @@ fn run_with_history(
                     "dry_run": args.dry_run,
                     "in_place": args.in_place,
                     "shortest_path": args.shortest_path,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "retry": args.retry,
+                    "resume": args.resume,
+                    "no_resume": args.no_resume,
+                    "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
                 }),
             )
         })(),
@@ -2066,14 +2061,17 @@ fn run_with_history(
         } else {
             false
         };
-        let finished = session.append_history_event(
+        let finished = (|| {
+            session.append_history_event(
             "MFB_HISTORY_FINISHED",
             serde_json::json!({
                 "schema_version": 1,
                 "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
                 "error": result.as_ref().err().map(|error| format!("{error:#}")),
+                "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
             }),
-        );
+        )
+        })();
         if let Err(error) = finished {
             if result.is_ok() {
                 return Err(error).context("write history terminal outcome");
@@ -2089,10 +2087,12 @@ fn run_drag_drop_inner(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
-    let verbose_offset = session
-        .map(|session| fs::metadata(&session.verbose_log).map(|metadata| metadata.len()))
+    let output_cursor = session
+        .map(|session| {
+            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+        })
         .transpose()
-        .context("record per-run verbose log boundary")?;
+        .context("record per-run processing output boundary")?;
     foundation::batch_control::checkpoint()?;
     validate_media_options(args)?;
     if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
@@ -2269,9 +2269,10 @@ fn run_drag_drop_inner(
             match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
-                    match read_session_verbose_since(
-                        &session.expect("session").verbose_log,
-                        verbose_offset.context("fast-img run has no verbose log boundary")?,
+                    match dev::infra::history_store::read_session_output_since(
+                        &session.expect("session").log_dir,
+                        &session.expect("session").stamp,
+                        output_cursor.context("fast-img run has no processing output boundary")?,
                     ) {
                         Ok(text) => {
                             let metrics = fast_img_session_size_metrics(&text);
@@ -2561,20 +2562,6 @@ fn run_drag_drop_inner(
     }
 
     Ok(())
-}
-
-fn read_session_verbose_since(path: &Path, offset: u64) -> Result<String> {
-    let mut file = fs::File::open(path).context("open current-run verbose log")?;
-    anyhow::ensure!(
-        file.metadata()?.len() >= offset,
-        "session verbose log was truncated during the current run"
-    );
-    file.seek(SeekFrom::Start(offset))
-        .context("seek current-run verbose log")?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)
-        .context("read current-run verbose log")?;
-    Ok(text)
 }
 
 fn finalize_handoff_preservation(
@@ -3506,29 +3493,86 @@ mod tests {
     }
 
     #[test]
-    fn history_verbose_boundary_excludes_previous_run_retained_files() {
+    fn history_output_boundary_excludes_previous_run_retained_files() {
         let temp = tempfile::tempdir().unwrap();
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
-        let mut log = fs::OpenOptions::new()
-            .append(true)
-            .open(&session.verbose_log)
+        let mut output =
+            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
+                .unwrap();
+        output
+            .push_line("IMG", "[FAIL    ]   prior\u{00e9}.jpg: old failure")
             .unwrap();
-        writeln!(log, "[FAIL    ]   prior\u{00e9}.jpg: old failure").unwrap();
-        let offset = log.metadata().unwrap().len();
-        writeln!(log, "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]").unwrap();
-        let current = read_session_verbose_since(&session.verbose_log, offset).unwrap();
+        output.flush().unwrap();
+        let cursor =
+            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+                .unwrap();
+        output
+            .push_line(
+                "IMG",
+                "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]",
+            )
+            .unwrap();
+        output.flush().unwrap();
+        let current = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            cursor,
+        )
+        .unwrap();
         assert_eq!(
             fast_img_retained_file_names(&current),
             vec![("current.jpg: no gain".to_owned(), "skipped".to_owned())]
         );
         assert!(!current.contains("prior"));
-        log.set_len(0).unwrap();
-        assert!(
-            read_session_verbose_since(&session.verbose_log, offset)
-                .unwrap_err()
-                .to_string()
-                .contains("truncated")
-        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launcher_output_is_sqlite_only_and_write_failure_does_not_interrupt_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let command = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(), "-c".into(),
+            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'".into(),
+        ]).unwrap();
+        let stats = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+        assert_eq!(stats.succeeded, 1);
+        assert!(stats.counts_complete());
+        let text = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            0,
+        )
+        .unwrap();
+        assert!(text.contains("synthetic worker output"));
+        for path in [&session.session_log, &session.verbose_log] {
+            assert!(
+                !fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line == "synthetic worker output" || line == "Succeeded: 1")
+            );
+        }
+        let database = rusqlite::Connection::open(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        database.execute_batch("CREATE TRIGGER reject_output BEFORE INSERT ON history_output BEGIN SELECT RAISE(ABORT, 'synthetic output failure'); END;").unwrap();
+        let finished = temp.path().join("child_finished");
+        let child = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(), "-c".into(),
+            "i=0; while [ $i -lt 140 ]; do printf 'synthetic failure test\\n'; i=$((i+1)); done; printf done > \"$1\"".into(),
+            "test".into(), finished.to_str().unwrap().into(),
+        ]).unwrap();
+        let error = child
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("synthetic output failure"));
+        assert_eq!(fs::read_to_string(finished).unwrap(), "done");
     }
 
     #[test]

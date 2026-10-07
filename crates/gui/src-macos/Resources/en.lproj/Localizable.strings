@@ -277,7 +277,13 @@
 "history.filter" = "Batch filter";
 "history.details" = "Batch details";
 "history.refresh" = "Refresh history";
-"history.open_log" = "Open session log";
+"history.open_log" = "View processing output";
+"history.output.loading" = "Loading processing output...";
+"history.output.count" = "Processing output: latest %ld of %lld records";
+"history.detail.version" = "MFB version";
+"history.detail.retry" = "Retry requested";
+"history.detail.resume" = "Resume requested";
+"history.detail.no_resume" = "Discard saved progress requested";
 "history.reveal" = "Reveal audit in Finder";
 "history.copy_sources" = "Copy source paths";
 "history.loading" = "Loading history…";
