@@ -1,2 +1,2 @@
-//! HEIC/HEIF Format Analysis - Re-exports from `shared_utils`
-pub use shared_utils::image_heic_analysis::*;
+//! HEIC/HEIF Format Analysis - Re-exports from `foundation`
+pub use foundation::image_heic_analysis::*;

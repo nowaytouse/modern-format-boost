@@ -1,0 +1,29 @@
+{
+  "config_version": 1,
+  "img": {
+    "allow_database": false,
+    "quality_heuristic": false,
+    "jpeg_effort": 11,
+    "fallback_policy": "strict"
+  },
+  "photos": {
+    "backend": "native",
+    "import_root": null,
+    "album_name": null,
+    "preserve_folder_structure": true,
+    "native_batch_size": 100,
+    "import_batch_size": 50,
+    "verification_batch_size": 250,
+    "adaptive_batching": false,
+    "native_min_batch_size": 50,
+    "native_max_batch_size": 1000,
+    "target_batch_seconds": 10
+  },
+  "performance": {
+    "mode": "adaptive"
+  },
+  "tools": {
+    "policy": "fallback",
+    "paths": {}
+  }
+}

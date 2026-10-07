@@ -1,0 +1,801 @@
+name: Continuous Quality & Fuzzing
+
+on:
+  push:
+    branches: [main, nightly]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+  pull_request:
+    branches: [main, nightly]
+  schedule:
+    - cron: "0 0 * * *" # Daily at midnight
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: write
+
+concurrency:
+  group: maintenance-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Prerequisites fail closed; independent quality checks collect every reachable
+  # failure and report one aggregate result at the end of their job.
+
+  validation:
+    name: "1 · Configuration & Workflow Validation"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.39.0"
+
+      - name: Verify justfile recipes
+        id: just
+        continue-on-error: true
+        run: just --list
+
+      - name: Check version consistency
+        id: version
+        continue-on-error: true
+        run: python3 crates/dev/scripts/check_version.py
+
+      - name: Install actionlint & yamllint
+        run: |
+          # Build actionlint directly; do not execute downloaded installer scripts.
+          go version
+          GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          sudo install -m 0755 "$RUNNER_TEMP/actionlint-bin/actionlint" /usr/local/bin/actionlint
+
+          # Install yamllint via apt to avoid PEP 668 issues on Ubuntu 24.04
+          sudo apt-get update -qq
+          sudo apt-get install -y yamllint
+
+      - name: Validate workflow files
+        id: actionlint
+        continue-on-error: true
+        run: actionlint -color
+
+      - name: Check YAML syntax
+        id: yamllint
+        continue-on-error: true
+        run: |
+          YAMLLINT_CONFIG='{extends: relaxed, rules: {document-start: disable, truthy: disable, comments: disable, line-length: disable}}'
+          find .github/workflows \( -name "*.yml" -o -name "*.yaml" \) -print0 | \
+            xargs -0 -n1 yamllint -d "$YAMLLINT_CONFIG"
+
+      - name: Check validation outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.just.outcome }}" = "failure" ]; then
+            echo "::error::just --list failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.version.outcome }}" = "failure" ]; then
+            echo "::error::version consistency failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.actionlint.outcome }}" = "failure" ]; then
+            echo "::error::actionlint failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.yamllint.outcome }}" = "failure" ]; then
+            echo "::error::yamllint failed"
+            exit_code=1
+          fi
+          exit $exit_code
+
+  dispatch2-macos:
+    name: "1b · dispatch2 (macOS / libdispatch)"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+
+      - name: Test dispatch2
+        working-directory: crates/dev/dispatch2
+        run: cargo test --no-fail-fast -- --test-threads=1
+
+  dispatch2-linux:
+    name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SYSTEM_DEPS_LIBHEIF_LINK: static
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libssl-dev build-essential cmake git clang libblocksruntime-dev pkg-config ninja-build nasm meson libsharpyuv-dev libde265-dev libaom-dev libdav1d-dev
+
+      - name: Install pinned secure libheif
+        env:
+          MFB_LIBHEIF_ONLY: "1"
+        run: |
+          rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+          "$RUNNER_TEMP/install_media_dependencies"
+
+      - name: Build libdispatch
+        env:
+          LIBDISPATCH_REF: release/6.0
+        run: cargo run --locked -p dev --bin build_libdispatch
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+
+      - name: Test dispatch2 (no objc2; Linux libdispatch)
+        working-directory: crates/dev/dispatch2
+        env:
+          LIBDISPATCH_PREFIX: /usr/local
+          LD_LIBRARY_PATH: /usr/local/lib
+          CC: clang
+          CXX: clang++
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+        run: cargo test --no-default-features --features "std,libc,alloc" --no-fail-fast -- --test-threads=1
+
+  # Keep package-level signals separate from the shared workspace audit. A
+  # failing video path must not hide whether IMG itself is healthy (and vice
+  # versa); both jobs still use the same pinned toolchain and static media
+  # dependency boundary.
+  package-quality:
+    name: "${{ matrix.name }}"
+    needs: validation
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: img
+            name: "2a · IMG package quality"
+          - package: vid
+            name: "2b · VID package quality"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LIBHEIF_STATIC: "1"
+      LIBHEIF_SYS_STATIC: "1"
+      SYSTEM_DEPS_LIBHEIF_LINK: static
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install media build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential clang cmake libssl-dev meson nasm ninja-build pkg-config \
+            libavif-bin libimage-exiftool-perl libjxl-tools ffmpeg \
+            imagemagick libjpeg-turbo-progs webp unzip \
+            libsharpyuv-dev libde265-dev libaom-dev libdav1d-dev
+
+      - name: Install pinned secure libheif
+        env:
+          MFB_LIBHEIF_ONLY: "1"
+        run: |
+          rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+          "$RUNNER_TEMP/install_media_dependencies"
+
+      - name: Install pinned modern libjxl CLI tools for IMG
+        if: matrix.package == 'img'
+        env:
+          LIBJXL_VERSION: v0.12.0
+          LIBJXL_ARCHIVE_SHA256: 5318a1ea40adad76d023e0c17a03d4627f8282f83cb2b575e69be8e74f1ff456
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y lzip
+          archive="$RUNNER_TEMP/jxl-linux-x86_64-static.tar.lz"
+          tools_root="$RUNNER_TEMP/libjxl-static"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjxl/libjxl/releases/download/${LIBJXL_VERSION}/jxl-linux-x86_64-static.tar.lz" \
+            -o "$archive"
+          printf '%s  %s\n' "$LIBJXL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          mkdir -p "$tools_root"
+          lzip -dc "$archive" | tar -xf - -C "$tools_root"
+          for tool in cjxl djxl jxlinfo; do
+            test -x "$tools_root/tools/$tool"
+            sudo install -m 0755 "$tools_root/tools/$tool" "/usr/local/bin/$tool"
+          done
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v djxl)" = "/usr/local/bin/djxl"
+          djxl_help="$(djxl -h 2>&1)"
+          grep -q -- "--output_format" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
+          djxl_version="$(djxl --version 2>&1)"
+          grep -q -- "v0.12.0" <<< "$djxl_version"
+          printf '%s\n' "$djxl_version"
+
+      # Keep the local development policy (HEAD/nightly where available)
+      # separate from CI: IMG uses checksum-pinned, non-prerelease releases so
+      # a runner cannot silently fall back to an obsolete distro CLI.
+      - name: Install pinned stable IMG media toolchain
+        if: matrix.package == 'img'
+        env:
+          LIBAVIF_TAG: v1.4.2
+          LIBAVIF_VERSION: 1.4.2
+          LIBAVIF_ARCHIVE_SHA256: faf58a670ffbfdc0e3559e6d37592cff277c447dd39453f1cd1d7d7f5a20b8ef
+          IMAGEMAGICK_VERSION: 7.1.2-32
+          IMAGEMAGICK_ARCHIVE_SHA256: d456cab221b5fc1c396768a026d0a33ee8665f7119c7fea7151b960c69058b21
+          EXIFTOOL_VERSION: "13.59"
+          EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac
+          LIBJPEG_TURBO_VERSION: 3.2.0
+          LIBJPEG_TURBO_ARCHIVE_SHA256: 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e
+        run: |
+          set -euo pipefail
+          tools_root="$RUNNER_TEMP/mfb-img-tools"
+          mkdir -p "$tools_root"
+
+          # Official libavif release artifact (statically linked avifenc/avifdec).
+          libavif_archive="$tools_root/libavif-linux.zip"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/AOMediaCodec/libavif/releases/download/${LIBAVIF_TAG}/linux-artifacts.zip" \
+            -o "$libavif_archive"
+          printf '%s  %s\n' "$LIBAVIF_ARCHIVE_SHA256" "$libavif_archive" | sha256sum --check -
+          mkdir -p "$tools_root/libavif"
+          unzip -q "$libavif_archive" -d "$tools_root/libavif"
+          for tool in avifenc avifdec; do
+            test -x "$tools_root/libavif/$tool"
+            sudo install -m 0755 "$tools_root/libavif/$tool" "/usr/local/bin/$tool"
+          done
+
+          # Official ImageMagick AppImage avoids Ubuntu's legacy IM6 command
+          # surface while keeping a stable, reproducible IM7 binary in CI.
+          imagemagick_archive="$tools_root/imagemagick.AppImage"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/ImageMagick/ImageMagick/releases/download/${IMAGEMAGICK_VERSION}/ImageMagick-${IMAGEMAGICK_VERSION}-gcc-x86_64.AppImage" \
+            -o "$imagemagick_archive"
+          printf '%s  %s\n' "$IMAGEMAGICK_ARCHIVE_SHA256" "$imagemagick_archive" | sha256sum --check -
+          chmod +x "$imagemagick_archive"
+          (cd "$tools_root" && "$imagemagick_archive" --appimage-extract >/dev/null)
+          magick_root="$tools_root/squashfs-root"
+          test -x "$magick_root/AppRun"
+          magick_wrapper="$tools_root/magick-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "cd \"$magick_root\"" \
+            'exec ./AppRun "$@"' > "$magick_wrapper"
+          sudo install -m 0755 "$magick_wrapper" /usr/local/bin/magick
+
+          # Official ExifTool release; keep its bundled Perl library adjacent
+          # to the launcher instead of mixing it with the distro module tree.
+          exiftool_archive="$tools_root/exiftool-${EXIFTOOL_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" \
+            -o "$exiftool_archive"
+          printf '%s  %s\n' "$EXIFTOOL_ARCHIVE_SHA256" "$exiftool_archive" | sha256sum --check -
+          tar -xzf "$exiftool_archive" -C "$tools_root"
+          exiftool_root="$tools_root/exiftool-${EXIFTOOL_VERSION}"
+          test -x "$exiftool_root/exiftool"
+          exiftool_wrapper="$tools_root/exiftool-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "export PERL5LIB=\"$exiftool_root/lib\${PERL5LIB:+:\$PERL5LIB}\"" \
+            "exec \"$exiftool_root/exiftool\" \"\$@\"" > "$exiftool_wrapper"
+          sudo install -m 0755 "$exiftool_wrapper" /usr/local/bin/exiftool
+
+          # Build the official libjpeg-turbo release so jpegtran is not tied to
+          # the runner's potentially stale distro utility package.
+          jpeg_archive="$tools_root/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/${LIBJPEG_TURBO_VERSION}/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}.tar.gz" \
+            -o "$jpeg_archive"
+          printf '%s  %s\n' "$LIBJPEG_TURBO_ARCHIVE_SHA256" "$jpeg_archive" | sha256sum --check -
+          tar -xzf "$jpeg_archive" -C "$tools_root"
+          cmake -S "$tools_root/libjpeg-turbo-${LIBJPEG_TURBO_VERSION}" \
+            -B "$tools_root/libjpeg-build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DENABLE_SHARED=OFF \
+            -DWITH_TURBOJPEG=OFF \
+            -DWITH_SIMD=ON
+          cmake --build "$tools_root/libjpeg-build" --parallel 2
+          sudo cmake --install "$tools_root/libjpeg-build"
+
+          # ffmpeg/ffprobe remain the Ubuntu formal-release pair (upstream does
+          # not publish portable official binaries); assert the codec contract
+          # used by the shared IMG foundation instead of accepting a stub.
+          command -v ffmpeg
+          command -v ffprobe
+          ffmpeg -hide_banner -h encoder=libx265 >/dev/null
+          ffprobe -version >/dev/null
+
+          for tool in avifenc avifdec magick exiftool jpegtran ffmpeg ffprobe; do
+            printf '[IMG tool] %s -> ' "$tool"
+            case "$tool" in
+              exiftool) version_output="$(exiftool -ver)" ;;
+              jpegtran) version_output="$(jpegtran -version 2>&1)" ;;
+              ffmpeg|ffprobe) version_output="$("$tool" -version 2>&1)" ;;
+              *) version_output="$("$tool" --version 2>&1)" ;;
+            esac
+            # Do not pipe the producer through head: with pipefail, FFmpeg
+            # reports EPIPE after head closes its multi-line version output.
+            printf '%s\n' "${version_output%%$'\n'*}"
+          done
+          avifenc --version 2>&1 | grep -F "$LIBAVIF_VERSION"
+          avifdec --version 2>&1 | grep -F "$LIBAVIF_VERSION"
+          magick -version 2>&1 | grep -F "ImageMagick ${IMAGEMAGICK_VERSION}"
+          exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+          jpegtran -version 2>&1 | grep -F "libjpeg-turbo version ${LIBJPEG_TURBO_VERSION}"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: nightly-2026-08-09
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.package }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.package }}-
+
+      - name: Check ${{ matrix.package }} compilation
+        id: package_check
+        continue-on-error: true
+        run: cargo check --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build
+
+      - name: Check ${{ matrix.package }} clippy
+        id: package_clippy
+        continue-on-error: true
+        run: cargo clippy --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build -- -D warnings
+
+      - name: Test ${{ matrix.package }}
+        id: package_test
+        continue-on-error: true
+        run: cargo test --locked -p ${{ matrix.package }} --all-targets --features foundation/ci-static-build --no-fail-fast -- --test-threads=1
+
+      - name: Check ${{ matrix.package }} quality outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.package_check.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} cargo check failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.package_clippy.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} clippy failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.package_test.outcome }}" = "failure" ]; then
+            echo "::error::${{ matrix.package }} tests failed"
+            exit_code=1
+          fi
+          exit $exit_code
+
+  health-check:
+    name: "2c · Shared ${{ matrix.group }}"
+    needs: validation
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [format, compile, clippy, tests, audit, coverage]
+    # Cold bench/fuzz builds reached coverage after 176 minutes. Leave time for
+    # instrumented dependencies and final gates even when the cache is absent.
+    timeout-minutes: 360
+    env:
+      # Link the installer's pinned security release, not libheif-sys's old embedded source.
+      LIBHEIF_STATIC: "1"
+      LIBHEIF_SYS_STATIC: "1"
+      SYSTEM_DEPS_LIBHEIF_LINK: static
+      # Feature, fuzz and coverage builds already use separate graphs. Do not
+      # retain incremental copies on an ephemeral runner as well.
+      CARGO_INCREMENTAL: "0"
+      # Suppress Node 24 punycode deprecation noise from upload-artifact and other JS actions.
+      NODE_OPTIONS: --no-deprecation
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: nightly-2026-08-09
+          components: rustfmt, clippy, miri, rust-src, llvm-tools
+
+      - name: Ensure required nightly components on pinned toolchain
+        run: rustup component add rustfmt clippy miri rust-src llvm-tools --toolchain nightly-2026-08-09
+
+      # Restore before the MPC downloader and just fix-gate compile the workspace.
+      # Cache sources only: a cross-lock target restore grew beyond 11 GB
+      # compressed and exhausted disk during the instrumented libheif build.
+      - name: Cache Cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-health-sources-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-health-sources-v1-
+
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.39.0"
+
+      - name: Just fmt check (early gate)
+        if: matrix.group == 'format'
+        id: fmt_check
+        continue-on-error: true
+        run: just fmt-check
+
+      - name: Install MPC downloader bootstrap dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y curl meson ninja-build nasm
+
+      - name: Build standalone media dependency installer
+        run: rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+
+      - name: Install upstream media dependencies before compiling the MPC downloader
+        env:
+          MFB_SKIP_MPC_INSTALL: "1"
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
+
+      - name: Install pinned stable libjxl CLI tools for health checks
+        env:
+          LIBJXL_VERSION: v0.12.0
+          LIBJXL_ARCHIVE_SHA256: 5318a1ea40adad76d023e0c17a03d4627f8282f83cb2b575e69be8e74f1ff456
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y lzip
+          archive="$RUNNER_TEMP/jxl-linux-x86_64-static.tar.lz"
+          tools_root="$RUNNER_TEMP/libjxl-static"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjxl/libjxl/releases/download/${LIBJXL_VERSION}/jxl-linux-x86_64-static.tar.lz" \
+            -o "$archive"
+          printf '%s  %s\n' "$LIBJXL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          mkdir -p "$tools_root"
+          lzip -dc "$archive" | tar -xf - -C "$tools_root"
+          for tool in cjxl djxl jxlinfo; do
+            test -x "$tools_root/tools/$tool"
+            sudo install -m 0755 "$tools_root/tools/$tool" "/usr/local/bin/$tool"
+          done
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v djxl)" = "/usr/local/bin/djxl"
+          djxl_help="$(djxl -h 2>&1)"
+          grep -q -- "--output_format" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
+          djxl_version="$(djxl --version 2>&1)"
+          grep -q -- "v0.12.0" <<< "$djxl_version"
+          printf '%s\n' "$djxl_version"
+
+      - name: Install pinned stable ExifTool for health checks
+        env:
+          EXIFTOOL_VERSION: "13.59"
+          EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac
+        run: |
+          set -euo pipefail
+          tools_root="$RUNNER_TEMP/exiftool-health"
+          mkdir -p "$tools_root"
+          archive="$tools_root/exiftool-${EXIFTOOL_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$EXIFTOOL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "$tools_root"
+          exiftool_root="$tools_root/exiftool-${EXIFTOOL_VERSION}"
+          test -x "$exiftool_root/exiftool"
+          wrapper="$tools_root/exiftool-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "export PERL5LIB=\"$exiftool_root/lib\${PERL5LIB:+:\$PERL5LIB}\"" \
+            "exec \"$exiftool_root/exiftool\" \"\$@\"" > "$wrapper"
+          sudo install -m 0755 "$wrapper" /usr/local/bin/exiftool
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v exiftool)" = "/usr/local/bin/exiftool"
+          exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+
+      - name: Download GNU MPC with mirror failover
+        run: |
+          archive="$RUNNER_TEMP/mpc-1.4.1.tar.xz"
+          cargo run --locked -p dev --bin download_gnu_mpc -- "$archive"
+          echo "MFB_MPC_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Install GNU MPC from the mirror-verified archive
+        env:
+          MFB_MPC_ONLY: "1"
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
+
+      - name: Install check_all CI tools (llvm-cov, hack, bloat, fuzz)
+        if: matrix.group == 'audit' || matrix.group == 'coverage'
+        run: cargo install cargo-llvm-cov cargo-hack cargo-bloat cargo-fuzz --locked
+
+      - name: Repository health (${{ matrix.group }})
+        id: check_all
+        continue-on-error: true
+        env:
+          MFB_CHECK_LOG_DIR: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
+        run: |
+          # SSOT: fmt, clippy_strict, check, CI tests, contract registry,
+          # rustdoc -D warnings, llvm-cov LCOV, cargo fuzz smoke, cargo hack
+          # feature matrix, cargo bloat — see check_all --ci
+          # Records every reachable required/optional failure, then exits once
+          # with a numbered summary. Coverage and rustdoc still run after an
+          # earlier independent failure.
+          mkdir -p "$MFB_CHECK_LOG_DIR"
+          set -o pipefail
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke --group "${{ matrix.group }}" 2>&1 | tee "$MFB_CHECK_LOG_DIR/runner.log"
+
+      - name: Upload check diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: check-all-${{ matrix.group }}-logs
+          path: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
+          if-no-files-found: warn
+
+      - name: Verify LCOV artifact (fail-closed)
+        if: always() && matrix.group == 'coverage'
+        id: verify_lcov
+        continue-on-error: true
+        run: test -s lcov.info
+
+      - name: Upload LCOV artifact
+        if: always() && matrix.group == 'coverage'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-lcov-shared-utils
+          path: lcov.info
+          if-no-files-found: error
+
+      - name: Check shared health-check outcomes
+        if: always()
+        run: |
+          exit_code=0
+          if [ "${{ steps.fmt_check.outcome }}" = "failure" ]; then
+            echo "::error::just fmt-check failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.check_all.outcome }}" = "failure" ]; then
+            echo "::error::check_all failed"
+            exit_code=1
+          fi
+          if [ "${{ steps.verify_lcov.outcome }}" = "failure" ]; then
+            echo "::error::lcov.info check failed or missing"
+            exit_code=1
+          fi
+          exit $exit_code
+
+  security-audit:
+    name: "3 · Dependency Security Audit"
+    needs: health-check
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: cargo audit --deny warnings
+
+  nightly-release:
+    name: Build & Publish Nightly
+    if: >-
+      github.ref == 'refs/heads/nightly' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.health-check.result == 'success' && needs.package-quality.result == 'success' &&
+      needs.security-audit.result == 'success' && needs.validation.result == 'success' &&
+      needs.dispatch2-macos.result == 'success' && needs.dispatch2-linux.result == 'success' &&
+      needs.deep-audit.result == 'success'
+    needs:
+      - validation
+      - package-quality
+      - health-check
+      - security-audit
+      - dispatch2-macos
+      - dispatch2-linux
+      - deep-audit
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/cd-nightly.yml
+    secrets: inherit
+
+  deep-audit:
+    name: Deep Production Audit
+    needs: security-audit
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      SYSTEM_DEPS_LIBHEIF_LINK: static
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Nightly Rust
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: nightly-2026-08-09
+          components: clippy, rustfmt, miri, rust-src, llvm-tools
+
+      - name: Build standalone media dependency installer
+        run: rustc --edition 2024 crates/dev/src/bin/install_media_dependencies.rs -o "$RUNNER_TEMP/install_media_dependencies"
+
+      - name: Install upstream media and MPC dependencies
+        run: '"$RUNNER_TEMP/install_media_dependencies"'
+
+      - name: Install pinned stable libjxl CLI tools for deep audit
+        env:
+          LIBJXL_VERSION: v0.12.0
+          LIBJXL_ARCHIVE_SHA256: 5318a1ea40adad76d023e0c17a03d4627f8282f83cb2b575e69be8e74f1ff456
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y lzip
+          archive="$RUNNER_TEMP/jxl-linux-x86_64-static.tar.lz"
+          tools_root="$RUNNER_TEMP/libjxl-static"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/libjxl/libjxl/releases/download/${LIBJXL_VERSION}/jxl-linux-x86_64-static.tar.lz" \
+            -o "$archive"
+          printf '%s  %s\n' "$LIBJXL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          mkdir -p "$tools_root"
+          lzip -dc "$archive" | tar -xf - -C "$tools_root"
+          for tool in cjxl djxl jxlinfo; do
+            test -x "$tools_root/tools/$tool"
+            sudo install -m 0755 "$tools_root/tools/$tool" "/usr/local/bin/$tool"
+          done
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v djxl)" = "/usr/local/bin/djxl"
+          djxl_help="$(djxl -h 2>&1)"
+          grep -q -- "--output_format" <<< "$djxl_help"
+          probe_dir="$RUNNER_TEMP/libjxl-reconstruction-probe"
+          mkdir -p "$probe_dir"
+          # Synthetic 2x2 JPEG fixture; avoids depending on a runner image tool
+          # before the pinned media toolchain is installed.
+          base64 --decode > "$probe_dir/source.jpg" <<'JPEG'
+          /9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkI
+          CQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQ
+          EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAIDAREA
+          AhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEB
+          AAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/
+          2Q==
+          JPEG
+          cjxl "$probe_dir/source.jpg" "$probe_dir/archive.jxl" 2>&1 | tee "$probe_dir/cjxl.log"
+          djxl "$probe_dir/archive.jxl" "$probe_dir/recovered.jpg" --reconstruct_jpeg 2>&1 | tee "$probe_dir/djxl.log"
+          grep -q -- "Reconstructed to JPEG" "$probe_dir/djxl.log"
+          cmp -s "$probe_dir/source.jpg" "$probe_dir/recovered.jpg"
+          djxl_version="$(djxl --version 2>&1)"
+          grep -q -- "v0.12.0" <<< "$djxl_version"
+          printf '%s\n' "$djxl_version"
+
+      - name: Install pinned stable ExifTool for deep audit
+        env:
+          EXIFTOOL_VERSION: "13.59"
+          EXIFTOOL_ARCHIVE_SHA256: 87d3317882fdae9cb4dcfe57a96a378d0132ffc02c731315bf128b19ddcf7aac
+        run: |
+          set -euo pipefail
+          tools_root="$RUNNER_TEMP/exiftool-deep-audit"
+          mkdir -p "$tools_root"
+          archive="$tools_root/exiftool-${EXIFTOOL_VERSION}.tar.gz"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" \
+            -o "$archive"
+          printf '%s  %s\n' "$EXIFTOOL_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+          tar -xzf "$archive" -C "$tools_root"
+          exiftool_root="$tools_root/exiftool-${EXIFTOOL_VERSION}"
+          test -x "$exiftool_root/exiftool"
+          wrapper="$tools_root/exiftool-wrapper"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            "export PERL5LIB=\"$exiftool_root/lib\${PERL5LIB:+:\$PERL5LIB}\"" \
+            "exec \"$exiftool_root/exiftool\" \"\$@\"" > "$wrapper"
+          sudo install -m 0755 "$wrapper" /usr/local/bin/exiftool
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          test "$(command -v exiftool)" = "/usr/local/bin/exiftool"
+          exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+
+      - name: Install Audit Tools
+        run: |
+          cargo install cargo-hack cargo-bloat cargo-nextest cargo-fuzz --locked
+
+      - name: Generate edge test media (gitignored fixtures)
+        run: cargo run --locked -p dev --bin generate_test_media
+
+      - name: Run Expensive Workspace Audit
+        env:
+          MFB_CHECK_LOG_DIR: ${{ runner.temp }}/mfb-check-deep-audit
+        run: |
+          # 运行 check_all 并启用昂贵检查：
+          # --build: 验证 Release 编译
+          # --fuzz-smoke: 验证并短跑所有 Fuzz 目标
+          # (不传 --no-expensive 默认开启 cargo hack feature matrix)
+          mkdir -p "$MFB_CHECK_LOG_DIR"
+          set -o pipefail
+          cargo run --locked -p dev --bin check_all -- --allow-non-nightly --collect-all --build --fuzz-smoke 2>&1 | tee "$MFB_CHECK_LOG_DIR/runner.log"
+
+      - name: Upload deep audit diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: check-all-deep-audit-logs
+          path: ${{ runner.temp }}/mfb-check-deep-audit
+          if-no-files-found: warn

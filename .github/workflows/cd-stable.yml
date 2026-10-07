@@ -1,0 +1,231 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RELEASE_TARGET: aarch64-apple-darwin
+  RELEASE_ARTIFACT_NAME: macos-arm64
+  MIGRATED_RUST_BINS: "backfill_directory_scores cache_cleaner check_all collect_optimized create_live_photo database_manager generate_test_media icloud_import install_deps mfb_rust_toolchain normalize_stale_embed_measurement_slots post_training_closure run_training sandbox_validate session_audit setup_private_db start_training_four training_pipeline delivery_heatmap corpus_thresholds smart_build"
+
+jobs:
+  build:
+    name: Build macos-arm64
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      COSIGN_KEY_PRESENT: ${{ secrets.COSIGN_PRIVATE_KEY != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: nightly-2026-05-23
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: macos-15-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-15-arm64-cargo-
+
+      - name: Install dependencies (macOS ARM64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BREW_PREFIX=$(brew --prefix)
+          # The hosted image installs an OpenSSL 1.1 shim outside brew link.
+          # Preserve only that known shim before OpenSSL 3 claims the command.
+          OPENSSL_SHIM="${BREW_PREFIX}/bin/openssl"
+          if [[ -L "$OPENSSL_SHIM" && "$(readlink "$OPENSSL_SHIM")" == "${BREW_PREFIX}/opt/openssl@1.1/bin/openssl" ]]; then
+            OPENSSL_BACKUP=$(mktemp -d "${RUNNER_TEMP}/mfb-openssl-shim.XXXXXX")
+            mv "$OPENSSL_SHIM" "$OPENSSL_BACKUP/openssl"
+            echo "Preserved legacy OpenSSL shim in $OPENSSL_BACKUP"
+          fi
+
+          BREW_FORMULAS=(
+            ffmpeg jpeg-xl exiftool exiv2 jpeginfo pngcheck jhead jpeg-turbo libavif imagemagick webp libheif nasm dav1d
+            gmp mpfr libmpc vvdec vvenc
+          )
+          MISSING=()
+          for formula in "${BREW_FORMULAS[@]}"; do
+            # Only official formulas: no global trust bypass or third-party taps.
+            if ! brew list --formula "homebrew/core/${formula}" &>/dev/null; then
+              MISSING+=("homebrew/core/${formula}")
+            fi
+          done
+          if ((${#MISSING[@]} > 0)); then
+            brew update
+            brew install "${MISSING[@]}"
+          else
+            echo "All required Homebrew formulas already installed."
+          fi
+
+          if ! pkg-config --atleast-version=1.23.5 libheif; then
+            brew update
+            brew upgrade homebrew/core/libheif
+          fi
+          pkg-config --atleast-version=1.23.5 libheif
+
+          {
+            echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig"
+            echo "CPATH=${BREW_PREFIX}/include${CPATH:+:$CPATH}"
+            echo "LIBRARY_PATH=${BREW_PREFIX}/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Workaround for stdc++ on macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/libstdcxx-fix
+          ln -sf /usr/lib/libc++.1.dylib /tmp/libstdcxx-fix/libstdc++.dylib
+          echo "LIBRARY_PATH=/tmp/libstdcxx-fix${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target "$RELEASE_TARGET" \
+            -p vid -p img --features "img/system-gmp,vid/system-gmp,foundation/system-gmp"
+          DEV_BIN_ARGS=()
+          for bin in ${MIGRATED_RUST_BINS}; do
+            DEV_BIN_ARGS+=(--bin "${bin}")
+          done
+          cargo build --locked --release --target "$RELEASE_TARGET" -p dev "${DEV_BIN_ARGS[@]}"
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="ModernFormatBoost-${TAG}-${RELEASE_ARTIFACT_NAME}.zip"
+          mkdir -p dist
+          for bin in vid img; do
+            cp "target/${RELEASE_TARGET}/release/${bin}" dist/
+          done
+          for bin in ${MIGRATED_RUST_BINS}; do
+            cp "target/${RELEASE_TARGET}/release/${bin}" dist/
+          done
+          mkdir -p dist/crates/dev/scripts
+          cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
+            dist/crates/dev/scripts/
+          cp README.md LICENSE dist/
+          (cd dist && zip -r "../${ARCHIVE}" .)
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign release archive (cosign)
+        if: env.COSIGN_KEY_PRESENT == 'true'
+        shell: bash
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f cosign.key' EXIT
+          printf '%s\n' "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+          chmod 600 cosign.key
+          cosign sign-blob \
+            --key cosign.key \
+            --output "${ARCHIVE}.sig" \
+            --tlog-upload=false \
+            "${ARCHIVE}"
+
+      - name: Upload artifact (inter-job)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-arm64
+          path: ModernFormatBoost-*-macos-arm64.zip
+          if-no-files-found: error
+
+      - name: Upload cosign signatures
+        if: env.COSIGN_KEY_PRESENT == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-arm64-cosign
+          path: ModernFormatBoost-*-macos-arm64.zip.sig
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for CHANGELOG)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh release-assets/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: nightly-2026-05-23
+
+      - name: Generate workspace SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --workspace --format json --override-filename sbom
+          mv sbom.json release-assets/sbom.cdx.json
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p release-staged
+          cp release-assets/*.zip release-staged/
+          cp release-assets/sbom.cdx.json release-staged/
+          for sig in release-assets/*.zip.sig; do
+            cp "$sig" release-staged/
+          done
+          ls -lh release-staged/
+
+      - name: Extract version changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          if [ -f "RELEASE_NOTES_${TAG}.md" ]; then
+            echo "Using RELEASE_NOTES_${TAG}.md"
+            cp "RELEASE_NOTES_${TAG}.md" /tmp/release_notes.md
+          else
+            echo "Extracting from CHANGELOG.md for version ${VERSION}"
+            NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" docs/CHANGELOG.md 2>/dev/null | head -80)
+            if [ -z "$NOTES" ]; then
+              NOTES="See commit history for changes in ${TAG}."
+            fi
+            printf '%s\n' "$NOTES" > /tmp/release_notes.md
+          fi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
+          files: release-staged/*
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}

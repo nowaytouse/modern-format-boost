@@ -1,8 +1,10 @@
-# Clippy configuration for modern_format_boost
-# 配置合理的警告阈值
+# Workspace Clippy thresholds (pedantic defaults unless noted).
+# CI + local: `./scripts/clippy_strict.py` — workspace deny + `-W clippy::pedantic`,
+# `-W clippy::nursery`, `-W clippy::cargo`, `-W unreachable_pub`, `-W dead_code`.
 
-# 允许更多函数参数（媒体处理需要很多配置参数）
-too-many-arguments-threshold = 10
-
-# 允许复杂类型（Result<T, E>嵌套是必要的）
+too-many-lines-threshold = 100
+cognitive-complexity-threshold = 25
 type-complexity-threshold = 500
+too-many-arguments-threshold = 10
+single-char-binding-names-threshold = 4
+pass-by-value-size-limit = 256

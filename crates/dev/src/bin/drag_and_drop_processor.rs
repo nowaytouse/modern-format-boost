@@ -1,0 +1,4403 @@
+//! Modern Format Boost - Drag/Drop Processor (Rust primary;
+//! `drag_and_drop_processor.py` retained as compat reference). PTY/process
+//! streaming, watch mode, interactive TUI menu, handoff preserve — parity with
+//! Python launcher.
+
+use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Local};
+use clap::{Parser, ValueEnum};
+use dev::infra::drag_drop::{
+    ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
+    build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
+    create_directory_structure, delete_fast_img_shortest_path_output_dir,
+    fast_img_retained_file_names, fast_img_session_size_metrics, run_unified_verification,
+    safety_check, scan_content, sync_non_media_files,
+};
+use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
+use dev::infra::fastmode_paths::{
+    build_fast_img_command, build_fast_img_restore_command, build_fast_vid_command,
+    fast_img_restore_output_dir_for_target, fast_vid_output_dir_for_target,
+};
+use dev::infra::hardening::delegated_exit_code;
+use dev::infra::log_paths::{
+    append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
+    format_session_stamp,
+};
+use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
+use dev::infra::rich_panel::{
+    PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
+    pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
+    print_runtime_panel, print_summary_report,
+};
+use dev::infra::signal_handlers::{install_signal_handlers, set_child_active};
+use dev::infra::terminal_input::{
+    NavKey, drain_stdin, read_nav_key, resize_terminal_for_gui, validate_drag_drop_path,
+};
+use dev::infra::ui_tokens::{colors_enabled, pick_symbol};
+use dev::infra::watch_mode::{is_watch_trigger_ext, watch_directory_with_debounce};
+
+use dev::infra::system_checks::{check_system_resources, probe_system_snapshot};
+use dev::media::scope::format_bytes;
+
+use dev::media::scope::{
+    HANDOFF_PRESERVE_PHASE_POST_IMG_VID, PIPELINE_IMAGE, PIPELINE_VIDEO, classify_media_owner,
+    extract_routed_video_paths_from_audit, preserve_handoff_gaps,
+    report_handoff_preserve_gaps_from_paths,
+};
+use foundation::BatchErrorMode;
+use foundation::infra::runtime_config::FallbackPolicy;
+use foundation::process_lock::DirLock;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+use walkdir::WalkDir;
+
+const DRAG_DROP_CHILD_ULTIMATE: bool = true;
+const DRAG_DROP_CHILD_VERBOSE: bool = true;
+
+#[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum LaunchMode {
+    Auto,
+    Images,
+    Videos,
+    FastImg,
+    RestoreJpeg,
+    FastVid,
+    Collect,
+    Compare,
+    MergeXmp,
+    IcloudImport,
+    Diagnostic,
+    CacheClean,
+    DatabaseManager,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ErrorModeOption {
+    LogAndContinue,
+    FailFast,
+}
+
+impl ErrorModeOption {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::LogAndContinue => "log-and-continue",
+            Self::FailFast => "fail-fast",
+        }
+    }
+
+    const fn batch_mode(self) -> BatchErrorMode {
+        match self {
+            Self::LogAndContinue => BatchErrorMode::LogAndContinue,
+            Self::FailFast => BatchErrorMode::FailFast,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum VideoCodecOption {
+    Hevc,
+    Av1,
+}
+
+impl VideoCodecOption {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "drag_and_drop_processor",
+    version,
+    about = "Modern Format Boost CLI-first drag/drop launcher"
+)]
+struct Args {
+    #[arg(value_name = "INPUT")]
+    inputs: Vec<PathBuf>,
+
+    #[arg(long, value_enum, default_value_t = LaunchMode::Auto)]
+    mode: LaunchMode,
+
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Backup folder or Photos library used by recovery collection/comparison.
+    #[arg(long, value_name = "PATH")]
+    backup: Option<PathBuf>,
+
+    #[arg(long)]
+    archive: bool,
+
+    #[arg(long = "shortest-path")]
+    shortest_path: bool,
+
+    #[arg(long, conflicts_with = "no_resume")]
+    retry: bool,
+
+    #[arg(short, long)]
+    force: bool,
+
+    #[arg(long)]
+    dry_run: bool,
+
+    #[arg(long)]
+    plain: bool,
+
+    #[arg(long, conflicts_with = "no_resume")]
+    resume: bool,
+
+    /// Explicitly discard saved conversion state and start a fresh run.
+    #[arg(long, conflicts_with = "resume")]
+    no_resume: bool,
+
+    #[arg(long)]
+    ultimate: bool,
+
+    #[arg(long)]
+    in_place: bool,
+
+    #[arg(short, long)]
+    verbose: bool,
+
+    #[arg(long)]
+    base_dir: Option<PathBuf>,
+
+    /// Watch input directory for new media (debounced re-run)
+    #[arg(long)]
+    watch: bool,
+
+    /// Only process static images (maps to `--mode images`)
+    #[arg(long, conflicts_with = "videos_only")]
+    images_only: bool,
+
+    /// Only process videos/animated media (maps to `--mode videos`)
+    #[arg(long, conflicts_with = "images_only")]
+    pub videos_only: bool,
+
+    #[arg(long)]
+    pub strategy: Option<String>,
+
+    /// Image runtime JSON overlay; the file is not modified.
+    #[arg(long, value_name = "PATH")]
+    img_config: Option<PathBuf>,
+    #[command(flatten)]
+    performance: foundation::runtime_config::PerformanceArgs,
+
+    /// Permitted image encoding attempts, independent of batch failure handling.
+    #[arg(long, value_enum)]
+    img_fallback_policy: Option<FallbackPolicy>,
+
+    /// JPEG reversible recompression effort, from 1 through 11.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
+    img_jpeg_effort: Option<u8>,
+
+    /// Override image quality inference without affecting video settings.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_quality_heuristic: Option<bool>,
+
+    /// Permit or deny optional image database access, not database credentials.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_allow_database: Option<bool>,
+
+    #[command(flatten)]
+    photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
+
+    /// Standard image batch policy; FastImg retains its checkpointed handling.
+    #[arg(long, value_enum)]
+    img_error_mode: Option<ErrorModeOption>,
+
+    /// Standard video batch policy; not applicable to Fast Video/GIF.
+    #[arg(long, value_enum)]
+    vid_error_mode: Option<ErrorModeOption>,
+
+    /// Standard video codec; AV1 explicitly disables Apple compatibility.
+    #[arg(long, value_enum)]
+    vid_codec: Option<VideoCodecOption>,
+
+    /// Restrict restore-jpeg to one native Photos album UUID.
+    #[arg(long, conflicts_with = "photos_folder_id")]
+    photos_album_id: Option<String>,
+
+    /// Restrict restore-jpeg to one native Photos folder UUID.
+    #[arg(long, conflicts_with = "photos_album_id")]
+    photos_folder_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LaunchCommand {
+    program: PathBuf,
+    args: Vec<String>,
+    env_overrides: Vec<(String, Option<String>)>,
+}
+
+struct DragDropSession {
+    started_at: DateTime<Local>,
+    stamp: String,
+    log_dir: PathBuf,
+    session_log: PathBuf,
+    verbose_log: PathBuf,
+    session_audit: PathBuf,
+}
+
+impl DragDropSession {
+    fn start() -> Result<Self> {
+        let log_dir = ensure_unified_log_dir()?;
+        Self::start_with_log_dir(&log_dir, true)
+    }
+
+    #[cfg(test)]
+    fn start_for_test(log_dir: &Path) -> Result<Self> {
+        Self::start_with_log_dir(log_dir, false)
+    }
+
+    fn start_with_log_dir(log_dir: &Path, set_child_env: bool) -> Result<Self> {
+        fs::create_dir_all(log_dir)
+            .with_context(|| format!("create drag/drop log dir {}", log_dir.display()))?;
+        let log_dir = log_dir
+            .canonicalize()
+            .with_context(|| format!("canonicalize drag/drop log dir {}", log_dir.display()))?;
+        let started_at = Local::now();
+        let stamp = format!(
+            "{}_{}_{:09}",
+            format_session_stamp(Some(started_at)),
+            std::process::id(),
+            started_at.timestamp_subsec_nanos()
+        );
+        let session = Self {
+            started_at,
+            session_log: log_dir.join(format!("MFB_Session_{stamp}.log")),
+            verbose_log: log_dir.join(format!("verbose_{stamp}.log")),
+            session_audit: log_dir.join(format!("session_audit_{stamp}.jsonl")),
+            log_dir,
+            stamp,
+        };
+        // A collision must never append another session's events or counters.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&session.session_log)
+            .context("reserve unique processing session log")?;
+        if set_child_env {
+            unsafe {
+                std::env::set_var("MFB_SESSION_ID", &session.stamp);
+                std::env::set_var("MFB_LOG_DIR", session.log_dir.as_os_str());
+            }
+            if std::env::var("RUST_LOG").map_or(true, |value| value.trim().is_empty()) {
+                unsafe {
+                    std::env::set_var("RUST_LOG", "trace");
+                }
+            }
+        }
+        session.append_line(&session.session_log, "SESSION_STARTED")?;
+        session.append_line(&session.verbose_log, "SESSION_STARTED")?;
+        append_jsonl_audit_record(&session.session_audit, "SESSION_STARTED")?;
+        Ok(session)
+    }
+
+    fn append_line(&self, path: &Path, event: &str) -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .with_context(|| format!("open drag/drop log {}", path.display()))?;
+        let stamp = Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        writeln!(file, "[{stamp}] {event}")
+            .with_context(|| format!("write drag/drop log {}", path.display()))
+    }
+
+    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+        let event = format!("{name}={payload}");
+        dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
+    }
+
+    fn record_history_verification(
+        &self,
+        verify: &dev::infra::drag_drop::VerifyOutcome,
+        source: &Path,
+        output: &Path,
+    ) -> Result<()> {
+        let counts = verify
+            .integrity_summary
+            .as_ref()
+            .context("history verification requires the machine integrity summary")?;
+        self.append_history_event(
+            "MFB_HISTORY_VERIFICATION",
+            serde_json::json!({
+                "schema_version": 1,
+                "source_path": serde_json::to_value(source).context("encode history verification source path")?,
+                "output_path": serde_json::to_value(output).context("encode history verification output path")?,
+                "has_warnings": counts.has_warnings,
+                "issue_count": counts.issue_count,
+                "source_count": counts.source_count,
+                "optimized_count": counts.optimized_count,
+                "skipped_count": counts.skipped_count,
+                "failed_count": counts.failed_count,
+                "source_remaining_count": counts.source_remaining_count,
+                "verified_deleted_count": counts.verified_deleted_count,
+                "count_status": counts.count_status,
+            }),
+        )
+    }
+
+    /// Rename session log to include project folder name (mirrors Python
+    /// `rename_log_to_project`).
+    fn rename_log_to_project(&mut self, target: &Path) -> Result<()> {
+        let project_name = target.file_name().map_or_else(
+            || "project".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let new_name = self
+            .log_dir
+            .join(format!("MFB_{project_name}_{}.log", self.stamp));
+        if self.session_log == new_name {
+            return Ok(());
+        }
+        if self.session_log.is_file() {
+            fs::rename(&self.session_log, &new_name).with_context(|| {
+                format!(
+                    "rename session log {} -> {}",
+                    self.session_log.display(),
+                    new_name.display()
+                )
+            })?;
+            self.session_log = new_name;
+        }
+        Ok(())
+    }
+
+    /// Write final statistics block to session log (mirrors Python
+    /// `finish_log`).
+    fn finish_log(&self, summary: &PipelineSummary, size_summary: Option<&str>) -> Result<()> {
+        self.append_history_event("MFB_HISTORY_SUMMARY", history_summary_payload(summary))?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.session_log)
+            .with_context(|| format!("open session log {}", self.session_log.display()))?;
+        writeln!(file, "\n========================================")?;
+        writeln!(file, "Final Statistics")?;
+        writeln!(file, "========================================")?;
+        writeln!(
+            file,
+            "End Time: {}",
+            format_session_stamp(Some(Local::now()))
+        )?;
+        writeln!(file, "Verbose Log: {}", self.verbose_log.display())?;
+        let label =
+            |count: Option<usize>| count.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
+        for (media, stats, active) in [
+            ("Images", &summary.img, summary.has_image_stats()),
+            ("Videos", &summary.vid, summary.has_video_stats()),
+        ] {
+            if active {
+                writeln!(
+                    file,
+                    "{media}: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
+                    label(stats.reported[0].then_some(stats.succeeded)),
+                    label(stats.reported[1].then_some(stats.skipped)),
+                    label(stats.reported[2].then_some(stats.ignored)),
+                    label(stats.reported[3].then_some(stats.failed)),
+                    label(stats.unprocessed),
+                )?;
+            }
+        }
+        writeln!(
+            file,
+            "Total: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
+            label(summary.total_count(0)),
+            label(summary.total_count(1)),
+            label(summary.total_count(2)),
+            label(summary.total_count(3)),
+            label(summary.total_unprocessed()),
+        )?;
+        writeln!(
+            file,
+            "Count scope: processor outcomes, not unique files or Photos assets"
+        )?;
+        writeln!(
+            file,
+            "Conversion Success Rate: {}",
+            summary
+                .success_rate_percent()
+                .map_or_else(|| "N/A".to_owned(), |rate| format!("{rate}%"))
+        )?;
+        if let Some(state) = summary.integrity_state {
+            writeln!(
+                file,
+                "Integrity: {state}; issues={}",
+                summary.integrity_issue_count
+            )?;
+        }
+        if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
+            writeln!(file, "Retained files (source preserved):")?;
+            for name in &summary.failed_file_names {
+                writeln!(file, "  [FAIL] {name}")?;
+            }
+            for name in &summary.skipped_file_names {
+                writeln!(file, "  [SKIP] {name}")?;
+            }
+        } else if let Some(failed) = summary.total_count(3).filter(|count| *count > 0) {
+            // If failed count > 0 but no file names, point to verbose log
+            writeln!(
+                file,
+                "Failed: {} file(s) - see verbose log for details: {}",
+                failed,
+                self.verbose_log.display()
+            )?;
+        }
+        if let Some(block) = size_summary {
+            writeln!(file, "{block}")?;
+        }
+        writeln!(
+            file,
+            "\n========================================\nSession \
+             completed.\n========================================"
+        )?;
+        append_jsonl_audit_record(
+            &self.session_audit,
+            &format!(
+                "SESSION_COMPLETED images_ok={} images_skip={} images_ignore={} images_fail={} images_unprocessed={} videos_ok={} \
+                 videos_skip={} videos_ignore={} videos_fail={} videos_unprocessed={} integrity={:?} integrity_issues={}",
+                label(summary.img.reported[0].then_some(summary.img.succeeded)),
+                label(summary.img.reported[1].then_some(summary.img.skipped)),
+                label(summary.img.reported[2].then_some(summary.img.ignored)),
+                label(summary.img.reported[3].then_some(summary.img.failed)),
+                label(summary.img.unprocessed),
+                label(summary.vid.reported[0].then_some(summary.vid.succeeded)),
+                label(summary.vid.reported[1].then_some(summary.vid.skipped)),
+                label(summary.vid.reported[2].then_some(summary.vid.ignored)),
+                label(summary.vid.reported[3].then_some(summary.vid.failed)),
+                label(summary.vid.unprocessed),
+                summary.integrity_state,
+                summary.integrity_issue_count,
+            ),
+        )?;
+        let has_integrity_issues =
+            summary.integrity_state == Some("WARNINGS") && summary.integrity_issue_count > 0;
+        if summary.total_failed() > 0 || has_integrity_issues {
+            eprintln!(
+                "   {} Session log:  {}",
+                pick_symbol("📋", "[LOG]"),
+                self.session_log.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn archive(&self) -> Result<Option<PathBuf>> {
+        self.append_line(&self.session_log, "SESSION_ARCHIVE_BEGIN")?;
+        self.append_line(&self.verbose_log, "SESSION_ARCHIVE_BEGIN")?;
+        append_jsonl_audit_record(&self.session_audit, "SESSION_ARCHIVE_BEGIN")?;
+        let archived = archive_drag_drop_session_bundle(
+            &self.log_dir,
+            &self.stamp,
+            Some(&self.session_log),
+            Some(&self.verbose_log),
+            Some(&self.session_audit),
+            Some(self.started_at),
+        )?;
+        if let Some(bundle) = &archived {
+            let archived_audit = bundle.join(format!("session_audit_{}.jsonl", self.stamp));
+            append_jsonl_audit_record(&archived_audit, "SESSION_ARCHIVE_DONE")?;
+        }
+        Ok(archived)
+    }
+}
+
+impl LaunchCommand {
+    fn from_argv(argv: Vec<String>) -> Result<Self> {
+        let mut iter = argv.into_iter();
+        let Some(program) = iter.next() else {
+            bail!("internal launcher error: empty command argv");
+        };
+        Ok(Self {
+            program: PathBuf::from(program),
+            args: iter.collect(),
+            env_overrides: Vec::new(),
+        })
+    }
+
+    fn with_error_mode(mut self, mode: Option<ErrorModeOption>) -> Self {
+        if let Some(mode) = mode {
+            self.env_overrides.push((
+                foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
+                Some(mode.as_str().to_owned()),
+            ));
+            self.env_overrides.push((
+                foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
+                None,
+            ));
+        }
+        self
+    }
+
+    fn display(&self) -> String {
+        let mut parts = Vec::with_capacity(self.args.len() + 1);
+        parts.push(self.program.display().to_string());
+        parts.extend(self.args.iter().cloned());
+        parts.join(" ")
+    }
+
+    fn pipeline_label(&self) -> &'static str {
+        match self.program.file_name().and_then(|name| name.to_str()) {
+            Some("img") => "IMG",
+            Some("vid") => "VID",
+            _ => "CMD",
+        }
+    }
+
+    #[allow(dead_code)]
+    fn run(&self, dry_run: bool) -> Result<()> {
+        self.run_with_session(dry_run, None).map(|_| ())
+    }
+
+    fn run_with_session(
+        &self,
+        dry_run: bool,
+        session: Option<&DragDropSession>,
+    ) -> Result<ProcessorStats> {
+        self.run_collecting(dry_run, session, true)
+    }
+
+    fn run_collecting(
+        &self,
+        dry_run: bool,
+        session: Option<&DragDropSession>,
+        bail_on_failure: bool,
+    ) -> Result<ProcessorStats> {
+        println!("+ {}", self.display());
+        if self.args.first().is_some_and(|arg| arg == "run") {
+            for (name, value) in &self.env_overrides {
+                if name == foundation::constants::ENV_MFB_ERROR_MODE
+                    && let Some(value) = value
+                {
+                    println!("[POLICY] {} file_error_mode={value}", self.pipeline_label());
+                }
+            }
+        }
+        if dry_run {
+            return Ok(ProcessorStats::default());
+        }
+        foundation::batch_control::checkpoint()?;
+        if self.program.components().count() > 1 && !self.program.is_file() {
+            bail!(
+                "Rust CLI binary missing: {}. Build it with `cargo build -p {}` first.",
+                self.program.display(),
+                self.program
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("dev"))
+                    .to_string_lossy()
+            );
+        }
+        if let Some(sess) = session {
+            let event = format!(
+                "{}_PIPELINE_SPAWN cmd={}",
+                self.pipeline_label(),
+                self.display()
+            );
+            append_jsonl_audit_record(&sess.session_audit, &event)?;
+            sess.append_line(&sess.session_log, &event)?;
+            sess.append_line(&sess.verbose_log, &event)?;
+        }
+
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args);
+        for (name, value) in &self.env_overrides {
+            if let Some(value) = value {
+                cmd.env(name, value);
+            } else {
+                cmd.env_remove(name);
+            }
+        }
+        cmd.env("COLUMNS", "223");
+        cmd.env("LINES", "45");
+        if let Some(config) = foundation::runtime_config::active() {
+            let mode = clap::ValueEnum::to_possible_value(&config.performance.mode)
+                .context("performance mode has no CLI value")?;
+            cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
+        }
+        let stats = if let Some(sess) = session {
+            let mut output =
+                dev::infra::history_store::HistoryOutputWriter::open(&sess.log_dir, &sess.stamp)?;
+            let heartbeat = sess.session_audit.clone();
+            let mut last_heartbeat = Instant::now();
+            let pipeline_label = self.pipeline_label().to_string();
+            let pipeline_started_at = Instant::now();
+            let argv = self.argv();
+            let env_overrides = self
+                .env_overrides
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_deref()))
+                .collect::<Vec<_>>();
+            set_child_active(true);
+            let mut session_log_error = None;
+            let result = stream_process_with_pty_with_env(
+                &argv,
+                None,
+                &env_overrides,
+                |line| {
+                    println!("{line}");
+                    let _ = io::stdout().flush();
+                    if session_log_error.is_none()
+                        && let Err(error) = output.push_line(&pipeline_label, line)
+                    {
+                        session_log_error = Some(error);
+                    }
+                },
+                || {
+                    if last_heartbeat.elapsed() >= std::time::Duration::from_mins(1) {
+                        let event = format!(
+                            "SESSION_HEARTBEAT pipeline={pipeline_label} elapsed_secs={}",
+                            pipeline_started_at.elapsed().as_secs()
+                        );
+                        let _ = append_jsonl_audit_record(&heartbeat, &event);
+                        last_heartbeat = Instant::now();
+                    }
+                },
+            );
+            set_child_active(false);
+            if session_log_error.is_none()
+                && let Err(error) = output.flush()
+            {
+                session_log_error = Some(error);
+            }
+            match result {
+                Ok(_) if session_log_error.is_some() => {
+                    return Err(session_log_error.expect("checked session stream log error"))
+                        .context("write session child output to processing history");
+                }
+                Ok(stats) => stats,
+                Err(error) => {
+                    let event = format!(
+                        "{pipeline_label}_PIPELINE_STREAM_ERROR elapsed_secs={} error={error}",
+                        pipeline_started_at.elapsed().as_secs()
+                    );
+                    let _ = append_jsonl_audit_record(&heartbeat, &event);
+                    if let Some(log_error) = session_log_error {
+                        eprintln!("[LOG] processing history output write failed: {log_error:#}");
+                    }
+                    if let Err(log_error) = sess.append_line(&sess.session_log, &event) {
+                        eprintln!("[LOG] session stream error write failed: {log_error:#}");
+                    }
+                    return Err(error);
+                }
+            }
+        } else {
+            let mut child = cmd
+                .spawn()
+                .with_context(|| format!("launch {}", self.display()))?;
+            let status = child
+                .wait()
+                .with_context(|| format!("wait {}", self.display()))?;
+            ProcessorStats {
+                exit_code: delegated_exit_code(
+                    status,
+                    &self.program.to_string_lossy(),
+                    "LaunchCommand",
+                ),
+                ..ProcessorStats::default()
+            }
+        };
+        if let Some(sess) = session {
+            let count = |index: usize, value: usize| {
+                stats.reported[index]
+                    .then_some(value)
+                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+            };
+            let event = format!(
+                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={} unprocessed={}",
+                self.pipeline_label(),
+                stats.exit_code,
+                count(0, stats.succeeded),
+                count(1, stats.skipped),
+                count(2, stats.ignored),
+                count(3, stats.failed),
+                stats
+                    .unprocessed
+                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+            );
+            append_jsonl_audit_record(&sess.session_audit, &event)?;
+            sess.append_line(&sess.session_log, &event)?;
+            sess.append_line(&sess.verbose_log, &event)?;
+            if stats.exit_code != 0 {
+                let error_event = format!(
+                    "{}_PIPELINE_ERROR command failed with exit {}: {}",
+                    self.pipeline_label(),
+                    stats.exit_code,
+                    self.display()
+                );
+                sess.append_line(&sess.session_log, &error_event)?;
+                sess.append_line(&sess.verbose_log, &error_event)?;
+            }
+        }
+        // The delegated child has finished its own file/checkpoint boundary.
+        foundation::batch_control::checkpoint()?;
+        if stats.exit_code != 0 && bail_on_failure {
+            bail!(
+                "command failed with exit {}: {}",
+                stats.exit_code,
+                self.display()
+            );
+        }
+        Ok(stats)
+    }
+
+    fn argv(&self) -> Vec<String> {
+        let mut argv = Vec::with_capacity(self.args.len() + 1);
+        argv.push(self.program.to_string_lossy().into_owned());
+        argv.extend(self.args.iter().cloned());
+        argv
+    }
+}
+
+fn resolve_runtime_root() -> Result<PathBuf> {
+    if let Some(bundle) = app_bundle_root() {
+        return Ok(bundle);
+    }
+    project_root()
+}
+
+fn app_bundle_root() -> Option<PathBuf> {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!(
+                "{} current_exe lookup failed while resolving app bundle root: {err}",
+                pick_symbol("⚠️", "[WARN]")
+            );
+            return None;
+        }
+    };
+    #[allow(unused_variables)]
+    let exe_dir = exe.parent()?;
+    #[cfg(target_os = "macos")]
+    {
+        let exe_dir_name = exe_dir.file_name().and_then(|n| n.to_str());
+        if exe_dir_name == Some("Resources") || exe_dir_name == Some("MacOS") {
+            return Some(exe_dir.to_path_buf());
+        }
+    }
+    None
+}
+
+fn is_app_bundle_resource_root(root: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let name = root.file_name().and_then(|n| n.to_str());
+        matches!(name, Some("Resources" | "MacOS"))
+            && root.parent().is_some_and(|parent| {
+                parent.file_name().and_then(|n| n.to_str()) == Some("Contents")
+            })
+            && root
+                .parent()
+                .and_then(|contents| contents.parent())
+                .is_some_and(|bundle| bundle.extension().and_then(|e| e.to_str()) == Some("app"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+fn project_root() -> Result<PathBuf> {
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(err) => {
+            bail!("cannot locate Modern Format Boost workspace: current_exe failed: {err}")
+        }
+    };
+
+    if let Some(mut dir) = exe.parent() {
+        for _ in 0..3 {
+            if dir.join("Cargo.toml").is_file() && dir.join("crates").is_dir() {
+                return Ok(dir.to_path_buf());
+            }
+            dir = match dir.parent() {
+                Some(parent) => parent,
+                None => break,
+            };
+        }
+    }
+
+    // Fallback to cwd search
+    let cwd = std::env::current_dir().context("read current directory")?;
+    let mut dir = cwd.as_path();
+    loop {
+        if dir.join("Cargo.toml").is_file() && dir.join("crates").is_dir() {
+            return Ok(dir.to_path_buf());
+        }
+        let Some(parent) = dir.parent() else {
+            break;
+        };
+        dir = parent;
+    }
+    bail!(
+        "cannot locate Modern Format Boost workspace root from {}",
+        cwd.display()
+    )
+}
+
+fn cli_binary(project_root: &Path, name: &str) -> PathBuf {
+    if is_app_bundle_resource_root(project_root) {
+        // When running from an app bundle, binaries are packaged alongside the
+        // executable.
+        project_root.join(name)
+    } else {
+        // smart_build always produces release binaries, regardless of how
+        // drag_and_drop_processor was compiled
+        project_root.join("target").join("release").join(name)
+    }
+}
+
+fn du_size_recursive(path: &Path) -> Result<u64> {
+    let mut total: u64 = 0;
+    if path.is_dir() {
+        for entry in WalkDir::new(path) {
+            match entry {
+                Ok(e) => {
+                    if e.path().is_file() {
+                        match e.metadata() {
+                            Ok(meta) => total += meta.len(),
+                            Err(err) => eprintln!(
+                                "[DRAG] du metadata failed ({}): {err}",
+                                e.path().display()
+                            ),
+                        }
+                    }
+                }
+                Err(err) => eprintln!("[DRAG] du walk failed under {}: {err}", path.display()),
+            }
+        }
+    } else if path.is_file() {
+        total = path.metadata()?.len();
+    }
+    Ok(total)
+}
+
+fn adjacent_output(input: &Path, suffix: &str) -> PathBuf {
+    let name = input
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+        .to_string_lossy();
+    let parent = input.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{name}_{suffix}"))
+}
+
+fn unique_adjacent_output(input: &Path, suffix: &str) -> PathBuf {
+    let base = adjacent_output(input, suffix);
+    let mut candidate = base;
+    let mut count = 2;
+    while candidate.exists() {
+        candidate = adjacent_output(input, &format!("{suffix}_{count}"));
+        count += 1;
+    }
+    candidate
+}
+
+const fn mode_needs_img_vid_binaries(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto
+            | LaunchMode::Images
+            | LaunchMode::Videos
+            | LaunchMode::FastImg
+            | LaunchMode::RestoreJpeg
+            | LaunchMode::FastVid
+    )
+}
+
+const fn mode_needs_db_health(mode: &LaunchMode) -> bool {
+    match mode {
+        LaunchMode::Auto | LaunchMode::Videos => true,
+        // img resolves JSON, environment and explicit flags before its own database setup.
+        // A launcher-only environment probe cannot determine the effective image policy.
+        LaunchMode::Images
+        | LaunchMode::FastImg
+        | LaunchMode::RestoreJpeg
+        | LaunchMode::FastVid
+        | LaunchMode::Collect
+        | LaunchMode::Compare
+        | LaunchMode::MergeXmp
+        | LaunchMode::IcloudImport
+        | LaunchMode::Diagnostic
+        | LaunchMode::CacheClean
+        | LaunchMode::DatabaseManager => false,
+    }
+}
+
+// ── safety checks (ported from drag_and_drop_processor.py) ──────────────────
+
+fn drag_drop_error_should_abort(mode: BatchErrorMode, error: &anyhow::Error) -> bool {
+    mode.should_abort_error(error)
+}
+
+fn read_optional_text_file(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => {
+            eprintln!(
+                "[DRAG] optional env read failed ({}): {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Load `.modern_format_boost/local_env.json` (and `.sh` fallback) into
+/// `std::env`.  Mirrors `load_local_env()` in the Python implementation.
+///
+/// Uses `serde_json` for robust JSON parsing — the previous hand-rolled
+/// `split(',')` approach silently mishandled values containing commas (e.g.
+/// `PostgreSQL` multi-host connection strings).
+fn load_local_env(_project_root: &Path) {
+    let Ok(conf_dir) = foundation::process_lock::get_mfb_root() else {
+        eprintln!(
+            "{} MFB state root unavailable; skipping local environment",
+            pick_symbol("⚠️", "[WARN]")
+        );
+        return;
+    };
+    // JSON source (preferred)
+    let json_path = conf_dir.join("local_env.json");
+    if json_path.is_file() {
+        if let Some(content) = read_optional_text_file(&json_path) {
+            match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content) {
+                Ok(map) => {
+                    for (key, val) in &map {
+                        if key.is_empty() {
+                            continue;
+                        }
+                        // Coerce all scalar types to strings, matching Python behaviour.
+                        let str_val = match val {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        // SAFETY: single-threaded startup; no concurrent env reads.
+                        unsafe { std::env::set_var(key, &str_val) };
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "{} local_env.json parse error (skipping): {err}",
+                        pick_symbol("⚠️", "[WARN]")
+                    );
+                }
+            }
+        }
+        return; // JSON wins; skip .sh fallback
+    }
+
+    // Shell fallback: `export KEY="VALUE"`
+    let sh_path = conf_dir.join("local_env.sh");
+    if sh_path.is_file()
+        && let Some(content) = read_optional_text_file(&sh_path)
+    {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || !line.contains("export ") {
+                continue;
+            }
+            let stripped = line.replacen("export ", "", 1);
+            let parts: Vec<&str> = stripped.splitn(2, '=').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim();
+                let val = parts[1].trim().trim_matches('"').trim_matches('\'');
+                if !key.is_empty() {
+                    // SAFETY: single-threaded startup; no concurrent env reads.
+                    unsafe { std::env::set_var(key, val) };
+                }
+            }
+        }
+    }
+}
+
+/// Call `img db-health` and fail-fast with a helpful error if `PostgreSQL` is
+/// unreachable.  Mirrors `verify_database_mandatory()` in the Python impl.
+fn verify_database_mandatory(project_root: &Path) -> Result<()> {
+    let img_bin = cli_binary(project_root, "img");
+    if !img_bin.is_file() {
+        // Binary absent — skip; ensure_tools_ready will handle the build.
+        return Ok(());
+    }
+    let out = Command::new(&img_bin)
+        .arg("db-health")
+        .output()
+        .context("run img db-health")?;
+    if !out.status.success() {
+        let diag = String::from_utf8_lossy(&out.stderr);
+        let diag = if diag.trim().is_empty() {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        } else {
+            diag.into_owned()
+        };
+        eprintln!();
+        eprintln!(
+            "{} MANDATORY DATABASE CONNECTION FAILED",
+            pick_symbol("❌", "[ERROR]")
+        );
+        eprintln!(
+            "  Modern Format Boost requires a PostgreSQL backend for full forensic accuracy."
+        );
+        eprintln!();
+        eprintln!("  HOW TO FIX:");
+        eprintln!("  1. Ensure PostgreSQL is running locally.");
+        eprintln!("  2. Run the private setup helper:");
+        eprintln!("       rust-script crates/dev/src/bin/setup_private_db.rs");
+        eprintln!("  3. Or create: ~/.modern_format_boost/local_env.json");
+        eprintln!("     with: {{\"MFB_PG_CONNSTR\": \"postgresql://user:pass@localhost/db\"}}");
+        if !diag.trim().is_empty() {
+            eprintln!("  Diagnostic: {}", diag.trim());
+        }
+        bail!("database health check failed");
+    }
+
+    Ok(())
+}
+
+/// Trigger `smart_build` if a required release binary is absent.
+fn smart_build_command(project_root: &Path, needs_img: bool, needs_vid: bool) -> Command {
+    let smart_build_bin = cli_binary(project_root, "smart_build");
+    let mut command = if smart_build_bin.is_file() {
+        Command::new(smart_build_bin)
+    } else {
+        let mut cargo = Command::new("cargo");
+        cargo.args([
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "dev",
+            "--bin",
+            "smart_build",
+            "--",
+        ]);
+        cargo
+    };
+
+    // Tool launch should stay incremental and must never refresh dependencies.
+    command.args(["--rust-only", "--verify"]);
+    if needs_img && !needs_vid {
+        command.arg("--img");
+    } else if needs_vid && !needs_img {
+        command.arg("--vid");
+    }
+    command
+}
+
+fn ensure_tools_ready(project_root: &Path, mode: &LaunchMode) -> Result<()> {
+    let img_bin = cli_binary(project_root, "img");
+    let vid_bin = cli_binary(project_root, "vid");
+    let verify_bin = cli_binary(project_root, "verify");
+    let needs_img = !matches!(mode, LaunchMode::Videos | LaunchMode::FastVid);
+    let needs_vid = !matches!(
+        mode,
+        LaunchMode::Images | LaunchMode::FastImg | LaunchMode::RestoreJpeg
+    );
+
+    if is_app_bundle_resource_root(project_root) {
+        // App bundle mode: binaries are pre-packaged. Just verify existence.
+        if needs_img && !img_bin.is_file() {
+            bail!("App bundle is missing img binary: {}", img_bin.display());
+        }
+        if needs_vid && !vid_bin.is_file() {
+            bail!("App bundle is missing vid binary: {}", vid_bin.display());
+        }
+        if !verify_bin.is_file() {
+            bail!(
+                "App bundle is missing verify binary: {}",
+                verify_bin.display()
+            );
+        }
+        return Ok(());
+    }
+
+    if (!needs_img || img_bin.is_file())
+        && (!needs_vid || vid_bin.is_file())
+        && verify_bin.is_file()
+    {
+        return Ok(());
+    }
+
+    eprintln!(
+        "{} Required release binary is missing; running smart_build…",
+        pick_symbol("⚙️", "[BUILD]")
+    );
+
+    let status = smart_build_command(project_root, needs_img, needs_vid)
+        .current_dir(project_root)
+        .status()
+        .context("run smart_build")?;
+    if !status.success() {
+        bail!("smart_build failed — check the logs and retry");
+    }
+
+    if needs_img && !img_bin.is_file() {
+        bail!(
+            "smart_build completed but img binary is still missing: {}",
+            img_bin.display()
+        );
+    }
+    if needs_vid && !vid_bin.is_file() {
+        bail!(
+            "smart_build completed but vid binary is still missing: {}",
+            vid_bin.display()
+        );
+    }
+    if !verify_bin.is_file() {
+        bail!(
+            "smart_build completed but verify binary is still missing: {}",
+            verify_bin.display()
+        );
+    }
+
+    Ok(())
+}
+const fn processing_filter(args: &Args) -> ProcessingFilter {
+    if args.images_only {
+        ProcessingFilter::ImagesOnly
+    } else if args.videos_only {
+        ProcessingFilter::VideosOnly
+    } else {
+        ProcessingFilter::Both
+    }
+}
+
+const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto | LaunchMode::Images | LaunchMode::Videos
+    )
+}
+
+fn validate_media_options(args: &Args) -> Result<()> {
+    anyhow::ensure!(
+        args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
+        "Photos import settings require --mode fast-img"
+    );
+    let image_options = args.img_config.is_some()
+        || args.img_fallback_policy.is_some()
+        || args.img_jpeg_effort.is_some()
+        || args.img_quality_heuristic.is_some()
+        || args.img_allow_database.is_some()
+        || args.img_error_mode.is_some();
+    anyhow::ensure!(
+        !image_options
+            || matches!(
+                args.mode,
+                LaunchMode::Auto | LaunchMode::Images | LaunchMode::FastImg
+            ),
+        "image settings require --mode auto, images, or fast-img"
+    );
+    anyhow::ensure!(
+        (args.vid_error_mode.is_none() && args.vid_codec.is_none())
+            || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
+        "video settings require --mode auto or videos"
+    );
+    anyhow::ensure!(
+        args.img_error_mode.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
+        "image file-error policy requires standard image processing; fast-img uses its checkpointed failure handling"
+    );
+    Ok(())
+}
+
+fn media_error_mode(args: &Args, pipeline: &str, inherited: BatchErrorMode) -> BatchErrorMode {
+    match pipeline {
+        "IMG" => args
+            .img_error_mode
+            .map_or(inherited, ErrorModeOption::batch_mode),
+        "VID" => args
+            .vid_error_mode
+            .map_or(inherited, ErrorModeOption::batch_mode),
+        _ => inherited,
+    }
+}
+
+fn child_failure_should_abort(mode: BatchErrorMode, exit_code: i32, failed: usize) -> bool {
+    // Only a normal per-file failure summary permits continuing after a child exits.
+    // Signals, launch failures and absent summaries remain fatal/unknown.
+    mode.is_fail_fast() || !matches!(exit_code, 0 | 1) || failed == 0
+}
+
+fn child_result_needs_error(
+    dry_run: bool,
+    exit_code: i32,
+    failed: usize,
+    counts_complete: bool,
+) -> bool {
+    exit_code != 0 || failed > 0 || (!dry_run && !counts_complete)
+}
+
+fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
+    match args.mode {
+        LaunchMode::Images | LaunchMode::FastImg => {
+            media_error_mode(args, "IMG", inherited).is_fail_fast()
+        }
+        LaunchMode::Videos => media_error_mode(args, "VID", inherited).is_fail_fast(),
+        LaunchMode::Auto => {
+            media_error_mode(args, "IMG", inherited).is_fail_fast()
+                && media_error_mode(args, "VID", inherited).is_fail_fast()
+        }
+        _ => inherited.is_fail_fast(),
+    }
+}
+
+fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json::Value {
+    let inventory_valid = !stats.unprocessed_invalid
+        && stats.checked_total().is_some_and(|total| {
+            stats
+                .unprocessed
+                .is_none_or(|pending| total.checked_add(pending).is_some())
+        });
+    let count =
+        |index: usize, value| (active && stats.reported[index] && inventory_valid).then_some(value);
+    serde_json::json!({
+        "active": active,
+        "succeeded": count(0, stats.succeeded),
+        "skipped": count(1, stats.skipped),
+        "ignored": count(2, stats.ignored),
+        "failed": count(3, stats.failed),
+        "unprocessed": stats.unprocessed.filter(|_| active && inventory_valid),
+        "exit_code": active.then_some(stats.exit_code),
+    })
+}
+
+fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "count_scope": "processor_outcomes",
+        "img": processor_history_counts(&summary.img, summary.has_image_stats()),
+        "vid": processor_history_counts(&summary.vid, summary.has_video_stats()),
+        "integrity": {
+            "state": summary.integrity_state,
+            "issue_count": summary.integrity_state.map(|_| summary.integrity_issue_count),
+        },
+        "failed_files": summary.failed_file_names,
+        "skipped_files": summary.skipped_file_names,
+    })
+}
+
+fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
+    let mut counts = processor_history_counts(stats, true);
+    let payload = counts
+        .as_object_mut()
+        .expect("processor history counts object");
+    payload.remove("active");
+    payload.insert("schema_version".to_owned(), serde_json::json!(1));
+    payload.insert("media".to_owned(), serde_json::json!(media));
+    format!("MFB_BATCH_RESULT={counts}")
+}
+
+fn print_batch_result(command: &LaunchCommand, stats: &ProcessorStats, dry_run: bool) {
+    if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
+        println!(
+            "{}",
+            batch_result_line(&command.pipeline_label().to_ascii_lowercase(), stats)
+        );
+    }
+}
+
+fn print_batch_launch_error(command: &LaunchCommand, dry_run: bool) {
+    if !dry_run && matches!(command.pipeline_label(), "IMG" | "VID") {
+        println!(
+            "MFB_BATCH_RESULT={}",
+            serde_json::json!({
+                "schema_version": 1,
+                "media": command.pipeline_label().to_ascii_lowercase(),
+                "succeeded": null,
+                "skipped": null,
+                "ignored": null,
+                "failed": null,
+                "exit_code": null,
+            })
+        );
+    }
+}
+
+fn adjacent_output_dir(args: &Args) -> PathBuf {
+    args.output.clone().unwrap_or_else(|| {
+        unique_adjacent_output(args.inputs.first().expect("input required"), "optimized")
+    })
+}
+
+fn plan_routed_pipeline_commands(
+    args: &Args,
+    project_root: &Path,
+    scan: &ContentScan,
+    fail_fast: bool,
+) -> Result<Vec<LaunchCommand>> {
+    if fail_fast {
+        return plan_cli_invocations(args, project_root, None);
+    }
+    let target = args.inputs.first().context("input required")?;
+    let output = args
+        .output
+        .clone()
+        .unwrap_or_else(|| adjacent_output_dir(args));
+    let mut commands = Vec::new();
+    let run_images = matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
+        && scan.img_count > 0
+        && processing_filter(args).accepts_image();
+    let run_videos = matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos)
+        && scan.vid_count > 0
+        && processing_filter(args).accepts_video();
+    if run_images {
+        for rel in &scan.routed_images {
+            let mut file_args = args.clone();
+            file_args.inputs = vec![target.join(rel)];
+            file_args.output = Some(output.clone());
+            file_args.base_dir = Some(target.clone());
+            commands.push(rust_run_command(
+                project_root,
+                "img",
+                &file_args,
+                &file_args.inputs[0],
+            ));
+        }
+    }
+    if run_videos {
+        for rel in &scan.routed_videos {
+            let mut file_args = args.clone();
+            file_args.inputs = vec![target.join(rel)];
+            file_args.output = Some(output.clone());
+            file_args.base_dir = Some(target.clone());
+            commands.push(rust_run_command(
+                project_root,
+                "vid",
+                &file_args,
+                &file_args.inputs[0],
+            ));
+        }
+    }
+    if commands.is_empty() {
+        return plan_cli_invocations(args, project_root, None);
+    }
+    Ok(commands)
+}
+
+fn run_post_adjacent_steps(
+    args: &Args,
+    project_root: &Path,
+    session: &DragDropSession,
+    scan: &ContentScan,
+    summary: &mut PipelineSummary,
+) -> Result<()> {
+    let target = args.inputs.first().context("input required")?;
+    let output = adjacent_output_dir(args);
+    if !output.is_dir() {
+        return Ok(());
+    }
+    finalize_handoff_preservation(target, &output, session)?;
+    sync_non_media_files(
+        target,
+        &output,
+        scan,
+        &cli_binary(project_root, "img"),
+        Some(&session.session_audit),
+    )?;
+    draw_separator("Auto Verification");
+    println!(
+        "   {} Running unified integrity verification via Rust verify...",
+        pick_symbol("🔍", "[CHECK]")
+    );
+    let verify = run_unified_verification(
+        &cli_binary(project_root, "verify"),
+        target,
+        Some(&output),
+        processing_filter(args),
+        Some(&session.verbose_log),
+        &session.log_dir,
+        &session.stamp,
+        dev::infra::drag_drop::VerificationFlags {
+            include_logs: true,
+            auto_mode: true,
+            fast_img: dev::infra::drag_drop::VerifyFastImgMode::None,
+            strategy: args.strategy.clone(),
+        },
+    )?;
+    summary.integrity_state = verify
+        .warnings
+        .map(|w| if w { "WARNINGS" } else { "CLEAN" });
+    summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, &output)?;
+    Ok(())
+}
+
+fn run_fast_img_post_success(
+    args: &Args,
+    project_root: &Path,
+    session: &DragDropSession,
+    summary: &mut PipelineSummary,
+    output_dir: &Path,
+) -> Result<()> {
+    let verify_bin = cli_binary(project_root, "verify");
+    let (_, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
+    summary.fast_img_size_after_override = summary
+        .fast_img_session_output_bytes
+        .or(Some(delivered_size));
+
+    draw_separator("Auto Verification");
+    println!(
+        "   {} Running fast-img delivery verification via Rust verify...",
+        pick_symbol("🔍", "[CHECK]")
+    );
+    let target = args.inputs.first().context("input required")?;
+    let verify = run_unified_verification(
+        &verify_bin,
+        target,
+        Some(output_dir),
+        processing_filter(args),
+        Some(&session.session_audit),
+        &session.log_dir,
+        &session.stamp,
+        dev::infra::drag_drop::VerificationFlags {
+            include_logs: false,
+            auto_mode: true,
+            fast_img: dev::infra::drag_drop::VerifyFastImgMode::Delivery,
+            strategy: args.strategy.clone(),
+        },
+    )?;
+    summary.integrity_state = verify
+        .warnings
+        .map(|w| if w { "WARNINGS" } else { "CLEAN" });
+    summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, output_dir)?;
+    let counts = verify
+        .integrity_summary
+        .as_ref()
+        .context("fast-img verifier omitted its machine integrity summary")?;
+    println!(
+        "[VERIFY] inventory: {} optimized, {} skipped, {} failed; processing counters unchanged",
+        counts.optimized_count, counts.skipped_count, counts.failed_count
+    );
+    if args.shortest_path && verify.warnings == Some(false) {
+        match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
+            Ok(true) => {
+                summary.fast_img_size_after_override = summary
+                    .fast_img_session_output_bytes
+                    .or(Some(delivered_size));
+            }
+            Ok(false) => {
+                summary.integrity_state = Some("WARNINGS");
+                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+                eprintln!(
+                    "   {} Shortest Path cleanup left residual files in {}",
+                    pick_symbol("⚠️", "[WARN]"),
+                    output_dir.display()
+                );
+            }
+            Err(err) => {
+                summary.integrity_state = Some("WARNINGS");
+                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+                eprintln!(
+                    "   {} Shortest Path cleanup failed for {}: {err:#}",
+                    pick_symbol("❌", "[ERROR]"),
+                    output_dir.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_fast_img_restore_post_success(
+    args: &Args,
+    project_root: &Path,
+    session: &DragDropSession,
+    summary: &mut PipelineSummary,
+    output_dir: &Path,
+) -> Result<()> {
+    draw_separator("Auto Verification");
+    println!(
+        "   {} Running fast-img restore verification via Rust verify...",
+        pick_symbol("🔍", "[CHECK]")
+    );
+    let target = args.inputs.first().context("input required")?;
+    let verify = run_unified_verification(
+        &cli_binary(project_root, "verify"),
+        target,
+        Some(output_dir),
+        processing_filter(args),
+        Some(&session.session_audit),
+        &session.log_dir,
+        &session.stamp,
+        dev::infra::drag_drop::VerificationFlags {
+            include_logs: false,
+            auto_mode: true,
+            fast_img: dev::infra::drag_drop::VerifyFastImgMode::Restore,
+            strategy: args.strategy.clone(),
+        },
+    )?;
+    summary.integrity_state = verify
+        .warnings
+        .map(|w| if w { "WARNINGS" } else { "CLEAN" });
+    summary.integrity_issue_count = verify.issue_count;
+    session.record_history_verification(&verify, target, output_dir)?;
+    let counts = verify
+        .integrity_summary
+        .as_ref()
+        .context("restore-jpeg verifier omitted its machine integrity summary")?;
+    println!(
+        "[VERIFY] restore inventory: {} restored, {} skipped, {} failed; processing counters unchanged",
+        counts.optimized_count, counts.skipped_count, counts.failed_count
+    );
+    Ok(())
+}
+
+fn fast_img_source_root_for_run(target: &Path) -> Result<PathBuf> {
+    let canonical = foundation::media_conversion_gate::canonicalize_for_tool_input(target);
+    if canonical.is_file() {
+        return canonical.parent().map(Path::to_path_buf).with_context(|| {
+            format!(
+                "fast-img single-file input has no parent: {}",
+                canonical.display()
+            )
+        });
+    }
+    Ok(canonical)
+}
+
+fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf> {
+    let source_root = fast_img_source_root_for_run(target)?;
+    let live_output = if args.no_resume {
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&source_root)
+    } else {
+        foundation::pipeline::verification::resolve_working_copy_dir(&source_root)
+    };
+    if let Some(configured) = &args.output
+        && configured != &live_output
+    {
+        bail!(
+            "fast-img output no longer matches live working-copy state: requested={} live={}; retry so the launcher can resolve current markers",
+            configured.display(),
+            live_output.display()
+        );
+    }
+    Ok(live_output)
+}
+
+fn run_fast_img_task(
+    args: &Args,
+    project_root: &Path,
+    session: &DragDropSession,
+) -> Result<(ProcessorStats, PathBuf)> {
+    let target = args.inputs.first().context("input required")?;
+    let (command, output) = fast_img_launch_command(args, project_root, target)?;
+    let stats = command.run_collecting(args.dry_run, Some(session), false);
+    match &stats {
+        Ok(stats) if stats.exit_code != 0 => print_batch_result(&command, stats, args.dry_run),
+        Ok(_) => {}
+        Err(_) => print_batch_launch_error(&command, args.dry_run),
+    }
+    let stats = stats?;
+    Ok((stats, output))
+}
+
+// Preview and execution must use exactly the same options and output binding.
+fn fast_img_launch_command(
+    args: &Args,
+    project_root: &Path,
+    target: &Path,
+) -> Result<(LaunchCommand, PathBuf)> {
+    let output = resolve_fast_img_output_for_run(args, target)?;
+    let img_bin = cli_binary(project_root, "img");
+    let retry = args.retry || args.resume;
+    let mut command = LaunchCommand::from_argv(build_fast_img_command(
+        &img_bin,
+        target,
+        &output,
+        args.shortest_path,
+        args.archive,
+        retry,
+        args.no_resume,
+        args.strategy.as_deref(),
+        args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
+    ))?;
+    push_img_policy_args(&mut command.args, args);
+    let command = command.with_error_mode(args.img_error_mode);
+    Ok((command, output))
+}
+
+fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
+    command.extend(args.performance.cli_arguments());
+    command.extend(args.photos.cli_arguments());
+    if let Some(path) = &args.img_config {
+        command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
+    }
+    if let Some(policy) = args.img_fallback_policy {
+        let value = match policy {
+            FallbackPolicy::Strict => "strict",
+            FallbackPolicy::SameSemantics => "same-semantics",
+            FallbackPolicy::Repair => "repair",
+        };
+        command.extend(["--fallback-policy".to_owned(), value.to_owned()]);
+    }
+    if let Some(effort) = args.img_jpeg_effort {
+        command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
+    }
+    if let Some(heuristic) = args.img_quality_heuristic {
+        command.push(format!("--quality-heuristic={heuristic}"));
+    }
+    if let Some(database) = args.img_allow_database {
+        command.push(format!("--allow-database={database}"));
+    }
+}
+
+fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
+    command.push("run".to_string());
+    command.push(input.to_string_lossy().into_owned());
+    if let Some(output) = &args.output {
+        command.push("--output".to_string());
+        command.push(output.to_string_lossy().into_owned());
+    }
+    if let Some(base) = &args.base_dir {
+        command.push("--base-dir".to_string());
+        command.push(base.to_string_lossy().into_owned());
+    } else if input.is_dir() {
+        command.push("--base-dir".to_string());
+        command.push(input.to_string_lossy().into_owned());
+        command.push("--recursive".to_string());
+    }
+    if args.force {
+        command.push("--force".to_string());
+    }
+    if args.archive {
+        command.push("--archive".to_string());
+    }
+    if args.plain {
+        command.push("--plain".to_string());
+    }
+    if args.resume {
+        command.push("--resume".to_string());
+    } else if args.no_resume {
+        command.push("--no-resume".to_string());
+    }
+    if args.ultimate || DRAG_DROP_CHILD_ULTIMATE {
+        command.push("--ultimate".to_string());
+    }
+    if args.in_place {
+        command.push("--in-place".to_string());
+    }
+    if args.verbose || DRAG_DROP_CHILD_VERBOSE {
+        command.push("--verbose".to_string());
+    }
+    command.push("--apple-compat".to_string());
+}
+
+fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -> LaunchCommand {
+    let mut command = vec![cli_binary(project_root, bin).to_string_lossy().into_owned()];
+    push_common_run_args(&mut command, args, input);
+    match bin {
+        "img" => push_img_policy_args(&mut command, args),
+        "vid" => {
+            command.extend(args.performance.cli_arguments());
+            if let Some(codec) = args.vid_codec {
+                command.extend(["--codec".to_owned(), codec.as_str().to_owned()]);
+                if codec == VideoCodecOption::Av1 {
+                    command.push("--no-apple-compat".to_owned());
+                }
+            }
+        }
+        _ => {}
+    }
+    LaunchCommand::from_argv(command)
+        .expect("internal command must include binary")
+        .with_error_mode(match bin {
+            "img" => args.img_error_mode,
+            "vid" => args.vid_error_mode,
+            _ => None,
+        })
+}
+
+fn plan_auto_file(project_root: &Path, args: &Args, input: &Path) -> Result<LaunchCommand> {
+    match classify_media_owner(input)? {
+        Some(owner) if owner == PIPELINE_IMAGE => {
+            Ok(rust_run_command(project_root, "img", args, input))
+        }
+        Some(owner) if owner == PIPELINE_VIDEO => {
+            Ok(rust_run_command(project_root, "vid", args, input))
+        }
+        Some(owner) => bail!("unsupported media owner `{owner}` for {}", input.display()),
+        None => bail!("unsupported drag/drop input: {}", input.display()),
+    }
+}
+
+fn dev_bin_command(project_root: &Path, bin: &str, args: Vec<String>) -> Result<LaunchCommand> {
+    let mut launch_argv = Vec::with_capacity(args.len() + 1);
+    launch_argv.push(cli_binary(project_root, bin).to_string_lossy().into_owned());
+    launch_argv.extend(args);
+    LaunchCommand::from_argv(launch_argv)
+}
+
+fn resolve_restore_jpeg_launch_output(
+    input: &Path,
+    requested_output: Option<&Path>,
+) -> Result<(Option<PathBuf>, bool)> {
+    let is_photos_audit =
+        foundation::image::photos_jxl_audit::detect_photos_audit_scope(input)?.is_some();
+    let output = requested_output
+        .map(Path::to_path_buf)
+        .or_else(|| (!is_photos_audit).then(|| fast_img_restore_output_dir_for_target(input)));
+    Ok((output, is_photos_audit))
+}
+
+fn is_photos_library_package_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name.ends_with(".photoslibrary") || name.ends_with(".photolibrary")
+        })
+}
+
+fn plan_cli_invocations(
+    args: &Args,
+    project_root: &Path,
+    session: Option<&DragDropSession>,
+) -> Result<Vec<LaunchCommand>> {
+    validate_media_options(args)?;
+    if args.inputs.is_empty() {
+        // Handled by main menu
+        return Ok(Vec::new());
+    }
+    anyhow::ensure!(
+        args.backup.is_none() || matches!(args.mode, LaunchMode::Collect | LaunchMode::Compare),
+        "--backup is available only with --mode collect or --mode compare"
+    );
+    anyhow::ensure!(
+        !matches!(args.mode, LaunchMode::Collect | LaunchMode::Compare) || args.backup.is_some(),
+        "--mode collect/compare requires --backup; legacy optimized-media relocation was removed"
+    );
+    if args.mode == LaunchMode::Compare {
+        let backup = args
+            .backup
+            .as_deref()
+            .context("--mode compare requires --backup")?;
+        anyhow::ensure!(
+            is_photos_library_package_path(backup)
+                && args
+                    .inputs
+                    .iter()
+                    .all(|input| is_photos_library_package_path(input)),
+            "--mode compare only supports comparing two Photos libraries; use an external file deduplicator for folders/files"
+        );
+    }
+
+    let img_bin = cli_binary(project_root, "img");
+    let vid_bin = cli_binary(project_root, "vid");
+    let mut commands = Vec::new();
+
+    for input in &args.inputs {
+        match args.mode {
+            LaunchMode::Auto if input.is_dir() => {
+                commands.push(rust_run_command(project_root, "img", args, input));
+                commands.push(rust_run_command(project_root, "vid", args, input));
+            }
+            LaunchMode::Auto => commands.push(plan_auto_file(project_root, args, input)?),
+            LaunchMode::Images => commands.push(rust_run_command(project_root, "img", args, input)),
+            LaunchMode::Videos => commands.push(rust_run_command(project_root, "vid", args, input)),
+            LaunchMode::FastImg => {
+                commands.push(fast_img_launch_command(args, project_root, input)?.0);
+            }
+            LaunchMode::RestoreJpeg => {
+                let (output, _) =
+                    resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
+                commands.push(LaunchCommand::from_argv(build_fast_img_restore_command(
+                    &img_bin,
+                    input,
+                    output.as_deref(),
+                    args.photos_album_id.as_deref(),
+                    args.photos_folder_id.as_deref(),
+                ))?);
+            }
+            LaunchMode::FastVid => {
+                let output = args
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| fast_vid_output_dir_for_target(input));
+                let mut command = LaunchCommand::from_argv(build_fast_vid_command(
+                    &vid_bin,
+                    input,
+                    &output,
+                    args.shortest_path,
+                    args.strategy.as_deref(),
+                ))?;
+                command.args.extend(args.performance.cli_arguments());
+                commands.push(command);
+            }
+            LaunchMode::Collect | LaunchMode::Compare => {
+                let output = args.output.clone().unwrap_or_else(|| {
+                    adjacent_output(
+                        input,
+                        if args.mode == LaunchMode::Compare {
+                            "backup_comparison"
+                        } else {
+                            "recovery_originals"
+                        },
+                    )
+                });
+                let backup = args
+                    .backup
+                    .as_ref()
+                    .context("recovery collection/comparison requires --backup")?;
+                let mut collect_args = vec![
+                    input.to_string_lossy().into_owned(),
+                    output.to_string_lossy().into_owned(),
+                    "--yes".to_string(),
+                    "--backup".to_string(),
+                    backup.to_string_lossy().into_owned(),
+                ];
+                if args.mode == LaunchMode::Compare {
+                    collect_args.push("--compare".to_string());
+                }
+                commands.push(dev_bin_command(
+                    project_root,
+                    "collect_optimized",
+                    collect_args,
+                )?);
+            }
+            LaunchMode::MergeXmp => {
+                commands.push(dev_bin_command(
+                    project_root,
+                    "merge_xmp",
+                    vec![input.to_string_lossy().into_owned()],
+                )?);
+            }
+            LaunchMode::IcloudImport => {
+                commands.push(dev_bin_command(
+                    project_root,
+                    "icloud_import",
+                    vec![input.to_string_lossy().into_owned()],
+                )?);
+            }
+            LaunchMode::Diagnostic => {
+                let mut verify_args =
+                    vec!["--verify".to_string(), input.to_string_lossy().into_owned()];
+                if let Some(output) = &args.output {
+                    verify_args.push(output.to_string_lossy().into_owned());
+                }
+                verify_args.extend(["--mode".to_string(), "both".to_string()]);
+                if let Some(s) = session {
+                    verify_args.push("--session-audit".to_string());
+                    verify_args.push(s.session_audit.to_string_lossy().into_owned());
+                }
+                commands.push(dev_bin_command(project_root, "verify", verify_args)?);
+            }
+            LaunchMode::CacheClean => {
+                commands.push(dev_bin_command(project_root, "cache_cleaner", Vec::new())?);
+            }
+            LaunchMode::DatabaseManager => {
+                commands.push(dev_bin_command(
+                    project_root,
+                    "database_manager",
+                    Vec::new(),
+                )?);
+            }
+        }
+    }
+    Ok(commands)
+}
+
+const fn mode_label(mode: &LaunchMode) -> &'static str {
+    match mode {
+        LaunchMode::Auto => "Standard Pipeline",
+        LaunchMode::Images => "Images Only",
+        LaunchMode::Videos => "Videos/Animated",
+        LaunchMode::FastImg => "Fast Image",
+        LaunchMode::RestoreJpeg => "Restore Original JPEG",
+        LaunchMode::FastVid => "Fast Video",
+        LaunchMode::Collect => "Collect Recovery Originals",
+        LaunchMode::Compare => "Compare Backup",
+        LaunchMode::MergeXmp => "Merge XMP",
+        LaunchMode::IcloudImport => "iCloud Import",
+        LaunchMode::Diagnostic => "Diagnostic Verify",
+        LaunchMode::CacheClean => "Cache Cleanup",
+        LaunchMode::DatabaseManager => "Database Manager",
+    }
+}
+
+const fn mode_supports_ultimate(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto
+            | LaunchMode::Images
+            | LaunchMode::Videos
+            | LaunchMode::FastImg
+            | LaunchMode::FastVid
+    )
+}
+
+const fn target_type_label(args: &Args) -> &'static str {
+    if args.images_only {
+        "Images Only"
+    } else if args.videos_only {
+        "Videos/Animated Media Only"
+    } else {
+        "Everything"
+    }
+}
+
+fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
+    let target = args
+        .inputs
+        .first()
+        .map_or_else(|| "(interactive)".to_string(), |p| p.display().to_string());
+    let snapshot = args.inputs.first().map(|p| probe_system_snapshot(p));
+    RuntimeDashboard {
+        target_path: target,
+        mode_label: mode_label(&args.mode).to_string(),
+        target_type: target_type_label(args).to_string(),
+        output_path: args.output.as_ref().map(|p| p.display().to_string()),
+        ultimate: args.ultimate && mode_supports_ultimate(&args.mode),
+        watch: args.watch,
+        cpu_percent: snapshot.as_ref().map(|s| s.cpu_percent),
+        memory_percent: snapshot.as_ref().map(|s| s.memory_percent),
+        disk_free_gb: snapshot.map(|s| {
+            foundation::numeric_cast::u64_to_f64(s.disk_free_bytes) / (1024.0 * 1024.0 * 1024.0)
+        }),
+    }
+}
+
+fn command_phase_label(program: &Path) -> String {
+    let name = program
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("worker");
+    match name {
+        "img" => format!("Processing Images ({name})"),
+        "vid" => format!("Processing Videos ({name})"),
+        _ => format!("Processing ({name})"),
+    }
+}
+
+struct CursorGuard;
+
+impl Drop for CursorGuard {
+    fn drop(&mut self) {
+        dev::infra::elapsed_spinner::show_cursor();
+    }
+}
+
+fn pipeline_summary_has_reportable_outcome(summary: &PipelineSummary) -> bool {
+    summary.has_image_stats()
+        || summary.has_video_stats()
+        || summary.integrity_state == Some("WARNINGS")
+}
+
+fn run_drag_drop(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    dir_lock: Option<&DirLock>,
+) -> Result<()> {
+    run_with_history(args, session, || {
+        run_drag_drop_inner(args, session, dir_lock)
+    })
+}
+
+fn run_with_history(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    run: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let absolute = |path: &Path| -> Result<PathBuf> {
+        if path.is_absolute() {
+            Ok(path.to_path_buf())
+        } else {
+            Ok(std::env::current_dir()
+                .context("resolve history working directory")?
+                .join(path))
+        }
+    };
+    let context_result = match session {
+        Some(session) => (|| {
+            let inputs = args
+                .inputs
+                .iter()
+                .map(|path| absolute(path))
+                .collect::<Result<Vec<_>>>()?;
+            let output = args.output.as_deref().map(absolute).transpose()?;
+            let backup = args.backup.as_deref().map(absolute).transpose()?;
+            session.append_history_event(
+                "MFB_HISTORY_CONTEXT",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "inputs": serde_json::to_value(inputs).context("encode history input paths")?,
+                    "output": serde_json::to_value(output).context("encode history output path")?,
+                    "backup": serde_json::to_value(backup).context("encode history backup path")?,
+                    "mode": args.mode.to_possible_value().context("history mode has no CLI name")?.get_name(),
+                    "dry_run": args.dry_run,
+                    "in_place": args.in_place,
+                    "shortest_path": args.shortest_path,
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "retry": args.retry,
+                    "resume": args.resume,
+                    "no_resume": args.no_resume,
+                    "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
+                }),
+            )
+        })(),
+        None => Ok(()),
+    };
+    let context_failed = context_result.is_err();
+    let result = context_result.and_then(|()| run());
+    if let Some(session) = session {
+        let cancelled = if result.is_err() && !context_failed {
+            match foundation::batch_control::is_cancelled() {
+                Ok(cancelled) => cancelled,
+                Err(error) => {
+                    eprintln!("history cancellation state unavailable: {error:#}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        let finished = (|| {
+            session.append_history_event(
+            "MFB_HISTORY_FINISHED",
+            serde_json::json!({
+                "schema_version": 1,
+                "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
+                "error": result.as_ref().err().map(|error| format!("{error:#}")),
+                "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
+            }),
+        )
+        })();
+        if let Err(error) = finished {
+            if result.is_ok() {
+                return Err(error).context("write history terminal outcome");
+            }
+            eprintln!("history terminal outcome write failed: {error:#}");
+        }
+    }
+    result
+}
+
+fn run_drag_drop_inner(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    dir_lock: Option<&DirLock>,
+) -> Result<()> {
+    let output_cursor = session
+        .map(|session| {
+            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+        })
+        .transpose()
+        .context("record per-run processing output boundary")?;
+    foundation::batch_control::checkpoint()?;
+    validate_media_options(args)?;
+    if args.photos_album_id.is_some() || args.photos_folder_id.is_some() {
+        anyhow::ensure!(
+            args.mode == LaunchMode::RestoreJpeg && args.inputs.len() == 1,
+            "Photos album/folder selection requires one restore-jpeg library input"
+        );
+        let scope = foundation::image::photos_jxl_audit::detect_photos_audit_scope(
+            args.inputs.first().expect("one validated Photos input"),
+        )?
+        .context("Photos album/folder selection requires a Photos library package")?;
+        anyhow::ensure!(
+            scope.selected_asset_path.is_none(),
+            "Photos album/folder selection requires the library package, not one concrete asset"
+        );
+    }
+    let root = resolve_runtime_root()?;
+    let started = Instant::now();
+    draw_banner(env!("CARGO_PKG_VERSION"));
+    if !args.inputs.is_empty() {
+        print_runtime_panel(&build_runtime_dashboard(args));
+    }
+
+    load_local_env(&root);
+
+    if !args.inputs.is_empty() {
+        safety_check(&args.inputs[0])
+            .with_context(|| format!("safety check failed for {}", args.inputs[0].display()))?;
+    }
+
+    let scan =
+        if !args.dry_run && !args.inputs.is_empty() && mode_uses_standard_pipeline(&args.mode) {
+            Some(scan_content(
+                &args.inputs[0],
+                processing_filter(args),
+                session.map(|s| s.session_audit.as_path()),
+            )?)
+        } else {
+            None
+        };
+
+    // Defer binary check until after scan (matches Python: ensure_tools_ready after
+    // count_files)
+    if mode_needs_img_vid_binaries(&args.mode) {
+        ensure_tools_ready(&root, &args.mode)?;
+    }
+    if !args.dry_run
+        && mode_needs_db_health(&args.mode)
+        && !(args.mode == LaunchMode::Auto && scan.as_ref().is_some_and(|scan| scan.vid_count == 0))
+    {
+        verify_database_mandatory(&root)?;
+    }
+
+    if let (Some(scan), false) = (&scan, args.dry_run) {
+        if scan.img_count > 0 || scan.vid_count > 0 {
+            let check_path = if args.in_place {
+                &args.inputs[0]
+            } else {
+                args.output.as_deref().unwrap_or_else(|| {
+                    args.inputs
+                        .first()
+                        .map_or_else(|| Path::new("."), std::path::PathBuf::as_path)
+                })
+            };
+            check_system_resources(
+                check_path,
+                scan.media_total_size.saturating_add(1024 * 1024 * 1024),
+            )?;
+        }
+    } else if !args.dry_run && !args.inputs.is_empty() {
+        check_system_resources(&args.inputs[0], 1024u64 * 1024 * 1024)?;
+    }
+
+    let error_mode = BatchErrorMode::current();
+    let fail_fast = routing_fail_fast(args, error_mode);
+    let commands = if let Some(ref scan) = scan {
+        if mode_uses_standard_pipeline(&args.mode) {
+            plan_routed_pipeline_commands(args, &root, scan, fail_fast)?
+        } else {
+            plan_cli_invocations(args, &root, session)?
+        }
+    } else {
+        plan_cli_invocations(args, &root, session)?
+    };
+
+    let mut first_error: Option<anyhow::Error> = None;
+    let mut summary = PipelineSummary::default();
+
+    dev::infra::elapsed_spinner::resize_terminal(45, 223);
+    dev::infra::elapsed_spinner::hide_cursor();
+
+    let _cursor_guard = CursorGuard;
+
+    let mut spinner = dev::infra::elapsed_spinner::ElapsedSpinner::start();
+
+    if matches!(args.mode, LaunchMode::FastImg) {
+        println!("\n\x1B[36m⏳ Pacing start to ensure system stability...\x1B[0m");
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        spinner.stop();
+        println!("\n\x1B[34m🚀 Launching Rust Fast Mode Pipeline...\x1B[0m");
+    }
+
+    if matches!(args.mode, LaunchMode::FastImg | LaunchMode::RestoreJpeg) && !args.dry_run {
+        if args.mode == LaunchMode::RestoreJpeg {
+            let input = args.inputs.first().expect("input");
+            let (output, is_photos_audit) =
+                resolve_restore_jpeg_launch_output(input, args.output.as_deref())?;
+            let command = LaunchCommand::from_argv(build_fast_img_restore_command(
+                &cli_binary(&root, "img"),
+                input,
+                output.as_deref(),
+                args.photos_album_id.as_deref(),
+                args.photos_folder_id.as_deref(),
+            ))?;
+            draw_separator("Processing (restore-jpeg)");
+            match command.run_collecting(false, session, false) {
+                Ok(stats) => {
+                    print_batch_result(&command, &stats, false);
+                    summary.img = stats.clone();
+                    if stats.exit_code != 0 {
+                        if fail_fast {
+                            bail!("restore-jpeg exited with code {}", stats.exit_code);
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(anyhow::anyhow!(
+                                "restore-jpeg exited with code {}",
+                                stats.exit_code
+                            ));
+                        }
+                    }
+                }
+                Err(err) if drag_drop_error_should_abort(error_mode, &err) => {
+                    print_batch_launch_error(&command, false);
+                    return Err(err);
+                }
+                Err(err) => {
+                    print_batch_launch_error(&command, false);
+                    first_error = Some(err);
+                }
+            }
+            if first_error.is_none() && is_photos_audit {
+                summary.integrity_state = Some("CLEAN");
+                println!(
+                    "   {} Photos JXL audit completed with live UUID/album proof",
+                    pick_symbol("✅", "[OK]")
+                );
+            } else if first_error.is_none() {
+                if output.as_deref().is_some_and(Path::is_dir) {
+                    run_fast_img_restore_post_success(
+                        args,
+                        &root,
+                        session.expect("session"),
+                        &mut summary,
+                        output.as_deref().expect("local restore output"),
+                    )?;
+                } else if summary.img.succeeded == 0 && summary.img.failed == 0 {
+                    summary.integrity_state = Some("CLEAN");
+                    println!(
+                        "   {} No exact-reconstruction JPEG output was eligible; all source files were retained",
+                        pick_symbol("ℹ️", "[INFO]")
+                    );
+                } else {
+                    bail!(
+                        "restore-jpeg reported successful outputs but output directory is missing: {}",
+                        output.as_deref().map_or_else(
+                            || "<not selected>".to_owned(),
+                            |path| path.display().to_string()
+                        )
+                    );
+                }
+            }
+        } else {
+            draw_separator("Processing (fast-img)");
+            match run_fast_img_task(args, &root, session.expect("session")) {
+                Ok((stats, output)) => {
+                    summary.img = stats.clone();
+                    match dev::infra::history_store::read_session_output_since(
+                        &session.expect("session").log_dir,
+                        &session.expect("session").stamp,
+                        output_cursor.context("fast-img run has no processing output boundary")?,
+                    ) {
+                        Ok(text) => {
+                            let metrics = fast_img_session_size_metrics(&text);
+                            summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
+                            summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                            // Collect per-file retained names for terminal + session log
+                            for (name, disposition) in fast_img_retained_file_names(&text) {
+                                if disposition == "failed" {
+                                    summary.failed_file_names.push(name);
+                                } else if disposition == "skipped" {
+                                    summary.skipped_file_names.push(name);
+                                }
+                            }
+                        }
+                        Err(err) => eprintln!(
+                            "{} fast-img size metrics log read failed: {err}",
+                            pick_symbol("⚠️", "[WARN]")
+                        ),
+                    }
+                    if stats.exit_code != 0 {
+                        if fail_fast {
+                            bail!("fast-img exited with code {}", stats.exit_code);
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(anyhow::anyhow!(
+                                "fast-img exited with code {}",
+                                stats.exit_code
+                            ));
+                        }
+                    } else {
+                        let verified = run_fast_img_post_success(
+                            args,
+                            &root,
+                            session.expect("session"),
+                            &mut summary,
+                            &output,
+                        );
+                        if verified.is_err() {
+                            summary.img.exit_code = 1;
+                        }
+                        println!("{}", batch_result_line("img", &summary.img));
+                        verified?;
+                    }
+                }
+                Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
+                Err(err) => first_error = Some(err),
+            }
+        }
+    } else {
+        for command in commands {
+            update_terminal_title(started.elapsed());
+            draw_separator(&command_phase_label(&command.program));
+            let command_error_mode = media_error_mode(args, command.pipeline_label(), error_mode);
+            match command.run_collecting(args.dry_run, session, false) {
+                Ok(stats) => {
+                    print_batch_result(&command, &stats, args.dry_run);
+                    let child_exit_code = stats.exit_code;
+                    let child_failed = stats.failed;
+                    let child_counts_complete = stats.counts_complete();
+                    let is_img = command
+                        .program
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|n| n == "img");
+                    let is_vid = command
+                        .program
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|n| n == "vid");
+                    if is_img {
+                        summary.add_image_stats(&stats);
+                    } else if is_vid {
+                        summary.add_video_stats(&stats);
+                    } else if summary.img.total() == 0 {
+                        summary.img = stats.clone();
+                    } else {
+                        summary.vid = stats;
+                    }
+                    if child_result_needs_error(
+                        args.dry_run,
+                        child_exit_code,
+                        child_failed,
+                        child_counts_complete,
+                    ) {
+                        let err = if child_counts_complete {
+                            anyhow::anyhow!(
+                                "{} command exited with code {} and reported {} failed file(s)",
+                                command.pipeline_label(),
+                                child_exit_code,
+                                child_failed
+                            )
+                        } else {
+                            anyhow::anyhow!(
+                                "{} command exited with code {}; final file counts are incomplete or invalid",
+                                command.pipeline_label(),
+                                child_exit_code
+                            )
+                        };
+                        if !child_counts_complete
+                            || child_failure_should_abort(
+                                command_error_mode,
+                                child_exit_code,
+                                child_failed,
+                            )
+                        {
+                            first_error = Some(err);
+                            break;
+                        }
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
+                }
+                Err(err) => {
+                    print_batch_launch_error(&command, args.dry_run);
+                    let is_img = command
+                        .program
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|n| n == "img");
+                    let is_vid = command
+                        .program
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|n| n == "vid");
+                    if is_img {
+                        summary.add_image_stats(&ProcessorStats {
+                            exit_code: 2,
+                            ..ProcessorStats::default()
+                        });
+                    } else if is_vid {
+                        summary.add_video_stats(&ProcessorStats {
+                            exit_code: 2,
+                            ..ProcessorStats::default()
+                        });
+                    }
+                    if drag_drop_error_should_abort(command_error_mode, &err) {
+                        first_error = Some(err);
+                        break;
+                    }
+                    eprintln!(
+                        "{} command error (log-and-continue): {err:#}",
+                        pick_symbol("⚠️", "[WARN]")
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+            }
+        }
+
+        let img_vid_pipeline_completed =
+            mode_uses_standard_pipeline(&args.mode) && !args.dry_run && first_error.is_none();
+
+        if mode_uses_standard_pipeline(&args.mode) {
+            if args.in_place {
+                let _ = dir_lock;
+            } else if img_vid_pipeline_completed && let (Some(scan), Some(sess)) = (&scan, session)
+            {
+                let output = adjacent_output_dir(args);
+                if output.is_dir()
+                    && let Err(err) = run_post_adjacent_steps(args, &root, sess, scan, &mut summary)
+                {
+                    if drag_drop_error_should_abort(error_mode, &err) {
+                        return Err(err);
+                    }
+                    eprintln!(
+                        "{} post-pipeline step error: {err:#}",
+                        pick_symbol("⚠️", "[WARN]")
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut size_summary_block: Option<String> = None;
+    if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
+        if summary.integrity_state == Some("WARNINGS") {
+            eprintln!(
+                "{} Integrity verification reported {} issue(s); file outcome counts are unchanged",
+                pick_symbol("⚠️", "[WARN]"),
+                summary.integrity_issue_count
+            );
+        }
+        if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
+            eprintln!(
+                "\n   {} Exiting with failures: {failed_files} file(s) did not complete \
+                 successfully.",
+                pick_symbol("❌", "[ERROR]")
+            );
+            // Enumerate every retained file so the user doesn't have to grep logs
+            if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
+                eprintln!("   Retained files:");
+                for name in &summary.failed_file_names {
+                    eprintln!("     [FAIL] {name}");
+                }
+                for name in &summary.skipped_file_names {
+                    eprintln!("     [SKIP] {name}");
+                }
+            }
+        }
+        print_summary_report(&summary);
+        if let Some(ref scan) = scan {
+            let (before, after) = if matches!(args.mode, LaunchMode::FastImg) {
+                let before = summary
+                    .fast_img_session_source_bytes
+                    .unwrap_or(scan.media_total_size);
+                let after = if let Some(bytes) = summary
+                    .fast_img_size_after_override
+                    .or(summary.fast_img_session_output_bytes)
+                {
+                    bytes
+                } else {
+                    du_size_recursive(&adjacent_output_dir(args))?
+                };
+                (before, after)
+            } else if args.in_place {
+                (scan.media_total_size, scan.media_total_size)
+            } else {
+                (
+                    scan.media_total_size,
+                    du_size_recursive(&adjacent_output_dir(args))?,
+                )
+            };
+            let block = build_size_comparison_summary(
+                before,
+                after,
+                if args.in_place { "every" } else { "normal" },
+                processing_filter(args).verify_mode_label(),
+            );
+            println!("\n{block}");
+            size_summary_block = Some(block);
+        }
+    }
+    if let Some(sess) = session {
+        sess.finish_log(&summary, size_summary_block.as_deref())?;
+    }
+    print_elapsed(started.elapsed());
+    eprintln!(
+        "{} Session stamp: {}",
+        pick_symbol("✓", "[DONE]"),
+        session.map_or("-", |s| s.stamp.as_str())
+    );
+
+    if let (Some(sess), Some(output_dir)) = (session, &args.output) {
+        let output_size = if let Some(override_size) = summary.fast_img_size_after_override {
+            override_size
+        } else {
+            du_size_recursive(output_dir)?
+        };
+        if let Some(source_dir) = args.inputs.first() {
+            let source_size = du_size_recursive(source_dir)?;
+            let ratio = if source_size > 0 {
+                foundation::numeric_cast::u64_to_f64(output_size)
+                    / foundation::numeric_cast::u64_to_f64(source_size)
+            } else {
+                0.0
+            };
+            println!(
+                "{} Source: {} → Output: {} ({:.1}%)",
+                pick_symbol("📊", "[STATS]"),
+                format_bytes(source_size),
+                format_bytes(output_size),
+                ratio * 100.0
+            );
+            let _ = &sess;
+        }
+    }
+
+    if !args.dry_run && pipeline_summary_has_reportable_outcome(&summary) {
+        if summary.integrity_state == Some("WARNINGS") {
+            bail!(
+                "integrity verification reported {} issue(s); file outcome counts are unchanged",
+                summary.integrity_issue_count
+            );
+        }
+        if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
+            bail!("exiting with failures: {failed_files} file(s) did not complete successfully");
+        }
+    }
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn finalize_handoff_preservation(
+    source_root: &Path,
+    optimized_root: &Path,
+    session: &DragDropSession,
+) -> Result<()> {
+    draw_separator("Handoff Preserve (optional — post img/vid only)");
+    let routed = extract_routed_video_paths_from_audit(&session.session_audit)?;
+    if routed.is_empty() {
+        session.append_line(
+            &session.session_audit,
+            "HANDOFF_PRESERVE_SKIP reason=no_video_routes",
+        )?;
+        return Ok(());
+    }
+
+    let candidates = report_handoff_preserve_gaps_from_paths(source_root, optimized_root, &routed)?;
+    session.append_line(
+        &session.session_audit,
+        &format!("HANDOFF_PRESERVE_SCAN candidates={}", candidates.len()),
+    )?;
+
+    println!(
+        "\n{} Handoff preserve (optional — post img/vid only)",
+        pick_symbol("⚠️", "[WARN]")
+    );
+    println!("   Source:    {}", source_root.display());
+    println!("   Optimized: {}", optimized_root.display());
+
+    if candidates.is_empty() {
+        println!("   {} No handoff gaps detected", pick_symbol("✓", "[OK]"));
+        session.append_line(&session.session_audit, "HANDOFF_PRESERVE_NONE_NEEDED")?;
+        return Ok(());
+    }
+
+    let total_bytes: u64 = candidates.iter().map(|c| c.size_bytes).sum();
+    println!(
+        "   {} {} file(s) would be copied ({} total):",
+        pick_symbol("⚠️", "[WARN]"),
+        candidates.len(),
+        format_bytes(total_bytes)
+    );
+    for candidate in &candidates {
+        println!(
+            "      • {}  ({})",
+            candidate.rel_path,
+            format_bytes(candidate.size_bytes)
+        );
+        session.append_line(
+            &session.session_audit,
+            &format!(
+                "HANDOFF_PRESERVE_CANDIDATE path={} bytes={}",
+                candidate.rel_path, candidate.size_bytes
+            ),
+        )?;
+    }
+
+    let choice = read_choice("Preserve handoff gaps? (y/N): ")?;
+    let accepted = matches!(choice.to_lowercase().as_str(), "y" | "yes");
+    if !accepted {
+        session.append_line(&session.session_audit, "HANDOFF_PRESERVE_DECLINED")?;
+        println!("   Skipped handoff preserve.");
+        return Ok(());
+    }
+
+    let mut audit_cb = |line: &str| {
+        let _ = session.append_line(&session.session_audit, line);
+    };
+    let preserved = preserve_handoff_gaps(
+        source_root,
+        optimized_root,
+        &routed,
+        Some(&candidates),
+        HANDOFF_PRESERVE_PHASE_POST_IMG_VID,
+        Some(&mut audit_cb),
+    )?;
+    println!(
+        "   {} Preserved {} handoff file(s)",
+        pick_symbol("✓", "[OK]"),
+        preserved.len()
+    );
+    Ok(())
+}
+
+fn read_choice(prompt: &str) -> Result<String> {
+    print!("{prompt}");
+    io::stdout().flush().context("flush stdout")?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line).context("read stdin")?;
+    Ok(line.trim().to_string())
+}
+
+fn prompt_for_input() -> Result<Option<PathBuf>> {
+    let cyan = if colors_enabled() { "\x1b[0;36m" } else { "" };
+    let reset = if colors_enabled() { "\x1b[0m" } else { "" };
+    println!(
+        "\n{cyan}Please drag and drop a folder or file into this terminal window and press \
+         Enter.{reset}"
+    );
+    drain_stdin();
+    let path = read_choice(&format!("{cyan} > {reset}"))?;
+    if path.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(validate_drag_drop_path(&path)?))
+}
+
+fn wait_enter() {
+    let cyan = if colors_enabled() { "\x1b[0;36m" } else { "" };
+    let reset = if colors_enabled() { "\x1b[0m" } else { "" };
+    let _ = read_choice(&format!("\n{cyan}Press Enter to return to menu...{reset}"));
+}
+
+fn execute_menu_quick_pick(
+    choice: usize,
+    session: &DragDropSession,
+    dir_lock: &mut Option<DirLock>,
+    target: &Path,
+    strategy: &str,
+) -> Result<()> {
+    let (cat, sub) = match choice {
+        1 => (0, 0),
+        2 => (0, 1),
+        3 => (0, 2),
+        4 => (1, 0),
+        5 => (1, 1),
+        6 => (1, 2),
+        7 => (2, 0),
+        8 => (2, 1),
+        9 => (2, 2),
+        _ => return Ok(()),
+    };
+    let _ = execute_menu_selection(
+        cat,
+        sub,
+        sub,
+        sub,
+        session,
+        dir_lock,
+        target,
+        ProcessingFilter::Both,
+        strategy,
+    )?;
+    Ok(())
+}
+
+fn execute_menu_selection(
+    selected: usize,
+    opt_sub: usize,
+    workspace_sub: usize,
+    maint_sub: usize,
+    session: &DragDropSession,
+    dir_lock: &mut Option<DirLock>,
+    target: &Path,
+    filter: ProcessingFilter,
+    strategy: &str,
+) -> Result<bool> {
+    let root = resolve_runtime_root()?;
+    match selected {
+        0 => {
+            let fastmode_count = if matches!(
+                filter,
+                ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
+            ) {
+                3
+            } else {
+                2
+            };
+            let actual = map_mode_sub_state(opt_sub, fastmode_count, filter);
+            if actual == 0 {
+                let output = adjacent_output_for_target(target);
+                create_directory_structure(target, &output, Some(&session.session_audit))?;
+                println!("\n{} ADJACENT MODE SELECTED", pick_symbol("✅", "[OK]"));
+                println!("   Output: {}", output.display());
+                let args = build_run_args(
+                    target,
+                    LaunchMode::Auto,
+                    Some(output),
+                    false,
+                    true,
+                    false,
+                    filter,
+                    None,
+                );
+                run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+            } else if actual == 1 {
+                if !confirm_in_place()? {
+                    return Ok(false);
+                }
+                *dir_lock = Some(acquire_global_lock(target)?);
+                let args = build_run_args(
+                    target,
+                    LaunchMode::Auto,
+                    None,
+                    true,
+                    false,
+                    false,
+                    filter,
+                    None,
+                );
+                run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+            } else if matches!(filter, ProcessingFilter::VideosOnly) {
+                let shortest = dev::infra::drag_drop::choose_fast_vid_shortest_path(strategy)?;
+                let output = dev::infra::fastmode_paths::fast_vid_output_dir_for_target(target);
+                let args = build_run_args(
+                    target,
+                    LaunchMode::FastVid,
+                    Some(output),
+                    false,
+                    true,
+                    shortest,
+                    filter,
+                    Some(strategy.to_string()),
+                );
+                run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+            } else {
+                let action = dev::infra::drag_drop::choose_fast_img_action(strategy)?;
+                let (mode, shortest) = match action {
+                    FastImgAction::RestoreJpeg => (LaunchMode::RestoreJpeg, false),
+                    FastImgAction::Normal => (LaunchMode::FastImg, false),
+                    FastImgAction::ShortestPath => (LaunchMode::FastImg, true),
+                };
+                let output = if matches!(action, FastImgAction::RestoreJpeg) {
+                    resolve_restore_jpeg_launch_output(target, None)?.0
+                } else {
+                    None
+                };
+                let args = build_run_args(
+                    target,
+                    mode,
+                    output,
+                    false,
+                    true,
+                    shortest,
+                    filter,
+                    Some(strategy.to_string()),
+                );
+                run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+            }
+        }
+        1 => {
+            let mode = match workspace_sub {
+                1 => LaunchMode::MergeXmp,
+                2 => LaunchMode::IcloudImport,
+                _ => LaunchMode::Collect,
+            };
+            let collecting_recovery_originals = mode == LaunchMode::Collect;
+            let mut args = build_run_args(
+                target,
+                mode,
+                None,
+                false,
+                false,
+                false,
+                ProcessingFilter::Both,
+                None,
+            );
+            if collecting_recovery_originals {
+                let Some(backup) = prompt_for_input()? else {
+                    return Ok(false);
+                };
+                args.backup = Some(backup);
+            }
+            run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+        }
+        _ => match maint_sub {
+            0 => {
+                let args = build_run_args(
+                    target,
+                    LaunchMode::Diagnostic,
+                    None,
+                    false,
+                    false,
+                    false,
+                    ProcessingFilter::Both,
+                    None,
+                );
+                run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
+            }
+            1 => {
+                let bin = cli_binary(&root, "cache_cleaner");
+                let status = Command::new(&bin).status()?;
+                if !status.success() {
+                    eprintln!("{}Cache cleaner failed.", pick_symbol("❌", "[ERROR]"));
+                }
+            }
+            _ => {
+                let bin = cli_binary(&root, "database_manager");
+                let status = Command::new(&bin).status()?;
+                if !status.success() {
+                    eprintln!("{}Database manager failed.", pick_symbol("❌", "[ERROR]"));
+                }
+            }
+        },
+    }
+    Ok(true)
+}
+
+const fn map_mode_sub_state(sub: usize, fastmode_count: usize, filter: ProcessingFilter) -> usize {
+    let _ = fastmode_count;
+    if matches!(
+        filter,
+        ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
+    ) {
+        match sub {
+            0 => 2,
+            2 => 0,
+            other => other,
+        }
+    } else {
+        sub
+    }
+}
+
+fn build_run_args(
+    target: &Path,
+    mode: LaunchMode,
+    output: Option<PathBuf>,
+    in_place: bool,
+    archive: bool,
+    shortest_path: bool,
+    filter: ProcessingFilter,
+    strategy: Option<String>,
+) -> Args {
+    Args {
+        inputs: vec![target.to_path_buf()],
+        mode,
+        output,
+        backup: None,
+        archive,
+        shortest_path,
+        retry: false,
+        force: false,
+        dry_run: false,
+        plain: false,
+        base_dir: None,
+        in_place,
+        resume: false,
+        no_resume: false,
+        ultimate: DRAG_DROP_CHILD_ULTIMATE,
+        verbose: DRAG_DROP_CHILD_VERBOSE,
+        watch: false,
+        images_only: matches!(filter, ProcessingFilter::ImagesOnly),
+        videos_only: matches!(filter, ProcessingFilter::VideosOnly),
+        strategy,
+        photos_album_id: None,
+        photos_folder_id: None,
+        img_config: None,
+        performance: Default::default(),
+        img_fallback_policy: None,
+        img_jpeg_effort: None,
+        img_quality_heuristic: None,
+        img_allow_database: None,
+        photos: Default::default(),
+        img_error_mode: None,
+        vid_error_mode: None,
+        vid_codec: None,
+    }
+}
+
+fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
+    let bold = if colors_enabled() { "\x1b[1m" } else { "" };
+    let reset = if colors_enabled() { "\x1b[0m" } else { "" };
+    let filter = processing_filter(args);
+
+    let target = if args.inputs.is_empty() {
+        let Some(path) = prompt_for_input()? else {
+            return Ok(());
+        };
+        safety_check(&path)?;
+        session.rename_log_to_project(&path)?;
+        path
+    } else {
+        args.inputs[0].clone()
+    };
+
+    let snapshot = probe_system_snapshot(&target);
+    print_runtime_panel(&RuntimeDashboard {
+        target_path: target.display().to_string(),
+        mode_label: "Interactive".to_string(),
+        target_type: target_type_label(args).to_string(),
+        output_path: None,
+        ultimate: args.ultimate,
+        watch: args.watch,
+        cpu_percent: Some(snapshot.cpu_percent),
+        memory_percent: Some(snapshot.memory_percent),
+        disk_free_gb: Some(
+            foundation::numeric_cast::u64_to_f64(snapshot.disk_free_bytes)
+                / (1024.0 * 1024.0 * 1024.0),
+        ),
+    });
+
+    let mut dir_lock = None;
+    let mut selected = 0usize;
+    let mut opt_sub = 0usize;
+    let mut workspace_sub = 0usize;
+    let mut maint_sub = 0usize;
+    let mut strategy = "jxl".to_string(); // Default strategy
+    let fastmode_count = if matches!(
+        filter,
+        ProcessingFilter::ImagesOnly | ProcessingFilter::VideosOnly
+    ) {
+        3
+    } else {
+        2
+    };
+
+    loop {
+        clear_screen();
+        draw_banner(env!("CARGO_PKG_VERSION"));
+        println!("{bold}Select Operation Mode:{reset}\n");
+        println!("   Target: {}\n", target.display());
+
+        let (opt_title, opt_desc) = optimization_menu_labels(opt_sub, filter, &strategy);
+        print_menu_row(selected == 0, &opt_title, opt_desc);
+
+        let ws = [
+            (
+                "Tool: Collect Recovery Originals [Tab to Switch]",
+                "Copy only audited originals from an exact backup; never move source media.",
+            ),
+            (
+                "Tool: Merge XMP Attachments [Tab to Switch]",
+                "Merge XMP safely; JXL freezes JBRD boxes and appends a verified overlay.",
+            ),
+            (
+                "Tool: iCloud Photo Import [Tab to Switch]",
+                "Import processed assets into iCloud (osxphotos).",
+            ),
+        ];
+        print_menu_row(selected == 1, ws[workspace_sub].0, ws[workspace_sub].1);
+
+        let mt = [
+            (
+                "Tool: Diagnostic Analysis [Tab to Switch]",
+                "Analyze logs and verify output integrity.",
+            ),
+            (
+                "Tool: Cleanup Cache & Logs [Tab to Switch]",
+                "Clear analysis cache, session logs, and task progress.",
+            ),
+            (
+                "Tool: Database Manager [Tab to Switch]",
+                "Clean, train, backup and manage database.",
+            ),
+        ];
+        print_menu_row(selected == 2, mt[maint_sub].0, mt[maint_sub].1);
+
+        print_menu_hint();
+
+        // Show strategy hint when Fast Mode is selected
+        if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+            let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
+            let dim = if colors_enabled() { "\x1b[2m" } else { "" };
+            println!(
+                "\n   {cyan}Current Strategy: {}{reset}",
+                if strategy == "avif" {
+                    "AVIF (Meme Mode/表情包模式)"
+                } else {
+                    "JXL (Default)"
+                }
+            );
+            println!("   {dim}Press 'S' or Space to switch strategy{reset}\n");
+        }
+
+        let key = read_nav_key()?;
+        match key {
+            NavKey::Up | NavKey::Left => {
+                let menu_item_count = 3;
+                selected = (selected + menu_item_count - 1) % menu_item_count;
+            }
+            NavKey::Down | NavKey::Right => {
+                selected = (selected + 1) % 3;
+            }
+            NavKey::Tab => match selected {
+                0 => opt_sub = (opt_sub + 1) % fastmode_count,
+                1 => workspace_sub = (workspace_sub + 1) % 3,
+                _ => maint_sub = (maint_sub + 1) % 3,
+            },
+            NavKey::Char('s') | NavKey::Char('S') | NavKey::Char(' ') => {
+                // Toggle strategy when Fast Mode is selected
+                if selected == 0 && map_mode_sub_state(opt_sub, fastmode_count, filter) == 2 {
+                    strategy = if strategy == "jxl" {
+                        "avif".to_string()
+                    } else {
+                        "jxl".to_string()
+                    };
+                }
+            }
+            NavKey::Quit | NavKey::Char('0') => return Ok(()),
+            NavKey::Char(c @ '1'..='9') => {
+                let n = match c.to_digit(10) {
+                    Some(v) => v as usize,
+                    None => 0,
+                };
+                execute_menu_quick_pick(n, session, &mut dir_lock, &target, &strategy)?;
+                wait_enter();
+            }
+            NavKey::Enter => {
+                let _ = execute_menu_selection(
+                    selected,
+                    opt_sub,
+                    workspace_sub,
+                    maint_sub,
+                    session,
+                    &mut dir_lock,
+                    &target,
+                    filter,
+                    &strategy,
+                )?;
+                wait_enter();
+            }
+            NavKey::Unknown | NavKey::Char(_) => {}
+        }
+    }
+}
+
+fn optimization_menu_labels(
+    sub: usize,
+    filter: ProcessingFilter,
+    strategy: &str,
+) -> (String, &'static str) {
+    match filter {
+        ProcessingFilter::VideosOnly => match sub {
+            0 => (
+                format!(
+                    "Mode: Fast Video Mode ({}) [Tab to Switch]",
+                    if strategy == "avif" {
+                        "AVIF/Meme"
+                    } else {
+                        "JXL"
+                    }
+                ),
+                "Full LoopIntent path for videos and animated images.",
+            ),
+            1 => (
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
+                "Replaces original files. Saves disk space.",
+            ),
+            _ => (
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
+                "Safe mode. Keeps originals untouched.",
+            ),
+        },
+        ProcessingFilter::ImagesOnly => match sub {
+            0 => (
+                format!(
+                    "Mode: Fast Image Mode ({}) [Tab to Switch]",
+                    if strategy == "avif" {
+                        "AVIF/Meme"
+                    } else {
+                        "JXL"
+                    }
+                ),
+                "JPEG→JXL fast path or JXL→JPEG restore.",
+            ),
+            1 => (
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
+                "Replaces original files. Saves disk space.",
+            ),
+            _ => (
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
+                "Safe mode. Keeps originals untouched.",
+            ),
+        },
+        ProcessingFilter::Both => match sub {
+            0 => (
+                "Mode: Output to Adjacent Folder [Tab to Switch]".to_string(),
+                "Safe mode. Keeps originals untouched.",
+            ),
+            _ => (
+                "Mode: In-Place Optimization [Tab to Switch]".to_string(),
+                "Replaces original files. Saves disk space.",
+            ),
+        },
+    }
+}
+
+const fn apply_mode_overrides(mut args: Args) -> Args {
+    if mode_uses_standard_pipeline(&args.mode) {
+        if args.images_only {
+            args.mode = LaunchMode::Images;
+        } else if args.videos_only {
+            args.mode = LaunchMode::Videos;
+        }
+    }
+    args
+}
+
+fn run_watch_loop(args: &Args, session: &DragDropSession) -> Result<()> {
+    let watch_root = args
+        .inputs
+        .first()
+        .context("watch mode requires an input directory")?
+        .clone();
+    let processing = AtomicBool::new(false);
+    if args.watch {
+        draw_separator("Watch Mode Enabled");
+        println!(
+            "{} Monitoring: {}",
+            pick_symbol("👁", "[WATCH]"),
+            watch_root.display()
+        );
+        println!("Press Ctrl+C to stop. Debouncing active.\n");
+    }
+    watch_directory_with_debounce(&watch_root, 2000, move |event| {
+        let relevant = event.paths.iter().any(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| is_watch_trigger_ext(&format!(".{ext}")))
+        });
+        if !relevant {
+            return;
+        }
+        if processing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        eprintln!(
+            "{} Watch trigger — re-running pipeline",
+            pick_symbol("🔄", "[UPDATE]")
+        );
+        if let Err(err) = run_drag_drop(args, Some(session), None) {
+            eprintln!(
+                "{} watch reprocess error: {err:#}",
+                pick_symbol("⚠️", "[WARN]")
+            );
+        }
+        processing.store(false, Ordering::SeqCst);
+    })
+}
+
+fn main() -> Result<()> {
+    use std::io::IsTerminal;
+    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
+    install_signal_handlers()?;
+    unsafe {
+        std::env::set_var("MFB_GUI_LAUNCH", "1");
+        std::env::set_var("FORCE_COLOR", "1");
+        std::env::set_var("CLICOLOR_FORCE", "1");
+        if std::env::var("MODERN_FORMAT_DISABLE_STRICT_MEDIA_CONVERSION").is_err() {
+            std::env::set_var("MODERN_FORMAT_DISABLE_STRICT_MEDIA_CONVERSION", "0");
+        }
+    }
+    resize_terminal_for_gui(35, 110);
+    let args = apply_mode_overrides(Args::parse());
+    let mut runtime = foundation::runtime_config::load(None, false)?;
+    args.performance.apply_to(&mut runtime);
+    foundation::runtime_config::install(runtime.config)?;
+    let mut session = DragDropSession::start()?;
+    println!(
+        "MFB_LOG_DIRECTORY={}",
+        serde_json::to_string(&session.log_dir.to_string_lossy())?
+    );
+    let mut dir_lock = None;
+
+    // All entry paths share archival, including a failed interactive or watch run.
+    let run_result = if io::stdin().is_terminal() {
+        interactive_menu(&args, &mut session)
+    } else {
+        (|| {
+            if args.inputs.is_empty() {
+                return run_with_history(&args, Some(&session), || {
+                    bail!("at least one input path is required")
+                });
+            }
+            let setup_result: Result<()> = (|| {
+                session.rename_log_to_project(&args.inputs[0])?;
+                if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
+                    dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
+                }
+                Ok(())
+            })();
+            if let Err(error) = setup_result {
+                return run_with_history(&args, Some(&session), || Err(error));
+            }
+            run_drag_drop(&args, Some(&session), dir_lock.as_ref())?;
+            if args.watch {
+                run_watch_loop(&args, &session)?;
+            }
+            Ok(())
+        })()
+    };
+
+    match session.archive() {
+        Ok(Some(bundle)) => {
+            println!(
+                "{} Archived session bundle: {}",
+                pick_symbol("📦", "[ARCHIVE]"),
+                bundle.display()
+            );
+        }
+        Ok(None) => {}
+        Err(err) => {
+            if run_result.is_ok() {
+                return Err(err);
+            }
+            eprintln!("drag/drop session archive failed: {err:#}");
+        }
+    }
+    if run_result.is_err() {
+        if foundation::batch_control::is_cancelled()? {
+            eprintln!("Batch cancelled after active media work reached a safe boundary.");
+            std::process::exit(130);
+        }
+        report_drag_drop_failure(&run_result);
+    }
+    run_result
+}
+
+fn report_drag_drop_failure(result: &Result<()>) {
+    if let Err(err) = result {
+        eprintln!("{err:#}");
+        print_pipeline_failure_panel();
+        pause_before_gui_exit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::path::{Path, PathBuf};
+
+    fn history_payloads(session: &DragDropSession, name: &str) -> Vec<serde_json::Value> {
+        let prefix = format!("{name}=");
+        let connection = rusqlite::Connection::open_with_flags(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut query = connection
+            .prepare("SELECT event FROM history_events WHERE session_id=?1 ORDER BY sequence")
+            .unwrap();
+        query
+            .query_map([&session.stamp], |row| row.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|event| {
+                event
+                    .unwrap()
+                    .strip_prefix(&prefix)
+                    .map(|payload| serde_json::from_str(payload).unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn history_preserves_escaped_context_and_separate_run_outcomes() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "collect"]).unwrap();
+        args.inputs = vec![PathBuf::from("/tmp/source with spaces\nsecond line")];
+        args.output = Some(PathBuf::from("/tmp/output \"quoted\""));
+        args.backup = Some(PathBuf::from("/tmp/backup"));
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let error = run_with_history(&args, Some(&session), || {
+            bail!("synthetic processing failure")
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "synthetic processing failure");
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[0]["inputs"][0],
+            "/tmp/source with spaces\nsecond line"
+        );
+        assert_eq!(contexts[0]["output"], "/tmp/output \"quoted\"");
+        assert_eq!(contexts[0]["backup"], "/tmp/backup");
+        assert_eq!(contexts[0]["mode"], "collect");
+        let outcomes = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0]["outcome"], "completed");
+        assert!(outcomes[0]["error"].is_null());
+        assert_eq!(outcomes[1]["outcome"], "failed");
+        assert_eq!(outcomes[1]["error"], "synthetic processing failure");
+        args.inputs = vec![PathBuf::from("synthetic-relative-input")];
+        args.output = Some(PathBuf::from("synthetic-relative-output"));
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let context = history_payloads(&session, "MFB_HISTORY_CONTEXT")
+            .pop()
+            .unwrap();
+        assert_eq!(
+            context["inputs"][0],
+            serde_json::to_value(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("synthetic-relative-input")
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            context["output"],
+            serde_json::to_value(
+                std::env::current_dir()
+                    .unwrap()
+                    .join("synthetic-relative-output")
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn independent_sessions_do_not_share_history_or_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = DragDropSession::start_for_test(temp.path()).unwrap();
+        let second = DragDropSession::start_for_test(temp.path()).unwrap();
+        assert_ne!(first.stamp, second.stamp);
+        let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
+        run_with_history(&args, Some(&first), || Ok(())).unwrap();
+        run_with_history(&args, Some(&second), || bail!("second failed")).unwrap_err();
+        assert_eq!(
+            history_payloads(&first, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "completed"
+        );
+        assert_eq!(
+            history_payloads(&second, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn history_retains_primary_error_when_terminal_audit_write_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        let error = run_with_history(&args, Some(&session), || {
+            let database = session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE);
+            fs::remove_file(&database)?;
+            fs::create_dir(&database)?;
+            bail!("primary processing failure")
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "primary processing failure");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_invalid_utf8_paths_fail_explicitly_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        args.inputs = vec![PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/invalid\xff".to_vec(),
+        ))];
+        let called = AtomicBool::new(false);
+        let error = run_with_history(&args, Some(&session), || {
+            called.store(true, Ordering::Relaxed);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("encode history input paths"));
+        assert!(!called.load(Ordering::Relaxed));
+        let outcomes = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(outcomes[0]["outcome"], "failed");
+        assert!(
+            outcomes[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("encode history input paths")
+        );
+    }
+
+    #[test]
+    fn history_requires_context_and_terminal_audit_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
+        let called = AtomicBool::new(false);
+        let database = session
+            .log_dir
+            .join(dev::infra::history_store::HISTORY_DATABASE);
+        fs::create_dir(&database).unwrap();
+        assert!(
+            run_with_history(&args, Some(&session), || {
+                called.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called.load(Ordering::Relaxed));
+        fs::remove_dir(&database).unwrap();
+        assert!(
+            run_with_history(&args, Some(&session), || {
+                fs::remove_file(&database)?;
+                fs::create_dir(&database)?;
+                Ok(())
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("write history terminal outcome")
+        );
+    }
+
+    #[test]
+    fn history_summary_keeps_unknown_counts_and_integrity_separate() {
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 7,
+            failed: 1,
+            reported: [true, false, true, true],
+            ..ProcessorStats::default()
+        });
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["count_scope"], "processor_outcomes");
+        assert_eq!(payload["img"]["succeeded"], 7);
+        assert!(payload["img"]["skipped"].is_null());
+        assert_eq!(payload["img"]["failed"], 1);
+        assert!(payload["img"]["unprocessed"].is_null());
+        assert_eq!(payload["vid"]["active"], false);
+        assert!(payload["vid"]["succeeded"].is_null());
+        assert!(payload["vid"]["exit_code"].is_null());
+        assert!(payload["integrity"]["state"].is_null());
+        assert!(payload["integrity"]["issue_count"].is_null());
+        summary.integrity_state = Some("WARNINGS");
+        summary.integrity_issue_count = 4;
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["img"]["succeeded"], 7);
+        assert_eq!(payload["integrity"]["issue_count"], 4);
+        summary.img.succeeded = usize::MAX;
+        assert!(history_summary_payload(&summary)["img"]["succeeded"].is_null());
+    }
+
+    #[test]
+    fn history_output_boundary_excludes_previous_run_retained_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut output =
+            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
+                .unwrap();
+        output
+            .push_line("IMG", "[FAIL    ]   prior\u{00e9}.jpg: old failure")
+            .unwrap();
+        output.flush().unwrap();
+        let cursor =
+            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+                .unwrap();
+        output
+            .push_line(
+                "IMG",
+                "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]",
+            )
+            .unwrap();
+        output.flush().unwrap();
+        let current = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            cursor,
+        )
+        .unwrap();
+        assert_eq!(
+            fast_img_retained_file_names(&current),
+            vec![("current.jpg: no gain".to_owned(), "skipped".to_owned())]
+        );
+        assert!(!current.contains("prior"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launcher_output_is_sqlite_only_and_write_failure_does_not_interrupt_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let command = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(), "-c".into(),
+            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'".into(),
+        ]).unwrap();
+        let stats = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+        assert_eq!(stats.succeeded, 1);
+        assert!(stats.counts_complete());
+        let text = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            0,
+        )
+        .unwrap();
+        assert!(text.contains("synthetic worker output"));
+        for path in [&session.session_log, &session.verbose_log] {
+            assert!(
+                !fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line == "synthetic worker output" || line == "Succeeded: 1")
+            );
+        }
+        let database = rusqlite::Connection::open(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        database.execute_batch("CREATE TRIGGER reject_output BEFORE INSERT ON history_output BEGIN SELECT RAISE(ABORT, 'synthetic output failure'); END;").unwrap();
+        let finished = temp.path().join("child_finished");
+        let child = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(), "-c".into(),
+            "i=0; while [ $i -lt 140 ]; do printf 'synthetic failure test\\n'; i=$((i+1)); done; printf done > \"$1\"".into(),
+            "test".into(), finished.to_str().unwrap().into(),
+        ]).unwrap();
+        let error = child
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("synthetic output failure"));
+        assert_eq!(fs::read_to_string(finished).unwrap(), "done");
+    }
+
+    #[test]
+    fn media_settings_are_typed_scoped_and_forwarded() {
+        let args = apply_mode_overrides(
+            Args::try_parse_from([
+                "mfb",
+                "--images-only",
+                "--img-config",
+                "/tmp/preferences.json",
+                "--img-fallback-policy",
+                "strict",
+                "--img-jpeg-effort",
+                "11",
+                "--img-quality-heuristic=false",
+                "--img-allow-database=true",
+                "--img-error-mode",
+                "log-and-continue",
+                "/tmp/media",
+            ])
+            .unwrap(),
+        );
+        validate_media_options(&args).unwrap();
+        let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--config", "/tmp/preferences.json"])
+        );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--fallback-policy", "strict"])
+        );
+        assert!(
+            command
+                .args
+                .contains(&"--quality-heuristic=false".to_owned())
+        );
+        assert!(command.args.contains(&"--allow-database=true".to_owned()));
+        assert!(command.env_overrides.contains(&(
+            foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
+            Some("log-and-continue".to_owned())
+        )));
+        assert!(command.env_overrides.contains(&(
+            foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
+            None
+        )));
+        let video = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video"));
+        assert!(!video.args.contains(&"--config".to_owned()));
+        assert!(video.env_overrides.is_empty());
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort", "12", "/tmp/media"]).is_err());
+        assert!(
+            Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
+        );
+    }
+
+    #[test]
+    fn video_av1_and_inapplicable_options_are_explicit() {
+        let args = apply_mode_overrides(
+            Args::try_parse_from([
+                "mfb",
+                "--videos-only",
+                "--vid-codec",
+                "av1",
+                "--vid-error-mode",
+                "fail-fast",
+                "/tmp/media",
+            ])
+            .unwrap(),
+        );
+        validate_media_options(&args).unwrap();
+        let command = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--codec", "av1"])
+        );
+        assert!(command.args.contains(&"--no-apple-compat".to_owned()));
+        assert_eq!(
+            media_error_mode(&args, "VID", BatchErrorMode::LogAndContinue),
+            BatchErrorMode::FailFast
+        );
+        assert_eq!(
+            media_error_mode(&args, "IMG", BatchErrorMode::LogAndContinue),
+            BatchErrorMode::LogAndContinue
+        );
+        for argv in [
+            vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
+            vec!["mfb", "--images-only", "--vid-codec", "av1"],
+            vec!["mfb", "--mode", "fast-vid", "--vid-codec", "av1"],
+            vec![
+                "mfb",
+                "--mode",
+                "restore-jpeg",
+                "--img-config",
+                "/tmp/config.json",
+            ],
+            vec!["mfb", "--mode", "fast-img", "--img-error-mode", "fail-fast"],
+        ] {
+            let args = apply_mode_overrides(Args::try_parse_from(argv).unwrap());
+            assert!(validate_media_options(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn explicit_performance_is_forwarded_as_cli_precedence() {
+        let args = Args::try_parse_from(["mfb", "--performance", "tight"]).unwrap();
+        for bin in ["img", "vid"] {
+            let command = rust_run_command(Path::new("/tmp"), bin, &args, Path::new("input"));
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--performance", "tight"])
+            );
+        }
+        assert_eq!(
+            Args::try_parse_from(["mfb"])
+                .unwrap()
+                .performance
+                .cli_arguments(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn photos_settings_are_forwarded_only_to_fast_img() {
+        let mut args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "fast-img",
+            "--photos-backend",
+            "native",
+            "--photos-native-batch-size",
+            "200",
+            "--photos-import-batch-size",
+            "20",
+            "--photos-album-name",
+            "Selected",
+            "--preserve-folder-structure=false",
+            "/tmp/unused",
+        ])
+        .unwrap();
+        validate_media_options(&args).unwrap();
+        let mut forwarded = Vec::new();
+        push_img_policy_args(&mut forwarded, &args);
+        assert!(
+            forwarded
+                .windows(2)
+                .any(|pair| pair == ["--photos-native-batch-size", "200"])
+        );
+        assert!(
+            forwarded
+                .windows(2)
+                .any(|pair| pair == ["--photos-album-name", "Selected"])
+        );
+        assert!(forwarded.contains(&"--preserve-folder-structure=false".into()));
+        args.mode = LaunchMode::Images;
+        assert!(validate_media_options(&args).is_err());
+    }
+
+    #[test]
+    fn batch_results_preserve_unknown_and_failure_semantics() {
+        assert_eq!(
+            command_phase_label(Path::new("/bin/img")),
+            "Processing Images (img)"
+        );
+        assert_eq!(
+            command_phase_label(Path::new("/bin/vid")),
+            "Processing Videos (vid)"
+        );
+        let stats = ProcessorStats {
+            succeeded: 3,
+            skipped: 2,
+            failed: 1,
+            exit_code: 1,
+            reported: [true, true, false, true],
+            ..ProcessorStats::default()
+        };
+        let line = batch_result_line("img", &stats);
+        let result: serde_json::Value =
+            serde_json::from_str(line.strip_prefix("MFB_BATCH_RESULT=").unwrap()).unwrap();
+        assert_eq!(result["schema_version"], 1);
+        assert_eq!(result["succeeded"], 3);
+        assert_eq!(result["skipped"], 2);
+        assert_eq!(result["failed"], 1);
+        assert!(result["ignored"].is_null());
+        assert_eq!(result["exit_code"], 1);
+        assert!(!child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            1,
+            1
+        ));
+        assert!(!child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            0,
+            1
+        ));
+        assert!(child_failure_should_abort(BatchErrorMode::FailFast, 0, 1));
+        assert!(child_failure_should_abort(BatchErrorMode::FailFast, 1, 1));
+        assert!(child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            137,
+            1
+        ));
+        assert!(child_failure_should_abort(
+            BatchErrorMode::LogAndContinue,
+            1,
+            0
+        ));
+        assert!(!child_result_needs_error(true, 0, 0, false));
+        assert!(child_result_needs_error(true, 1, 0, false));
+        assert!(child_result_needs_error(true, 0, 1, false));
+        assert!(child_result_needs_error(false, 0, 0, false));
+        assert!(child_result_needs_error(false, 1, 0, true));
+    }
+
+    #[test]
+    fn batch_result_preserves_pending_and_rejects_overflowing_inventory() {
+        let mut stats = ProcessorStats {
+            succeeded: 3,
+            unprocessed: Some(2),
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        };
+        let decode = |stats: &ProcessorStats| -> serde_json::Value {
+            serde_json::from_str(
+                batch_result_line("img", stats)
+                    .strip_prefix("MFB_BATCH_RESULT=")
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(decode(&stats)["unprocessed"], 2);
+        stats.succeeded = usize::MAX;
+        let result = decode(&stats);
+        for key in ["succeeded", "skipped", "ignored", "failed", "unprocessed"] {
+            assert!(
+                result[key].is_null(),
+                "overflowing inventory reported {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_log_retains_file_counts_and_reports_integrity_separately() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut summary = PipelineSummary {
+            integrity_state: Some("WARNINGS"),
+            integrity_issue_count: 56,
+            ..PipelineSummary::default()
+        };
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 3,
+            skipped: 2,
+            ignored: 4,
+            failed: 1,
+            unprocessed: Some(5),
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        });
+        session.finish_log(&summary, None).unwrap();
+        let log = fs::read_to_string(&session.session_log).unwrap();
+        assert!(log.contains("Total: 3 succeeded, 2 skipped, 4 ignored, 1 failed, 5 unprocessed"));
+        assert!(log.contains("Conversion Success Rate: 75%"));
+        assert!(log.contains("Integrity: WARNINGS; issues=56"));
+        let audit = fs::read_to_string(&session.session_audit).unwrap();
+        assert!(audit.contains("images_ignore=4 images_fail=1 images_unprocessed=5"));
+        assert!(audit.contains("integrity_issues=56"));
+    }
+
+    #[test]
+    fn session_log_does_not_invent_file_counts_for_process_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            exit_code: 2,
+            ..ProcessorStats::default()
+        });
+        session.finish_log(&summary, None).unwrap();
+        let log = fs::read_to_string(&session.session_log).unwrap();
+        assert!(log.contains("Total: unknown succeeded, unknown skipped, unknown ignored, unknown failed, unknown unprocessed"));
+        assert!(log.contains("Conversion Success Rate: N/A"));
+        assert!(!log.contains("1 failed"));
+    }
+
+    #[test]
+    fn drag_drop_error_policy_continues_only_classified_recoverable_errors() {
+        let recoverable: anyhow::Error =
+            foundation::UnifiedError::analysis_error("bad media").into();
+        assert!(!drag_drop_error_should_abort(
+            BatchErrorMode::LogAndContinue,
+            &recoverable
+        ));
+        assert!(drag_drop_error_should_abort(
+            BatchErrorMode::FailFast,
+            &recoverable
+        ));
+
+        let unknown = anyhow::anyhow!("spawn or system failure");
+        assert!(drag_drop_error_should_abort(
+            BatchErrorMode::LogAndContinue,
+            &unknown
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn image_database_preflight_defers_to_resolved_child_configuration() {
+        let _heuristic = foundation::common_utils::EnvGuard::set(
+            foundation::constants::HEURISTIC_QUALITY_ENV_KEY,
+            "1",
+        );
+
+        assert!(!mode_needs_db_health(&LaunchMode::Images));
+        assert!(mode_needs_db_health(&LaunchMode::Videos));
+    }
+
+    #[test]
+    fn cli_binary_uses_release_path_for_workspace_like_roots() {
+        assert_eq!(
+            cli_binary(Path::new("/repo"), "img"),
+            PathBuf::from("/repo/target/release/img")
+        );
+    }
+
+    #[test]
+    fn smart_build_uses_release_launcher_without_dependency_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let launcher = temp.path().join("target/release/smart_build");
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::fs::File::create(&launcher).unwrap();
+
+        let command = smart_build_command(temp.path(), true, false);
+        assert_eq!(command.get_program(), launcher.as_os_str());
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--rust-only".to_string()));
+        assert!(args.contains(&"--img".to_string()));
+        assert!(args.contains(&"--verify".to_string()));
+        assert!(!args.contains(&"--update".to_string()));
+    }
+
+    #[test]
+    fn smart_build_falls_back_to_cargo_when_launcher_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = smart_build_command(temp.path(), false, true);
+        assert_eq!(command.get_program(), "cargo");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"--locked".to_string()));
+        assert!(args.contains(&"--rust-only".to_string()));
+        assert!(args.contains(&"--vid".to_string()));
+        assert!(args.contains(&"--verify".to_string()));
+        assert!(!args.contains(&"--update".to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cli_binary_uses_packaged_binary_inside_macos_app_bundle() {
+        let resources = Path::new("/Applications/Modern Format Boost.app/Contents/Resources");
+        assert!(is_app_bundle_resource_root(resources));
+        assert_eq!(
+            cli_binary(resources, "img"),
+            PathBuf::from("/Applications/Modern Format Boost.app/Contents/Resources/img")
+        );
+    }
+
+    #[test]
+    fn gui_fast_img_mode_survives_images_only_filter() {
+        let parsed = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--images-only",
+            "--mode",
+            "fast-img",
+            "--strategy",
+            "jxl",
+            "--shortest-path",
+            "/input/Album",
+        ])
+        .expect("parse GUI FastImg command");
+        let args = apply_mode_overrides(parsed);
+        let commands = plan_cli_invocations(&args, Path::new("/repo"), None)
+            .expect("plan GUI FastImg command");
+
+        assert_eq!(args.mode, LaunchMode::FastImg);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(
+            commands[0].program,
+            PathBuf::from("/repo/target/release/img")
+        );
+        assert_eq!(
+            commands[0].args.first().map(String::as_str),
+            Some("fast-img")
+        );
+        assert!(commands[0].args.iter().any(|arg| arg == "--shortest-path"));
+        assert!(!commands[0].args.iter().any(|arg| arg == "run"));
+    }
+
+    #[test]
+    #[serial]
+    fn fresh_fast_img_output_uses_live_marker_state_instead_of_guessing() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        let _state_guard = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            state_root.to_str().unwrap(),
+        );
+        let source = temp.path().join("Album");
+        std::fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        let parent = source.parent().unwrap();
+        std::fs::create_dir(parent.join("Album_optimized")).unwrap();
+        for suffix in [2, 3] {
+            let working_copy = parent.join(format!("Album_optimized_{suffix}"));
+            let marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+                source.clone(),
+                working_copy,
+                1,
+            );
+            foundation::pipeline::verification::write_marker_atomic(&marker).unwrap();
+        }
+        let args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--no-resume",
+            source.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            resolve_fast_img_output_for_run(&args, &source).unwrap(),
+            parent.join("Album_optimized_4")
+        );
+    }
+
+    #[test]
+    fn fast_img_preview_and_execution_share_archive_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        std::fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "fast-img",
+            "--dry-run",
+            input.to_str().unwrap(),
+        ])
+        .unwrap();
+        for archive in [false, true] {
+            args.archive = archive;
+            let (execution, _) =
+                fast_img_launch_command(&args, Path::new("/repo"), &input).unwrap();
+            let preview = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(execution.program, preview[0].program);
+            assert_eq!(execution.args, preview[0].args);
+            assert_eq!(execution.args.contains(&"--archive".to_owned()), archive);
+        }
+        args.resume = true;
+        for retry in [false, true] {
+            args.retry = retry;
+            let (execution, _) =
+                fast_img_launch_command(&args, Path::new("/repo"), &input).unwrap();
+            let preview = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(execution.args, preview[0].args);
+            // fast-img has one explicit resume/retry entry point.
+            assert!(execution.args.contains(&"--retry".to_owned()));
+        }
+        assert!(
+            Args::try_parse_from(["drag_and_drop_processor", "--retry", "--no-resume",]).is_err()
+        );
+    }
+
+    #[test]
+    fn integrity_only_warning_is_a_reportable_failure() {
+        let mut summary = PipelineSummary {
+            integrity_state: Some("WARNINGS"),
+            integrity_issue_count: 56,
+            ..PipelineSummary::default()
+        };
+        assert!(pipeline_summary_has_reportable_outcome(&summary));
+        summary.integrity_state = Some("CLEAN");
+        assert!(!pipeline_summary_has_reportable_outcome(&summary));
+    }
+
+    #[test]
+    fn restore_jpeg_dashboard_uses_restore_semantics() {
+        let args = Args::try_parse_from([
+            "drag_and_drop_processor",
+            "--mode",
+            "restore-jpeg",
+            "--ultimate",
+        ])
+        .expect("parse restore-jpeg dashboard arguments");
+
+        let dashboard = build_runtime_dashboard(&args);
+
+        assert_eq!(dashboard.mode_label, "Restore Original JPEG");
+        assert!(!dashboard.ultimate);
+    }
+
+    #[test]
+    fn restore_jpeg_launch_output_is_selected_by_input_location() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("Album");
+        let library = temp.path().join("Debug.photoslibrary");
+        let library_asset = library.join("originals/photo.jxl");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::create_dir_all(library_asset.parent().unwrap()).unwrap();
+        std::fs::write(&library_asset, b"jxl").unwrap();
+
+        let (local_output, local_is_photos) =
+            resolve_restore_jpeg_launch_output(&local, None).unwrap();
+        assert!(!local_is_photos);
+        assert_eq!(local_output, Some(temp.path().join("Album_restored_jpeg")));
+
+        for input in [&library, &library_asset] {
+            let (output, is_photos) = resolve_restore_jpeg_launch_output(input, None).unwrap();
+            assert!(is_photos);
+            assert_eq!(output, None);
+        }
+    }
+
+    #[test]
+    fn test_auto_directory_defaults_to_rust_img_and_vid_cli() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        std::fs::create_dir(&input).unwrap();
+        let args = Args {
+            inputs: vec![input],
+            mode: LaunchMode::Auto,
+            output: Some(PathBuf::from("/tmp/Album_optimized")),
+            backup: None,
+            archive: true,
+            shortest_path: false,
+            retry: false,
+            force: false,
+            dry_run: true,
+            resume: false,
+            no_resume: false,
+            ultimate: false,
+            in_place: false,
+            verbose: false,
+            base_dir: None,
+            plain: true,
+            watch: false,
+            images_only: false,
+            videos_only: false,
+            strategy: None,
+            photos_album_id: None,
+            photos_folder_id: None,
+            img_config: None,
+            performance: Default::default(),
+            img_fallback_policy: None,
+            img_jpeg_effort: None,
+            img_quality_heuristic: None,
+            img_allow_database: None,
+            photos: Default::default(),
+            img_error_mode: None,
+            vid_error_mode: None,
+            vid_codec: None,
+        };
+
+        let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[0].program,
+            PathBuf::from("/repo/target/release/img")
+        );
+        assert_eq!(
+            commands[1].program,
+            PathBuf::from("/repo/target/release/vid")
+        );
+        assert!(commands[0].args.contains(&"run".to_string()));
+        assert!(commands[1].args.contains(&"run".to_string()));
+        assert!(commands[0].args.contains(&"--archive".to_string()));
+        assert!(commands[1].args.contains(&"--archive".to_string()));
+        assert!(commands[0].args.contains(&"--plain".to_string()));
+        assert!(commands[1].args.contains(&"--plain".to_string()));
+    }
+
+    #[test]
+    fn test_workspace_tool_modes_delegate_to_rust_bins() {
+        let target = PathBuf::from("/input/Album");
+        let modes = [
+            (
+                LaunchMode::Collect,
+                Some(PathBuf::from("/backup/Album")),
+                "/repo/target/release/collect_optimized",
+                vec![
+                    "/input/Album",
+                    "/input/Album_recovery_originals",
+                    "--yes",
+                    "--backup",
+                    "/backup/Album",
+                ],
+            ),
+            (
+                LaunchMode::Compare,
+                Some(PathBuf::from("/backup/Album.photoslibrary")),
+                "/repo/target/release/collect_optimized",
+                vec![
+                    "/input/Album.photoslibrary",
+                    "/input/Album.photoslibrary_backup_comparison",
+                    "--yes",
+                    "--backup",
+                    "/backup/Album.photoslibrary",
+                    "--compare",
+                ],
+            ),
+            (
+                LaunchMode::MergeXmp,
+                None,
+                "/repo/target/release/merge_xmp",
+                vec!["/input/Album"],
+            ),
+            (
+                LaunchMode::IcloudImport,
+                None,
+                "/repo/target/release/icloud_import",
+                vec!["/input/Album"],
+            ),
+        ];
+
+        for (mode, backup, program, expected_args) in modes {
+            let input = if mode == LaunchMode::Compare {
+                PathBuf::from("/input/Album.photoslibrary")
+            } else {
+                target.clone()
+            };
+            let args = Args {
+                inputs: vec![input],
+                mode,
+                output: None,
+                backup,
+                archive: false,
+                shortest_path: false,
+                retry: false,
+                force: false,
+                dry_run: true,
+                resume: false,
+                no_resume: false,
+                ultimate: false,
+                in_place: false,
+                verbose: false,
+                base_dir: None,
+                plain: true,
+                watch: false,
+                images_only: false,
+                videos_only: false,
+                strategy: None,
+                photos_album_id: None,
+                photos_folder_id: None,
+                img_config: None,
+                performance: Default::default(),
+                img_fallback_policy: None,
+                img_jpeg_effort: None,
+                img_quality_heuristic: None,
+                img_allow_database: None,
+                photos: Default::default(),
+                img_error_mode: None,
+                vid_error_mode: None,
+                vid_codec: None,
+            };
+            let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0].program, PathBuf::from(program));
+            assert_eq!(commands[0].args, expected_args);
+        }
+    }
+
+    #[test]
+    fn compare_planner_rejects_folder_inputs() {
+        let args = Args {
+            inputs: vec![PathBuf::from("/input/Album")],
+            mode: LaunchMode::Compare,
+            output: None,
+            backup: Some(PathBuf::from("/backup/Album")),
+            archive: false,
+            shortest_path: false,
+            retry: false,
+            force: false,
+            dry_run: true,
+            resume: false,
+            no_resume: false,
+            ultimate: false,
+            in_place: false,
+            verbose: false,
+            base_dir: None,
+            plain: true,
+            watch: false,
+            images_only: false,
+            videos_only: false,
+            strategy: None,
+            photos_album_id: None,
+            photos_folder_id: None,
+            img_config: None,
+            performance: Default::default(),
+            img_fallback_policy: None,
+            img_jpeg_effort: None,
+            img_quality_heuristic: None,
+            img_allow_database: None,
+            photos: Default::default(),
+            img_error_mode: None,
+            vid_error_mode: None,
+            vid_codec: None,
+        };
+        let error = plan_cli_invocations(&args, Path::new("/repo"), None)
+            .expect_err("folder comparison must be rejected before spawning a worker");
+        assert!(
+            error
+                .to_string()
+                .contains("only supports comparing two Photos libraries")
+        );
+    }
+
+    #[test]
+    fn test_maintenance_tool_modes_delegate_to_rust_bins() {
+        let target = PathBuf::from("/input/Album");
+        let modes = [
+            (
+                LaunchMode::Diagnostic,
+                "/repo/target/release/verify",
+                vec!["--verify", "/input/Album", "--mode", "both"],
+            ),
+            (
+                LaunchMode::CacheClean,
+                "/repo/target/release/cache_cleaner",
+                vec![],
+            ),
+            (
+                LaunchMode::DatabaseManager,
+                "/repo/target/release/database_manager",
+                vec![],
+            ),
+        ];
+
+        for (mode, program, expected_args) in modes {
+            let args = Args {
+                inputs: vec![target.clone()],
+                mode,
+                output: None,
+                backup: None,
+                archive: false,
+                shortest_path: false,
+                retry: false,
+                force: false,
+                dry_run: true,
+                resume: false,
+                no_resume: false,
+                ultimate: false,
+                in_place: false,
+                verbose: false,
+                base_dir: None,
+                plain: true,
+                watch: false,
+                images_only: false,
+                videos_only: false,
+                strategy: None,
+                photos_album_id: None,
+                photos_folder_id: None,
+                img_config: None,
+                performance: Default::default(),
+                img_fallback_policy: None,
+                img_jpeg_effort: None,
+                img_quality_heuristic: None,
+                img_allow_database: None,
+                photos: Default::default(),
+                img_error_mode: None,
+                vid_error_mode: None,
+                vid_codec: None,
+            };
+            let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(commands[0].program, PathBuf::from(program));
+            assert_eq!(commands[0].args, expected_args);
+        }
+    }
+
+    #[test]
+    fn test_session_archive_moves_drag_drop_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let stamp = session.stamp.clone();
+        let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
+        run_with_history(&args, Some(&session), || {
+            session.finish_log(&PipelineSummary::default(), None)
+        })
+        .unwrap();
+
+        let bundle = session.archive().unwrap().expect("bundle created");
+
+        assert!(bundle.join(format!("MFB_Session_{stamp}.log")).is_file());
+        assert!(bundle.join(format!("verbose_{stamp}.log")).is_file());
+        let audit = bundle.join(format!("session_audit_{stamp}.jsonl"));
+        assert!(audit.is_file());
+        let audit_content = std::fs::read_to_string(audit).unwrap();
+        assert!(audit_content.contains("SESSION_STARTED"));
+        assert!(audit_content.contains("SESSION_ARCHIVE_BEGIN"));
+        assert!(audit_content.contains("SESSION_ARCHIVE_DONE"));
+        assert!(!audit_content.contains("MFB_HISTORY_"));
+        for name in [
+            "MFB_HISTORY_CONTEXT",
+            "MFB_HISTORY_SUMMARY",
+            "MFB_HISTORY_FINISHED",
+        ] {
+            assert_eq!(history_payloads(&session, name).len(), 1);
+        }
+        assert!(
+            !bundle
+                .join(dev::infra::history_store::HISTORY_DATABASE)
+                .exists()
+        );
+        let manifest = std::fs::read_to_string(bundle.join("manifest.json")).unwrap();
+        assert!(manifest.contains(&format!("MFB_Session_{stamp}.log")));
+    }
+}

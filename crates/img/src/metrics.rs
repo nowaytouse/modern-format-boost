@@ -1,2 +1,2 @@
-//! Image Quality Metrics - Re-exports from `shared_utils`
-pub use shared_utils::image_metrics::*;
+//! Image Quality Metrics - Re-exports from `foundation`
+pub use foundation::image_metrics::*;

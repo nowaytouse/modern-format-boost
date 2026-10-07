@@ -1,0 +1,30 @@
+{
+  "_consumer": "backfill_directory_scores.py",
+  "_comment": "Runtime loader: backfill_directory_scores.py via mfb_config_load.load_consumer_json only.",
+  "description": "Keywords for detecting loop intent from directory names",
+  "version": "1.0.0",
+  "keywords": {
+    "meme_sticker": [
+      "meme",
+      "memes",
+      "sticker",
+      "stickers",
+      "emoji",
+      "emojis",
+      "reaction",
+      "reactions",
+      "sticker_pack",
+      "sticker_pkg",
+      "sticker_collection",
+      "meme_collection",
+      "funny",
+      "humor"
+    ]
+  },
+  "scoring": {
+    "base_score": 0.5,
+    "max_depth": 3,
+    "match_weight": 0.5,
+    "description": "Score = base_score + (matches / max_depth) * match_weight"
+  }
+}

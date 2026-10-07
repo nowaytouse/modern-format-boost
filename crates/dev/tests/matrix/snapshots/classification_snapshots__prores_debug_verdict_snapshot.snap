@@ -1,0 +1,6 @@
+---
+source: crates/dev/tests/matrix/classification_snapshots.rs
+assertion_line: 41
+expression: verdict.reason()
+---
+"Layer 0-EX (Hard Veto): extreme-short duration 1.50s ≤ 6.0s — definitively animated image regardless of all other signals"

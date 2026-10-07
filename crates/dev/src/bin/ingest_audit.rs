@@ -2,9 +2,16 @@
 //!
 //! Syncs production decision logs (JSONL) into the `SQLite` Media Index.
 
+#![allow(unused_imports)]
+
+use foundation::{
+    log_anomaly, log_corruption, log_debug, log_detail, log_failure, log_fatal, log_hint,
+    log_ignore, log_info, log_skip, log_success,
+};
+
 use anyhow::{Context, Result};
 use clap::Parser;
-use dev::media_index::MediaIndex;
+use dev::media::index::MediaIndex;
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -41,7 +48,10 @@ fn main() -> Result<()> {
 
     if !args.input.exists() {
         let input_display = args.input.display();
-        println!("ℹ️ No audit log found at {input_display}. Nothing to ingest.");
+        log_info!(
+            "Ingest Audit",
+            &format!("No audit log found at {input_display}. Pipeline dormant.")
+        );
         return Ok(());
     }
 
@@ -53,26 +63,37 @@ fn main() -> Result<()> {
 
     let input_display = args.input.display();
     let db_display = args.db.display();
-    println!("📥 Ingesting logs from {input_display} into {db_display}...");
+    log_info!(
+        "Ingest Audit",
+        &format!("📥 Ingesting logs from {input_display} into {db_display}...")
+    );
 
-    for line in reader.lines() {
+    for (line_idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
 
-        if let Ok(record) = serde_json::from_str::<AuditRecord>(&line) {
-            index.log_live_details(
-                &record.blake3,
-                &record.session_id,
-                &record.actual_format,
-                &record.actual_params_json,
-                None, // VMAF not in basic audit yet
-            )?;
-            count += 1;
-        }
+        let record = serde_json::from_str::<AuditRecord>(&line).with_context(|| {
+            format!(
+                "Failed to parse audit JSON at {}:{}",
+                args.input.display(),
+                line_idx + 1
+            )
+        })?;
+        index.log_live_details(
+            &record.blake3,
+            &record.session_id,
+            &record.actual_format,
+            &record.actual_params_json,
+            None, // VMAF not in basic audit yet
+        )?;
+        count += 1;
     }
 
-    println!("✅ Successfully ingested {count} decision records.");
+    log_success!(
+        "Ingest Audit",
+        &format!("Successfully integrated {count} decision records into Media Index.")
+    );
     Ok(())
 }

@@ -1,0 +1,408 @@
+# JXL, XMP, and JPEG Archive Contract
+
+This document is the production contract for reversible JPEG-to-JXL delivery,
+lossless raster and proven-lossless modern-container JXL encoding, native XMP
+overlays, FastImg Tier 2 custody, and JPEG restoration.
+
+## Ownership boundary
+
+| Layer                                                     | Owner                | Mutation policy                    |
+| --------------------------------------------------------- | -------------------- | ---------------------------------- |
+| JBRD and reconstructed JPEG bitstream                     | Reconstruction-owned | Immutable                          |
+| Original Exif, XMP, ICC, JUMBF, unknown boxes, codestream | Reconstruction-owned | Immutable                          |
+| Appended XMP overlay                                      | Overlay-owned        | Append only after validation       |
+| MFB audit fields and manifests                            | Application-owned    | Versioned, atomic, and hash-linked |
+
+An external XMP sidecar is never merged by rewriting a reconstructible JXL.
+The complete existing container is copied byte-for-byte, one validated `xml`
+box (four-byte type including its trailing space) is appended, and exact JPEG
+reconstruction is proved again. Repeating the
+same overlay is an idempotent no-op.
+
+The decoder is invoked with `--reconstruct_jpeg` on the real input first. Its
+help output is not used to infer support because released/development builds may
+accept an option they do not list. Only a diagnostic that explicitly rejects
+that option permits the extension-selected `.jpg` compatibility interface. A
+supported strict operation that rejects the media never falls through. In both
+cases, a zero exit status is insufficient: positive reconstruction output,
+non-empty JPEG, no pixel fallback, JPEG health, and the outer BLAKE3/byte proof
+remain mandatory.
+
+The shared embedded-metadata audit distinguishes native JXL metadata from JPEG
+APP13 reconstruction custody. Absent `IPTC:*` and `Photoshop:*` tags are accepted
+only for content-detected JPEG-to-JXL pairs after freshly reconstructing the
+delivered JXL and matching the original JPEG's complete BLAKE3. This is not an
+IPTC ignore list: changed tags exposed by the output still fail, as do missing
+native EXIF or the primary XMP packet, conflicting sidecars, pixel-only JXL, and
+mismatched source pairings. Metadata-clear mode and other format pairs retain
+their existing rules.
+
+ExifTool Family 4 `CopyN` values distinguish occurrences within one dump, not
+identities across containers. Compare Family 1 plus tag with value multiplicity
+preserved. Do not remove IFD1 resolution metadata to accommodate ordinal changes.
+An appended sidecar does not replace reconstruction-owned XMP: the primary native
+packet must match, every exposed packet must belong to the paired source or
+sidecar, the final overlay must retain the complete current sidecar, and a fresh
+byte-exact JPEG reconstruction proves custody of secondary original packets.
+Only pre-existing unrecognized-MakerNotes or invalid-UserComment-encoding warnings
+may use identical complete EXIF payload evidence; retain the warning in logs.
+Unknown diagnostics, errors, missing payloads and changed duplicate counts fail.
+
+## Archival source routing
+
+The default IMG route protects functional archive value, not only visible
+metadata:
+
+- true JPEG, including UltraHDR/MPF JPEG, enters reversible JXL only when the
+  original JPEG bytes can be reconstructed exactly;
+- ordinary lossless raster sources such as PNG, BMP, single-raster TIFF, TGA, single-image ICO,
+  NetPBM/PAM, and confirmed single-frame GIF, plus modern WebP, AVIF,
+  HEIC/HEIF, and JP2 sources with positive lossless evidence, enter
+  pixel-lossless JXL with final decoded RGBA16 equality and metadata audit;
+  supported float32 TIFF is compared by float sample bits, not quantized to RGB8/16;
+- AVIF admission uses the authoritative `avifdec` metadata probe before pixel
+  decoding, including the established high-precision HDR path. A present or unprovable gain map retains the native
+  source instead of flattening HDR. HEIC/HEIF without positive lossless evidence
+  remains native; a synthesized HDR image plus auxiliary PNGs is not an archive
+  replacement for the HEIF relationship graph;
+- an existing JXL and every lossy or semantically unknown modern container
+  remains native, without pixel re-encoding. Explicitly permitted XMP enrichment
+  is distinct from byte-identical whole-file custody. Unknown archive structure
+  is never inferred to be disposable from primary-pixel equality alone;
+- SVG/SVGZ and enumerated camera RAW inputs are accepted as archival originals
+  but remain byte-for-byte. Raster JXL cannot prove preservation of vector
+  semantics or RAW sensor/CFA/maker-note data, so decoder availability is not
+  treated as permission to flatten them;
+- TIFF multi-IFD/SubIFD, signed/undefined samples, unmodelled extra channels,
+  associated alpha, non-gray/RGB photometric models, and unknown/private image
+  descriptors remain native. Ordinary unsigned gray/RGB and straight-alpha
+  rasters retain the existing conversion route. CUR hotspots and multi-image
+  ICO directories likewise require native-container custody;
+- non-JPEG provenance-capable containers use original-byte retention, not a
+  pixel re-encode. This reuses the C2PA/JUMBF structural probes; it is not a
+  cryptographic signature-validity or vendor-specific provenance claim;
+- a proven single-frame GIF/WebP/AVIF/HEIC/HEIF remains an IMG still. An
+  animated instance is handed to VID. MP4/MOV/MKV/WebM enters IMG only when
+  decoded-frame inventory proves exactly one video frame, no audio or other
+  streams, no chapters/programs, a valid canvas, and a duration no longer than
+  two seconds; uncertain or genuinely temporal containers remain in VID. The
+  resulting JXL is a pixel-equivalent still derivative and is never described
+  as a reconstruction of the original video container.
+
+Archive fallback copies stage metadata and XMP independently before publishing
+without replacing an existing path. Reusing an existing destination requires
+both identical delivered bytes and the expected filesystem metadata (permissions,
+modification time and preserved extended attributes). A conflict returns failure
+without modifying that existing file or the source.
+
+For immutable/opaque native archives, the copy stage does not rewrite embedded
+metadata or merge XMP into the media. It copies filesystem metadata, verifies
+the source and staged BLAKE3 payload, and preserves the selected XMP sidecar
+as a separate no-clobber copy. This prevents both signed-media rewrite failures
+and silent byte changes to retained TIFF/CUR/RAW-like inputs. Native formats
+whose existing contract explicitly allows XMP enrichment keep that route.
+
+Original-only custody is independent of conversion-tool availability and version
+checks. IMG defers codec preflight until a file requires the conversion pipeline,
+shares its result across that run's batch workers, and propagates preflight errors
+through the normal diagnostic/flush path. This does not waive any proof needed
+for conversion, XMP enrichment, or source deletion.
+
+The original-only early return must still discover and deliver supported
+same-stem Live Photo companions, including protected HEIC/JXL stills requested
+as a single file. A conflicting MOV fails before the still is published; the
+source pair remains untouched. Existing XMP/AAE custody rules still apply.
+This conservative pair retention is not proof of native Photos playback or of
+complete migration of arbitrary vendor asset graphs.
+
+For confirmed lossless raster sources, the shared JXL delivery boundary verifies
+the final candidate after metadata work even when a caller already checked
+pixels. Orientation correlation is not an archive sample proof: alpha,
+invisible RGB and 16-bit low-order values
+must match; float samples require matching bit patterns in the supported float
+decode domain. An unavailable or lossy reference representation fails closed.
+Unproven modern compression is not relabelled lossless by this check; native
+archive admission and HDR decoder-domain/colour proofs retain their own contracts.
+These proofs do not certify arbitrary scientific channel roles, private vendor
+asset graphs, or Photos/iCloud resource migration. Unknown semantics must not
+be described as a completed cross-format archive merely because pixels match.
+
+All `cjxl` outputs explicitly request the JXL container so append-only metadata
+boxes remain available. Direct pixel encoding uses effort 7 normally and effort
+10 for ultimate/archive work. Effort 10 disables libjxl chunked encoding and can
+therefore require whole-image working memory; effort 11 runs multiple expert
+lossless configurations and is not used for general pixel encoding. JPEG
+bitstream transcode is a distinct, fast workload and uses effort 11 by default;
+an encoder that rejects expert options is retried at effort 10. Direct pixel
+encoding delegates progressive, responsive and noise behavior to libjxl by
+default. Only the frozen, default-off `img run --jxl-fixed-features` policy sets
+`--progressive_dc=0`, `--responsive=0`, `--noise=0`, and `--photon_noise_iso=0`.
+It does not request progressive AC flags. These controls do not pre-filter real
+source noise: `d=0` must preserve decoded samples exactly. The immutable
+JPEG-transcode path receives none of these pixel-policy overrides, even when
+the advanced flag is enabled. Changing progressive behavior requires a new encode and a new
+archive proof; it is not an in-place lossless metadata toggle. No path may
+bypass its pixel or exact-reconstruction proof. The controls are available in
+the CI-pinned libjxl v0.12 as well as the production v0.13 toolchain; see the
+official [cjxl option definitions](https://github.com/libjxl/libjxl/blob/v0.12.0/tools/cjxl_main.cc).
+
+## Historical encoder-policy measurements (development frozen)
+
+These measurements document the former explicit-off policy; they do not set
+the current libjxl-auto default or a size threshold. Feature-policy development
+is frozen. The 2026-09-05 baseline used local `cjxl` v0.13,
+512×512 deterministic inputs, and identical settings except for the named
+feature:
+
+| Input / comparison                             |          Explicit off |           Alternative | Observed change |
+| ---------------------------------------------- | --------------------: | --------------------: | --------------: |
+| Clean gradient, `d=1/e7`, file size            |                 730 B |           `-p`: 879 B |          +20.4% |
+| Deterministic noisy image, `d=1/e7`, file size |             146,339 B |       `-p`: 150,481 B |          +2.83% |
+| Clean gradient, peak RSS                       |               44.7 MB |         `-p`: 55.0 MB |      about +23% |
+| Deterministic noisy image, peak RSS            |               46.4 MB |         `-p`: 61.3 MB |      about +32% |
+| Textured image, `d=3/e7`, file size            | `--noise=0`: 19,052 B | `--noise=1`: 18,686 B |          -1.92% |
+
+The encoder's auto policy happened to equal explicit-off output on the first
+two samples, but that is not a cross-version contract. The measured range also
+shows why “progressive always costs 13% size and 39% memory” is not a valid
+project invariant.
+
+Effort measurements explain the production split:
+
+| 512×512 lossless workload    |    Size |   Time | Peak RSS |
+| ---------------------------- | ------: | -----: | -------: |
+| Pixel encode e7              | 1,757 B | 0.06 s |  20.9 MB |
+| Pixel encode e10             | 1,261 B | 0.31 s |  29.4 MB |
+| Pixel encode e11             |   952 B | 3.58 s | 511.1 MB |
+| JPEG bitstream transcode e7  | 3,140 B | 0.01 s |  17.8 MB |
+| JPEG bitstream transcode e10 | 2,785 B | 0.02 s |  19.7 MB |
+| JPEG bitstream transcode e11 | 2,785 B | 0.02 s |  19.3 MB |
+
+This supports e7 for normal pixel work, e10 only for explicit ultimate/archive
+pixel work, and e11 for JPEG bitstream transcode. It also agrees with libjxl's
+official [effort description](https://github.com/libjxl/libjxl/blob/main/doc/encode_effort.md):
+e10 disables chunked encoding for global analysis and e11 tries multiple
+lossless configurations. On a 2048×2048 lossless probe, forcing
+`--buffering=1` increased peak RSS at e7 (224.4 MB to 262.8 MB), changed output
+size, and did not improve e10; consequently there is no global buffering
+override. Measurements are regression evidence for the policy, not promises
+that every image will have the same size or memory ratio.
+
+## Durable overlay commit
+
+The commit order is fixed:
+
+1. Capture source length, modification time, device/inode identity, and BLAKE3.
+2. Copy the complete JXL into a same-directory unique temporary file.
+3. Append the validated XMP box.
+4. Flush the temporary file and verify its size.
+5. Prove that the complete pre-existing byte prefix and JBRD hash are unchanged.
+6. Hash XMP through the same open descriptor used for copying, then verify the
+   final `xml` box payload against that hash.
+7. Recheck the live source identity and BLAKE3 to reject concurrent edits.
+8. Atomically rename, then flush the committed file and parent directory.
+9. Re-prove exact JPEG reconstruction or the original non-JBRD classification.
+
+Session audit events link the transaction without storing media content:
+
+- `MFB-JXL-001`: overlay UUID/schema, original container/JBRD/XMP hashes,
+  overlay hash, final container hash, MFB version, and timestamp.
+- `MFB-JXL-002`: final container/JBRD hash plus exact reconstructed-JPEG hash,
+  or the explicit non-JBRD classification proof.
+
+A crash may leave only a hidden, uniquely named `.tmp` recovery artifact; its
+suffix cannot be rediscovered as media by JXL scans, and it cannot expose a
+partially written final JXL. No source deletion is authorized by an unfinished
+overlay transaction.
+
+## Overlay lifecycle and parser bounds
+
+The overlay chain is deterministic: an overlay UUID is derived from the prior
+container/XMP hash, new overlay hash, and final container hash. Reapplying the
+same latest XML is a no-op. A different XML becomes a new append-only version,
+so historical bytes remain auditable; a container with 64 XML boxes refuses a
+further overlay instead of growing without bound.
+
+Sidecars must be regular non-symlink files and one complete XML document. The
+parser rejects empty or over-100-MiB sidecars, document type declarations,
+nesting beyond 256 levels, more than one million events, malformed XML, unsafe
+container boundaries, duplicate top-level JBRD, and excessive JXL box counts.
+These are fail-closed limits, not permission to truncate metadata.
+
+## FastImg Tier 2 and AVIF Meme Mode
+
+FastImg has one byte-preserving custody tier: JXL strategy Tier 2 admits only
+positively proven lossy, static WebP, JP2, JXL, AVIF, HEIC, or HEIF
+originals. It imports the admitted source without re-encoding and performs the
+live Photos UUID/content-hash checks before cleanup.
+
+AVIF strategy has no Photos-custody Tier 2. It has two input-driven paths:
+
+1. an existing AVIF is never re-encoded: a metadata-clean file is adopted
+   byte-for-byte; otherwise ExifTool edits only a staged container copy;
+2. the staged AVIF is accepted only when its exact primary-image SHA-256 is
+   unchanged, `avifdec` still reports the same codec/HDR/gain-map features, and
+   the clear-metadata audit passes;
+3. every other confirmed-static input is decoded, searched, and encoded in the
+   AVIF domain with Exif, XMP, and ICC embedding disabled;
+4. the final AVIF must pass pixel, dimension, payload and clear-metadata gates;
+5. if a matching XMP sidecar exists, validate it before processing and remove that
+   exact sidecar only after the same final delivery proof; retain it whenever a
+   gate fails.
+
+When no sidecar exists, the JXL Tier 2 path imports the original media bytes and
+verifies them unchanged. When an adjacent XMP exists on a JXL container, the
+eligible Tier 2 candidate instead:
+
+1. validates the XMP;
+2. creates an isolated copy of the media;
+3. merges XMP into that copy (append-only for JXL);
+4. imports the enriched copy;
+5. verifies the live Photos asset UUID and enriched BLAKE3;
+6. keeps separate hashes for the on-disk source and Photos-delivered original;
+7. rechecks both the admitted source hash and sidecar hash after staging;
+8. persists the admitted sidecar hash with the Photos proof;
+9. removes the source and sidecar only while their current hashes still match.
+
+If staging, metadata merge, import, or live-library verification fails, both the
+source and sidecar remain. Tier 2 never deletes an unproved sidecar.
+
+AVIF, HEIC/HEIF, WebP, and JP2 preserving routes use a staged format-native XMP writer
+instead of a generic container rewrite. Commit requires an unchanged primary
+image-data hash, dimensions and frame count, unchanged stable non-XMP
+properties, and successful XMP readback. ISOBMFF aggregate `mdat` size is not an
+invariant because the XMP item itself is stored there. Any failed or incomplete
+proof retains both source and sidecar. AVIF Meme Mode is deliberately outside
+this metadata-preserving writer: it strips embedded metadata and does not merge
+the sidecar into the output. JXL uses the append-only overlay contract above.
+Any JPEG APP11 segment blocks generic XMP rewrites because APP11 can carry JPEG
+XT, JUMBF, provenance, or other protected structure. Existing C2PA manifests
+also block XMP mutation at every supported image embedding point: PNG `caBX`,
+JPEG XL `jumb`, the C2PA UUID box in AVIF/HEIF, a WebP `C2PA` RIFF chunk, TIFF
+tag 52545 (classic TIFF or BigTIFF), and the GIF `C2PA_GIF` application
+extension. Primary-image equality cannot prove that a wider cryptographic
+binding remains valid, so both media and sidecar are retained unchanged.
+
+## `restore-jpeg` input-driven behavior
+
+There is one command and no user-selected action mode:
+
+```text
+img restore-jpeg INPUT
+```
+
+For ordinary files and folders, byte-identical JPEGs are restored. Source
+cleanup remains behind the durable manifest and final hash gate;
+`--keep-source` disables cleanup. The same run atomically commits
+`.mfb_restore_jpeg_audit.tsv`: exact records get no marker, recovery-needed
+records are mirrored under `Reconstruction Blocked`, and uncertain/invalid
+records under `Needs Review`. Non-reconstructible media is never converted by
+a pixel-to-JPEG fallback and remains untouched.
+
+JPEG reconstructibility and metadata-layer agreement are separate facts. If
+the JXL reconstructs the original JPEG but its container XMP differs from an
+adjacent XMP, restoration still succeeds byte-for-byte and the adjacent XMP is
+committed as the output sidecar. The source JXL and source sidecar are retained,
+and the manifest records `MFB_RESTORE_JPEG_ATTENTION`; this preserves both XMP
+layers for review without falsely calling the JPEG non-reconstructible.
+
+For a Photos library or one concrete asset path inside it, the command switches
+automatically to live-library audit. It resolves and re-queries real asset UUIDs,
+hashes the current originals, and adds references for affected assets to
+`MFB JXL Audit/Recovery Needed` or `MFB JXL Audit/Needs Review`, mirroring the
+source folder/album hierarchy. Exact-reversible assets remain unmarked. MFB does
+not rewrite media bytes or edit Photos database files directly; Photos records
+only album membership. A separate atomic BLAKE3/UUID checkpoint records verified
+membership for idempotent resume. Every CLI, interactive, and native-GUI launch
+uses this same input detector and therefore never supplies a local output tree
+to a Photos audit. Query and re-query results must contain valid, unique, exact
+UUID sets; native album mutations are bounded into 50-asset transactions and
+ambiguous duplicate folder or album names fail closed instead of selecting one.
+
+Whole-library audit is the default. `img photos-albums LIBRARY` and the AppKit
+picker expose the same live native container UUIDs. `--photos-album-id` selects
+one exact album; `--photos-folder-id` expands the native parent graph to all
+descendant album UUIDs before database filtering. The implementation does not
+compare a native folder UUID with an unrelated database folder identifier and
+does not use a display name as identity. Generated `MFB JXL Audit` containers
+are excluded from selection, and each selected scope receives an independent
+BLAKE3-derived checkpoint path.
+
+## Recovery-original collection
+
+`collect_optimized AUDITED DEST --backup BACKUP` is the only backup handoff;
+it does not add another `restore-jpeg` mode. A single JXL accepts one exact
+same-basename backup file or a backup folder. Folder inputs re-probe every JXL
+from its magic bytes and accept a backup original only when the same relative
+directory and basename resolve to one true JPEG payload. Photos inputs
+re-probe live assets already referenced by `MFB JXL Audit/Recovery Needed`, then
+resolve an exact original filename by one unique same UUID or album hierarchy;
+capture time is reported as evidence but never selects a candidate. They export
+the original version plus an XMP sidecar through `osxphotos`.
+
+The collector never edits either backup or a Photos database. Missing,
+duplicate, changed, JXL-only, or escaped-path results fail closed. Every copied
+media/XMP output is BLAKE3-checked and recorded in the atomic
+`.mfb_recovery_collection.json`; the Photos export database and update mode make
+an interrupted export idempotently resumable.
+`--dry-run` emits every resolved folder/Photos identity without copying media,
+providing a review list that can be redirected for custom export tools.
+
+Single-file input uses the selected file as its overlap boundary and its parent
+only for relative output naming. Both the library default and the GUI's
+sibling-of-file output are valid, while selecting the source file itself as an
+output remains forbidden. Directory input and output roots must be fully
+disjoint in both directions.
+
+Valid pixel-only JXL, advertised-but-rejected reconstruction records, and probe
+failures are classified in the manifest and marker tree or live audit albums.
+They are not converted through pixel-to-JPEG fallback and are not deleted.
+
+Pixel readability is not proof that the original JPEG file is still exactly
+recoverable. JPEG reconstruction may depend on the reconstruction-owned Exif,
+XMP, or JUMBF bytes referenced by JBRD. If a historical metadata writer changed
+those bytes, exact recovery is possible only when the original metadata change
+can be undone byte-for-byte or an exact original/backup is available. An
+adjacent sidecar is useful metadata but is not assumed to be those original
+container bytes. Reordering boxes, removing overlays, substituting a sidecar,
+or accepting `--pixels_to_jpeg` must never be reported as original-JPEG
+recovery. A pixel decode may be exported to a lossless pixel format for visual
+rescue, but that is a derivative and does not repair JPEG bitstream identity.
+
+## Read-only backup comparison
+
+`collect_optimized CURRENT REPORT --backup BACKUP --compare` accepts **two
+Photos library packages only** and never mutates either library or its assets.
+Photos-library comparison uses `osxphotos compare --json`. An atomic
+`mfb_backup_comparison.json` reports matched, source-only, backup-only and
+different native-asset entries without storing absolute filesystem paths.
+Folder/file comparison is intentionally outside MFB's scope; users should use
+a dedicated external deduplication tool for ordinary filesystem inputs.
+Non-Photos inputs, symlinks and incomplete upstream reports fail closed before
+any report is written.
+
+## Restore manifest and delete gate
+
+Manifest V3 records safe relative paths, source-JXL hash, fresh reconstruction
+hash, committed JPEG hash, optional XMP hash, verification time, MFB/djxl
+versions, optional Photos UUID, and source-deletion state. The manifest is
+written to a unique temporary file, flushed, atomically renamed, and followed
+by a parent-directory flush.
+
+Deletion order is non-negotiable:
+
+1. exact reconstruction succeeds;
+2. committed JPEG is a non-empty true JPEG;
+3. fresh reconstruction and committed JPEG hashes match;
+4. optional XMP sidecar is valid and hash-matched;
+5. manifest with `source_deleted=false` is durably committed;
+6. the current source/output hashes still match the proof;
+7. source JXL and its matching XMP are removed;
+8. manifest is durably updated to `source_deleted=true`.
+
+Any failed or ambiguous gate retains the source. A verifier treats a manifest,
+filesystem, or Photos-state disagreement as an integrity warning rather than a
+successful migration.
+
+Reconstruction caches, when introduced for performance, are never authoritative
+for deletion. The final delete gate always performs a fresh hash and state proof.

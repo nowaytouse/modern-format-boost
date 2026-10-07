@@ -1,0 +1,201 @@
+"""Protect the Rust-first operational entry-point contract."""
+
+import re
+import subprocess
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+SCRIPT_ROOT = REPO_ROOT / "crates" / "dev" / "scripts"
+
+RETIRED_OPERATIONAL_PYTHON = {
+    "cache_cleaner.py": "cache_cleaner",
+    "check_all.py": "check_all",
+    "collect_optimized.py": "collect_optimized",
+    "create_live_photo.py": "create_live_photo",
+    "generate_test_media.py": "generate_test_media",
+    "icloud_import.py": "icloud_import",
+    "install_deps.py": "install_deps",
+    "media_conversion_delivery_heatmap.py": "delivery_heatmap",
+    "mfb_rust_toolchain.py": "mfb_rust_toolchain",
+    "normalize_stale_embed_measurement_slots.py": "normalize_stale_embed_measurement_slots",
+    "sandbox_validate.py": "sandbox_validate",
+    "session_audit.py": "session_audit",
+    "setup_private_db.py": "setup_private_db",
+}
+
+TRAINING_OR_ML_PYTHON = {
+    "backfill_directory_scores.py",
+    "database_manager.py",
+    "fabrication_policy.py",
+    "fastmode_paths.py",
+    "loop_intent_clustering.py",
+    "media_scope.py",
+    "mfb_config_load.py",
+    "mfb_corpus_thresholds.py",
+    "mfb_dylib.py",
+    "mfb_entry_guard.py",
+    "mfb_log_paths.py",
+    "mfb_performance.py",
+    "mfb_training_scan.py",
+    "mfb_training_session_audit.py",
+    "mfb_ui_tokens.py",
+    "post_training_closure.py",
+    "python_api.py",
+    "quality_regression_model.py",
+    "run_training.py",
+    "start_training_four.py",
+    "training_pipeline.py",
+}
+
+
+def test_only_training_or_ml_python_remains_at_script_root() -> None:
+    for legacy_python, rust_binary in RETIRED_OPERATIONAL_PYTHON.items():
+        assert not (SCRIPT_ROOT / legacy_python).exists(), legacy_python
+        assert (
+            REPO_ROOT / "crates" / "dev" / "src" / "bin" / f"{rust_binary}.rs"
+        ).is_file(), rust_binary
+
+    assert not (SCRIPT_ROOT / "mfb_logger.py").exists()
+    assert not (SCRIPT_ROOT / "mfb_runtime_env.example.py").exists()
+    assert (SCRIPT_ROOT / "mfb_runtime_env.example.env").is_file()
+
+    remaining = {path.name for path in SCRIPT_ROOT.glob("*.py")}
+    assert remaining == TRAINING_OR_ML_PYTHON
+
+
+def test_readmes_use_rust_training_entry_point() -> None:
+    english = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    chinese = (REPO_ROOT / "docs" / "README_ZH.md").read_text(encoding="utf-8")
+    rust_command = "cargo run --locked -p dev --bin run_training --"
+
+    assert rust_command in english
+    assert rust_command in chinese
+    assert "**Entry**: `python3 crates/dev/scripts/run_training.py`" not in english
+    assert (
+        "**唯一推荐入口**：`python3 crates/dev/scripts/run_training.py`" not in chinese
+    )
+
+
+def test_migration_contract_documents_retained_python_categories() -> None:
+    migration = (REPO_ROOT / "docs" / "PYTHON_RUST_MIGRATION.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Production and CI orchestration are Rust-first" in migration
+    assert "The operational migration is physically complete" in migration
+    for category in (
+        "Python-native ML workers",
+        "Tests and fixtures",
+        "Fuzzing",
+        "Training and ML bridges",
+    ):
+        assert category in migration
+    for binary in ("run_training", "check_all", "install_deps", "icloud_import"):
+        assert f"--bin {binary}" in migration
+    for boundary in (
+        "CI media dependency bootstrap is a standalone Rust binary",
+        "`kondo` cache cleanup belongs to",
+    ):
+        assert boundary in migration
+
+
+def test_github_workflows_do_not_invoke_script_files() -> None:
+    script_invocation = re.compile(r"(?:python3?|bash|sh)\s+[^\n]*\.(?:py|sh|bash)\b")
+    violations = []
+    for workflow in sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml")):
+        for line_number, line in enumerate(
+            workflow.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.lstrip().startswith("#") and script_invocation.search(line):
+                violations.append(f"{workflow.name}:{line_number}: {line.strip()}")
+
+    assert violations == []
+
+
+def test_release_packages_rust_tools_and_only_allowlisted_python_workers() -> None:
+    workflows = [
+        (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        for name in ("cd-nightly.yml", "cd-stable.yml")
+    ]
+    allowlisted_workers = {
+        "quality_regression_model.py",
+        "loop_intent_clustering.py",
+        "fastmode_paths.py",
+    }
+    for workflow in workflows:
+        assert "cp -r crates/dev/scripts" not in workflow
+        assert "MIGRATED_RUST_BINS:" in workflow
+        for worker in allowlisted_workers:
+            assert worker in workflow
+
+        bins = re.search(r'MIGRATED_RUST_BINS: "([^"]+)"', workflow)
+        assert bins is not None
+        for binary in bins.group(1).split():
+            assert (
+                REPO_ROOT / "crates" / "dev" / "src" / "bin" / f"{binary}.rs"
+            ).is_file()
+
+
+def test_media_dependency_installer_compiles_without_cargo(tmp_path: Path) -> None:
+    source = (
+        REPO_ROOT / "crates" / "dev" / "src" / "bin" / "install_media_dependencies.rs"
+    )
+    subprocess.run(
+        ["rustc", "--edition", "2024", str(source), "-o", str(tmp_path / "installer")],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_production_hints_use_rust_entry_points() -> None:
+    entry_guard = (
+        REPO_ROOT / "crates" / "foundation" / "src" / "infra" / "entry_guard.rs"
+    ).read_text(encoding="utf-8")
+    training_guard = (
+        REPO_ROOT
+        / "crates"
+        / "foundation"
+        / "src"
+        / "train"
+        / "training_entry_guard.rs"
+    ).read_text(encoding="utf-8")
+    train_quality = (
+        REPO_ROOT / "crates" / "foundation" / "src" / "bin" / "train_quality.rs"
+    ).read_text(encoding="utf-8")
+    orchestrate = (
+        REPO_ROOT / "crates" / "dev" / "src" / "training_pipeline" / "orchestrate.rs"
+    ).read_text(encoding="utf-8")
+    database = (
+        REPO_ROOT / "crates" / "foundation" / "src" / "db" / "database.rs"
+    ).read_text(encoding="utf-8")
+    training_rules = (
+        REPO_ROOT / "crates" / "dev" / "src" / "config" / "training_rules.json"
+    ).read_text(encoding="utf-8")
+
+    production_text = (
+        f"{entry_guard}\n{training_guard}\n{train_quality}\n{orchestrate}\n{database}"
+    )
+    assert (
+        "cargo run --locked -p dev --bin run_training -- --execute" in production_text
+    )
+    assert "cargo run --locked -p dev --bin training_pipeline --" in production_text
+    assert (
+        "cargo run --locked -p dev --bin training_pipeline -- finalize-loop-intent"
+        in production_text
+    )
+
+    assert (
+        "Runtime JSON loader: run_training.py load_rules() ONLY" not in training_rules
+    )
+    assert "canonical Rust run_training binary" in training_rules
+    for legacy_hint in (
+        "Use: python3 crates/dev/scripts/run_training.py",
+        "Production: python3 crates/dev/scripts/run_training.py",
+        "python3 crates/dev/scripts/run_training.py --execute --use-api",
+        "Next: run `python3 crates/dev/scripts/training_pipeline.py",
+        "invoke via training_pipeline.py / run_training.py",
+        "Run loop_intent_clustering.py after stats refresh",
+    ):
+        assert legacy_hint not in production_text

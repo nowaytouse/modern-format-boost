@@ -1,0 +1,2 @@
+"NSAppDataUsageDescription" = "Modern Format Boost は、メディアの処理または読み込み時にのみ、選択したフォルダと写真のメタデータを読み取ります。";
+"NSAppleEventsUsageDescription" = "Modern Format Boost は、メディアの読み込みを明示的に要求した場合にのみ写真アプリへ Apple Event を送信します。";
