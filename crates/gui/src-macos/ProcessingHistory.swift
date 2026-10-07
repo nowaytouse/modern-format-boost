@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SQLite3
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -211,11 +212,7 @@ private enum HistoryStore {
     }
 
     static func parse(data: Data, stamp: String, audit: URL) -> HistoryAudit {
-        var entries: [HistoryEntry] = []
         var current = HistoryEntry(id: stamp + ":0", stamp: stamp, audit: audit, timestamp: stamp)
-        var hasContext = false
-        var sawRecord = false
-        let decoder = JSONDecoder()
         guard data.count <= maximumAuditBytes else {
             current.issues.append(localized("history.issue.too_large"))
             return HistoryAudit(entries: [current], hasEnd: false)
@@ -224,14 +221,27 @@ private enum HistoryStore {
             current.issues.append(localized("history.issue.encoding"))
             return HistoryAudit(entries: [current], hasEnd: false)
         }
+        let decoder = JSONDecoder()
+        return parse(records: text.split(separator: "\n", omittingEmptySubsequences: true).lazy.map {
+            try? decoder.decode(HistoryRecord.self, from: Data($0.utf8))
+        }, stamp: stamp, audit: audit)
+    }
+
+    private static func parse<S: Sequence>(records: S, stamp: String, audit: URL) -> HistoryAudit
+        where S.Element == HistoryRecord? {
+        var entries: [HistoryEntry] = []
+        var current = HistoryEntry(id: stamp + ":0", stamp: stamp, audit: audit, timestamp: stamp)
+        var hasContext = false
+        var sawRecord = false
+        let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, from event: String, prefix: String) throws -> T {
             try decoder.decode(type, from: Data(event.dropFirst(prefix.count).utf8))
         }
-        for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: true).enumerated() {
+        for (index, record) in records.enumerated() {
             guard index < maximumRecordsPerSession else {
                 current.issues.append(localized("history.issue.entry_limit")); break
             }
-            guard let record = try? decoder.decode(HistoryRecord.self, from: Data(line.utf8)) else {
+            guard let record else {
                 if current.issues.count < 32 { current.issues.append(localized("history.issue.record", index + 1)) }
                 continue
             }
@@ -339,6 +349,74 @@ private enum HistoryStore {
         return summary.valid ? summary : nil
     }
 
+    private static func databaseError(_ database: OpaquePointer?, _ detail: String? = nil) -> HostError {
+        HostError(message: localized("history.issue.read") + " (history.sqlite3: "
+                  + (detail ?? String(cString: sqlite3_errmsg(database))) + ")")
+    }
+
+    private static func statement(_ database: OpaquePointer, _ sql: String) throws -> OpaquePointer {
+        var value: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &value, nil) == SQLITE_OK, let value else {
+            if let value { sqlite3_finalize(value) }
+            throw databaseError(database)
+        }
+        return value
+    }
+
+    private static func databaseText(_ statement: OpaquePointer, _ column: Int32, database: OpaquePointer) throws -> String {
+        guard sqlite3_column_type(statement, column) == SQLITE_TEXT,
+              let bytes = sqlite3_column_text(statement, column),
+              let text = String(data: Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8)
+        else { throw databaseError(database, "invalid text record") }
+        return text
+    }
+
+    private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
+                                      readBytes: inout Int, limited: inout Bool) throws -> HistoryAudit {
+        let query = try statement(database, "SELECT ts, event FROM history_events WHERE session_id = ? ORDER BY sequence LIMIT \(maximumRecordsPerSession + 1)")
+        defer { sqlite3_finalize(query) }
+        guard stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK
+        else { throw databaseError(database) }
+        var records: [HistoryRecord?] = []
+        var bytes = 0
+        var issue: String?
+        while true {
+            let result = sqlite3_step(query)
+            if result == SQLITE_DONE { break }
+            if result == SQLITE_TOOBIG {
+                issue = localized("history.issue.too_large"); limited = true; break
+            }
+            guard result == SQLITE_ROW else { throw databaseError(database) }
+            guard sqlite3_column_type(query, 0) == SQLITE_TEXT, sqlite3_column_type(query, 1) == SQLITE_TEXT else {
+                issue = localized("history.issue.record", records.count + 1); break
+            }
+            let size = Int(sqlite3_column_bytes(query, 0)) + Int(sqlite3_column_bytes(query, 1))
+            guard records.count < maximumRecordsPerSession else {
+                issue = localized("history.issue.entry_limit"); limited = true; break
+            }
+            guard size <= maximumAuditBytes - bytes else {
+                issue = localized("history.issue.too_large"); limited = true; break
+            }
+            guard size <= maximumScanBytes - readBytes else {
+                issue = localized("history.issue.scan_limit"); limited = true; break
+            }
+            bytes += size
+            readBytes += size
+            do {
+                let ts = try databaseText(query, 0, database: database)
+                let event = try databaseText(query, 1, database: database)
+                records.append(event.hasPrefix("MFB_HISTORY_") ? HistoryRecord(ts: ts, event: event) : nil)
+            } catch {
+                issue = localized("history.issue.encoding"); break
+            }
+        }
+        let parsed = parse(records: records, stamp: stamp, audit: url)
+        guard let issue else { return parsed }
+        var entries = parsed.entries
+        entries[entries.count - 1].issues.append(issue)
+        return HistoryAudit(entries: entries, hasEnd: false)
+    }
+
     static func load(directory: URL) throws -> Result {
         let root = directory.standardizedFileURL.resolvingSymlinksInPath()
         let manager = FileManager.default
@@ -385,23 +463,92 @@ private enum HistoryStore {
         }
         try scan(root, archived: false)
         let groups = Dictionary(grouping: candidates, by: \.stamp)
-        let stamps = groups.keys.sorted { left, right in
-            let leftDate = groups[left]!.map(\.modified).max() ?? .distantPast
-            let rightDate = groups[right]!.map(\.modified).max() ?? .distantPast
+        let databaseURL = root.appendingPathComponent("history.sqlite3")
+        var database: OpaquePointer?
+        defer { if let database { sqlite3_close(database) } }
+        var databaseSessions: [String: Date] = [:]
+        var legacyStamps = Set(groups.keys)
+        if manager.fileExists(atPath: databaseURL.path)
+            || (try? databaseURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            guard regularFile(databaseURL) else { throw databaseError(nil, "not a regular file") }
+            guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+                  let database else { throw databaseError(database) }
+            sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
+            guard sqlite3_exec(database, "BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+            let version = try statement(database, "PRAGMA user_version")
+            defer { sqlite3_finalize(version) }
+            guard sqlite3_step(version) == SQLITE_ROW else { throw databaseError(database) }
+            let schema = sqlite3_column_int(version, 0)
+            guard schema == 1 else { throw databaseError(database, "unsupported schema \(schema)") }
+            let eventSchema = try statement(database, "SELECT sequence, session_id, ts, event FROM history_events LIMIT 0")
+            sqlite3_finalize(eventSchema)
+            let sessions = try statement(database, "SELECT session_id, updated_at FROM history_sessions ORDER BY updated_at DESC, session_id DESC LIMIT \(maximumSessions + 1)")
+            defer { sqlite3_finalize(sessions) }
+            let formatter = ISO8601DateFormatter()
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            while true {
+                let result = sqlite3_step(sessions)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW else { throw databaseError(database) }
+                if databaseSessions.count == maximumSessions { limited = true; break }
+                guard sqlite3_column_type(sessions, 0) == SQLITE_TEXT, sqlite3_column_type(sessions, 1) == SQLITE_TEXT,
+                      sqlite3_column_bytes(sessions, 0) <= 1_024, sqlite3_column_bytes(sessions, 1) <= 128 else {
+                    throw databaseError(database, "invalid session record")
+                }
+                let stamp = try databaseText(sessions, 0, database: database)
+                let updated = try databaseText(sessions, 1, database: database)
+                guard !stamp.isEmpty, !stamp.contains("\0"), databaseSessions[stamp] == nil,
+                      let date = fractionalFormatter.date(from: updated) ?? formatter.date(from: updated) else {
+                    throw databaseError(database, "invalid session record")
+                }
+                databaseSessions[stamp] = date
+            }
+            let membership = try statement(database, "SELECT 1 FROM history_sessions WHERE session_id = ? LIMIT 1")
+            defer { sqlite3_finalize(membership) }
+            for stamp in groups.keys {
+                sqlite3_reset(membership)
+                guard stamp.withCString({ sqlite3_bind_text(membership, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK
+                else { throw databaseError(database) }
+                let result = sqlite3_step(membership)
+                if result == SQLITE_ROW { legacyStamps.remove(stamp) }
+                else if result != SQLITE_DONE { throw databaseError(database) }
+            }
+        }
+        let stamps = legacyStamps.union(databaseSessions.keys).sorted { left, right in
+            let leftDate = databaseSessions[left] ?? groups[left]!.map(\.modified).max() ?? .distantPast
+            let rightDate = databaseSessions[right] ?? groups[right]!.map(\.modified).max() ?? .distantPast
             return leftDate == rightDate ? left > right : leftDate > rightDate
         }
         if stamps.count > maximumSessions { limited = true }
+        var databaseAudits: [String: HistoryAudit] = [:]
+        if let connection = database {
+            for stamp in stamps.prefix(maximumSessions) where databaseSessions[stamp] != nil {
+                guard readBytes < maximumScanBytes else { limited = true; break }
+                databaseAudits[stamp] = try databaseAudit(connection, stamp: stamp, url: databaseURL,
+                                                        readBytes: &readBytes, limited: &limited)
+            }
+            guard sqlite3_exec(connection, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(connection) }
+            guard sqlite3_close(connection) == SQLITE_OK else { throw databaseError(connection) }
+            database = nil
+        }
         var entries: [HistoryEntry] = []
         for stamp in stamps.prefix(maximumSessions) {
-            guard readBytes < maximumScanBytes else { limited = true; break }
-            let options = groups[stamp]!.sorted {
+            if databaseSessions[stamp] == nil, readBytes >= maximumScanBytes { limited = true; continue }
+            let options = (groups[stamp] ?? []).sorted {
                 if $0.archived != $1.archived { return $0.archived }
                 return $0.url.path < $1.url.path
             }
             if options.count > maximumAuditsPerSession { limited = true }
             var selected: (Candidate, HistoryAudit)?
             var conflictingCopies = false
-            for candidate in options.prefix(maximumAuditsPerSession) {
+            if databaseSessions[stamp] != nil {
+                guard let audit = databaseAudits[stamp] else { limited = true; continue }
+                let candidate = options.first ?? Candidate(stamp: stamp, url: databaseURL, archived: false,
+                                                            modified: databaseSessions[stamp]!)
+                selected = (candidate, audit)
+            }
+            for candidate in options.prefix(databaseSessions[stamp] == nil ? maximumAuditsPerSession : 0) {
                 guard readBytes < maximumScanBytes else { limited = true; break }
                 let audit: HistoryAudit
                 do {
@@ -903,6 +1050,24 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
         window?.setFrame(original, display: false)
     }
+
+    func validateDatabaseLoadForSelfTest(expectedStatuses: [String]) throws {
+        refresh(directory: directory)
+        let deadline = Date().addingTimeInterval(5)
+        while !refreshButton.isEnabled, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        guard refreshButton.isEnabled, entries.map(\.statusKey).sorted() == expectedStatuses.sorted(),
+              table.numberOfRows == expectedStatuses.count, selected?.audit.lastPathComponent == "history.sqlite3",
+              revealButton.isEnabled, detail.string.contains("history.sqlite3") else {
+            throw HostError(message: "History panel did not load database records: \(status.stringValue)")
+        }
+        filter.selectedSegment = 1
+        applyFilter()
+        guard displayed.allSatisfy(\.needsAttention), displayed.count == entries.filter(\.needsAttention).count else {
+            throw HostError(message: "Database history attention filter lost counted states")
+        }
+    }
 }
 
 func runProcessingHistorySelfTests() throws {
@@ -1047,4 +1212,134 @@ func runProcessingHistorySelfTests() throws {
     let conflict = try HistoryStore.load(directory: directory)
     try require(conflict.entries[0].summary == nil && conflict.entries[0].finished == nil
                 && conflict.entries[0].needsAttention, "Conflicting archive copies concealed a terminal failure")
+
+    let databaseURL = directory.appendingPathComponent("history.sqlite3")
+    func writeDatabase(_ sessions: [(String, [String])], schema: Int = 1) throws {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+              let database else { throw HostError(message: "Unable to create synthetic history database") }
+        defer { sqlite3_close(database) }
+        let setup = """
+        DROP TABLE IF EXISTS history_events;
+        DROP TABLE IF EXISTS history_sessions;
+        CREATE TABLE history_sessions(session_id TEXT PRIMARY KEY, updated_at TEXT NOT NULL);
+        CREATE TABLE history_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, event TEXT NOT NULL);
+        CREATE INDEX history_events_session_sequence ON history_events(session_id, sequence);
+        CREATE INDEX history_sessions_updated_at ON history_sessions(updated_at);
+        PRAGMA user_version = \(schema);
+        BEGIN;
+        """
+        guard sqlite3_exec(database, setup, nil, nil, nil) == SQLITE_OK else {
+            throw HostError(message: "Synthetic history schema failed")
+        }
+        var insertSession: OpaquePointer?
+        var insertEvent: OpaquePointer?
+        defer { sqlite3_finalize(insertSession); sqlite3_finalize(insertEvent) }
+        guard sqlite3_prepare_v2(database, "INSERT INTO history_sessions VALUES (?, ?)", -1, &insertSession, nil) == SQLITE_OK,
+              sqlite3_prepare_v2(database, "INSERT INTO history_events(session_id, ts, event) VALUES (?, ?, ?)", -1, &insertEvent, nil) == SQLITE_OK
+        else { throw HostError(message: "Synthetic history insert prepare failed") }
+        func insert(_ query: OpaquePointer?, _ values: [String]) throws {
+            sqlite3_reset(query)
+            for (index, value) in values.enumerated() {
+                guard value.withCString({ sqlite3_bind_text(query, Int32(index + 1), $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK
+                else { throw HostError(message: "Synthetic history binding failed") }
+            }
+            guard sqlite3_step(query) == SQLITE_DONE else { throw HostError(message: "Synthetic history insert failed") }
+        }
+        for (stamp, events) in sessions {
+            let timestamp = "2026-10-07T01:02:03.123456Z"
+            try insert(insertSession, [stamp, timestamp])
+            for event in events { try insert(insertEvent, [stamp, timestamp, event]) }
+        }
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            throw HostError(message: "Synthetic history commit failed")
+        }
+    }
+    let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
+    var pendingMedia = media
+    pendingMedia["unprocessed"] = 1
+    var pendingSummary = summaryValue
+    pendingSummary["img"] = pendingMedia
+    var fileFailureMedia = media
+    fileFailureMedia["failed"] = 1
+    var fileFailureSummary = summaryValue
+    fileFailureSummary["img"] = fileFailureMedia
+    try writeDatabase([
+        ("test", [context, verification, summary, completed]),
+        ("failed", [context, summary, failed]),
+        ("cancelled", [context, summary, cancelled]),
+        ("preview", [try payload("MFB_HISTORY_CONTEXT", previewValue), completed]),
+        ("pending", [context, try payload("MFB_HISTORY_SUMMARY", pendingSummary), completed]),
+        ("file_failures", [context, try payload("MFB_HISTORY_SUMMARY", fileFailureSummary), completed]),
+        ("warnings", [context, try payload("MFB_HISTORY_VERIFICATION", mismatchValue), summary, completed]),
+        ("invalid", [context, try payload("MFB_HISTORY_SUMMARY", futureSummary), completed]),
+        ("empty", [])
+    ])
+    let databaseBytes = try Data(contentsOf: databaseURL)
+    try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: databaseURL.path)
+    let databaseLoaded = try HistoryStore.load(directory: directory)
+    let expectedStatuses = ["history.status.completed", "history.status.failed", "history.status.cancelled",
+        "history.status.preview", "history.status.unfinished", "history.status.file_failures",
+        "history.status.verification_warnings", "history.status.incomplete", "history.status.incomplete"]
+    try require(databaseLoaded.entries.map(\.statusKey).sorted() == expectedStatuses.sorted(),
+                "Database history changed counted terminal states")
+    try require(databaseLoaded.entries.filter { $0.stamp == "test" }.count == 1
+                && databaseLoaded.entries.first(where: { $0.stamp == "test" })?.succeededLabel == "2"
+                && databaseLoaded.entries.first(where: { $0.stamp == "test" })?.logs.first?.resolvingSymlinksInPath().path == projectLog.resolvingSymlinksInPath().path,
+                "Legacy copies overrode database evidence or lost associated logs")
+    try MainActor.assumeIsolated {
+        _ = NSApplication.shared
+        try ProcessingHistoryPanel(directory: directory).validateDatabaseLoadForSelfTest(expectedStatuses: expectedStatuses)
+    }
+    try require(try Data(contentsOf: databaseURL) == databaseBytes
+                && !FileManager.default.fileExists(atPath: databaseURL.path + "-wal")
+                && !FileManager.default.fileExists(atPath: databaseURL.path + "-shm")
+                && !FileManager.default.fileExists(atPath: databaseURL.path + "-journal"),
+                "History read mutated the database or created sidecars")
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
+    try records(["SESSION_STARTED", "SESSION_COMPLETED images_ok=1"]).write(to: directory.appendingPathComponent("session_audit_legacy.jsonl"))
+    let mixed = try HistoryStore.load(directory: directory)
+    try require(mixed.entries.count == expectedStatuses.count + 1 && mixed.entries.contains { $0.stamp == "legacy" && $0.legacy },
+                "Database migration concealed unrelated legacy sessions")
+    let many = (0...HistoryStore.maximumSessions).map { (String(format: "session_%03d", $0), [context, summary, completed]) }
+    try writeDatabase(many)
+    try records([context, summary, failed]).write(to: directory.appendingPathComponent("session_audit_session_000.jsonl"))
+    let bounded = try HistoryStore.load(directory: directory)
+    try require(bounded.limited && bounded.entries.count == HistoryStore.maximumSessions
+                && !bounded.entries.contains { $0.stamp == "session_000" },
+                "Database session bound leaked an older database-owned JSONL copy")
+    try writeDatabase([("record_limit", Array(repeating: "MFB_HISTORY_FUTURE=", count: HistoryStore.maximumRecordsPerSession + 1))])
+    let recordLimit = try HistoryStore.load(directory: directory)
+    try require(recordLimit.limited && recordLimit.entries.first(where: { $0.stamp == "record_limit" })?.needsAttention == true,
+                "Database record bound appeared complete")
+    try writeDatabase([("entry_limit", Array(repeating: context, count: HistoryStore.maximumEntriesPerSession + 1))])
+    let entryLimit = try HistoryStore.load(directory: directory)
+    try require(entryLimit.entries.filter { $0.stamp == "entry_limit" }.count == HistoryStore.maximumEntriesPerSession
+                && entryLimit.entries.first(where: { $0.stamp == "entry_limit" })?.needsAttention == true,
+                "Database entries bypassed the shared parser bound")
+    let largeEvent = "MFB_HISTORY_FUTURE=" + String(repeating: "x", count: HistoryStore.maximumAuditBytes / 2)
+    try writeDatabase([("byte_limit", [largeEvent, largeEvent])])
+    let byteLimit = try HistoryStore.load(directory: directory)
+    try require(byteLimit.limited && byteLimit.entries.first(where: { $0.stamp == "byte_limit" })?.needsAttention == true,
+                "Database byte bound appeared complete")
+    let oversizedEvent = "MFB_HISTORY_FUTURE=" + String(repeating: "x", count: HistoryStore.maximumAuditBytes + 1)
+    try writeDatabase([("oversized", [oversizedEvent]), ("test", [context, summary, completed])])
+    let oversized = try HistoryStore.load(directory: directory)
+    try require(oversized.limited && oversized.entries.first(where: { $0.stamp == "oversized" })?.needsAttention == true
+                && oversized.entries.first(where: { $0.stamp == "test" })?.statusKey == "history.status.completed",
+                "One oversized database session concealed other valid sessions")
+    func requireReadFailure(_ message: String) throws {
+        do { _ = try HistoryStore.load(directory: directory) }
+        catch { return }
+        throw HostError(message: message)
+    }
+    try writeDatabase([("test", [context, summary, completed])], schema: 2)
+    let futureDatabase = try Data(contentsOf: databaseURL)
+    try requireReadFailure("Unsupported database schema appeared successful")
+    try require(try Data(contentsOf: databaseURL) == futureDatabase, "History reader migrated an unsupported schema")
+    try Data("synthetic corrupt database".utf8).write(to: databaseURL)
+    try requireReadFailure("Corrupt database fell back to successful legacy evidence")
+    try FileManager.default.removeItem(at: databaseURL)
+    _ = try HistoryStore.load(directory: directory)
+    try require(!FileManager.default.fileExists(atPath: databaseURL.path), "History reader created an absent database")
 }

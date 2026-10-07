@@ -13,6 +13,7 @@ pub mod infra {
     pub mod fabrication_policy;
     pub mod fastmode_paths;
     pub mod hardening;
+    pub mod history_store;
     pub mod log_paths;
     pub mod logger;
     pub mod mfb_cargo_env;

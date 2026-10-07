@@ -1267,11 +1267,20 @@ mod tests {
         let target = tempdir.path();
         let log_file = target.join("session.log");
         let bundle_dir = target.join("Bundle_20260608");
+        dev::infra::history_store::append_history_event(
+            target,
+            "synthetic-session",
+            "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"completed\"}",
+        )
+        .unwrap();
+        let history = target.join(dev::infra::history_store::HISTORY_DATABASE);
+        let history_before = fs::read(&history).unwrap();
         fs::write(&log_file, "log").unwrap();
         fs::create_dir(&bundle_dir).unwrap();
 
         assert_eq!(purge_log_dir_session_artifacts(target).unwrap(), (1, 1));
         assert!(!log_file.exists());
         assert!(!bundle_dir.exists());
+        assert_eq!(fs::read(history).unwrap(), history_before);
     }
 }

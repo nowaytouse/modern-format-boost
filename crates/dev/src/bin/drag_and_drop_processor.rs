@@ -263,7 +263,12 @@ impl DragDropSession {
             .canonicalize()
             .with_context(|| format!("canonicalize drag/drop log dir {}", log_dir.display()))?;
         let started_at = Local::now();
-        let stamp = format_session_stamp(Some(started_at));
+        let stamp = format!(
+            "{}_{}_{:09}",
+            format_session_stamp(Some(started_at)),
+            std::process::id(),
+            started_at.timestamp_subsec_nanos()
+        );
         let session = Self {
             started_at,
             session_log: log_dir.join(format!("MFB_Session_{stamp}.log")),
@@ -272,6 +277,12 @@ impl DragDropSession {
             log_dir,
             stamp,
         };
+        // A collision must never append another session's events or counters.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&session.session_log)
+            .context("reserve unique processing session log")?;
         if set_child_env {
             unsafe {
                 std::env::set_var("MFB_SESSION_ID", &session.stamp);
@@ -302,8 +313,7 @@ impl DragDropSession {
 
     fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
         let event = format!("{name}={payload}");
-        append_jsonl_audit_record(&self.session_audit, &event)?;
-        Ok(())
+        dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
     }
 
     fn record_history_verification(
@@ -3294,13 +3304,21 @@ mod tests {
 
     fn history_payloads(session: &DragDropSession, name: &str) -> Vec<serde_json::Value> {
         let prefix = format!("{name}=");
-        fs::read_to_string(&session.session_audit)
+        let connection = rusqlite::Connection::open_with_flags(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let mut query = connection
+            .prepare("SELECT event FROM history_events WHERE session_id=?1 ORDER BY sequence")
+            .unwrap();
+        query
+            .query_map([&session.stamp], |row| row.get::<_, String>(0))
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .filter_map(|record| {
-                record["event"]
-                    .as_str()
+            .filter_map(|event| {
+                event
                     .unwrap()
                     .strip_prefix(&prefix)
                     .map(|payload| serde_json::from_str(payload).unwrap())
@@ -3364,13 +3382,35 @@ mod tests {
     }
 
     #[test]
+    fn independent_sessions_do_not_share_history_or_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = DragDropSession::start_for_test(temp.path()).unwrap();
+        let second = DragDropSession::start_for_test(temp.path()).unwrap();
+        assert_ne!(first.stamp, second.stamp);
+        let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
+        run_with_history(&args, Some(&first), || Ok(())).unwrap();
+        run_with_history(&args, Some(&second), || bail!("second failed")).unwrap_err();
+        assert_eq!(
+            history_payloads(&first, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "completed"
+        );
+        assert_eq!(
+            history_payloads(&second, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
     fn history_retains_primary_error_when_terminal_audit_write_fails() {
         let temp = tempfile::tempdir().unwrap();
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
         let error = run_with_history(&args, Some(&session), || {
-            fs::remove_file(&session.session_audit)?;
-            fs::create_dir(&session.session_audit)?;
+            let database = session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE);
+            fs::remove_file(&database)?;
+            fs::create_dir(&database)?;
             bail!("primary processing failure")
         })
         .unwrap_err();
@@ -3411,8 +3451,10 @@ mod tests {
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
         let called = AtomicBool::new(false);
-        fs::remove_file(&session.session_audit).unwrap();
-        fs::create_dir(&session.session_audit).unwrap();
+        let database = session
+            .log_dir
+            .join(dev::infra::history_store::HISTORY_DATABASE);
+        fs::create_dir(&database).unwrap();
         assert!(
             run_with_history(&args, Some(&session), || {
                 called.store(true, Ordering::Relaxed);
@@ -3421,11 +3463,11 @@ mod tests {
             .is_err()
         );
         assert!(!called.load(Ordering::Relaxed));
-        fs::remove_dir(&session.session_audit).unwrap();
+        fs::remove_dir(&database).unwrap();
         assert!(
             run_with_history(&args, Some(&session), || {
-                fs::remove_file(&session.session_audit)?;
-                fs::create_dir(&session.session_audit)?;
+                fs::remove_file(&database)?;
+                fs::create_dir(&database)?;
                 Ok(())
             })
             .unwrap_err()
@@ -4298,9 +4340,19 @@ mod tests {
         assert!(audit_content.contains("SESSION_STARTED"));
         assert!(audit_content.contains("SESSION_ARCHIVE_BEGIN"));
         assert!(audit_content.contains("SESSION_ARCHIVE_DONE"));
-        assert!(audit_content.contains("MFB_HISTORY_CONTEXT="));
-        assert!(audit_content.contains("MFB_HISTORY_SUMMARY="));
-        assert!(audit_content.contains("MFB_HISTORY_FINISHED="));
+        assert!(!audit_content.contains("MFB_HISTORY_"));
+        for name in [
+            "MFB_HISTORY_CONTEXT",
+            "MFB_HISTORY_SUMMARY",
+            "MFB_HISTORY_FINISHED",
+        ] {
+            assert_eq!(history_payloads(&session, name).len(), 1);
+        }
+        assert!(
+            !bundle
+                .join(dev::infra::history_store::HISTORY_DATABASE)
+                .exists()
+        );
         let manifest = std::fs::read_to_string(bundle.join("manifest.json")).unwrap();
         assert!(manifest.contains(&format!("MFB_Session_{stamp}.log")));
     }

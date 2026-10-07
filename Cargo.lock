@@ -3606,16 +3606,16 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.60"
-source = "git+https://github.com/google/zerocopy#3e328bc9f3d440cabb4e96dd7e851a688c941983"
+version = "0.8.61"
+source = "git+https://github.com/google/zerocopy#7bbce8dcf43f7c5038a398ce965c5cb114c90502"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.60"
-source = "git+https://github.com/google/zerocopy#3e328bc9f3d440cabb4e96dd7e851a688c941983"
+version = "0.8.61"
+source = "git+https://github.com/google/zerocopy#7bbce8dcf43f7c5038a398ce965c5cb114c90502"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -421,6 +421,13 @@ sessions; an archived bundle alone is not proof of successful processing.
 The inspector reads the resolved log directory (normally
 `~/.modern_format_boost/logs`) and remembers backend-resolved overrides;
 clearing the live view does not delete stored logs or history.
+New batch context, counts, verification and terminal outcomes are committed to
+`history.sqlite3` in that directory, separately from disposable caches. The GUI
+queries recent sessions read-only with bounded records and bytes; older JSONL
+history remains readable without rewriting it. Database records take precedence
+over a session's legacy audit, so archiving cannot duplicate its counts. Unknown
+database versions and write failures are explicit errors, never automatic resets.
+Detailed worker logs and recovery checkpoints have not yet migrated to this store.
 Result, control and error records have a separate bounded delivery reserve, so
 routine log bursts cannot displace them. If that reserve is also exhausted, the
 GUI marks completion as unconfirmed rather than reporting a misleading success.

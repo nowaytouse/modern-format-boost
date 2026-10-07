@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-09-28
 
+### Durable SQLite processing history (2026-10-07)
+
+- Move new launcher history context, processor counts, verification and terminal
+  results into `history.sqlite3`, separate from disposable analysis caches. Commit
+  session indexes and ordered events atomically; write errors propagate, unknown
+  database schemas are retained and rejected instead of reset or downgraded.
+- Read recent database sessions directly in the native history inspector, retaining
+  bounded, read-only access and existing count/unknown/failure semantics. Keep old
+  JSONL history readable without rewriting it, with database ownership preventing
+  active/archive duplicates from replacing a batch's structured evidence.
+- Add process and subsecond identity to launcher session stamps so closely started
+  runs do not share history or log files. Session archival leaves the history
+  database in place; diagnostic cleanup preserves it.
+- This is the processing-history migration, not a completed migration of worker
+  logs, checkpoints, resume state or all cache namespaces. Those remain separate
+  follow-up work; no media safety gate or Photos operation is changed.
+- Preserve the incoming zerocopy 0.8.61 update and OSS-Fuzz builder digest refresh.
+- Repair the M68/M158 contract failures reported by the completed CI runs: an
+  absent output metadata group explicitly records every missing occurrence, and
+  EXIF warning exceptions remain optional until exact payload custody is proven.
+  No default collection is substituted for missing verification evidence.
+- Validation: 398 fallback-contract checks, 94 metadata regressions and 40
+  history/launcher/cleanup checks pass locally. The complete native-host self-test
+  passes using an isolated app bundle with real localization resources, including
+  database loading, bounded history and minimum-window layout checks.
+
 ### Metadata occurrence identity and layered JPEG archives (2026-10-07)
 
 - Stop treating ExifTool Family 4 `CopyN` ordinals as cross-container identities.

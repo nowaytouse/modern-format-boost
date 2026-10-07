@@ -507,7 +507,10 @@ fn unmatched_metadata_instances<'a>(
     let mut unexpected = Vec::new();
     let mut actual_groups = metadata_instance_groups(dst);
     for (key, expected) in metadata_instance_groups(src) {
-        let actual = actual_groups.remove(&key).unwrap_or_default();
+        let Some(actual) = actual_groups.remove(&key) else {
+            missing.extend(expected);
+            continue;
+        };
         let mut source_matches = vec![None; expected.len()];
         let mut output_matches: Vec<Option<usize>> = vec![None; actual.len()];
         for start in 0..expected.len() {
@@ -979,54 +982,52 @@ fn parse_metadata_records_with_exif_custody(
     }
 
     let records: Vec<UniqueRecord> = serde_json::from_slice(raw)?;
-    let allowed_warnings = pair
-        .and_then(|[src, dst]| {
-            let record = |path: &Path| {
-                records
-                    .iter()
-                    .find(|record| {
-                        record
-                            .0
-                            .get("SourceFile")
-                            .and_then(Value::as_str)
-                            .map(Path::new)
-                            == Some(path)
-                    })
-                    .map(|record| &record.0)
-            };
-            let source = record(src)?;
-            let output = record(dst)?;
-            let exif = |record: &serde_json::Map<String, Value>| {
-                metadata_object_map(record)
-                    .into_iter()
-                    .filter(|(key, _)| metadata_comparison_key(key) == "EXIF:EXIF")
-                    .collect::<BTreeMap<_, _>>()
-            };
-            let source_exif = exif(source);
-            let output_exif = exif(output);
-            if source_exif.is_empty()
-                || source_exif.get("EXIF:EXIF") != output_exif.get("EXIF:EXIF")
-                || !preserve_mismatches(&source_exif, &output_exif).is_empty()
-            {
-                return None;
-            }
-            Some(
-                source
-                    .iter()
-                    .filter(|(key, _)| key.starts_with("ExifTool:") && key.ends_with(":Warning"))
-                    .filter_map(|(_, value)| value.as_str())
-                    .filter(|message| {
-                        matches!(
-                            *message,
-                            "[minor] Unrecognized MakerNotes"
-                                | "Invalid EXIF text encoding for UserComment"
-                        )
-                    })
-                    .map(str::to_owned)
-                    .collect::<BTreeSet<_>>(),
-            )
-        })
-        .unwrap_or_default();
+    let allowed_warnings = pair.and_then(|[src, dst]| {
+        let record = |path: &Path| {
+            records
+                .iter()
+                .find(|record| {
+                    record
+                        .0
+                        .get("SourceFile")
+                        .and_then(Value::as_str)
+                        .map(Path::new)
+                        == Some(path)
+                })
+                .map(|record| &record.0)
+        };
+        let source = record(src)?;
+        let output = record(dst)?;
+        let exif = |record: &serde_json::Map<String, Value>| {
+            metadata_object_map(record)
+                .into_iter()
+                .filter(|(key, _)| metadata_comparison_key(key) == "EXIF:EXIF")
+                .collect::<BTreeMap<_, _>>()
+        };
+        let source_exif = exif(source);
+        let output_exif = exif(output);
+        if source_exif.is_empty()
+            || source_exif.get("EXIF:EXIF") != output_exif.get("EXIF:EXIF")
+            || !preserve_mismatches(&source_exif, &output_exif).is_empty()
+        {
+            return None;
+        }
+        Some(
+            source
+                .iter()
+                .filter(|(key, _)| key.starts_with("ExifTool:") && key.ends_with(":Warning"))
+                .filter_map(|(_, value)| value.as_str())
+                .filter(|message| {
+                    matches!(
+                        *message,
+                        "[minor] Unrecognized MakerNotes"
+                            | "Invalid EXIF text encoding for UserComment"
+                    )
+                })
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>(),
+        )
+    });
     let mut maps = BTreeMap::new();
     for UniqueRecord(object) in records {
         let path = object
@@ -1041,9 +1042,11 @@ fn parse_metadata_records_with_exif_custody(
         }) {
             if key.ends_with(":Warning")
                 && pair.is_some_and(|pair| pair.contains(&Path::new(path)))
-                && diagnostic
-                    .as_str()
-                    .is_some_and(|message| allowed_warnings.contains(message))
+                && diagnostic.as_str().is_some_and(|message| {
+                    allowed_warnings
+                        .as_ref()
+                        .is_some_and(|allowed| allowed.contains(message))
+                })
             {
                 tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}; original EXIF payload preserved byte-for-byte");
                 continue;
