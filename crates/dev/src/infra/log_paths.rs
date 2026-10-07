@@ -15,6 +15,31 @@ pub const MFB_DEFAULT_HOME_DIRNAME: &str = ".modern_format_boost";
 pub const TRAINING_BUNDLE_PREFIX: &str = "TrainingBundle_";
 pub const SESSION_BUNDLE_PREFIX: &str = "Bundle_";
 
+fn session_bundle_name(session_log: Option<&Path>, stamp: &str) -> String {
+    let project = session_log
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("MFB_"))
+        .and_then(|name| name.strip_suffix(&format!("_{stamp}.log")))
+        .filter(|name| *name != "Session");
+    let prefix: String = project
+        .unwrap_or("")
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.'))
+        .scan(0usize, |bytes, ch| {
+            *bytes += ch.len_utf8();
+            (*bytes <= 64).then_some(ch)
+        })
+        .collect::<String>()
+        .trim_matches([' ', '.', '_', '-'])
+        .to_owned();
+    if prefix.is_empty() {
+        format!("{SESSION_BUNDLE_PREFIX}{stamp}")
+    } else {
+        format!("{prefix}_{SESSION_BUNDLE_PREFIX}{stamp}")
+    }
+}
+
 pub const TRAINING_LOG_LANES: &[&str] = &["static_high", "static_low", "loop_high", "loop_low"];
 pub const LEGACY_TRAINING_LOG_LANES: &[&str] = &["static", "all_high", "loop", "loop_video"];
 
@@ -412,6 +437,13 @@ pub fn archive_drag_drop_session_bundle(
     if stamp.is_empty() {
         return Ok(None);
     }
+    if stamp.len() > 80
+        || !stamp
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return Err(anyhow!("invalid drag/drop session stamp"));
+    }
 
     let session_dt = match session_started_at {
         Some(dt) => dt,
@@ -431,7 +463,9 @@ pub fn archive_drag_drop_session_bundle(
         mtime_dt >= session_dt - chrono::Duration::seconds(10)
     };
 
-    let bundle = log_dir.join(format!("{SESSION_BUNDLE_PREFIX}{stamp}"));
+    let bundle_name = session_bundle_name(session_log, stamp);
+    let mut bundle = log_dir.join(&bundle_name);
+    let mut bundle_created = false;
     let mut moved = HashSet::new();
 
     let mut move_path = |src: &Path| -> Result<()> {
@@ -443,7 +477,27 @@ pub fn archive_drag_drop_session_bundle(
         if resolved.parent() != Some(&log_resolved) {
             return Ok(());
         }
-        fs::create_dir_all(&bundle)?;
+        if !bundle_created {
+            for index in 0..=1000 {
+                let candidate = if index == 0 {
+                    log_dir.join(&bundle_name)
+                } else {
+                    log_dir.join(format!("{bundle_name}_{index}"))
+                };
+                match fs::create_dir(&candidate) {
+                    Ok(()) => {
+                        bundle = candidate;
+                        bundle_created = true;
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            if !bundle_created {
+                return Err(anyhow!("no available drag/drop archive directory"));
+            }
+        }
         let filename = src
             .file_name()
             .context("no filename")?
@@ -601,6 +655,73 @@ mod tests {
         let stamp = format_session_stamp(None);
         let parsed = parse_session_stamp(&stamp);
         assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_session_bundle_name() {
+        let stamp = "20261007_120000_42_123456789";
+        assert_eq!(
+            session_bundle_name(
+                Some(Path::new(
+                    "MFB_Photos 2026_20261007_120000_42_123456789.log"
+                )),
+                stamp
+            ),
+            format!("Photos 2026_Bundle_{stamp}")
+        );
+        assert_eq!(
+            session_bundle_name(
+                Some(Path::new("MFB_Session_20261007_120000_42_123456789.log")),
+                stamp
+            ),
+            format!("Bundle_{stamp}")
+        );
+        let unsafe_name = format!("MFB_{}_{stamp}.log", "é".repeat(100));
+        let bundle = session_bundle_name(Some(Path::new(&unsafe_name)), stamp);
+        assert!(bundle.starts_with(&"é".repeat(32)));
+        assert!(bundle.ends_with(&format!("_Bundle_{stamp}")));
+        assert!(bundle.len() < 255);
+        assert_eq!(
+            session_bundle_name(Some(Path::new(&format!("MFB_.._{stamp}.log"))), stamp),
+            format!("Bundle_{stamp}")
+        );
+    }
+
+    #[test]
+    fn test_session_bundle_collision_preserves_existing_archive() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        assert!(
+            archive_drag_drop_session_bundle(temp.path(), "../escape", None, None, None, None)
+                .is_err()
+        );
+        let stamp = "20261007_120000";
+        let session_log = temp.path().join(format!("MFB_Photos_{stamp}.log"));
+        fs::write(&session_log, "new session")?;
+        let existing = temp.path().join(format!("Photos_Bundle_{stamp}"));
+        fs::create_dir(&existing)?;
+        fs::write(existing.join("manifest.json"), "old session")?;
+        let archived = archive_drag_drop_session_bundle(
+            temp.path(),
+            stamp,
+            Some(&session_log),
+            None,
+            None,
+            None,
+        )?
+        .context("archive missing")?;
+        assert_eq!(
+            archived,
+            temp.path().join(format!("Photos_Bundle_{stamp}_1"))
+        );
+        assert_eq!(
+            fs::read_to_string(existing.join("manifest.json"))?,
+            "old session"
+        );
+        assert_eq!(
+            fs::read_to_string(archived.join(session_log.file_name().unwrap()))?,
+            "new session"
+        );
+        Ok(())
     }
 
     #[test]

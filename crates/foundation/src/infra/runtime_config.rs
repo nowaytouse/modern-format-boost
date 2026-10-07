@@ -5,6 +5,8 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -100,6 +102,30 @@ pub struct ImgPolicy {
     pub fallback_policy: FallbackPolicy,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum VidCodec {
+    #[default]
+    Hevc,
+    Av1,
+}
+
+impl VidCodec {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VidPolicy {
+    pub codec: VidCodec,
+}
+
 impl Default for ImgPolicy {
     fn default() -> Self {
         Self {
@@ -157,6 +183,7 @@ pub struct ToolsPolicy {
 pub struct RuntimeConfig {
     pub config_version: u32,
     pub img: ImgPolicy,
+    pub vid: VidPolicy,
     pub photos: PhotosPolicy,
     pub tools: ToolsPolicy,
     pub performance: PerformancePolicy,
@@ -167,6 +194,7 @@ impl Default for RuntimeConfig {
         Self {
             config_version: 1,
             img: ImgPolicy::default(),
+            vid: VidPolicy::default(),
             photos: PhotosPolicy::default(),
             tools: ToolsPolicy::default(),
             performance: PerformancePolicy::default(),
@@ -253,6 +281,44 @@ impl LoadedConfig {
         } else {
             Ok(serde_json::to_string(self)?)
         }
+    }
+
+    fn write_history_marker(
+        &self,
+        pipeline: &str,
+        session_id: Option<&OsStr>,
+        output: &mut impl Write,
+    ) -> Result<()> {
+        if !session_id.is_some_and(|id| !id.is_empty()) {
+            return Ok(());
+        }
+        ensure!(
+            matches!(pipeline, "img" | "vid"),
+            "unknown processing pipeline"
+        );
+        let marker = json!({
+            "schema_version": 1,
+            "pipeline": pipeline,
+            "package_version": env!("CARGO_PKG_VERSION"),
+            "config": &self.config,
+            "sources": &self.sources,
+        });
+        let line = format!("MFB_HISTORY_CONFIG={}\n", serde_json::to_string(&marker)?);
+        output
+            .write_all(line.as_bytes())
+            .context("write effective runtime configuration history marker")?;
+        output
+            .flush()
+            .context("flush effective runtime configuration history marker")
+    }
+
+    pub fn emit_history_marker_if_session(&self, pipeline: &str) -> Result<()> {
+        let session_id = std::env::var_os("MFB_SESSION_ID");
+        self.write_history_marker(
+            pipeline,
+            session_id.as_deref(),
+            &mut std::io::stdout().lock(),
+        )
     }
 }
 
@@ -524,6 +590,7 @@ mod tests {
         let config = RuntimeConfig::default();
         assert_eq!(config.photos.backend, PhotosBackend::Native);
         assert_eq!(config.performance.mode, PerformanceMode::Adaptive);
+        assert_eq!(config.vid.codec, VidCodec::Hevc);
         let mut loaded = LoadedConfig {
             config,
             sources: BTreeMap::new(),
@@ -549,6 +616,63 @@ mod tests {
     fn legacy_tool_names_match_resolver_names() {
         assert_eq!(legacy_tool_name("OPJ_DECOMPRESS"), "opj_decompress");
         assert_eq!(legacy_tool_name("HEIF_CONVERT"), "heif-convert");
+    }
+
+    #[test]
+    fn history_marker_uses_resolved_values_only_for_launcher_sessions() -> Result<()> {
+        let mut loaded = LoadedConfig {
+            config: RuntimeConfig::default(),
+            sources: BTreeMap::new(),
+        };
+        loaded.config.performance.mode = PerformanceMode::Tight;
+        loaded
+            .sources
+            .insert("performance.mode".into(), "CLI".into());
+        let mut output = Vec::new();
+        loaded.write_history_marker("img", None, &mut output)?;
+        loaded.write_history_marker("img", Some(OsStr::new("")), &mut output)?;
+        assert!(output.is_empty());
+        loaded.write_history_marker("img", Some(OsStr::new("session")), &mut output)?;
+        let line = std::str::from_utf8(&output)?;
+        let marker: Value = serde_json::from_str(
+            line.strip_prefix("MFB_HISTORY_CONFIG=")
+                .context("missing history marker prefix")?
+                .trim_end_matches('\n'),
+        )?;
+        assert_eq!(marker["schema_version"], 1);
+        assert_eq!(marker["pipeline"], "img");
+        assert_eq!(marker["package_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(marker["config"]["performance"]["mode"], "tight");
+        assert_eq!(marker["sources"]["performance.mode"], "CLI");
+        assert_eq!(line.lines().count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn history_marker_propagates_stdout_write_failure() -> Result<()> {
+        struct BrokenOutput;
+        impl Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("broken output"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let loaded = LoadedConfig {
+            config: RuntimeConfig::default(),
+            sources: BTreeMap::new(),
+        };
+        let error = loaded
+            .write_history_marker("vid", Some(OsStr::new("session")), &mut BrokenOutput)
+            .err()
+            .context("stdout error was not propagated")?;
+        assert!(
+            error
+                .to_string()
+                .contains("write effective runtime configuration")
+        );
+        Ok(())
     }
 
     #[test]
@@ -590,6 +714,7 @@ mod tests {
         for invalid in [
             r#"{"config_version":2}"#,
             r#"{"config_version":1,"photos":{"unknown":1}}"#,
+            r#"{"config_version":1,"vid":{"codec":"av2"}}"#,
             r#"{"config_version":1,"photos":{"native_batch_size":"large"}}"#,
             r#"{"config_version":1,"photos":{"verification_batch_size":0}}"#,
             r#"{"config_version":1,"photos":{"verification_batch_size":1001}}"#,

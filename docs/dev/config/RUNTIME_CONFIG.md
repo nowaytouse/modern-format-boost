@@ -1,9 +1,9 @@
 # Runtime Preferences
 
-`img` loads versioned JSON preferences before database initialization, worker
-startup or media processing. The native GUI's image operations launch `img`
-and therefore inherit the same user configuration. No dependency is required
-beyond the existing JSON parser.
+`img` and `vid` load the same typed, versioned JSON model before database
+initialization, worker startup or media processing. Each accepts an independent
+explicit configuration file; GUI overrides use the matching worker's resolver.
+No dependency is required beyond the existing JSON parser.
 
 ## Files And Precedence
 
@@ -26,6 +26,10 @@ but legacy environment settings and explicit flags still apply.
 ```sh
 img config show --effective
 img config validate
+vid config show --effective
+vid config validate
+vid --config /path/to/video.json config show --effective
+vid run /path/to/videos --codec av1
 img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
@@ -42,7 +46,7 @@ img fast-img /path/to/images --shortest-path --photos-backend native \
 initialize databases, acquire media locks or process files. Media runs also
 log the resolved configuration. Booleans accept a bare enable flag or an
 explicit `=false`, so a saved opt-in can be disabled for one run.
-`config validate` checks the same effective policy. `config path` reports the
+`config validate` checks the same effective policy. IMG's `config path` reports the
 user/project/explicit paths and precedence without loading potentially invalid
 files. `config init PATH` atomically creates default JSON at an explicit path;
 an existing file is never replaced. Relative targets are resolved to an absolute
@@ -54,45 +58,52 @@ fallback destination. These commands do not access Photos.
 
 ### Native GUI Overrides
 
-The gear button shows the image workflow currently selected, Photos settings
-for Fast IMG, and shared Performance settings. Standard and Fast IMG retain
+The gear button shows the current image workflow, a standard Video tab,
+Photos settings and Performance settings. Standard and Fast IMG retain
 independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Existing shared image preferences
 migrate once to Fast IMG; subsequent edits and resets stay independent.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure
-policies appear only in Developer mode, enabled in About. Video exposes HEVC/AV1
-on the main screen and an independent developer file-error mode. AV1 disables
-Apple compatibility; video quality and preset are not exposed by the current
+policies and image tool selection appear only in Developer mode, enabled in About.
+Video exposes HEVC/AV1 in Settings, plus an independent developer configuration
+file and file-error mode. AV1 defaults to non-Apple delivery; an explicitly
+conflicting `--apple-compat` request is rejected. HEVC keeps Apple compatibility
+by default; `--no-apple-compat` still disables it. Video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
 Video settings apply only to standard `vid run` processing. Fast Video uses
-`vid fast-gif`, which supports neither option; explicit launcher options there
-are rejected and the GUI disables the settings button for that operation.
+`vid fast-gif`, which does not use `vid.codec` or the standard error-mode override;
+explicit launcher codec/error overrides there are rejected. Direct Fast VID
+configuration files can set its shared performance policy, not its GIF/AVIF
+strategy. The GUI disables the settings button for that operation.
 The image file-error override also belongs to standard processing. FastImg
 retains its existing checkpointed per-file failure handling; the launcher rejects
 an explicit error-mode override there rather than pretending it controls the
 FastImg encoding waves. Its fallback, effort and other image preferences still apply.
 
-Image and Photos effective values are queried from the backend, not duplicated
+Image, Video and Photos effective values are queried from the backend, not duplicated
 in Swift. The GUI displays the resolved value without an extra inherited choice;
-opening and applying unchanged controls does not create overrides. Developer
+opening and applying unchanged controls does not create overrides. When standard
+IMG and VID inherit different performance modes, the mixed workflow offers
+"Use each pipeline's configuration" rather than fabricating one shared mode;
+only an explicit shared selection overrides both. Developer
 tooltips include configuration keys and sources. Numeric fields use steppers;
 quality inference/database use Enabled/Disabled menus and Photos booleans use
 ordinary two-state checkboxes. Apply
-validates the resolved standard and Fast IMG profiles, including adaptive
+validates the relevant standard/Fast IMG and VID profiles, including adaptive
 batch bounds, before persisting. Configuration query failures stay visible.
 Overrides are saved in native GUI preferences,
 passed as explicit launcher options, and only forwarded to the matching media
 pipeline. Reset This Tab removes that tab's overrides, not the other tab or
 the runtime JSON. Invalid saved overrides and unreadable explicit files fail
 visibly instead of silently reverting to defaults. JSON schema validation
-remains owned by `img`. Tool executable paths remain available through JSON or
+remains owned by the shared Rust model. Tool executable paths remain available through JSON or
 direct `img --tool` overrides.
 
 The launcher accepts `--img-config`, `--img-fallback-policy`,
 `--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
-`--img-allow-database=true|false`, `--img-error-mode`, `--vid-codec`, and
+`--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
 `--vid-error-mode`. Error modes are `log-and-continue` and `fail-fast`; overrides
 apply only to the child process, including PTY launches, without mutating the
 launcher's global environment. Encoding options are not sent to verification,
@@ -110,6 +121,27 @@ child's exit and known counts. Missing counts are JSON `null`, not fabricated
 zeroes; the GUI retains that uncertainty when aggregating results. Error logs
 and nonzero exits are preserved even when a count summary is unavailable.
 
+### Captured Runtime Configuration
+
+Launcher-managed media invocations emit their already resolved `RuntimeConfig`
+with the winning `sources` map and worker package version. The launcher validates
+the full snapshot and stores `MFB_HISTORY_CONFIG` in `history.sqlite3`; it does
+not reload files or fill missing snapshot fields with defaults. Structured config
+records are not duplicated into terminal output or the worker-text table. Write
+or marker validation failure is explicit after the child output is drained.
+Known media counts and the original child exit remain available even on history
+failure; unsafe downstream steps stop, and the final summary is attempted without
+replacing the original error. A bad marker does not truncate later worker output.
+
+Processing History shows distinct captured snapshots within the selected batch.
+Repeated identical snapshots share a display entry, but captured invocation count
+is separate from processed-file count. Missing historical config is not inferred
+from current preferences. Invalid/future records retain valid earlier snapshots
+and media counts, with an explicit issue; they never hide a batch's failed status.
+This is the typed runtime snapshot, not a complete run manifest: command-specific
+flags, all losing overrides, tool versions, build IDs and the backend actually
+chosen after runtime fallback are not yet part of this record.
+
 ### Runtime JSON
 
 | Field | Default | Meaning |
@@ -118,6 +150,7 @@ and nonzero exits are preserved even when a count summary is unavailable.
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11. Pixel encoding retains its normal/ultimate mode policy. |
 | `img.fallback_policy` | `strict` | `strict`: one requested JPEG encode attempt. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. All delivery and exact reconstruction checks remain mandatory. |
+| `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
 | `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |
 | `tools.paths` | `{}` | Tool-name to absolute executable-path overrides, also accepted as repeated `--tool NAME=PATH` flags. Existing tool health checks still apply. |
 | `performance.mode` | `adaptive` | Shared IMG/VID memory-aware scheduling. `relaxed`, `balanced`, and `tight` request fixed tiers without removing memory safety caps. `--performance` overrides JSON; legacy `MFB_PERF_TIER` remains lower priority. |

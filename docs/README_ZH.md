@@ -1,6 +1,6 @@
 # Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-0.11.3-0969DA?style=for-the-badge&logo=rust&logoColor=white)
+![Version](https://img.shields.io/badge/version-0.12.0-0969DA?style=for-the-badge&logo=rust&logoColor=white)
 ![Rust](<https://img.shields.io/badge/rust-2024_edition_(nightly)-E57324?style=for-the-badge&logo=rust&logoColor=white>)
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge)
@@ -81,6 +81,12 @@ JPEG 的 XMP 探测遵循数据段边界，包括渐进式图像的扫描间元�
 并标明显示条数与总条数。同一会话内多次处理有独立的输出边界，不会串日志；这些记录
 不代替成功、失败或警告的结构化计数。详情同时记录当时的版本和显式重试、继续运行请求。
 历史数据库 v1 会事务迁移到 v2，保留旧记录；未知版本或写入失败明确报错，不会自动清空重建。
+新批次还会直接保存 IMG/VID 处理端解析出的运行时 JSON、各字段最终值来源和处理端版本。
+历史详情显示当时的快照，不按今天的设置重新推测；相同配置只合并显示，处理端启动次数
+仍单独统计，不混入文件计数。旧批次明确显示“未记录”，无效或未来版本记录明确报错。
+这些快照覆盖 `RuntimeConfig` 的字段，不等于全部命令参数、完整覆盖链、工具版本或回退后
+最终选用的后端。归档目录改为处理文件夹名称前缀，例如 `Photos_Bundle_<会话>`；名称过长
+会安全截短，重名时另建编号目录，不覆盖原归档。旧归档仍可查看。
 内部 tracing、管线审计文件和恢复检查点仍未全部迁入，这一步不代表整个日志与恢复系统已经完成迁移。
 
 设置页新增“缓存”分页，分别显示可重建缓存内容、本库保留记录、数据库文件大小和旧分析缓存。
@@ -132,10 +138,14 @@ JPEG 的 XMP 探测遵循数据段边界，包括渐进式图像的扫描间元�
   可见就向其他处理器传入不支持的参数。
 - 手动输入数字后，增减箭头从新值继续；无效数字保留在输入框中等待修正。重新加载或重置
   无效的已保存选项不会重复添加菜单项，也不会把旧的无效项留在恢复后的菜单里。
-- HEVC/AV1 选择移到首页；Photos 批量参数按需展开，不相关的控件隐藏。
+- HEVC/AV1 选择收进设置的“视频”分页，直接读取 VID 的生效值；标准 VID 可以使用独立
+  配置文件，不再由首页的默认选择掩盖配置中的 AV1。AV1 默认关闭 Apple 兼容交付；明确
+  要求 AV1 同时兼容 Apple 时仍拒绝冲突。图像与视频配置中的性能模式不同时，默认分别
+  使用各自配置；只有明确选择共享模式才统一覆盖。Photos 批量参数按需展开，不相关的控件隐藏。
   开发者模式移到“关于”，保留失败策略、配置文件覆盖和配置来源提示。
 - 质量启发与质量数据库使用启用/禁用列表；数据库开关控制是否允许访问，不是数据库连接编辑器。
-  工具路径可通过 JSON 或 `--tool` 指定，GUI 尚不提供每一种底层工具参数。
+  工具路径可通过 JSON 或 `--tool` 指定；开发者设置新增标准 IMG 和 Fast IMG 各自的工具选择
+  策略，可以只用首选工具或允许备选，不会放宽编码回退与强制核验要求。
 - 英文、中文、日文文案和布局同步改进；组件缺失时普通用户可打开完整版本下载入口，
   开发者可以指定本地处理器位置。恢复或重新开始的选择在真正需要时再出现。
 - CLI 提供 `config show --effective`、`validate`、`path`、`init`；配置初始化原子创建且不覆盖。

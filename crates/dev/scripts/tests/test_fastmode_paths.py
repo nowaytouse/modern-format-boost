@@ -12,6 +12,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import fastmode_paths
+import mfb_log_paths
 
 
 class TestFastModePaths(unittest.TestCase):
@@ -268,6 +269,34 @@ class TestFastModePaths(unittest.TestCase):
         self.assertIn("ensure_unified_log_dir", source)
         self.assertIn("archive_drag_drop_session_bundle", source)
         self.assertIn("SESSION_ARCHIVE_DONE", source)
+
+    def test_named_session_archive_preserves_collision_and_legacy_fallback(self):
+        stamp = "20261007_120000"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = root / f"MFB_Photos_{stamp}.log"
+            log.write_text("new session", encoding="utf-8")
+            existing = root / f"Photos_Bundle_{stamp}"
+            existing.mkdir()
+            (existing / "manifest.json").write_text("old session", encoding="utf-8")
+            archived = mfb_log_paths.archive_drag_drop_session_bundle(
+                root, stamp, session_log=log
+            )
+            self.assertEqual(archived, root / f"Photos_Bundle_{stamp}_1")
+            self.assertEqual((existing / "manifest.json").read_text(encoding="utf-8"), "old session")
+            self.assertEqual((archived / log.name).read_text(encoding="utf-8"), "new session")
+            with self.assertRaises(ValueError):
+                mfb_log_paths.archive_drag_drop_session_bundle(root, "../escape")
+
+        self.assertEqual(
+            mfb_log_paths._session_bundle_name(Path(f"MFB_Session_{stamp}.log"), stamp),
+            f"Bundle_{stamp}",
+        )
+        long_name = "é" * 100
+        self.assertEqual(
+            mfb_log_paths._session_bundle_name(Path(f"MFB_{long_name}_{stamp}.log"), stamp),
+            f"{'é' * 32}_Bundle_{stamp}",
+        )
 
     def test_drag_processor_rust_ui_runs_fastmode_verify_summary_after_success(self):
         source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SQLite3
 import Darwin
+import CoreFoundation
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -107,6 +108,20 @@ private struct HistoryVerification: Decodable, Equatable {
     }
 }
 
+private struct HistoryConfigSnapshot: Hashable {
+    let pipeline: String
+    let packageVersion: String
+    let values: String
+    let sources: String
+}
+
+private struct HistoryConfigMetadata: Decodable {
+    let schema_version: Int
+    let pipeline: String
+    let package_version: String
+    let sources: [String: String]
+}
+
 private struct HistoryRecord: Decodable {
     let ts: String
     let event: String
@@ -120,6 +135,11 @@ private struct HistoryEntry {
     var context: HistoryContext?
     var summary: HistorySummary?
     var verification: HistoryVerification?
+    var configSnapshots: [HistoryConfigSnapshot] = []
+    var configSet: Set<HistoryConfigSnapshot> = []
+    var configInvocationCount = 0
+    var configMarkerSeen = false
+    var configEvidenceInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -190,7 +210,8 @@ private struct HistoryAudit {
     var evidenceWeight: Int {
         entries.reduce(0) { total, entry in
             total + (entry.context == nil ? 0 : 1) + (entry.summary == nil ? 0 : 1)
-                + (entry.verification == nil ? 0 : 1) + (entry.finished == nil ? 0 : 1)
+                + (entry.verification == nil ? 0 : 1) + (entry.configSnapshots.isEmpty ? 0 : 1)
+                + (entry.finished == nil ? 0 : 1)
         }
     }
 }
@@ -205,6 +226,8 @@ private enum HistoryStore {
     static let maximumScanBytes = 64 * 1024 * 1024
     static let maximumOutputLines = 1_000
     static let maximumOutputBytes = 2 * 1024 * 1024
+    static let maximumConfigBytes = 32 * 1024
+    static let maximumConfigSnapshots = 64
 
     struct Output {
         let text: String
@@ -255,6 +278,33 @@ private enum HistoryStore {
         func decode<T: Decodable>(_ type: T.Type, from event: String, prefix: String) throws -> T {
             try decoder.decode(type, from: Data(event.dropFirst(prefix.count).utf8))
         }
+        func decodeConfig(_ event: String) throws -> HistoryConfigSnapshot {
+            let data = Data(event.dropFirst("MFB_HISTORY_CONFIG=".count).utf8)
+            guard data.count <= maximumConfigBytes,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let values = object["config"] as? [String: Any] else { throw HistoryParseError.invalid }
+            let metadata = try decoder.decode(HistoryConfigMetadata.self, from: data)
+            func leafPaths(_ object: [String: Any], prefix: String = "") -> Set<String> {
+                object.reduce(into: Set<String>()) { paths, field in
+                    let path = prefix.isEmpty ? field.key : prefix + "." + field.key
+                    if let nested = field.value as? [String: Any] { paths.formUnion(leafPaths(nested, prefix: path)) }
+                    else { paths.insert(path) }
+                }
+            }
+            guard metadata.schema_version == 1, ["img", "vid"].contains(metadata.pipeline),
+                  !metadata.package_version.isEmpty, !metadata.sources.isEmpty,
+                  metadata.sources.values.allSatisfy({ !$0.isEmpty }),
+                  Set(metadata.sources.keys) == leafPaths(values),
+                  let version = values["config_version"] as? NSNumber,
+                  CFGetTypeID(version) != CFBooleanGetTypeID(), version == NSNumber(value: 1)
+            else { throw HistoryParseError.invalid }
+            let valuesData = try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
+            let sourcesData = try JSONSerialization.data(withJSONObject: metadata.sources, options: [.prettyPrinted, .sortedKeys])
+            guard let valuesJSON = String(data: valuesData, encoding: .utf8),
+                  let sourcesJSON = String(data: sourcesData, encoding: .utf8) else { throw HistoryParseError.invalid }
+            return HistoryConfigSnapshot(pipeline: metadata.pipeline, packageVersion: metadata.package_version,
+                                         values: valuesJSON, sources: sourcesJSON)
+        }
         for (index, record) in records.enumerated() {
             guard index < maximumRecordsPerSession else {
                 current.issues.append(localized("history.issue.entry_limit")); break
@@ -302,6 +352,15 @@ private enum HistoryStore {
                         throw HistoryParseError.invalid
                     }
                     current.verification = verification
+                } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
+                    current.configMarkerSeen = true
+                    let snapshot = try decodeConfig(event)
+                    current.configInvocationCount += 1
+                    if !current.configSet.contains(snapshot) {
+                        guard current.configSnapshots.count < maximumConfigSnapshots else { throw HistoryParseError.invalid }
+                        current.configSet.insert(snapshot)
+                        current.configSnapshots.append(snapshot)
+                    }
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -327,6 +386,7 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
                 if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     current.summary = nil
                     current.contradictoryFields.insert("summary")
@@ -541,7 +601,8 @@ private enum HistoryStore {
                     guard !stamp.isEmpty else { continue }
                     candidates.append(Candidate(stamp: stamp, url: url, archived: archived,
                                                 modified: values.contentModificationDate ?? .distantPast))
-                } else if !archived, values.isDirectory == true, name.hasPrefix("Bundle_") {
+                } else if !archived, values.isDirectory == true,
+                          name.hasPrefix("Bundle_") || (name.contains("_Bundle_") && !name.hasPrefix("_Bundle_")) {
                     bundles.append(url)
                 }
             }
@@ -669,6 +730,10 @@ private enum HistoryStore {
                         if let a = left.context, let b = right.context, a != b { conflictingCopies = true }
                         if let a = left.summary, let b = right.summary, a != b { conflictingCopies = true }
                         if let a = left.verification, let b = right.verification, a != b { conflictingCopies = true }
+                        if !left.configSet.isEmpty && !right.configSet.isEmpty,
+                           !left.configSet.isSubset(of: right.configSet), !right.configSet.isSubset(of: left.configSet) {
+                            conflictingCopies = true
+                        }
                         if let a = left.finished, let b = right.finished, a != b { conflictingCopies = true }
                     }
                     if audit.entries.count > previous.1.entries.count { selected = (candidate, audit) }
@@ -709,6 +774,10 @@ private enum HistoryStore {
                         entry.context = nil
                         entry.summary = nil
                         entry.verification = nil
+                        entry.configSnapshots = []
+                        entry.configSet = []
+                        entry.configInvocationCount = 0
+                        entry.configMarkerSeen = true
                         entry.finished = nil
                         entry.issues.append(localized("history.issue.conflicting_copies"))
                     }
@@ -1046,6 +1115,19 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 lines.append(row(key, value.map { localized($0 ? "settings.value.true" : "settings.value.false") } ?? unknown))
             }
         }
+        lines += ["", localized("history.effective_config")]
+        if entry.configSnapshots.isEmpty {
+            lines.append(localized(entry.configMarkerSeen ? "history.config.invalid" : "history.config.not_recorded"))
+        } else {
+            lines.append(row("config_invocations", String(entry.configInvocationCount)))
+            for (index, snapshot) in entry.configSnapshots.enumerated() {
+                lines += ["", row("config_snapshot", String(index + 1)),
+                          row("config_pipeline", snapshot.pipeline),
+                          row("config_package_version", snapshot.packageVersion),
+                          row("config_values", snapshot.values),
+                          row("config_sources", snapshot.sources)]
+            }
+        }
         lines += ["", localized("history.processor_counts")]
         for (key, media) in [("img", entry.summary?.img), ("vid", entry.summary?.vid)] {
             lines.append(localized("history.media.\(key)"))
@@ -1248,6 +1330,70 @@ func runProcessingHistorySelfTests() throws {
     let success = try parsed(["SESSION_STARTED", context, summary, completed])
     try require(success.entries.count == 1 && success.entries[0].statusKey == "history.status.completed"
                 && success.entries[0].context?.output == nil && success.entries[0].succeededLabel == "2", "Typed history did not retain nullable paths or active counts")
+    try require(success.entries[0].configSnapshots.isEmpty && !success.entries[0].configMarkerSeen,
+                "Old history invented an effective configuration")
+    let imgConfigValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
+        "config": ["config_version": 1, "performance": ["mode": "tight"]],
+        "sources": ["config_version": "default", "performance.mode": "CLI"]]
+    var vidConfigValue = imgConfigValue
+    vidConfigValue["pipeline"] = "vid"
+    vidConfigValue["config"] = ["config_version": 1, "performance": ["mode": "relaxed"]]
+    let imgConfig = try payload("MFB_HISTORY_CONFIG", imgConfigValue)
+    let vidConfig = try payload("MFB_HISTORY_CONFIG", vidConfigValue)
+    let withConfigs = try parsed([context, imgConfig, imgConfig, vidConfig, summary, completed])
+    let configEntry = withConfigs.entries[0]
+    let shownValues = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].values.utf8)) as? [String: Any]
+    let shownSources = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].sources.utf8)) as? [String: String]
+    try require(configEntry.configInvocationCount == 3 && configEntry.configSnapshots.count == 2
+                && configEntry.configSnapshots.map(\.pipeline) == ["img", "vid"]
+                && ((shownValues?["performance"] as? [String: Any])?["mode"] as? String) == "tight"
+                && shownSources?["performance.mode"] == "CLI"
+                && configEntry.succeededLabel == "2" && configEntry.statusKey == "history.status.completed",
+                "Child configuration snapshots changed media counts or lost distinct invocations")
+    let configBatches = try parsed([context, imgConfig, summary, completed, context, vidConfig, summary, completed])
+    try require(configBatches.entries.count == 2 && configBatches.entries[0].configSnapshots.map(\.pipeline) == ["img"]
+                && configBatches.entries[1].configSnapshots.map(\.pipeline) == ["vid"],
+                "Effective configurations crossed batch boundaries")
+    let invalidConfigs: [[String: Any]] = [
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "sources": [:]],
+        ["schema_version": 1, "pipeline": "other", "package_version": "0.12.0", "config": [:], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": 12, "config": [:], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "config": [], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "config": [:], "sources": ["mode": 1]],
+        ["schema_version": 2, "pipeline": "img", "package_version": "0.12.0", "config": [:], "sources": [:]],
+    ]
+    for invalidConfig in invalidConfigs {
+        let invalidEvent = try payload("MFB_HISTORY_CONFIG", invalidConfig)
+        let history = try parsed([context, imgConfig, invalidEvent, summary, completed])
+        try require(history.entries[0].statusKey == "history.status.incomplete"
+                    && history.entries[0].configSnapshots.count == 1
+                    && history.entries[0].configInvocationCount == 1
+                    && history.entries[0].summary?.img.succeeded == 2,
+                    "Invalid config evidence erased a valid snapshot or processor counts")
+    }
+    let malformedConfig = try parsed([context, imgConfig, "MFB_HISTORY_CONFIG={", summary, failed])
+    try require(malformedConfig.entries[0].configEvidenceInvalid
+                && malformedConfig.entries[0].statusKey == "history.status.failed"
+                && malformedConfig.entries[0].configSnapshots.count == 1
+                && malformedConfig.entries[0].summary?.img.succeeded == 2,
+                "Malformed config hid the batch failure, captured configuration or media counts")
+    var configSequence = [context]
+    for index in 0...HistoryStore.maximumConfigSnapshots {
+        var distinct = imgConfigValue
+        distinct["package_version"] = "0.12.\(index)"
+        configSequence.append(try payload("MFB_HISTORY_CONFIG", distinct))
+    }
+    configSequence += [summary, completed]
+    let limitedConfigs = try parsed(configSequence).entries[0]
+    try require(limitedConfigs.configEvidenceInvalid
+                && limitedConfigs.configSnapshots.count == HistoryStore.maximumConfigSnapshots
+                && limitedConfigs.configInvocationCount == HistoryStore.maximumConfigSnapshots + 1
+                && limitedConfigs.succeededLabel == "2", "Snapshot limit changed processor counts or concealed truncation")
+    var oversizedConfigValue = imgConfigValue
+    oversizedConfigValue["config"] = ["long": String(repeating: "x", count: HistoryStore.maximumConfigBytes)]
+    let oversizedConfig = try parsed([context, try payload("MFB_HISTORY_CONFIG", oversizedConfigValue), summary, completed])
+    try require(oversizedConfig.entries[0].configEvidenceInvalid && oversizedConfig.entries[0].configSnapshots.isEmpty,
+                "Oversized effective configuration escaped the history display bound")
     let failure = try parsed([context, summary, failed])
     try require(failure.entries[0].statusKey == "history.status.failed" && failure.entries[0].succeededLabel == "2",
                 "Converted items hid a final session failure")
@@ -1361,6 +1507,16 @@ func runProcessingHistorySelfTests() throws {
     let conflict = try HistoryStore.load(directory: directory)
     try require(conflict.entries[0].summary == nil && conflict.entries[0].finished == nil
                 && conflict.entries[0].needsAttention, "Conflicting archive copies concealed a terminal failure")
+
+    let namedRoot = directory.appendingPathComponent("named-archive-case")
+    let namedArchive = namedRoot.appendingPathComponent("Photos_Bundle_named")
+    try FileManager.default.createDirectory(at: namedArchive, withIntermediateDirectories: true)
+    try records([context, summary, completed]).write(to: namedArchive.appendingPathComponent("session_audit_named.jsonl"))
+    let named = try HistoryStore.load(directory: namedRoot)
+    try require(named.entries.count == 1
+                && named.entries[0].audit.deletingLastPathComponent().resolvingSymlinksInPath().path
+                    == namedArchive.resolvingSymlinksInPath().path,
+                "Named archive was not discovered: \(named.entries.map { $0.audit.path })")
 
     let databaseURL = directory.appendingPathComponent("history.sqlite3")
     func writeDatabase(_ sessions: [(String, [String])], schema: Int = 1) throws {

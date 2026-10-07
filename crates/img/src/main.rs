@@ -680,6 +680,13 @@ fn main_inner() -> anyhow::Result<()> {
         } => *allow_expert_options = allow_recovery,
         _ => {}
     }
+    validate_command_strategy(&cli.command)?;
+    if matches!(
+        &cli.command,
+        Commands::Run { .. } | Commands::FastImg { .. } | Commands::RestoreJpeg { .. }
+    ) {
+        resolved.emit_history_marker_if_session("img")?;
+    }
     foundation::infra::runtime_config::install(resolved.config)?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
@@ -693,8 +700,6 @@ fn main_inner() -> anyhow::Result<()> {
     {
         tracing::warn!(target: "runtime_config", "Legacy environment preferences are active; inspect img config show --effective and migrate them to config/flags");
     }
-
-    validate_command_strategy(&cli.command)?;
 
     // Initialize Ctrl+C guard for long-running batch operations
     foundation::ctrlc_guard::init();

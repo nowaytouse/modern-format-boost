@@ -1,6 +1,6 @@
 # Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-0.11.3-0969DA?style=for-the-badge&logo=rust&logoColor=white)
+![Version](https://img.shields.io/badge/version-0.12.0-0969DA?style=for-the-badge&logo=rust&logoColor=white)
 ![Rust](<https://img.shields.io/badge/rust-2024_edition_(nightly)-E57324?style=for-the-badge&logo=rust&logoColor=white>)
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge)
@@ -60,6 +60,28 @@ assets, and conversion byte totals exclude skipped/reused/passthrough input.
 Matching output cardinalities do not replace identity or content verification.
 See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
 receipt uniqueness, error handling and regression boundaries.
+
+### Settings And Batch Configuration
+
+Settings now has a dedicated **Videos** tab. Standard VID supports independent
+`--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
+The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
+delivery, while an explicitly conflicting Apple-compatibility request is rejected.
+Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
+and does not relax codec fallback or mandatory verification. Photos settings remain
+available. Unchanged inherited values are not saved as GUI overrides; different
+IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
+
+New launcher-managed IMG/VID invocations record the worker's resolved runtime JSON,
+winning field sources and worker version in `history.sqlite3`. Processing History
+shows these captured snapshots, not a reconstruction using today's preferences.
+Multiple worker invocations remain distinct from media counts; identical snapshots
+share a display entry. Older records explicitly say configuration was not recorded.
+This captures fields in `RuntimeConfig`, not every command-specific flag, the full
+override chain, tool versions or the backend ultimately selected after a fallback.
+Session archives use a sanitized input-folder prefix, such as
+`Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
+See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
 
 ### Cache management
 

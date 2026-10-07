@@ -17,6 +17,15 @@ use vid::{
 #[command(name = "vid")]
 #[command(version, about = "High-performance video and animated media converter", long_about = None)]
 struct Cli {
+    /// Overlay an explicit JSON configuration after user and project preferences.
+    #[arg(long, global = true, conflicts_with = "no_config")]
+    config: Option<PathBuf>,
+    /// Ignore configuration files; explicit flags and legacy environment still apply.
+    #[arg(long, global = true)]
+    no_config: bool,
+    /// Output codec for video runs.
+    #[arg(long, global = true, value_enum)]
+    codec: Option<foundation::runtime_config::VidCodec>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
     #[command(subcommand)]
@@ -25,6 +34,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Inspect persistent runtime preferences without processing media or accessing databases.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     #[command(name = "run")]
     Run {
         #[arg(value_name = "INPUT")]
@@ -43,7 +57,7 @@ enum Commands {
         explore: bool,
         #[arg(long, default_value_t = true)]
         match_quality: bool,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = false)]
         apple_compat: bool,
         #[arg(long)]
         no_apple_compat: bool,
@@ -75,15 +89,11 @@ enum Commands {
         no_resume: bool,
         #[arg(long, value_parser = ["default", "avif"], default_value = "default")]
         strategy: String,
-        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
-        codec: String,
     },
 
     Strategy {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
-        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
-        codec: String,
     },
 
     #[command(
@@ -126,8 +136,51 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Show resolved preferences and the source of every value without processing media.
+    Show {
+        /// Accepted for clarity; show always prints the effective configuration.
+        #[arg(long)]
+        effective: bool,
+    },
+    /// Validate the effective configuration, without processing or accessing databases.
+    Validate,
+}
+
+fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::LoadedConfig> {
+    let mut loaded = foundation::runtime_config::load(cli.config.as_deref(), cli.no_config)?;
+    cli.performance.apply_to(&mut loaded);
+    if let Some(codec) = cli.codec {
+        loaded.config.vid.codec = codec;
+        loaded.sources.insert("vid.codec".into(), "CLI".into());
+    }
+    loaded.config.validate()?;
+    Ok(loaded)
+}
+
+fn resolve_run_apple_compat(
+    requested: bool,
+    disabled: bool,
+    codec: foundation::runtime_config::VidCodec,
+) -> bool {
+    (requested || codec == foundation::runtime_config::VidCodec::Hevc) && !disabled
+}
+
+fn inspect_config(cli: &Cli, command: &ConfigCommand) -> anyhow::Result<()> {
+    let loaded = resolve_runtime(cli)?;
+    match command {
+        ConfigCommand::Show { .. } => println!("{}", loaded.to_json(true)?),
+        ConfigCommand::Validate => println!(
+            "{}",
+            serde_json::json!({"valid": true, "sources": loaded.sources})
+        ),
+    }
+    Ok(())
+}
+
 const fn command_requires_database(command: &Commands) -> bool {
-    !matches!(command, Commands::FastGif { .. })
+    !matches!(command, Commands::Config { .. } | Commands::FastGif { .. })
 }
 
 fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
@@ -844,6 +897,20 @@ fn run_fast_gif(
 #[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("vid").context("vid entry guard")?;
+    let cli = Cli::parse();
+    if let Commands::Config { command } = &cli.command {
+        return inspect_config(&cli, command);
+    }
+    validate_command_strategy(&cli.command)?;
+    let runtime = resolve_runtime(&cli)?;
+    let configured_codec = runtime.config.vid.codec;
+    if matches!(
+        &cli.command,
+        Commands::Run { .. } | Commands::FastGif { .. }
+    ) {
+        runtime.emit_history_marker_if_session("vid")?;
+    }
+    foundation::runtime_config::install(runtime.config)?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
     foundation::logging::init("vid", &foundation::logging::LogConfig::default())
@@ -851,11 +918,6 @@ fn main() -> anyhow::Result<()> {
 
     foundation::ctrlc_guard::init();
 
-    let cli = Cli::parse();
-    let mut runtime = foundation::runtime_config::load(None, false)?;
-    cli.performance.apply_to(&mut runtime);
-    foundation::runtime_config::install(runtime.config)?;
-    validate_command_strategy(&cli.command)?;
     if command_requires_database(&cli.command) {
         // Enforce PostgreSQL dependency as mandatory for the DB-backed video toolchain.
         // Fast GIF mode is excluded: it performs content-aware scanning, LoopIntent
@@ -904,6 +966,7 @@ fn main() -> anyhow::Result<()> {
     // ------------------------------------------------------
 
     match cli.command {
+        Commands::Config { .. } => unreachable!("configuration inspection returned before startup"),
         Commands::Run {
             input,
             output,
@@ -928,7 +991,6 @@ fn main() -> anyhow::Result<()> {
             resume,
             no_resume,
             strategy,
-            codec,
         } => {
             // Fail-fast if critical sub-tools are missing
             if let Err(e) = foundation::tools::require(&["ffmpeg", "ffprobe", "exiftool"]) {
@@ -936,7 +998,8 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(foundation::constants::EXIT_CODE_ERROR);
             }
 
-            let apple_compat = apple_compat && !no_apple_compat;
+            let apple_compat =
+                resolve_run_apple_compat(apple_compat, no_apple_compat, configured_codec);
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let resume = foundation::checkpoint::resolve_resume_choice(
                 &input,
@@ -946,7 +1009,7 @@ fn main() -> anyhow::Result<()> {
             )?;
             let selected_codec = match SelectedCodec::resolve_cli_delivery_codec(
                 DeliveryProduct::Vid,
-                &codec,
+                configured_codec.as_str(),
                 apple_compat,
             ) {
                 Ok(c) => c,
@@ -1152,17 +1215,20 @@ fn main() -> anyhow::Result<()> {
             )?;
         }
 
-        Commands::Strategy { input, codec } => {
+        Commands::Strategy { input } => {
             let detection = detect_video(&input)?;
-            let selected_codec =
-                SelectedCodec::resolve_cli_delivery_codec(DeliveryProduct::Vid, &codec, false)
-                    .map_err(|e| {
-                        foundation::log_fatal!(
-                            foundation::infra::static_logs::messages::LABEL_CONFIG,
-                            &e.to_string(),
-                        );
-                        std::process::exit(foundation::constants::EXIT_CODE_ERROR);
-                    })?;
+            let selected_codec = SelectedCodec::resolve_cli_delivery_codec(
+                DeliveryProduct::Vid,
+                configured_codec.as_str(),
+                false,
+            )
+            .map_err(|e| {
+                foundation::log_fatal!(
+                    foundation::infra::static_logs::messages::LABEL_CONFIG,
+                    &e.to_string(),
+                );
+                std::process::exit(foundation::constants::EXIT_CODE_ERROR);
+            })?;
             let strategy = determine_strategy_with_apple_compat(
                 &detection,
                 &input,
@@ -1463,7 +1529,7 @@ mod fast_gif_tests {
         fast_gif_delivery_output_path, fast_gif_effective_strategy, fast_gif_original_path_for,
         fast_gif_output_path_for, fast_gif_photos_import_candidates, fast_gif_required_tools,
         fast_gif_requires_loop_intent, fast_gif_shortest_path_supported, process_fast_gif_batch,
-        validate_command_strategy,
+        resolve_run_apple_compat, resolve_runtime, validate_command_strategy,
     };
     use clap::Parser;
     use clap::error::ErrorKind;
@@ -1578,6 +1644,87 @@ mod fast_gif_tests {
             Cli::try_parse_from(["vid", "fast-gif", "/media/in", "--strategy", "jpeg"]),
             Err(err) if err.kind() == ErrorKind::InvalidValue
         ));
+    }
+
+    #[test]
+    fn config_inspection_uses_same_codec_resolution_as_processing() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("vid.json");
+        std::fs::write(&path, br#"{"config_version":1,"vid":{"codec":"av1"}}"#)?;
+        let path = path.to_string_lossy().to_string();
+        let shown =
+            Cli::try_parse_from(["vid", "config", "show", "--effective", "--config", &path])?;
+        assert!(matches!(&shown.command, Commands::Config { .. }));
+        assert!(!command_requires_database(&shown.command));
+        let loaded = resolve_runtime(&shown)?;
+        assert_eq!(loaded.config.vid.codec.as_str(), "av1");
+        assert_eq!(loaded.sources["vid.codec"], path);
+
+        let overridden = Cli::try_parse_from([
+            "vid", "config", "validate", "--config", &path, "--codec", "hevc",
+        ])?;
+        let loaded = resolve_runtime(&overridden)?;
+        assert_eq!(loaded.config.vid.codec.as_str(), "hevc");
+        assert_eq!(loaded.sources["vid.codec"], "CLI");
+        let run = Cli::try_parse_from(["vid", "run", "/unused", "--no-config", "--codec", "av1"])?;
+        assert_eq!(resolve_runtime(&run)?.config.vid.codec.as_str(), "av1");
+        assert!(
+            Cli::try_parse_from(["vid", "config", "show", "--config", &path, "--no-config",])
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn video_run_apple_compat_default_follows_resolved_codec() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("vid.json");
+        std::fs::write(&path, br#"{"config_version":1,"vid":{"codec":"av1"}}"#)?;
+        let path = path.to_string_lossy().to_string();
+        let av1 = Cli::try_parse_from(["vid", "run", "/unused", "--config", &path])?;
+        let codec = resolve_runtime(&av1)?.config.vid.codec;
+        let Commands::Run {
+            apple_compat,
+            no_apple_compat,
+            ..
+        } = av1.command
+        else {
+            anyhow::bail!("expected video run");
+        };
+        assert_eq!(codec.as_str(), "av1");
+        assert!(!resolve_run_apple_compat(
+            apple_compat,
+            no_apple_compat,
+            codec
+        ));
+
+        let explicit =
+            Cli::try_parse_from(["vid", "run", "/unused", "--config", &path, "--apple-compat"])?;
+        let Commands::Run {
+            apple_compat,
+            no_apple_compat,
+            ..
+        } = explicit.command
+        else {
+            anyhow::bail!("expected video run");
+        };
+        let apple_compat = resolve_run_apple_compat(apple_compat, no_apple_compat, codec);
+        assert!(apple_compat);
+        assert!(
+            foundation::conversion_types::SelectedCodec::resolve_cli_delivery_codec(
+                foundation::delivery_codec_strategy::DeliveryProduct::Vid,
+                codec.as_str(),
+                apple_compat,
+            )
+            .is_err()
+        );
+
+        let hevc = Cli::try_parse_from(["vid", "run", "/unused", "--no-config"])?;
+        let codec = resolve_runtime(&hevc)?.config.vid.codec;
+        assert_eq!(codec.as_str(), "hevc");
+        assert!(resolve_run_apple_compat(false, false, codec));
+        assert!(!resolve_run_apple_compat(false, true, codec));
+        Ok(())
     }
 
     #[test]

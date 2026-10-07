@@ -115,6 +115,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
         matches!(
             name,
             "MFB_HISTORY_CONTEXT"
+                | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_FINISHED"
@@ -329,6 +330,18 @@ mod tests {
     use super::*;
 
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
+
+    #[test]
+    fn config_history_marker_is_allowed_without_changing_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let event = "MFB_HISTORY_CONFIG={\"schema_version\":1,\"pipeline\":\"img\"}";
+        append_history_event(directory.path(), "session", event).unwrap();
+        let connection = Connection::open(directory.path().join(HISTORY_DATABASE)).unwrap();
+        let saved: String = connection
+            .query_row("SELECT event FROM history_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(saved, event);
+    }
 
     #[test]
     fn history_is_ordered_transactional_and_rejects_unknown_databases() {

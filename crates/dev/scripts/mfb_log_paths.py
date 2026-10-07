@@ -195,6 +195,31 @@ TRAINING_BUNDLE_PREFIX = "TrainingBundle_"
 SESSION_BUNDLE_PREFIX = "Bundle_"
 
 
+def _session_bundle_name(session_log: Path | None, stamp: str) -> str:
+    name = session_log.name if session_log is not None else ""
+    suffix = f"_{stamp}.log"
+    project = (
+        name[4:-len(suffix)]
+        if name.startswith("MFB_") and name.endswith(suffix)
+        else ""
+    )
+    if project == "Session":
+        project = ""
+    prefix = ""
+    for char in project:
+        if not (char.isalnum() or char in " -_."):
+            continue
+        if len((prefix + char).encode("utf-8")) > 64:
+            break
+        prefix += char
+    prefix = prefix.strip(" ._-")
+    return (
+        f"{prefix}_{SESSION_BUNDLE_PREFIX}{stamp}"
+        if prefix
+        else f"{SESSION_BUNDLE_PREFIX}{stamp}"
+    )
+
+
 def training_lane_slug(
     *,
     training_mode: str,
@@ -345,7 +370,7 @@ def archive_drag_drop_session_bundle(
     session_audit: Path | None = None,
     session_started_at: datetime | None = None,
 ) -> Path | None:
-    """Move drag-and-drop session artifacts into ``Bundle_{stamp}/`` (move, not merge).
+    """Move drag-and-drop session artifacts into a named session bundle (move, not merge).
 
     Archives worker ``img_*`` / ``vid_*`` logs and jsonl traces, session summary,
     verbose audit, structured session audit, and diagnostic reports from the session window.
@@ -356,6 +381,10 @@ def archive_drag_drop_session_bundle(
     stamp = (session_stamp or "").strip()
     if not stamp:
         return None
+    if len(stamp) > 80 or not all(
+        char.isascii() and (char.isalnum() or char in "_-") for char in stamp
+    ):
+        raise ValueError("invalid drag/drop session stamp")
 
     try:
         session_dt = session_started_at or parse_session_stamp(stamp)
@@ -369,10 +398,12 @@ def archive_drag_drop_session_bundle(
             return False
         return mtime >= session_dt - timedelta(seconds=10)
 
-    bundle = log_dir / f"{SESSION_BUNDLE_PREFIX}{stamp}"
+    bundle_name = _session_bundle_name(session_log, stamp)
+    bundle: Path | None = None
     moved: list[str] = []
 
     def _move_path(src: Path) -> None:
+        nonlocal bundle
         if not src.is_file():
             return
         try:
@@ -383,7 +414,17 @@ def archive_drag_drop_session_bundle(
         except OSError:
             if src.parent.expanduser() != log_dir.expanduser():
                 return
-        bundle.mkdir(parents=True, exist_ok=True)
+        if bundle is None:
+            for index in range(1001):
+                candidate = log_dir / (bundle_name if index == 0 else f"{bundle_name}_{index}")
+                try:
+                    candidate.mkdir()
+                except FileExistsError:
+                    continue
+                bundle = candidate
+                break
+            if bundle is None:
+                raise FileExistsError("no available drag/drop archive directory")
         dest = bundle / src.name
         if dest.exists():
             dest.unlink()
@@ -412,7 +453,7 @@ def archive_drag_drop_session_bundle(
                 continue
             _move_path(candidate)
 
-    if not moved:
+    if not moved or bundle is None:
         return None
 
     manifest: dict = {

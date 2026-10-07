@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Worker configuration history and scoped Settings
+
+- Add independent VID `--config`/`--no-config`, `config show --effective` and
+  `config validate` through the shared resolver, without database or media startup.
+  Add typed `vid.codec` with a HEVC default and CLI precedence. Derive implicit
+  Apple delivery compatibility from the resolved codec; configured AV1 no longer
+  conflicts with a launcher-injected Apple flag. Explicit AV1/Apple contradictions
+  remain rejected, and Fast GIF retains its own strategy.
+- Move video codec selection into a compact native Settings video tab. Add
+  developer VID configuration and independent IMG/Fast IMG tool-policy controls.
+  Query actual worker values and sources; preserve different inherited IMG/VID
+  performance profiles unless a shared override is explicitly selected. Keep
+  Photos settings available and unchanged controls free of accidental overrides.
+- Capture the worker's already resolved runtime JSON, winning field sources and
+  package version as structured SQLite history events. Reject partial/default-filled
+  snapshots, incorrect pipeline/version, incomplete source maps and duplicate
+  markers per invocation. Drain the child before propagating history errors;
+  do not duplicate configuration JSON into realtime or worker-text output.
+- Preserve collected media counts and the original child exit on marker, worker
+  output or post-collection history write failure. Keep capturing later output
+  after a bad marker, report simultaneous failures, stop unsafe downstream steps,
+  and attempt the final structured summary before returning the original error.
+- Show distinct captured configs in batch history, counting worker invocations
+  separately from media outcomes. Keep older batches explicitly unrecorded;
+  malformed/future/bounded records preserve known counts and prior snapshots,
+  report incomplete evidence, and cannot hide a failed batch. Complete run
+  manifests, losing override chains and selected backend/tool-version evidence
+  remain separate follow-up work.
+- Prefix session archives with the sanitized processed-folder name, capped at
+  64 UTF-8 bytes, with exclusive directory creation and collision suffixes.
+  Preserve old archives and recognize both naming schemes in history; reject
+  unsafe session stamps. Align the existing Python archive helper with Rust.
+- Validation: 98 focused configuration, history, launcher and archive/path tests
+  pass, as does the complete native-host self-test. Compare resolved paths for
+  the named-archive regression on macOS's `/var` alias. Refresh all nine bundled
+  tools, the GUI, Photos helper and foundation library; packaged versions and
+  Mach-O UUIDs match their build outputs, and deep strict signing verification
+  passes. No production Photos library or source media was used in these tests.
+
 ### Version consistency and batch output history
 
 - Make the workspace package version the release source of truth. CLI packages,

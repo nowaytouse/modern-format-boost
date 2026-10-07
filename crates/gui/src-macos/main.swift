@@ -274,18 +274,19 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgErrorMode
-    case vidCodec, vidErrorMode
-    case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase
+    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgErrorMode, imgToolPolicy
+    case vidCodec, vidErrorMode, vidConfig
+    case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
     case performance
 
     var isImage: Bool { rawValue.hasPrefix("img") }
+    var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
-    var isDeveloper: Bool { [.imgConfig, .fastConfig, .imgErrorMode, .vidErrorMode].contains(self) }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy].contains(self) }
     var section: String {
         if self == .performance { return "performance" }
         if isDeveloper { return "developer" }
@@ -301,9 +302,11 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
+        case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
         case .imgErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
         case .vidErrorMode: "--vid-error-mode"
+        case .vidConfig: "--vid-config"
         case .photosBackend: "--photos-backend"
         case .photosNativeBatch: "--photos-native-batch-size"
         case .photosAppleScriptBatch: "--photos-import-batch-size"
@@ -325,6 +328,7 @@ private enum MediaSetting: String, CaseIterable {
              .photosAdaptive, .photosPreserveTree: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
         case .vidCodec: ["hevc", "av1"]
+        case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
         case .photosBackend: ["auto", "native", "applescript"]
         default: []
         }
@@ -345,6 +349,8 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
+        case .imgToolPolicy, .fastToolPolicy: "tools.policy"
+        case .vidCodec: "vid.codec"
         case .photosBackend: "photos.backend"
         case .photosNativeBatch: "photos.native_batch_size"
         case .photosAppleScriptBatch: "photos.import_batch_size"
@@ -367,6 +373,7 @@ private enum MediaSetting: String, CaseIterable {
         case .fastJpegEffort: "imgJpegEffort"
         case .fastHeuristic: "imgHeuristic"
         case .fastDatabase: "imgDatabase"
+        case .fastToolPolicy: "imgToolPolicy"
         default: rawValue
         }
     }
@@ -380,6 +387,7 @@ private enum MediaSetting: String, CaseIterable {
 private enum ImageFallback: String { case strict, sameSemantics = "same-semantics", repair }
 private enum FileFailurePolicy: String { case recordAndContinue = "log-and-continue", failFast = "fail-fast" }
 private enum VideoCodec: String { case hevc, av1 }
+private enum ToolSelectionPolicy: String { case fallback, single }
 private enum PhotosImportBackend: String { case auto, native, applescript }
 
 private struct ImageSettings {
@@ -388,6 +396,7 @@ private struct ImageSettings {
     var jpegEffort: Int?
     var qualityHeuristic: Bool?
     var allowDatabase: Bool?
+    var toolPolicy: ToolSelectionPolicy?
 }
 
 private struct PhotosImportSettings {
@@ -411,6 +420,7 @@ private struct MediaSettings {
     var imageFailure: FileFailurePolicy?
     var videoFailure: FileFailurePolicy?
     var videoCodec: VideoCodec?
+    var videoConfigurationFile: String?
     var performance: String?
     private var invalidValues: [MediaSetting: String] = [:]
 
@@ -422,9 +432,11 @@ private struct MediaSettings {
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
+                .imgToolPolicy: image.toolPolicy?.rawValue,
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
-                .fastDatabase: fastImage.allowDatabase.map(String.init), .vidCodec: videoCodec?.rawValue,
+                .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
+                .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
                 .photosNativeBatch: photos.nativeBatchSize.map(String.init),
                 .photosAppleScriptBatch: photos.appleScriptBatchSize.map(String.init),
@@ -453,13 +465,16 @@ private struct MediaSettings {
                 case .imgJpegEffort: image.jpegEffort = Int(value)
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
+                case .imgToolPolicy: image.toolPolicy = ToolSelectionPolicy(rawValue: value)
                 case .imgErrorMode: imageFailure = FileFailurePolicy(rawValue: value)
                 case .fastConfig: fastImage.configurationFile = value
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
+                case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
                 case .vidCodec: videoCodec = VideoCodec(rawValue: value)
+                case .vidConfig: videoConfigurationFile = value
                 case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
                 case .photosBackend: photos.backend = PhotosImportBackend(rawValue: value)
                 case .photosNativeBatch: photos.nativeBatchSize = Int(value)
@@ -505,7 +520,7 @@ private struct MediaSettings {
             guard let value = values[field] else { continue }
             let valid: Bool
             switch field {
-            case .imgConfig, .fastConfig:
+            case .imgConfig, .fastConfig, .vidConfig:
                 var isDirectory: ObjCBool = false
                 valid = value.hasPrefix("/")
                     && FileManager.default.fileExists(atPath: value, isDirectory: &isDirectory)
@@ -560,6 +575,15 @@ private struct MediaSettings {
             }
         }
     }
+
+    func videoRuntimeArguments(inheritedOnly: Bool) -> [String] {
+        var arguments = videoConfigurationFile.map { ["--config", $0] } ?? []
+        if !inheritedOnly {
+            if let performance { arguments += ["--performance", performance] }
+            if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
+        }
+        return arguments
+    }
 }
 
 private struct EffectiveRuntimeSettings {
@@ -588,13 +612,15 @@ private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: Tim
     return capture.data
 }
 
-private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntimeSettings {
-    guard let binary = ProcessorLocator.resolveTool(named: "img") else {
-        throw HostError(message: localized("error.img_backend_missing"))
+private func queryRuntimeSettings(arguments: [String], tool: String = "img") throws -> EffectiveRuntimeSettings {
+    guard let binary = ProcessorLocator.resolveTool(named: tool) else {
+        throw HostError(message: localized(tool == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
     }
     let data = try settingsToolOutput(binary, arguments: ["config", "show", "--effective"] + arguments)
     guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let config = document["config"] as? [String: Any] else {
+          let config = document["config"] as? [String: Any],
+          let sources = document["sources"] as? [String: String],
+          !sources.isEmpty, sources.values.allSatisfy({ !$0.isEmpty }) else {
         throw HostError(message: localized("settings.config_invalid"))
     }
     var result: [String: String] = [:]
@@ -608,7 +634,7 @@ private func queryRuntimeSettings(arguments: [String]) throws -> EffectiveRuntim
             } else if let text = value as? String { result["\(section).\(key)"] = text }
         }
     }
-    return EffectiveRuntimeSettings(values: result, sources: document["sources"] as? [String: String] ?? [:])
+    return EffectiveRuntimeSettings(values: result, sources: sources)
 }
 
 private struct LocalCacheStatus: Decodable {
@@ -677,6 +703,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     private var restored = MediaSettings()
     private var inherited: [MediaSetting: String] = [:]
     private var inheritedSources: [MediaSetting: String] = [:]
+    private var inheritedMixedPerformance = false
     private var displayed: [MediaSetting: String] = [:]
     private var rows: [MediaSetting: NSGridRow] = [:]
     private let developer: Bool
@@ -690,6 +717,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     private var grids: [String: NSGridView] = [:]
     private var applying = false
     private var applyGeneration = UUID()
+    private var inheritedGeneration = UUID()
     private let resetButton = NSButton()
     private let cancelButton = NSButton()
     private let applyButton = NSButton()
@@ -727,15 +755,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         ])
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
-        for section in ["img", "photos", "performance"] + (developer ? ["developer"] : []) {
+        for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) {
             let fields = MediaSetting.allCases.filter { field in
                 if field == .performance { return section == "performance" }
-                if field == .vidCodec { return false }
                 if field.isDeveloper {
-                    if field == .vidErrorMode { return developer && section == "developer" && !fast }
+                    if field.isVideo { return developer && section == "developer" && !fast }
                     return developer && section == "developer" && !videos && (fast ? field.isFastImage : field.isImage)
                 }
                 if field.isPhotos { return section == "photos" }
+                if field.isVideo { return section == "vid" && !fast }
                 return section == "img" && !videos && (fast ? field.isFastImage : field.isImage)
             }
             if fields.isEmpty { continue }
@@ -991,27 +1019,58 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     }
 
     private func loadInheritedValues() {
+        inheritedGeneration = UUID()
+        let generation = inheritedGeneration
         let settings = draft()
         let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: true)
         let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: true)
+        let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
+        let needsStandard = !fast && !videos
+        let needsVideo = !fast
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { (try queryRuntimeSettings(arguments: standardArgs), try queryRuntimeSettings(arguments: fastArgs)) }
+            let result = Result {
+                (try needsStandard ? queryRuntimeSettings(arguments: standardArgs) : nil,
+                 try queryRuntimeSettings(arguments: fastArgs),
+                 try needsVideo ? queryRuntimeSettings(arguments: videoArgs, tool: "vid") : nil)
+            }
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, self.inheritedGeneration == generation else { return }
                 switch result {
-                case let .success((standard, fast)):
+                case let .success((standard, fast, video)):
                     let draft = self.draft()
-                    for field in MediaSetting.allCases {
-                        guard let key = field.runtimeKey else { continue }
-                        self.inherited[field] = (field.isFastImage || field.isPhotos ? fast : standard)[key]
-                        self.inheritedSources[field] = (field.isFastImage || field.isPhotos ? fast : standard).sources[key]
-                    }
+                    self.setInheritedValues(standard: standard, fast: fast, video: video)
                     self.restore(draft)
                     self.status.stringValue = ""
-                case let .failure(error): self.status.stringValue = error.localizedDescription
+                case let .failure(error):
+                    let draft = self.draft()
+                    self.inherited.removeAll()
+                    self.inheritedSources.removeAll()
+                    self.inheritedMixedPerformance = false
+                    self.restore(draft)
+                    self.status.stringValue = error.localizedDescription
                 }
                 self.updatePanelSize()
             }
+        }
+    }
+
+    private func setInheritedValues(standard: EffectiveRuntimeSettings?, fast: EffectiveRuntimeSettings,
+                                    video: EffectiveRuntimeSettings?) {
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        inheritedMixedPerformance = false
+        for field in MediaSetting.allCases {
+            guard let key = field.runtimeKey else { continue }
+            let effective = field == .performance ? (self.fast ? fast : (videos ? video : standard))
+                : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
+            inherited[field] = effective?[key]
+            inheritedSources[field] = effective?.sources[key]
+        }
+        if !self.fast, !videos, let imageMode = standard?["performance.mode"],
+           let videoMode = video?["performance.mode"], imageMode != videoMode {
+            inheritedMixedPerformance = true
+            inherited[.performance] = nil
+            inheritedSources[.performance] = "IMG: \(imageMode) (\(standard?.sources["performance.mode"] ?? localized("result.unknown")))\nVID: \(videoMode) (\(video?.sources["performance.mode"] ?? localized("result.unknown")))"
         }
     }
 
@@ -1038,6 +1097,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
+            if field == .performance && inheritedMixedPerformance {
+                popup.insertItem(withTitle: localized("settings.performance.per_pipeline"), at: 0)
+                if settings.values[field] == nil { popup.selectItem(at: 0) }
+            }
             if let value = displayed[field] {
                 if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) {
                     popup.select(item)
@@ -1052,7 +1115,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             for (field, row) in rows {
                 row.cell(at: 1).contentView?.toolTip = localized("settings.\(field.labelKey).help")
                     + "\n" + (field.runtimeKey ?? field.flag) + ": " + (displayed[field] ?? localized("settings.automatic"))
-                    + "\n" + (settings.values[field] == nil ? (inheritedSources[field] ?? "default") : "GUI")
+                    + "\n" + (settings.values[field] == nil ? (inheritedSources[field] ?? localized("result.unknown")) : "GUI")
             }
         }
         updateVisibility()
@@ -1070,6 +1133,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
+            if field == .performance, inheritedMixedPerformance, popup.indexOfSelectedItem == 0 {
+                settings.values[field] = nil
+                continue
+            }
             if let value = popup.selectedItem?.representedObject as? String, value != displayed[field] {
                 settings.values[field] = value
             }
@@ -1103,6 +1170,16 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         guard let text = notification.object as? NSTextField,
               let field = textFields.first(where: { $0.value === text })?.key else { return }
         updateStepper(for: field)
+        if [.imgConfig, .fastConfig, .vidConfig].contains(field) {
+            inheritedGeneration = UUID()
+        }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let text = notification.object as? NSTextField,
+              let field = textFields.first(where: { $0.value === text })?.key,
+              [.imgConfig, .fastConfig, .vidConfig].contains(field) else { return }
+        loadInheritedValues()
     }
 
     private func updateStepper(for field: MediaSetting) {
@@ -1125,11 +1202,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             settings.values.removeValue(forKey: field)
         }
         restore(settings)
+        if section == "developer" && !validatingLayout { loadInheritedValues() }
     }
 
     @objc private func cancel() {
         guard !cacheBusy else { return }
         applyGeneration = UUID()
+        inheritedGeneration = UUID()
         applying = false
         panel.sheetParent?.endSheet(panel)
     }
@@ -1144,8 +1223,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             let generation = applyGeneration
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
             let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false)
+            let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
+            let needsStandard = !fast && !videos
+            let needsVideo = !fast
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let result = Result { _ = try queryRuntimeSettings(arguments: standardArgs); _ = try queryRuntimeSettings(arguments: fastArgs) }
+                let result = Result {
+                    if needsStandard { _ = try queryRuntimeSettings(arguments: standardArgs) }
+                    _ = try queryRuntimeSettings(arguments: fastArgs)
+                    if needsVideo { _ = try queryRuntimeSettings(arguments: videoArgs, tool: "vid") }
+                }
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.applyGeneration == generation else { return }
                     self.applying = false
@@ -1258,12 +1344,65 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         guard MediaSettings(preferences: preferences).values.isEmpty else {
             throw HostError(message: "Reset settings still override inherited configuration")
         }
+        let standard = EffectiveRuntimeSettings(values: ["performance.mode": "tight", "tools.policy": "single"],
+                                                sources: ["performance.mode": "/synthetic/img.json", "tools.policy": "CLI"])
+        let fastValues = EffectiveRuntimeSettings(values: ["performance.mode": "adaptive", "tools.policy": "fallback"],
+                                                  sources: ["performance.mode": "default", "tools.policy": "default"])
+        let video = EffectiveRuntimeSettings(values: ["performance.mode": "relaxed", "vid.codec": "av1"],
+                                             sources: ["performance.mode": "/synthetic/vid.json", "vid.codec": "/synthetic/vid.json"])
+        setInheritedValues(standard: standard, fast: fastValues, video: video)
+        restore(MediaSettings())
+        if !fast && !videos {
+            guard inheritedMixedPerformance, popups[.performance]?.indexOfSelectedItem == 0,
+                  draft().values[.performance] == nil, inherited[.vidCodec] == "av1" else {
+                throw HostError(message: "Mixed pipeline defaults became a fabricated shared performance override")
+            }
+            var explicit = MediaSettings()
+            explicit.values[.performance] = "balanced"
+            restore(explicit)
+            guard draft().values[.performance] == "balanced" else {
+                throw HostError(message: "Explicit shared performance choice was lost")
+            }
+            popups[.performance]?.selectItem(at: 0)
+            guard draft().values[.performance] == nil else {
+                throw HostError(message: "Returning to per-pipeline defaults kept a shared override")
+            }
+            restore(MediaSettings())
+            restore(MediaSettings())
+            guard popups[.performance]?.numberOfItems == MediaSetting.performance.choices.count + 1 else {
+                throw HostError(message: "Repeated reload duplicated the per-pipeline choice")
+            }
+        } else {
+            guard !inheritedMixedPerformance, inherited[.performance] == (fast ? "adaptive" : "relaxed") else {
+                throw HostError(message: "Performance inheritance used the wrong pipeline")
+            }
+        }
+        if developer {
+            let tool: MediaSetting = fast ? .fastToolPolicy : .imgToolPolicy
+            if !videos {
+                guard popups[tool] != nil,
+                      inherited[tool] == (fast ? "fallback" : "single") else {
+                    throw HostError(message: "Developer tool policy is missing or inherited from another pipeline")
+                }
+            }
+        }
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        inheritedMixedPerformance = false
+        restore(MediaSettings())
     }
 
     func validatePhotosForSelfTest() throws {
         guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "photos" }),
               MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
             throw HostError(message: "Photos import settings disappeared outside Fast IMG")
+        }
+        if !fast {
+            guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "vid" }),
+                  popups[.vidCodec] != nil,
+                  !developer || (textFields[.vidConfig] != nil && popups[.vidErrorMode] != nil) else {
+                throw HostError(message: "Video configuration controls are missing")
+            }
         }
     }
 
@@ -2512,8 +2651,6 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let backupField = NSTextField()
     private let processingPopup = NSPopUpButton()
     private let operationPopup = NSPopUpButton()
-    private let videoCodecPopup = NSPopUpButton()
-    private var videoCodecRow: NSGridRow?
     private var processingRow: NSGridRow?
     private let languagePopup = NSPopUpButton()
     private let appearancePopup = NSPopUpButton()
@@ -2775,20 +2912,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         processingPopup.action = #selector(configurationChanged)
         operationPopup.target = self
         operationPopup.action = #selector(operationChanged)
-        videoCodecPopup.target = self
-        videoCodecPopup.action = #selector(videoCodecChanged)
         let grid = NSGridView(views: [
             [mediaLabel, processingPopup],
             [operationLabel, operationPopup],
         ])
-        videoCodecRow = grid.addRow(with: [NSTextField(labelWithString: localized("settings.vidCodec")), videoCodecPopup])
         processingRow = grid.row(at: 0)
         grid.rowSpacing = 8
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .leading
         grid.column(at: 0).width = 120
         grid.column(at: 1).xPlacement = .fill
-        for popup in [processingPopup, operationPopup, videoCodecPopup] {
+        for popup in [processingPopup, operationPopup] {
             popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
             popup.widthAnchor.constraint(equalTo: grid.widthAnchor, constant: -132).isActive = true
         }
@@ -3277,8 +3411,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         for control in [forceCheck, plainCheck, inPlaceCheck] {
             control.isHidden = !developerMode || !capabilities.supportsStandardOptions
         }
-        videoCodecRow?.isHidden = selectedOperation != .adjacent || processingPopup.indexOfSelectedItem == 1
-        videoCodecPopup.isEnabled = configurationControlsEnabled
         watchCheck.isHidden = !developerMode
         watchCheck.isEnabled = configurationControlsEnabled && developerMode
         if !developerMode { watchCheck.state = .off }
@@ -3509,15 +3641,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         settingsPanel?.show(for: window)
     }
 
-    @objc private func videoCodecChanged() {
-        do {
-            var settings = MediaSettings(preferences: preferences)
-            settings.values[.vidCodec] = videoCodecPopup.indexOfSelectedItem == 1 ? "av1" : "hevc"
-            try settings.save(to: preferences)
-            configurationChanged()
-        } catch { present(error) }
-    }
-
     @objc private func openHelp() {
         if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost#readme") { NSWorkspace.shared.open(url) }
     }
@@ -3596,9 +3719,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         settingsButton.setAccessibilityLabel(localized("settings.title"))
         helpButton.toolTip = localized("button.help")
         helpButton.setAccessibilityLabel(localized("button.help"))
-        replaceTitles(videoCodecPopup, with: [localized("settings.value.hevc"), localized("settings.value.av1")])
-        videoCodecPopup.selectItem(at: MediaSettings(preferences: preferences).videoCodec == .av1 ? 1 : 0)
-        if let label = videoCodecRow?.cell(at: 0).contentView as? NSTextField { label.stringValue = localized("settings.vidCodec") }
         diagnosticsButton.toolTip = localized("button.photos_diagnostics")
         diagnosticsButton.setAccessibilityLabel(localized("button.photos_diagnostics"))
         diagnosticsPanel?.title = localized("button.photos_diagnostics")
@@ -4115,6 +4235,19 @@ private func runSelfTest() -> Int32 {
               effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
               effective["photos.preserve_folder_structure"] == "false" else {
             throw HostError(message: "GUI settings do not match the effective backend configuration")
+        }
+        let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
+        guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI" else {
+            throw HostError(message: "Video settings do not match the effective backend configuration")
+        }
+        configured.mediaSettings.values[.fastToolPolicy] = "single"
+        let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
+        guard toolEffective["tools.policy"] == "single", toolEffective.sources["tools.policy"] == "CLI",
+              try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
+                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"] else {
+            throw HostError(message: "Tool selection was not resolved or leaked into video settings")
         }
         configured.mediaSettings.values[.fastJpegEffort] = "12"
         do {

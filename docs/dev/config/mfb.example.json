@@ -6,6 +6,9 @@
     "jpeg_effort": 11,
     "fallback_policy": "strict"
   },
+  "vid": {
+    "codec": "hevc"
+  },
   "photos": {
     "backend": "native",
     "import_root": null,
