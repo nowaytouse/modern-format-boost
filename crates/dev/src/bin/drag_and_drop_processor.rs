@@ -1414,6 +1414,18 @@ fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json:
 }
 
 fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
+    let size = (summary
+        .fast_img_session_converted
+        .is_some_and(|count| count > 0)
+        && (summary.fast_img_session_source_bytes.is_some()
+            || summary.fast_img_session_output_bytes.is_some()))
+    .then(|| {
+        serde_json::json!({
+            "scope": "fast_img_converted_this_run",
+            "input_bytes": summary.fast_img_session_source_bytes,
+            "output_bytes": summary.fast_img_session_output_bytes,
+        })
+    });
     serde_json::json!({
         "schema_version": 1,
         "count_scope": "processor_outcomes",
@@ -1425,6 +1437,7 @@ fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
         },
         "failed_files": summary.failed_file_names,
         "skipped_files": summary.skipped_file_names,
+        "size": size,
     })
 }
 
@@ -2452,6 +2465,7 @@ fn run_drag_drop_inner(
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
                             summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                            summary.fast_img_session_converted = metrics.files_converted;
                             // Collect per-file retained names for terminal + session log
                             for (name, disposition) in fast_img_retained_file_names(&text) {
                                 if disposition == "failed" {
@@ -3728,6 +3742,19 @@ mod tests {
         assert!(payload["vid"]["exit_code"].is_null());
         assert!(payload["integrity"]["state"].is_null());
         assert!(payload["integrity"]["issue_count"].is_null());
+        assert!(payload["size"].is_null());
+        summary.fast_img_session_source_bytes = Some(1_000);
+        assert!(history_summary_payload(&summary)["size"].is_null());
+        summary.fast_img_session_converted = Some(0);
+        assert!(history_summary_payload(&summary)["size"].is_null());
+        summary.fast_img_session_converted = Some(1);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["scope"], "fast_img_converted_this_run");
+        assert_eq!(payload["size"]["input_bytes"], 1_000);
+        assert!(payload["size"]["output_bytes"].is_null());
+        summary.fast_img_session_output_bytes = Some(1_200);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["output_bytes"], 1_200);
         summary.integrity_state = Some("WARNINGS");
         summary.integrity_issue_count = 4;
         let payload = history_summary_payload(&summary);

@@ -61,8 +61,13 @@ fallback destination. These commands do not access Photos.
 The gear button shows the current image workflow, a standard Video tab,
 Photos settings and Performance settings. Standard and Fast IMG retain
 independent JPEG transcoding effort (1 through 11), fallback,
-quality heuristic and database overrides. Existing shared image preferences
-migrate once to Fast IMG; subsequent edits and resets stay independent.
+quality heuristic and database overrides. Standard IMG preferences are never
+copied into Fast IMG on read; each workflow uses its own saved overrides and the
+backend's effective configuration. Existing independent preferences stay intact.
+Search locates the original setting by localized label, section or choice. In
+Developer mode, runtime keys and flags are searchable too. Results include only
+the current workflow's applicable controls; selecting a Photos advanced parameter
+reveals it without changing its value. Search and navigation preserve the draft.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure

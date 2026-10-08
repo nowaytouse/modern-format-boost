@@ -895,22 +895,28 @@ pub struct FastImgSessionSizeMetrics {
 }
 
 fn parse_size_line_exact_bytes(rest: &str) -> Option<u64> {
-    let open = rest.rfind('(')?;
-    let close = rest.rfind(" bytes)")?;
-    if close <= open {
-        return None;
+    let parsed = (|| {
+        let (_, value) = rest.trim_end().rsplit_once('(')?;
+        let digits = value.strip_suffix(" bytes)")?;
+        let mut groups = digits.split(',');
+        let first = groups.next()?;
+        if first.is_empty() || !first.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        if digits.contains(',')
+            && (first.len() > 3
+                || groups.any(|group| {
+                    group.len() != 3 || !group.bytes().all(|byte| byte.is_ascii_digit())
+                }))
+        {
+            return None;
+        }
+        digits.replace(',', "").parse::<u64>().ok()
+    })();
+    if parsed.is_none() {
+        eprintln!("invalid fast-img exact byte count: {rest}");
     }
-    let digits: String = rest[open + 1..close]
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u64>().map_or_else(
-        |err| {
-            eprintln!("failed to parse fast-img byte count `{digits}`: {err}");
-            None
-        },
-        Some,
-    )
+    parsed
 }
 
 fn parse_size_metric_u64(label: &str, rest: &str) -> Option<u64> {
@@ -1238,5 +1244,20 @@ mod tests {
         assert_eq!(metrics.files_converted, Some(0));
         assert_eq!(metrics.source_bytes_actual, Some(12_567_890_123));
         assert_eq!(metrics.output_bytes_actual, Some(8_804_321_456));
+        for invalid in [
+            "1 KiB (-100 bytes)",
+            "1 KiB (1x00 bytes)",
+            "1 KiB (1,00 bytes)",
+            "1 KiB (1000,000 bytes)",
+            "1 KiB (100 bytes) trailing",
+            "1 KiB (18446744073709551616 bytes)",
+        ] {
+            assert_eq!(parse_size_line_exact_bytes(invalid), None, "{invalid}");
+        }
+        assert_eq!(parse_size_line_exact_bytes("0 B (0 bytes)"), Some(0));
+        assert_eq!(
+            parse_size_line_exact_bytes("1 KiB (1024 bytes)"),
+            Some(1024)
+        );
     }
 }

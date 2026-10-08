@@ -227,6 +227,8 @@ pub struct PipelineSummary {
     pub fast_img_session_source_bytes: Option<u64>,
     /// Parsed from fast-img `[SIZE]` lines (session-scoped output bytes).
     pub fast_img_session_output_bytes: Option<u64>,
+    /// Newly converted files; zero denotes resume-only byte totals.
+    pub fast_img_session_converted: Option<u64>,
     /// Post-delivery size override for drag summary when output dir is cleaned
     /// (Shortest Path).
     pub fast_img_size_after_override: Option<u64>,

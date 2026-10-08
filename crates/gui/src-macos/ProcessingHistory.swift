@@ -62,6 +62,17 @@ private struct HistorySummary: Decodable, Equatable {
         let state: String?
         let issue_count: Int?
     }
+    struct Size: Decodable, Equatable {
+        let scope: String
+        let input_bytes: UInt64?
+        let output_bytes: UInt64?
+
+        var valid: Bool {
+            scope == "fast_img_converted_this_run"
+                && (input_bytes != nil || output_bytes != nil)
+                && [input_bytes, output_bytes].compactMap { $0 }.allSatisfy { $0 <= UInt64(Int64.max) }
+        }
+    }
     let schema_version: Int
     let count_scope: String
     let img: HistoryMedia
@@ -69,6 +80,49 @@ private struct HistorySummary: Decodable, Equatable {
     let integrity: Integrity
     let failed_files: [String]
     let skipped_files: [String]
+    var size: Size?
+    var sizeInvalid: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case schema_version, count_scope, img, vid, integrity, failed_files, skipped_files, size
+    }
+
+    init(schema_version: Int, count_scope: String, img: HistoryMedia, vid: HistoryMedia,
+         integrity: Integrity, failed_files: [String], skipped_files: [String]) {
+        self.schema_version = schema_version
+        self.count_scope = count_scope
+        self.img = img
+        self.vid = vid
+        self.integrity = integrity
+        self.failed_files = failed_files
+        self.skipped_files = skipped_files
+        size = nil
+        sizeInvalid = false
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schema_version = try values.decode(Int.self, forKey: .schema_version)
+        count_scope = try values.decode(String.self, forKey: .count_scope)
+        img = try values.decode(HistoryMedia.self, forKey: .img)
+        vid = try values.decode(HistoryMedia.self, forKey: .vid)
+        integrity = try values.decode(Integrity.self, forKey: .integrity)
+        failed_files = try values.decode([String].self, forKey: .failed_files)
+        skipped_files = try values.decode([String].self, forKey: .skipped_files)
+        if values.contains(.size), try !values.decodeNil(forKey: .size) {
+            let candidate = try? values.decode(Size.self, forKey: .size)
+            if let candidate, candidate.valid, img.active {
+                size = candidate
+                sizeInvalid = false
+            } else {
+                size = nil
+                sizeInvalid = true
+            }
+        } else {
+            size = nil
+            sizeInvalid = false
+        }
+    }
 
     var valid: Bool {
         guard schema_version == 1, count_scope == "processor_outcomes", img.valid, vid.valid,
@@ -78,6 +132,12 @@ private struct HistorySummary: Decodable, Equatable {
             if let left = pair.0, let right = pair.1, left.addingReportingOverflow(right).overflow { return false }
         }
         return true
+    }
+
+    func sameOutcomes(as other: HistorySummary) -> Bool {
+        schema_version == other.schema_version && count_scope == other.count_scope
+            && img == other.img && vid == other.vid && integrity == other.integrity
+            && failed_files == other.failed_files && skipped_files == other.skipped_files
     }
 }
 
@@ -166,13 +226,13 @@ private struct HistoryEntry {
         if finished?.outcome == "failed" { return "history.status.failed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if hasProcessorError { return "history.status.failed" }
+        if hasFailures { return "history.status.file_failures" }
         if legacy { return "history.status.legacy" }
         if issues.isEmpty, context?.dry_run == true, finished?.outcome == "completed" {
             return "history.status.preview"
         }
         guard issues.isEmpty, context != nil, let summary, summary.img.complete, summary.vid.complete,
               finished?.outcome == "completed" else { return "history.status.incomplete" }
-        if hasFailures { return "history.status.file_failures" }
         if hasPending { return "history.status.unfinished" }
         if hasVerificationWarnings { return "history.status.verification_warnings" }
         return "history.status.completed"
@@ -200,6 +260,17 @@ private struct HistoryEntry {
             total = sum.partialValue
         }
         return String(total)
+    }
+    var sizeOutcome: String {
+        guard let input = summary?.size?.input_bytes, let output = summary?.size?.output_bytes else {
+            return localized("result.unknown")
+        }
+        if input > output { return localized("history.space.saved", Self.sizeLabel(input - output)) }
+        if output > input { return localized("history.space.increased", Self.sizeLabel(output - input)) }
+        return localized("history.space.unchanged")
+    }
+    static func sizeLabel(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) + " (\(bytes) B)"
     }
 }
 
@@ -337,12 +408,25 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     let summary = try decode(HistorySummary.self, from: event, prefix: "MFB_HISTORY_SUMMARY=")
                     guard summary.valid, !current.contradictoryFields.contains("summary") else { throw HistoryParseError.invalid }
-                    if let previous = current.summary, previous != summary {
-                        current.summary = nil
-                        current.contradictoryFields.insert("summary")
-                        throw HistoryParseError.invalid
+                    if let previous = current.summary {
+                        guard previous.sameOutcomes(as: summary) else {
+                            current.summary = nil
+                            current.contradictoryFields.insert("summary")
+                            throw HistoryParseError.invalid
+                        }
+                        if previous.size != summary.size || previous.sizeInvalid != summary.sizeInvalid {
+                            var merged = previous
+                            merged.size = nil
+                            merged.sizeInvalid = true
+                            current.summary = merged
+                        }
+                    } else {
+                        current.summary = summary
                     }
-                    current.summary = summary
+                    if current.summary?.sizeInvalid == true, current.issues.count < 32,
+                       !current.issues.contains(localized("history.space.invalid")) {
+                        current.issues.append(localized("history.space.invalid"))
+                    }
                 } else if event.hasPrefix("MFB_HISTORY_VERIFICATION=") {
                     let verification = try decode(HistoryVerification.self, from: event, prefix: "MFB_HISTORY_VERIFICATION=")
                     guard verification.valid, !current.contradictoryFields.contains("verification") else { throw HistoryParseError.invalid }
@@ -1102,6 +1186,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
         func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
         var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), "",
+                     localized("history.space.title")]
+        if let size = entry.summary?.size {
+            lines += [entry.sizeOutcome,
+                      row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
+                      row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
+                      localized("history.space.scope"), localized("history.space.note")]
+        } else if entry.summary?.sizeInvalid == true {
+            lines.append(localized("history.space.invalid"))
+        } else {
+            lines.append(localized("history.space.not_recorded"))
+        }
+        lines += ["",
                      row("mode", entry.context?.mode ?? unknown),
                      row("sources", entry.context?.inputs.isEmpty == false ? entry.context!.inputs.joined(separator: "\n") : unknown),
                      row("output", entry.verification?.output_path ?? entry.context?.output ?? unknown),
@@ -1332,6 +1428,67 @@ func runProcessingHistorySelfTests() throws {
                 && success.entries[0].context?.output == nil && success.entries[0].succeededLabel == "2", "Typed history did not retain nullable paths or active counts")
     try require(success.entries[0].configSnapshots.isEmpty && !success.entries[0].configMarkerSeen,
                 "Old history invented an effective configuration")
+    try require(success.entries[0].summary?.size == nil && success.entries[0].sizeOutcome == localized("result.unknown"),
+                "Old history invented a size comparison")
+    var sizedSummary = summaryValue
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    let reduced = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(reduced.summary?.size?.input_bytes == 1_024 && reduced.summary?.size?.output_bytes == 512
+                && reduced.sizeOutcome == localized("history.space.saved", HistoryEntry.sizeLabel(512)),
+                "Exact session bytes or reduction disappeared from history")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 1_024]
+    let expanded = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), failed]).entries[0]
+    try require(expanded.statusKey == "history.status.failed"
+                && expanded.sizeOutcome == localized("history.space.increased", HistoryEntry.sizeLabel(512)),
+                "Expansion was shown as savings or hid the batch failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": NSNull()]
+    let partialSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(partialSize.summary?.size?.input_bytes == 512 && partialSize.sizeOutcome == localized("result.unknown"),
+                "Partial size evidence became a claimed saving")
+    for invalidSize in [
+        ["scope": "directory_total", "input_bytes": 512, "output_bytes": 256],
+        ["scope": "fast_img_converted_this_run", "input_bytes": NSNull(), "output_bytes": NSNull()],
+        ["scope": "fast_img_converted_this_run", "input_bytes": -1, "output_bytes": 256],
+        ["scope": "fast_img_converted_this_run", "input_bytes": UInt64.max, "output_bytes": 256]
+    ] as [[String: Any]] {
+        sizedSummary["size"] = invalidSize
+        let invalidEvent = try payload("MFB_HISTORY_SUMMARY", sizedSummary)
+        let invalid = try parsed([context, invalidEvent, completed]).entries[0]
+        try require(invalid.summary?.img.succeeded == 2 && invalid.succeededLabel == "2"
+                    && invalid.summary?.size == nil && invalid.summary?.sizeInvalid == true
+                    && invalid.sizeOutcome == localized("result.unknown")
+                    && invalid.issues.contains(localized("history.space.invalid"))
+                    && invalid.statusKey == "history.status.incomplete",
+                    "Invalid size evidence erased counts or appeared as a saving")
+        let failedInvalid = try parsed([context, invalidEvent, failed]).entries[0]
+        try require(failedInvalid.statusKey == "history.status.failed" && failedInvalid.succeededLabel == "2",
+                    "Invalid size evidence erased a terminal failure or valid counts")
+    }
+    sizedSummary["size"] = "malformed"
+    let malformedSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), failed]).entries[0]
+    try require(malformedSize.summary?.sizeInvalid == true && malformedSize.statusKey == "history.status.failed"
+                && malformedSize.succeededLabel == "2", "Malformed size erased the summary or final failure")
+    var fileFailureWithBadSize = sizedSummary
+    var failedImage = media
+    failedImage["failed"] = 1
+    fileFailureWithBadSize["img"] = failedImage
+    let fileFailureSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", fileFailureWithBadSize), completed]).entries[0]
+    try require(fileFailureSize.statusKey == "history.status.file_failures" && fileFailureSize.summary?.img.failed == 1,
+                "An auxiliary size issue hid a recorded file failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    var otherSizeSummary = summaryValue
+    otherSizeSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 600]
+    let conflictingSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary),
+                                      try payload("MFB_HISTORY_SUMMARY", otherSizeSummary), failed]).entries[0]
+    try require(conflictingSize.summary?.sizeInvalid == true && conflictingSize.summary?.size == nil
+                && conflictingSize.succeededLabel == "2" && conflictingSize.statusKey == "history.status.failed",
+                "Conflicting size evidence erased counts or a terminal failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 256]
+    sizedSummary["img"] = inactive
+    let inactiveSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(inactiveSize.summary?.sizeInvalid == true && inactiveSize.summary?.size == nil
+                && inactiveSize.summary?.vid.active == false,
+                "Size evidence without an image run changed media outcomes")
     let imgConfigValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
         "config": ["config_version": 1, "performance": ["mode": "tight"]],
         "sources": ["config_version": "default", "performance.mode": "CLI"]]

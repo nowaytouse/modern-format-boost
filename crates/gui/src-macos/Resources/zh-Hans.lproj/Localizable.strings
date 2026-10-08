@@ -367,3 +367,16 @@
 "history.status.preview" = "仅预览";
 "history.issue.scan_limit" = "已达到历史记录读取上限，此记录不完整。";
 "history.issue.conflicting_copies" = "活动记录与归档记录不一致，无法确认此批次的结果。";
+"settings.search" = "搜索设置";
+"settings.search.results" = "匹配的设置";
+"settings.search.empty" = "没有匹配的设置";
+"history.space.title" = "文件体积对比";
+"history.space.saved" = "减少 %@";
+"history.space.increased" = "增加 %@";
+"history.space.unchanged" = "体积未变化";
+"history.space.scope" = "仅统计本次成功转换的文件；不含跳过、失败和复用文件。";
+"history.space.note" = "文件体积对比；不代表磁盘空间已释放。";
+"history.space.not_recorded" = "未记录可比的体积数据";
+"history.space.invalid" = "体积记录无效，无法确认体积变化。";
+"history.detail.input_bytes" = "输入";
+"history.detail.output_bytes" = "输出";

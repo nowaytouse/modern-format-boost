@@ -367,3 +367,16 @@
 "history.status.preview" = "Preview only";
 "history.issue.scan_limit" = "The history scan limit was reached; this record is incomplete.";
 "history.issue.conflicting_copies" = "Active and archived copies disagree; this batch cannot be confirmed.";
+"settings.search" = "Search Settings";
+"settings.search.results" = "Matching Settings";
+"settings.search.empty" = "No matching settings";
+"history.space.title" = "File Size Comparison";
+"history.space.saved" = "Reduced by %@";
+"history.space.increased" = "Increased by %@";
+"history.space.unchanged" = "No size change";
+"history.space.scope" = "Only files converted in this run; skipped, failed and reused files excluded.";
+"history.space.note" = "File size comparison; disk space may not have been freed.";
+"history.space.not_recorded" = "No comparable size data recorded";
+"history.space.invalid" = "The size record is invalid; the size change cannot be confirmed.";
+"history.detail.input_bytes" = "Input";
+"history.detail.output_bytes" = "Output";

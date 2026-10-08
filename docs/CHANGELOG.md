@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Searchable Settings and scoped size history (2026-10-08)
+
+- Search native Settings by localized names, sections and choices; Developer mode
+  also searches runtime keys and CLI flags. Navigate to the original control,
+  reveal applicable Photos advanced fields, retain unsaved edits, and support
+  keyboard selection without treating Return in search as Apply. Results respect
+  the active workflow, backend and Developer visibility.
+- Record exact Fast IMG input/output bytes for newly converted files and highlight
+  reduction, growth or unchanged size in batch history. Exclude resume-only totals
+  from new-run benefits, preserve partial evidence, and never imply physical disk
+  space was freed. Invalid or conflicting size data is reported independently of
+  valid media counts and terminal failure status.
+- Remove the obsolete GUI preference migration that copied standard IMG settings
+  into Fast IMG while reading. Current independent preferences remain supported;
+  regression coverage requires read-only loading and no cross-profile copying.
+- Reject malformed exact-byte metrics instead of stripping arbitrary characters
+  into a valid-looking count. File failures remain prominent even when auxiliary
+  size evidence is incomplete or invalid.
+
 ### Worker configuration history and scoped Settings
 
 - Add independent VID `--config`/`--no-config`, `config show --effective` and

@@ -71,6 +71,11 @@ Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer setti
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
 IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
+Search Settings by a localized option name, section or choice, then jump directly
+to its existing control. Developer mode also accepts configuration keys and flags.
+Search preserves unsaved edits and reveals applicable advanced Photos fields.
+Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
+their own current overrides.
 
 New launcher-managed IMG/VID invocations record the worker's resolved runtime JSON,
 winning field sources and worker version in `history.sqlite3`. Processing History
@@ -82,6 +87,13 @@ override chain, tool versions or the backend ultimately selected after a fallbac
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
+
+Processing History now highlights recorded Fast IMG size changes, with exact input
+and output byte counts for files newly converted in that run. Skipped, failed and
+reused files are excluded; resume-only totals are not attributed to a new run.
+Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
+cannot erase valid processing counts or a failed result, and a smaller output is
+not presented as proof that disk space was freed.
 
 ### Cache management
 

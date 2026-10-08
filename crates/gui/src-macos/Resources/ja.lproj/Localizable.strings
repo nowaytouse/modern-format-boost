@@ -367,3 +367,16 @@
 "history.status.preview" = "プレビューのみ";
 "history.issue.scan_limit" = "履歴の読み取り上限に達したため、この記録は不完全です。";
 "history.issue.conflicting_copies" = "実行中とアーカイブの記録が一致しないため、結果を確認できません。";
+"settings.search" = "設定を検索";
+"settings.search.results" = "一致する設定";
+"settings.search.empty" = "一致する設定がありません";
+"history.space.title" = "ファイルサイズ比較";
+"history.space.saved" = "%@ 削減";
+"history.space.increased" = "%@ 増加";
+"history.space.unchanged" = "サイズ変化なし";
+"history.space.scope" = "今回変換したファイルのみ。スキップ・失敗・再利用は含みません。";
+"history.space.note" = "ファイルサイズの比較です。ディスク容量の解放を示すものではありません。";
+"history.space.not_recorded" = "比較可能なサイズデータの記録なし";
+"history.space.invalid" = "サイズの記録が無効なため、サイズ変化を確認できません。";
+"history.detail.input_bytes" = "入力";
+"history.detail.output_bytes" = "出力";

@@ -494,17 +494,6 @@ private struct MediaSettings {
 
     init(preferences: UserDefaults? = nil) {
         if let preferences {
-            if !preferences.bool(forKey: "MFBGuiSeparateFastImageSettings") {
-                for (standard, fast) in [(MediaSetting.imgConfig, MediaSetting.fastConfig),
-                    (.imgFallback, .fastFallback), (.imgJpegEffort, .fastJpegEffort),
-                    (.imgHeuristic, .fastHeuristic), (.imgDatabase, .fastDatabase)] {
-                    if preferences.string(forKey: fast.preferenceKey) == nil,
-                       let value = preferences.string(forKey: standard.preferenceKey) {
-                        preferences.set(value, forKey: fast.preferenceKey)
-                    }
-                }
-                preferences.set(true, forKey: "MFBGuiSeparateFastImageSettings")
-            }
             var saved: [MediaSetting: String] = [:]
             for field in MediaSetting.allCases {
                 if let value = preferences.string(forKey: field.preferenceKey) {
@@ -692,7 +681,12 @@ private func queryLocalCache(clear: Bool) throws -> LocalCacheStatus {
 }
 
 @MainActor
-private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextFieldDelegate {
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+    private enum SearchDestination: Equatable {
+        case setting(MediaSetting)
+        case cache
+    }
+
     private let panel: NSPanel
     private let preferences: UserDefaults
     private let applied: () -> Void
@@ -713,6 +707,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     private let status = NSTextField(wrappingLabelWithString: "")
     private let tabs = NSTabView()
     private let root = NSStackView()
+    private let search = NSSearchField()
+    private let searchResults = NSScrollView()
+    private let searchTable = NSTableView()
+    private let searchEmpty = NSTextField(labelWithString: "")
+    private var searchHeight: NSLayoutConstraint?
+    private var searchMatches: [SearchDestination] = []
+    private var fieldSections: [MediaSetting: String] = [:]
     private var tabHeight: NSLayoutConstraint?
     private var grids: [String: NSGridView] = [:]
     private var applying = false
@@ -753,6 +754,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             root.topAnchor.constraint(equalTo: surface.topAnchor, constant: 16),
             root.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -16),
         ])
+        configureSearch()
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
         for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) {
@@ -812,6 +814,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 let row = grid.addRow(with: [NSTextField(labelWithString: field.title), control])
                 rows[field] = row
+                fieldSections[field] = section
                 row.yPlacement = .center
             }
             grid.column(at: 0).xPlacement = .leading
@@ -867,6 +870,139 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         root.addArrangedSubview(actions)
         actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         restore(MediaSettings(preferences: preferences))
+    }
+
+    private func configureSearch() {
+        search.placeholderString = localized("settings.search")
+        search.setAccessibilityLabel(localized("settings.search"))
+        search.delegate = self
+        search.sendsSearchStringImmediately = true
+        root.addArrangedSubview(search)
+        search.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        search.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("setting"))
+        searchTable.addTableColumn(column)
+        searchTable.headerView = nil
+        searchTable.rowHeight = 26
+        searchTable.intercellSpacing = NSSize(width: 0, height: 0)
+        searchTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        searchTable.allowsMultipleSelection = false
+        searchTable.dataSource = self
+        searchTable.delegate = self
+        searchTable.target = self
+        searchTable.action = #selector(activateSearchResult)
+        searchTable.setAccessibilityLabel(localized("settings.search.results"))
+        searchResults.documentView = searchTable
+        searchResults.hasVerticalScroller = true
+        searchResults.autohidesScrollers = true
+        searchResults.borderType = .bezelBorder
+        searchResults.isHidden = true
+        root.addArrangedSubview(searchResults)
+        searchResults.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        searchHeight = searchResults.heightAnchor.constraint(equalToConstant: 28)
+        searchHeight?.isActive = true
+        searchEmpty.stringValue = localized("settings.search.empty")
+        searchEmpty.textColor = .secondaryLabelColor
+        searchEmpty.isHidden = true
+        root.addArrangedSubview(searchEmpty)
+    }
+
+    private func searchTitle(_ destination: SearchDestination) -> String {
+        switch destination {
+        case let .setting(field):
+            let section = fieldSections[field] ?? field.section
+            return field.title + " · " + localized("settings.section.\(section)")
+        case .cache: return localized("settings.section.cache")
+        }
+    }
+
+    private func matchingSettings(_ query: String) -> [SearchDestination] {
+        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !terms.isEmpty else { return [] }
+        func matches(_ text: String) -> Bool { terms.allSatisfy { text.localizedStandardContains($0) } }
+        var result = MediaSetting.allCases.compactMap { field -> SearchDestination? in
+            guard rows[field] != nil, isApplicable(field) else { return nil }
+            let destination = SearchDestination.setting(field)
+            var words = [searchTitle(destination), localized("settings.\(field.labelKey).help")]
+            words += field.choices.flatMap { [$0, localized("settings.value.\($0)")] }
+            if developer { words += [field.runtimeKey ?? "", field.flag] }
+            return matches(words.joined(separator: " ")) ? destination : nil
+        }
+        let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
+                          "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
+                          "settings.cache.clear"].map { localized($0) }.joined(separator: " ")
+        if matches(cacheTerms) { result.append(.cache) }
+        return result
+    }
+
+    private func updateSearch() {
+        let selected = searchMatches.indices.contains(searchTable.selectedRow) ? searchMatches[searchTable.selectedRow] : nil
+        searchMatches = matchingSettings(search.stringValue)
+        searchTable.reloadData()
+        searchResults.isHidden = searchMatches.isEmpty
+        searchEmpty.isHidden = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !searchMatches.isEmpty
+        searchHeight?.constant = CGFloat(min(4, searchMatches.count)) * searchTable.rowHeight + 2
+        if !searchMatches.isEmpty {
+            let index = selected.flatMap { searchMatches.firstIndex(of: $0) } ?? 0
+            searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            searchTable.scrollRowToVisible(index)
+        }
+        // Return in the search field navigates; it must never apply the draft.
+        applyButton.keyEquivalent = search.stringValue.isEmpty ? "\r" : ""
+        updatePanelSize()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { searchMatches.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard searchMatches.indices.contains(row) else { return nil }
+        let title = searchTitle(searchMatches[row])
+        let label = NSTextField(labelWithString: title)
+        label.lineBreakMode = .byTruncatingTail
+        label.toolTip = title
+        return label
+    }
+
+    @objc private func activateSearchResult() {
+        guard searchMatches.indices.contains(searchTable.selectedRow) else { return }
+        let destination = searchMatches[searchTable.selectedRow]
+        search.stringValue = ""
+        updateSearch()
+        switch destination {
+        case let .setting(field):
+            guard let section = fieldSections[field] else { return }
+            if field.isPhotos && field.range != nil { advanced.state = .on }
+            updateVisibility()
+            tabs.selectTabViewItem(withIdentifier: section)
+            let control: NSView? = (textFields[field] as NSView?) ?? popups[field] ?? toggles[field]
+            if let control { panel.makeFirstResponder(control) }
+        case .cache:
+            tabs.selectTabViewItem(withIdentifier: "cache")
+            panel.makeFirstResponder(cacheRefresh)
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === search else { return false }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)), !search.stringValue.isEmpty {
+            activateSearchResult()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)), !search.stringValue.isEmpty {
+            search.stringValue = ""
+            updateSearch()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.moveUp(_:)) {
+            guard !searchMatches.isEmpty else { return true }
+            let delta = commandSelector == #selector(NSResponder.moveDown(_:)) ? 1 : -1
+            let index = min(searchMatches.count - 1, max(0, searchTable.selectedRow + delta))
+            searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            searchTable.scrollRowToVisible(index)
+            return true
+        }
+        return false
     }
 
     private func addCacheTab() {
@@ -1013,7 +1149,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
             } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
         }
         tabHeight.constant = rowsHeight + 64
-        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52)
+        let searchExtras: CGFloat = 36 + (searchResults.isHidden ? 0 : (searchHeight?.constant ?? 0) + 12)
+            + (searchEmpty.isHidden ? 0 : 30)
+        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras
         panel.setContentSize(NSSize(width: 720, height: tabHeight.constant + 76 + extras))
         panel.contentView?.layoutSubtreeIfNeeded()
     }
@@ -1144,20 +1282,21 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         return settings
     }
 
-    @objc private func updateVisibility() {
+    private func isApplicable(_ field: MediaSetting) -> Bool {
         let backend = (popups[.photosBackend]?.selectedItem?.representedObject as? String) ?? displayed[.photosBackend]
         let adaptive = toggles[.photosAdaptive]?.state == .on
+        if field == .photosAppleScriptBatch && backend == "native" { return false }
+        if [.photosNativeBatch, .photosAdaptive, .photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field),
+           backend == "applescript" { return false }
+        if [.photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field), !adaptive { return false }
+        return true
+    }
+
+    @objc private func updateVisibility() {
         for (field, row) in rows {
-            var hidden = false
-            if field.range != nil && field.isPhotos { hidden = !developer && advanced.state != .on }
-            if field == .photosAppleScriptBatch { hidden = hidden || backend == "native" }
-            if [.photosNativeBatch, .photosAdaptive, .photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field) {
-                hidden = hidden || backend == "applescript"
-            }
-            if [.photosMinimumBatch, .photosMaximumBatch, .photosTargetSeconds].contains(field) { hidden = hidden || !adaptive }
-            row.isHidden = hidden
+            row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
         }
-        updatePanelSize()
+        updateSearch()
     }
 
     @objc private func stepNumber(_ sender: NSStepper) {
@@ -1167,6 +1306,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
     }
 
     func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSSearchField === search { updateSearch(); return }
         guard let text = notification.object as? NSTextField,
               let field = textFields.first(where: { $0.value === text })?.key else { return }
         updateStepper(for: field)
@@ -1251,6 +1391,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
         defer { validatingLayout = false }
         try validateCacheForSelfTest()
         try validatePhotosForSelfTest()
+        try validateSearchForSelfTest()
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
         let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
@@ -1403,6 +1544,74 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSTextField
                   !developer || (textFields[.vidConfig] != nil && popups[.vidErrorMode] != nil) else {
                 throw HostError(message: "Video configuration controls are missing")
             }
+        }
+    }
+
+    private func validateSearchForSelfTest() throws {
+        let original = draft()
+        let wasAdvanced = advanced.state
+        defer {
+            search.stringValue = ""
+            advanced.state = wasAdvanced
+            restore(original)
+        }
+        var settings = MediaSettings()
+        settings.values = [.photosBackend: "native", .photosAdaptive: "true", .photosAlbum: "Unsaved album"]
+        restore(settings)
+        advanced.state = .off
+        updateVisibility()
+        let before = draft().values
+        search.stringValue = MediaSetting.photosVerificationBatch.title
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        guard searchMatches.contains(.setting(.photosVerificationBatch)), !searchResults.isHidden,
+              applyButton.keyEquivalent.isEmpty, draft().values == before else {
+            throw HostError(message: "Settings search lost an advanced field or modified the draft")
+        }
+        guard let index = searchMatches.firstIndex(of: .setting(.photosVerificationBatch)) else {
+            throw HostError(message: "Settings search did not find the verification batch size")
+        }
+        searchTable.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        let editor = NSTextView()
+        guard control(search, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))),
+              tabs.selectedTabViewItem?.identifier as? String == "photos",
+              rows[.photosVerificationBatch]?.isHidden == false,
+              search.stringValue.isEmpty, draft().values == before else {
+            throw HostError(message: "Search navigation changed settings or failed to reveal the destination")
+        }
+        search.stringValue = "no-such-setting-948217"
+        updateSearch()
+        guard searchMatches.isEmpty, !searchEmpty.isHidden,
+              control(search, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))),
+              !applying, draft().values == before else {
+            throw HostError(message: "Return in empty search results attempted to apply settings")
+        }
+        guard control(search, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))),
+              search.stringValue.isEmpty, searchEmpty.isHidden, draft().values == before else {
+            throw HostError(message: "Search cancellation changed the settings draft")
+        }
+        guard !matchingSettings(MediaSetting.photosAppleScriptBatch.title).contains(.setting(.photosAppleScriptBatch)),
+              matchingSettings("fail-fast").contains(.setting(.vidErrorMode)) == (developer && !fast),
+              matchingSettings("vid.codec").contains(.setting(.vidCodec)) == (developer && !fast),
+              matchingSettings(localized("settings.cache.clear")).contains(.cache) else {
+            throw HostError(message: "Search exposed unavailable settings or missed cache management")
+        }
+        search.stringValue = localized("settings.section.photos")
+        updateSearch()
+        guard searchMatches.count > 1 else { throw HostError(message: "Section search missed its controls") }
+        _ = control(search, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:)))
+        guard searchTable.selectedRow == 1 else { throw HostError(message: "Settings search keyboard navigation failed") }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        if let surface = panel.contentView {
+            guard surface.bounds.contains(surface.convert(searchResults.bounds, from: searchResults)),
+                  searchResults.frame.maxY <= search.frame.minY || searchResults.frame.minY >= search.frame.maxY else {
+                throw HostError(message: "Settings search results overlap or escape the panel")
+            }
+        }
+        settings.values[.photosBackend] = "applescript"
+        restore(settings)
+        guard !matchingSettings(MediaSetting.photosNativeBatch.title).contains(.setting(.photosNativeBatch)),
+              matchingSettings(MediaSetting.photosAppleScriptBatch.title).contains(.setting(.photosAppleScriptBatch)) else {
+            throw HostError(message: "Settings search kept stale backend-specific results")
         }
     }
 
@@ -4564,14 +4773,16 @@ private func runSelfTest() -> Int32 {
             }
             preferences.removeObject(forKey: historyPreferenceKey)
             preferences.set("8", forKey: MediaSetting.imgJpegEffort.preferenceKey)
-            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == "8" else {
-                throw HostError(message: "Existing shared image settings did not migrate")
+            let beforeSettingsRead = preferences.persistentDomain(forName: suite)! as NSDictionary
+            let independent = MediaSettings(preferences: preferences)
+            guard independent.values[.imgJpegEffort] == "8", independent.values[.fastJpegEffort] == nil,
+                  beforeSettingsRead.isEqual(to: preferences.persistentDomain(forName: suite)!) else {
+                throw HostError(message: "Reading settings wrote preferences or copied standard IMG into Fast IMG")
             }
-            var migrated = MediaSettings(preferences: preferences)
-            migrated.values.removeValue(forKey: .fastJpegEffort)
-            try migrated.save(to: preferences)
-            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == nil else {
-                throw HostError(message: "A Fast IMG reset was undone by repeated migration")
+            preferences.set("10", forKey: MediaSetting.fastJpegEffort.preferenceKey)
+            guard MediaSettings(preferences: preferences).values[.fastJpegEffort] == "10",
+                  MediaSettings(preferences: preferences).values[.imgJpegEffort] == "8" else {
+                throw HostError(message: "Current independent image preferences were not retained")
             }
             try MediaSettings().save(to: preferences)
             let controlHost = NativeHost()
