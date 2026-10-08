@@ -85,7 +85,7 @@
 "button.pause" = "一時停止";
 "button.resume" = "続行";
 "button.stop" = "終了";
-"log.history" = "新しいバッチ · 以前のバックエンドログは %@ に残ります。「ログ履歴」で開けます。";
+"log.history" = "新しいバッチ · 履歴の保存先: %@";
 "status.pausing" = "安全に一時停止中 · 実行中の処理と検証済み進捗の保存を待っています…";
 "status.paused" = "安全に一時停止しました · 「続行」でこのバッチを再開";
 "status.stopping" = "安全に終了中 · 実行中の処理と検証済み進捗の保存を待っています…";
@@ -199,6 +199,9 @@
 "settings.override" = "個別指定";
 "settings.reset" = "このタブをリセット";
 "settings.apply" = "適用";
+"settings.sources.button" = "%@の設定元";
+"settings.sources.preview" = "現在の設定のプレビュー · 未適用";
+"settings.sources.order" = "適用された設定層（優先度の低い順）：";
 "settings.invalid" = "%@ が無効です：%@";
 "settings.choose_config" = "画像の設定ファイルを選択";
 "settings.imgConfig" = "設定ファイル";
@@ -376,6 +379,9 @@
 "progress.unavailable" = "ファイル進捗を取得できません";
 "log.latest_failure" = "直近のエラー: %@";
 "log.latest_warning" = "直近の警告: %@";
+"log.phase.processing" = "ファイル処理";
+"log.phase.verification" = "検証と出力";
+"log.phase.invalid" = "処理段階を認識できないため、現在のログ表示を保持しました。";
 "history.summary" = "概要";
 "history.output.title" = "出力";
 "history.output.older" = "前の出力ページ";

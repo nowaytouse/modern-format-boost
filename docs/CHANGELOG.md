@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Effective configuration provenance (2026-10-09)
+
+- Record ordered configuration source layers in the shared resolver, including
+  same-value file, environment and CLI overrides. Keep existing precedence and
+  final-source reporting; expose `source_chain` in IMG/VID effective-config JSON.
+- Add Developer-only setting information buttons with read-only previews of the
+  actual value and applied layers. Resolve IMG, Fast IMG/Photos and VID with their
+  own arguments; mixed IMG/VID performance settings remain separate.
+- Reject missing or inconsistent provenance instead of fabricating an override
+  chain. Discard late previews after edits, cancellation or application; keep
+  long paths selectable and scrollable. Current history snapshots are unchanged.
+
+### Phase-focused live logs (2026-10-09)
+
+- Emit shared, versioned presentation-phase events when file processing and
+  verification gates actually begin. Reuse the terminal marker writer and preserve
+  the full worker output in history; no verification or outcome policy changes.
+- Replace the live log only at coarse phase boundaries. Keep Gate 1-3 together,
+  combine short phases, preserve diagnostics and counts across replacements, and
+  hide previous file-progress percentages during verification. Malformed or unknown
+  events keep the existing view and produce a warning.
+- Keep concrete failure details visible when a later gate summary reports failure;
+  aggregate gate status must not overwrite the actionable cause.
+- Verify that phase transitions preserve complete stored output, and correct the
+  obsolete log-folder instruction in all three GUI languages.
+- Preserve the workspace dependency refresh for the tracing family and zerocopy
+  Git revisions; crate versions remain unchanged.
+
 ### Visible diagnostics and navigable history output (2026-10-08)
 
 - Keep the latest error and warning visible below the native GUI log. Preserve a

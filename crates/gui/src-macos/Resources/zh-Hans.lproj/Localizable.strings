@@ -85,7 +85,7 @@
 "button.pause" = "暂停";
 "button.resume" = "继续";
 "button.stop" = "终止";
-"log.history" = "新批次 · 之前的后端日志仍保存在 %@，可点击“历史日志”打开文件夹。";
+"log.history" = "新批次 · 历史记录位置：%@";
 "status.pausing" = "正在安全暂停 · 等待当前工作完成并保存已验证进度…";
 "status.paused" = "已安全暂停 · 点击“继续”恢复本批次";
 "status.stopping" = "正在安全终止 · 等待当前工作完成并保存已验证进度…";
@@ -199,6 +199,9 @@
 "settings.override" = "单独设置";
 "settings.reset" = "重置当前选项卡";
 "settings.apply" = "应用";
+"settings.sources.button" = "%@的配置来源";
+"settings.sources.preview" = "当前设置预览 · 尚未应用";
+"settings.sources.order" = "已参与解析的配置层，按覆盖顺序排列：";
 "settings.invalid" = "%@ 的值无效：%@";
 "settings.choose_config" = "选择图片配置文件";
 "settings.imgConfig" = "配置文件";
@@ -376,6 +379,9 @@
 "progress.unavailable" = "文件进度暂不可用";
 "log.latest_failure" = "最近错误：%@";
 "log.latest_warning" = "最近警告：%@";
+"log.phase.processing" = "处理文件";
+"log.phase.verification" = "验证与交付";
+"log.phase.invalid" = "无法识别处理阶段，已保留当前日志视图。";
 "history.summary" = "概览";
 "history.output.title" = "输出";
 "history.output.older" = "较早输出页";

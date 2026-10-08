@@ -578,7 +578,49 @@ private struct MediaSettings {
 private struct EffectiveRuntimeSettings {
     let values: [String: String]
     let sources: [String: String]
+    let sourceChain: [String: [String]]
     subscript(key: String) -> String? { values[key] }
+
+    static func decode(_ data: Data) throws -> EffectiveRuntimeSettings {
+        guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let config = document["config"] as? [String: Any],
+              let sources = document["sources"] as? [String: String],
+              let chains = document["source_chain"] as? [String: [String]],
+              !sources.isEmpty, Set(sources.keys) == Set(chains.keys),
+              sources.allSatisfy({ key, source in
+                  !source.isEmpty && chains[key]?.last == source
+                      && chains[key]?.allSatisfy({ !$0.isEmpty }) == true
+              }) else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        var result: [String: String] = [:]
+        for (section, object) in config {
+            guard let fields = object as? [String: Any] else { continue }
+            for (key, value) in fields {
+                if value is NSNull { continue }
+                if let number = value as? NSNumber {
+                    result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                        ? (number.boolValue ? "true" : "false") : number.stringValue
+                } else if let text = value as? String { result["\(section).\(key)"] = text }
+            }
+        }
+        guard result.keys.allSatisfy({ sources[$0] != nil }) else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        return EffectiveRuntimeSettings(values: result, sources: sources, sourceChain: chains)
+    }
+
+    func originDescription(key: String, guiOverride: Bool) throws -> String {
+        guard let chain = sourceChain[key], !chain.isEmpty, chain.last == sources[key],
+              !guiOverride || chain.last == "CLI" else {
+            throw HostError(message: localized("settings.config_invalid"))
+        }
+        let layers = chain.enumerated().map { index, source in
+            let label = guiOverride && index == chain.count - 1 ? "CLI (GUI)" : source
+            return "\(index + 1). \(label)"
+        }.joined(separator: "\n")
+        return "\(key) = \(values[key] ?? "null")\n\n\(localized("settings.sources.order"))\n\(layers)"
+    }
 }
 
 private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval = 10) throws -> Data {
@@ -606,24 +648,7 @@ private func queryRuntimeSettings(arguments: [String], tool: String = "img") thr
         throw HostError(message: localized(tool == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
     }
     let data = try settingsToolOutput(binary, arguments: ["config", "show", "--effective"] + arguments)
-    guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let config = document["config"] as? [String: Any],
-          let sources = document["sources"] as? [String: String],
-          !sources.isEmpty, sources.values.allSatisfy({ !$0.isEmpty }) else {
-        throw HostError(message: localized("settings.config_invalid"))
-    }
-    var result: [String: String] = [:]
-    for (section, object) in config {
-        guard let fields = object as? [String: Any] else { continue }
-        for (key, value) in fields {
-            if value is NSNull { continue }
-            if let number = value as? NSNumber {
-                result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
-                    ? (number.boolValue ? "true" : "false") : number.stringValue
-            } else if let text = value as? String { result["\(section).\(key)"] = text }
-        }
-    }
-    return EffectiveRuntimeSettings(values: result, sources: sources)
+    return try EffectiveRuntimeSettings.decode(data)
 }
 
 private struct LocalCacheStatus: Decodable {
@@ -694,6 +719,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var textFields: [MediaSetting: NSTextField] = [:]
     private var toggles: [MediaSetting: NSButton] = [:]
     private var steppers: [MediaSetting: NSStepper] = [:]
+    private var sourceButtons: [MediaSetting: NSButton] = [:]
+    private var sourceGeneration = UUID()
+    private let sourcePopover = NSPopover()
     private var restored = MediaSettings()
     private var inherited: [MediaSetting: String] = [:]
     private var inheritedSources: [MediaSetting: String] = [:]
@@ -812,7 +840,21 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-                let row = grid.addRow(with: [NSTextField(labelWithString: field.title), control])
+                var cells = [NSTextField(labelWithString: field.title), control]
+                if developer && field.runtimeKey != nil {
+                    let source = NSButton()
+                    source.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
+                    source.target = self
+                    source.action = #selector(showSources(_:))
+                    source.isBordered = false
+                    source.toolTip = localized("settings.sources.button", field.title)
+                    source.setAccessibilityLabel(source.toolTip)
+                    source.widthAnchor.constraint(equalToConstant: 22).isActive = true
+                    source.heightAnchor.constraint(equalToConstant: 22).isActive = true
+                    sourceButtons[field] = source
+                    cells.append(source)
+                } else if developer { cells.append(NSView()) }
+                let row = grid.addRow(with: cells)
                 rows[field] = row
                 fieldSections[field] = section
                 row.yPlacement = .center
@@ -820,6 +862,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             grid.column(at: 0).xPlacement = .leading
             grid.column(at: 0).width = 240
             grid.column(at: 1).xPlacement = .fill
+            if developer {
+                grid.column(at: 2).width = 22
+                grid.column(at: 2).xPlacement = .center
+            }
             grids[section] = grid
             let content = NSView()
             grid.translatesAutoresizingMaskIntoConstraints = false
@@ -1202,7 +1248,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let effective = field == .performance ? (self.fast ? fast : (videos ? video : standard))
                 : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
             inherited[field] = effective?[key]
-            inheritedSources[field] = effective?.sources[key]
+            inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
         }
         if !self.fast, !videos, let imageMode = standard?["performance.mode"],
            let videoMode = video?["performance.mode"], imageMode != videoMode {
@@ -1293,6 +1339,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func updateVisibility() {
+        sourceGeneration = UUID()
         for (field, row) in rows {
             row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
         }
@@ -1300,6 +1347,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func stepNumber(_ sender: NSStepper) {
+        sourceGeneration = UUID()
         if let field = steppers.first(where: { $0.value === sender })?.key {
             textFields[field]?.integerValue = sender.integerValue
         }
@@ -1307,6 +1355,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSSearchField === search { updateSearch(); return }
+        sourceGeneration = UUID()
         guard let text = notification.object as? NSTextField,
               let field = textFields.first(where: { $0.value === text })?.key else { return }
         updateStepper(for: field)
@@ -1335,6 +1384,64 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
     }
 
+    @objc private func showSources(_ sender: NSButton) {
+        guard let field = sourceButtons.first(where: { $0.value === sender })?.key,
+              let key = field.runtimeKey else { return }
+        sourcePopover.close()
+        do {
+            let settings = draft()
+            try settings.validate()
+            sourceGeneration = UUID()
+            let generation = sourceGeneration
+            let requests: [(String, String, [String])]
+            if field == .performance && !fast && !videos {
+                requests = [("IMG", "img", settings.runtimeArguments(fast: false, inheritedOnly: false)),
+                            ("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
+            } else if field.isVideo || (field == .performance && videos) {
+                requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
+            } else {
+                let useFast = field.isFastImage || field.isPhotos || (field == .performance && fast)
+                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false))]
+            }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = Result {
+                    try requests.map { label, tool, arguments in
+                        let effective = try queryRuntimeSettings(arguments: arguments, tool: tool)
+                        return "\(label)\n" + (try effective.originDescription(key: key, guiOverride: settings.values[field] != nil))
+                    }.joined(separator: "\n\n")
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.panel.sheetParent != nil, self.sourceGeneration == generation,
+                          self.draft().values == settings.values else { return }
+                    do {
+                        let text = try result.get()
+                        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 260))
+                        scroll.hasVerticalScroller = true
+                        scroll.drawsBackground = false
+                        let view = NSTextView(frame: scroll.bounds)
+                        view.isEditable = false
+                        view.isSelectable = true
+                        view.drawsBackground = false
+                        view.textColor = .labelColor
+                        view.textContainerInset = NSSize(width: 12, height: 12)
+                        view.autoresizingMask = [.width]
+                        view.textContainer?.widthTracksTextView = true
+                        view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+                        view.string = "\(field.title)\n\(localized("settings.sources.preview"))\n\n\(text)"
+                        view.setAccessibilityLabel(localized("settings.sources.preview"))
+                        scroll.documentView = view
+                        let controller = NSViewController()
+                        controller.view = scroll
+                        self.sourcePopover.contentViewController = controller
+                        self.sourcePopover.contentSize = scroll.frame.size
+                        self.sourcePopover.behavior = .transient
+                        self.sourcePopover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minX)
+                    } catch { NSAlert(error: error).beginSheetModal(for: self.panel) }
+                }
+            }
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+
     @objc private func resetTab() {
         var settings = draft()
         let section = tabs.selectedTabViewItem?.identifier as? String
@@ -1347,6 +1454,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     @objc private func cancel() {
         guard !cacheBusy else { return }
+        sourcePopover.close()
+        sourceGeneration = UUID()
         applyGeneration = UUID()
         inheritedGeneration = UUID()
         applying = false
@@ -1355,6 +1464,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     @objc private func apply() {
         guard !applying, !cacheBusy else { return }
+        sourcePopover.close()
+        sourceGeneration = UUID()
         do {
             let settings = draft()
             try settings.validate()
@@ -1486,13 +1597,20 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             throw HostError(message: "Reset settings still override inherited configuration")
         }
         let standard = EffectiveRuntimeSettings(values: ["performance.mode": "tight", "tools.policy": "single"],
-                                                sources: ["performance.mode": "/synthetic/img.json", "tools.policy": "CLI"])
+                                                sources: ["performance.mode": "/synthetic/img.json", "tools.policy": "CLI"],
+                                                sourceChain: ["performance.mode": ["default", "/synthetic/img.json"], "tools.policy": ["default", "CLI"]])
         let fastValues = EffectiveRuntimeSettings(values: ["performance.mode": "adaptive", "tools.policy": "fallback"],
-                                                  sources: ["performance.mode": "default", "tools.policy": "default"])
+                                                  sources: ["performance.mode": "default", "tools.policy": "default"],
+                                                  sourceChain: ["performance.mode": ["default"], "tools.policy": ["default"]])
         let video = EffectiveRuntimeSettings(values: ["performance.mode": "relaxed", "vid.codec": "av1"],
-                                             sources: ["performance.mode": "/synthetic/vid.json", "vid.codec": "/synthetic/vid.json"])
+                                             sources: ["performance.mode": "/synthetic/vid.json", "vid.codec": "/synthetic/vid.json"],
+                                             sourceChain: ["performance.mode": ["default", "/synthetic/vid.json"], "vid.codec": ["default", "/synthetic/vid.json"]])
         setInheritedValues(standard: standard, fast: fastValues, video: video)
         restore(MediaSettings())
+        guard rows.keys.filter({ $0.runtimeKey != nil }).allSatisfy({ (sourceButtons[$0] != nil) == developer }),
+              sourceButtons.values.allSatisfy({ $0.frame.width == 22 }) else {
+            throw HostError(message: "Configuration source controls escaped Developer mode or lost their fixed size")
+        }
         if !fast && !videos {
             guard inheritedMixedPerformance, popups[.performance]?.indexOfSelectedItem == 0,
                   draft().values[.performance] == nil, inherited[.vidCodec] == "av1" else {
@@ -1905,6 +2023,40 @@ private struct FileStageProgress {
     }
 }
 
+private struct PhaseLogPresentation {
+    enum Phase: String, Decodable { case processing, verification }
+    enum Update: Equatable {
+        case unchanged, invalid
+        case changed(Phase, replace: Bool)
+    }
+    private struct Event: Decodable {
+        let schema_version: Int
+        let phase: Phase
+    }
+    private(set) var phase: Phase?
+    private var lastReplacement: TimeInterval
+
+    init(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        lastReplacement = now
+    }
+
+    mutating func ingest(_ line: String, now: TimeInterval) -> Update? {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_LOG_PHASE="
+        guard raw.hasPrefix(prefix) else { return nil }
+        let payload = raw.dropFirst(prefix.count)
+        guard payload.utf8.count <= 512,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)),
+              next.schema_version == 1 else { return .invalid }
+        guard next.phase != phase else { return .unchanged }
+        phase = next.phase
+        // Merge short phases instead of flashing away output the user has just seen.
+        let replace = now - lastReplacement >= 2
+        if replace { lastReplacement = now }
+        return .changed(next.phase, replace: replace)
+    }
+}
+
 private struct BatchResults {
     struct Event: Decodable {
         let schemaVersion: Int
@@ -2156,7 +2308,7 @@ enum LogTone: Equatable {
         }
         if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):)"#, options: .regularExpression) != nil { return .warning }
         if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
-        if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS)\s*\])"#, options: .regularExpression) != nil { return .stage }
+        if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS|PHASE)\s*\])"#, options: .regularExpression) != nil { return .stage }
         if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
         return .normal
     }
@@ -2193,7 +2345,7 @@ private struct LatestDiagnostics {
         switch tone {
         case .failure:
             let isSummary = countStatusValue(in: message) != nil
-                || message.range(of: #"(?i)^(?:\[Summary\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\])\s*)?exiting with failures\b)"#,
+                || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?exiting with failures\b)"#,
                                  options: .regularExpression) != nil
             // A final aggregate must not hide the most recent actionable error.
             guard !isSummary || failure == nil || failureIsSummary else { return false }
@@ -3004,6 +3156,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var logPhase = PhaseLogPresentation()
     private var latestDiagnostics = LatestDiagnostics()
     private let latestFailureLabel = NSTextField(labelWithString: "")
     private let latestWarningLabel = NSTextField(labelWithString: "")
@@ -3608,6 +3761,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func clearBatchLog() {
         logView.string = ""
+        logPhase = PhaseLogPresentation()
         batchResults = BatchResults()
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
@@ -3859,19 +4013,42 @@ private final class AppController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func appendLog(_ text: String, captureDiagnostics: Bool = true) {
+    private func appendLog(_ text: String, captureDiagnostics: Bool = true,
+                           now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         var latestChanged = false
-        let displayText = text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
-            if fileProgress.ingest(String(line)) {
+        var replacePresentation = false
+        var displayLines: [String] = []
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if let phaseUpdate = logPhase.ingest(line, now: now) {
+                switch phaseUpdate {
+                case .changed(let phase, let replace):
+                    if replace {
+                        displayLines.removeAll(keepingCapacity: true)
+                        replacePresentation = true
+                    }
+                    displayLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
+                    refreshFileProgress()
+                case .invalid:
+                    let warning = "[WARN] " + localized("log.phase.invalid")
+                    displayLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                case .unchanged: break
+                }
+                continue
+            }
+            if fileProgress.ingest(line) {
                 refreshFileProgress()
-                return nil
+                continue
             }
-            if let summary = batchResults.ingest(String(line)) {
-                return developerMode ? "\(line)\n\(summary)" : summary
+            if let summary = batchResults.ingest(line) {
+                displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
+                continue
             }
-            if captureDiagnostics && latestDiagnostics.ingest(String(line)) { latestChanged = true }
-            return String(line)
-        }.joined(separator: "\n")
+            if captureDiagnostics && latestDiagnostics.ingest(line) { latestChanged = true }
+            displayLines.append(line)
+        }
+        let displayText = displayLines.joined(separator: "\n")
         if latestChanged { refreshLatestDiagnostics() }
         var diagnosticsChanged = false
         for line in text.split(separator: "\n") {
@@ -3895,6 +4072,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         guard !displayText.isEmpty else { return }
         let storage = logView.textStorage!
+        if replacePresentation { storage.setAttributedString(NSAttributedString(string: "")) }
         if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
         storage.append(styledLog(displayText))
         let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
@@ -3938,7 +4116,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshFileProgress() {
-        fileProgressRow.isHidden = fileProgress.event == nil && !fileProgress.invalid
+        fileProgressRow.isHidden = logPhase.phase == .verification || (fileProgress.event == nil && !fileProgress.invalid)
         fileProgressLabel.stringValue = fileProgress.label
         fileProgressLabel.toolTip = fileProgress.label
         fileProgressIndicator.isIndeterminate = fileProgress.invalid || fileProgress.event?.percentage == nil
@@ -4018,6 +4196,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
                 sawResumeDecision = false
                 batchResults = BatchResults()
+                logPhase = PhaseLogPresentation()
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 fileProgress = FileStageProgress()
@@ -4333,9 +4512,39 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard boundedDiagnostics.failure == "Error: a later concrete failure" else {
             throw HostError(message: "A later concrete failure was not shown")
         }
+        let processingPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verificationPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        logPhase = PhaseLogPresentation(now: 0)
+        appendLog(processingPhase, now: 3)
+        appendLog(progressLine)
+        appendLog("old processing detail\n"
+            + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"exit_code":0}"#
+            + "\n" + verificationPhase + "\n[GATE 1] verification FAIL", now: 6)
+        guard !logView.string.contains("old processing detail"), !logView.string.contains("MFB_LOG_PHASE="),
+              logView.string.contains(localized("log.phase.verification")),
+              logView.string.contains("[GATE 1] verification FAIL"), fileProgressRow.isHidden,
+              batchResults.hasFileFailures, countStatus == "MISMATCH",
+              latestDiagnostics.failure == "Permission denied",
+              latestDiagnostics.warning == "[WARN] synthetic metadata warning" else {
+            throw HostError(message: "Phase presentation lost results, warnings, count status or same-delivery output")
+        }
+        appendLog(verificationPhase + "\n[GATE 2] retained evidence\n"
+            + verificationPhase + "\n[GATE 3] retained evidence", now: 9)
+        guard logView.string.contains("[GATE 1] verification FAIL"),
+              logView.string.contains("[GATE 2] retained evidence"),
+              logView.string.contains("[GATE 3] retained evidence") else {
+            throw HostError(message: "Repeated verification events cleared earlier gate evidence")
+        }
+        appendLog("MFB_LOG_PHASE={}\nfile MFB_LOG_PHASE=unrelated", now: 12)
+        guard logView.string.contains("[GATE 1] verification FAIL"),
+              logView.string.contains("file MFB_LOG_PHASE=unrelated"),
+              logPhase.phase == .verification, batchResults.hasFileFailures,
+              latestDiagnostics.warning == "[WARN] " + localized("log.phase.invalid") else {
+            throw HostError(message: "Invalid or incidental phase text replaced valid output or outcomes")
+        }
         clearBatchLog()
         guard countStatusLabel.isHidden, countStatus == nil, latestDiagnosticsRow.isHidden,
-              latestDiagnostics.failure == nil, latestDiagnostics.warning == nil else {
+              latestDiagnostics.failure == nil, latestDiagnostics.warning == nil, logPhase.phase == nil else {
             throw HostError(message: "Previous batch count status leaked into the next batch")
         }
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"exit_code":0}"#)
@@ -4643,6 +4852,28 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 private func runSelfTest() -> Int32 {
     do {
         try runProcessingHistorySelfTests()
+        let sourceDocument: [String: Any] = [
+            "config": ["img": ["jpeg_effort": 9]],
+            "sources": ["img.jpeg_effort": "CLI"],
+            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"]],
+        ]
+        let sourceData = try JSONSerialization.data(withJSONObject: sourceDocument)
+        let sourceSettings = try EffectiveRuntimeSettings.decode(sourceData)
+        let sourcePreview = try sourceSettings.originDescription(key: "img.jpeg_effort", guiOverride: true)
+        guard sourcePreview.contains("img.jpeg_effort = 9"),
+              sourcePreview.contains("1. default\n2. /synthetic/project.json\n3. CLI (GUI)") else {
+            throw HostError(message: "Configuration preview lost its real values or override order")
+        }
+        for invalidChains: Any in [NSNull(), [:], ["img.jpeg_effort": []],
+                                  ["img.jpeg_effort": ["default"]], ["img.jpeg_effort": ["", "CLI"]],
+                                  ["img.jpeg_effort": ["CLI"], "extra": ["default"]]] {
+            var invalid = sourceDocument
+            invalid["source_chain"] = invalidChains
+            let data = try JSONSerialization.data(withJSONObject: invalid)
+            guard (try? EffectiveRuntimeSettings.decode(data)) == nil else {
+                throw HostError(message: "Invalid configuration provenance was accepted")
+            }
+        }
         if Bundle.main.bundleURL.pathExtension == "app" {
             guard let iconURL = Bundle.main.url(forResource: "icon", withExtension: "icns"),
                   let image = NSImage(contentsOf: iconURL), image.isValid,
@@ -4703,12 +4934,16 @@ private func runSelfTest() -> Int32 {
             + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
         guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
               effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
-              effective["photos.preserve_folder_structure"] == "false" else {
+              effective["photos.preserve_folder_structure"] == "false",
+              effective.sourceChain["img.jpeg_effort"]?.first == "default",
+              effective.sourceChain["img.jpeg_effort"]?.last == "CLI",
+              effective.sourceChain["photos.native_batch_size"]?.last == "CLI" else {
             throw HostError(message: "GUI settings do not match the effective backend configuration")
         }
         let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
-        guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI" else {
+        guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI",
+              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"] else {
             throw HostError(message: "Video settings do not match the effective backend configuration")
         }
         configured.mediaSettings.values[.fastToolPolicy] = "single"
@@ -4945,6 +5180,30 @@ private func runSelfTest() -> Int32 {
             return 1
         }
         let backpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
+        let processingPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verificationPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        var phaseLog = PhaseLogPresentation(now: 0)
+        guard phaseLog.ingest(processingPhase, now: 0.5) == .changed(.processing, replace: false),
+              phaseLog.ingest(verificationPhase, now: 1) == .changed(.verification, replace: false),
+              phaseLog.ingest(verificationPhase, now: 4) == .unchanged,
+              phaseLog.ingest("ERR: " + processingPhase, now: 5) == .changed(.processing, replace: true),
+              phaseLog.ingest(verificationPhase, now: 6) == .changed(.verification, replace: false),
+              phaseLog.ingest("[INFO] " + processingPhase, now: 8) == nil else {
+            throw HostError(message: "Log phases flashed, repeated or interpreted incidental text")
+        }
+        for invalid in ["MFB_LOG_PHASE={}", processingPhase.replacingOccurrences(of: ":1", with: ":2"),
+                        processingPhase.replacingOccurrences(of: "processing", with: "completed"),
+                        "MFB_LOG_PHASE=" + String(repeating: "x", count: 513)] {
+            guard phaseLog.ingest(invalid, now: 9) == .invalid, phaseLog.phase == .verification else {
+                throw HostError(message: "Malformed phase event changed the current phase")
+            }
+        }
+        let phaseQueue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0)
+        _ = phaseQueue.enqueue(processingPhase + "\n[WARN] retained warning\n" + verificationPhase)
+        guard phaseQueue.takeDelivery() == processingPhase + "\n[WARN] retained warning\n" + verificationPhase,
+              !phaseQueue.finishDelivery(), phaseQueue.isIdle else {
+            throw HostError(message: "Backpressure reordered or discarded phase boundaries and diagnostics")
+        }
         var fileProgress = FileStageProgress()
         let stageStart = #"MFB_PROGRESS={"schema_version":1,"stage_id":"unit-1","stage":"image_processing","processed":0,"total":20000,"state":"running"}"#
         let almostComplete = stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":19999")

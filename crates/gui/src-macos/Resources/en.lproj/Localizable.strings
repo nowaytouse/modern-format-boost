@@ -85,7 +85,7 @@
 "button.pause" = "Pause";
 "button.resume" = "Continue";
 "button.stop" = "Stop";
-"log.history" = "New batch · Previous backend logs remain in %@. Use Log History to open the folder.";
+"log.history" = "New batch · History location: %@";
 "status.pausing" = "Pause requested · Finishing active work and saving verified progress…";
 "status.paused" = "Paused safely · Continue to resume this batch";
 "status.stopping" = "Stopping safely · Finishing active work and saving verified progress…";
@@ -199,6 +199,9 @@
 "settings.override" = "Override";
 "settings.reset" = "Reset This Tab";
 "settings.apply" = "Apply";
+"settings.sources.button" = "%@ configuration sources";
+"settings.sources.preview" = "Current settings preview · Not applied";
+"settings.sources.order" = "Applied layers, from lowest to highest priority:";
 "settings.invalid" = "Invalid %@: %@";
 "settings.choose_config" = "Choose image configuration file";
 "settings.imgConfig" = "Configuration file";
@@ -376,6 +379,9 @@
 "progress.unavailable" = "File progress unavailable";
 "log.latest_failure" = "Latest error: %@";
 "log.latest_warning" = "Latest warning: %@";
+"log.phase.processing" = "Processing";
+"log.phase.verification" = "Verification and delivery";
+"log.phase.invalid" = "Unrecognized processing phase; the current log view was retained.";
 "history.summary" = "Summary";
 "history.output.title" = "Output";
 "history.output.older" = "Older output page";

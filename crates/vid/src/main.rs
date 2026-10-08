@@ -153,7 +153,12 @@ fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::Load
     cli.performance.apply_to(&mut loaded);
     if let Some(codec) = cli.codec {
         loaded.config.vid.codec = codec;
-        loaded.sources.insert("vid.codec".into(), "CLI".into());
+        foundation::runtime_config::record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "vid.codec",
+            "CLI",
+        );
     }
     loaded.config.validate()?;
     Ok(loaded)
@@ -1659,6 +1664,7 @@ mod fast_gif_tests {
         let loaded = resolve_runtime(&shown)?;
         assert_eq!(loaded.config.vid.codec.as_str(), "av1");
         assert_eq!(loaded.sources["vid.codec"], path);
+        assert_eq!(loaded.source_chain["vid.codec"], ["default", path.as_str()]);
 
         let overridden = Cli::try_parse_from([
             "vid", "config", "validate", "--config", &path, "--codec", "hevc",
@@ -1666,6 +1672,10 @@ mod fast_gif_tests {
         let loaded = resolve_runtime(&overridden)?;
         assert_eq!(loaded.config.vid.codec.as_str(), "hevc");
         assert_eq!(loaded.sources["vid.codec"], "CLI");
+        assert_eq!(
+            loaded.source_chain["vid.codec"],
+            ["default", path.as_str(), "CLI"]
+        );
         let run = Cli::try_parse_from(["vid", "run", "/unused", "--no-config", "--codec", "av1"])?;
         assert_eq!(resolve_runtime(&run)?.config.vid.codec.as_str(), "av1");
         assert!(

@@ -97,6 +97,7 @@ impl VerificationGate for Gate1Local {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
         let jxl_files = match collect_delivery_output_files(&ctx.working_copy, None) {
             Ok(files) => files,
             Err(err) => {
@@ -146,6 +147,7 @@ impl VerificationGate for Gate2Import {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
         let Some(library) = &ctx.library_handle else {
             return gate_result(vec![
                 detail(
@@ -238,6 +240,7 @@ impl VerificationGate for Gate3Deep {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
         let jxl_files = match collect_delivery_output_files(&ctx.working_copy, ctx.output_format) {
             Ok(files) => files,
             Err(err) => {

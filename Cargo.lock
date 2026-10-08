@@ -3004,7 +3004,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -3014,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -3026,7 +3026,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3036,7 +3036,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "valuable",
 ]
@@ -3044,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "log",
  "once_cell",
@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "serde",
  "tracing-core",
@@ -3063,7 +3063,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
+source = "git+https://github.com/tokio-rs/tracing#7a1f0d19901a8310e0acb403b9aa71c9520cee23"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -3607,7 +3607,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.62"
-source = "git+https://github.com/google/zerocopy#5bc5ede52c91d90ef1364cb00d6a434cd4078e33"
+source = "git+https://github.com/google/zerocopy#d51a14e861c3bca1b8fd5a3945298c5fee542768"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3615,7 +3615,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.62"
-source = "git+https://github.com/google/zerocopy#5bc5ede52c91d90ef1364cb00d6a434cd4078e33"
+source = "git+https://github.com/google/zerocopy#d51a14e861c3bca1b8fd5a3945298c5fee542768"
 dependencies = [
  "proc-macro2",
  "quote",

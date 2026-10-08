@@ -22,6 +22,52 @@ use std::time::{Duration, Instant};
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
 static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogPhase {
+    Processing,
+    Verification,
+}
+
+#[derive(serde::Serialize)]
+struct LogPhaseEvent {
+    schema_version: u8,
+    phase: LogPhase,
+}
+
+fn write_marker<W: Write>(writer: &mut W, name: &str, json: &[u8]) -> io::Result<()> {
+    let mut line = Vec::new();
+    line.extend_from_slice(b"\n");
+    line.extend_from_slice(name.as_bytes());
+    line.push(b'=');
+    line.extend_from_slice(json);
+    line.push(b'\n');
+    writer.write_all(&line)?;
+    writer.flush()
+}
+
+fn write_terminal_marker(name: &str, json: &[u8], branch: &'static str) -> io::Result<()> {
+    // Keep machine-readable events on a separate PTY line with terminal writes serialized.
+    let _terminal_guard = crate::media_conversion_gate::delivery_terminal_lock_guard(branch);
+    let mut stdout = io::stdout().lock();
+    write_marker(&mut stdout, name, json)
+}
+
+pub(crate) fn emit_log_phase(phase: LogPhase) {
+    if std::env::var_os("MFB_SESSION_ID").is_none_or(|id| id.is_empty()) {
+        return;
+    }
+    let result = serde_json::to_vec(&LogPhaseEvent {
+        schema_version: 1,
+        phase,
+    })
+    .map_err(io::Error::other)
+    .and_then(|json| write_terminal_marker("MFB_LOG_PHASE", &json, "log_phase_emit"));
+    if let Err(error) = result {
+        tracing::error!(%error, "failed to write log phase event");
+    }
+}
+
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileProgressStage {
@@ -90,6 +136,9 @@ impl FileStageProgress {
                 })
             }),
         };
+        if enabled {
+            emit_log_phase(LogPhase::Processing);
+        }
         if let Some(snapshot) = &reporter.state {
             let snapshot = crate::media_conversion_gate::mutex_guard_or_recover(
                 "file_stage_progress_start",
@@ -116,16 +165,7 @@ impl FileStageProgress {
         let result = serde_json::to_vec(&event)
             .map_err(io::Error::other)
             .and_then(|json| {
-                // PTY stdout and stderr share a line; separate from terminal redraws.
-                let mut line = b"\nMFB_PROGRESS=".to_vec();
-                line.extend(json);
-                line.push(b'\n');
-                let _terminal_guard = crate::media_conversion_gate::delivery_terminal_lock_guard(
-                    "file_stage_progress_emit",
-                );
-                let mut stdout = io::stdout().lock();
-                stdout.write_all(&line)?;
-                stdout.flush()
+                write_terminal_marker("MFB_PROGRESS", &json, "file_stage_progress_emit")
             });
         if let Err(error) = result {
             tracing::error!(%error, "failed to write file stage progress");
@@ -2007,6 +2047,79 @@ impl Default for GlobalProgressManager {
 mod tests {
     use super::*;
     use console::measure_text_width;
+
+    #[test]
+    fn log_phase_marker_has_versioned_snake_case_schema_and_shared_framing() {
+        for (phase, expected) in [
+            (LogPhase::Processing, "processing"),
+            (LogPhase::Verification, "verification"),
+        ] {
+            let json = serde_json::to_vec(&LogPhaseEvent {
+                schema_version: 1,
+                phase,
+            })
+            .expect("serialize log phase event");
+            assert_eq!(
+                json,
+                format!("{{\"schema_version\":1,\"phase\":\"{expected}\"}}").as_bytes()
+            );
+
+            let mut output = Vec::new();
+            write_marker(&mut output, "MFB_LOG_PHASE", &json).expect("write log phase marker");
+            assert_eq!(
+                output,
+                format!("\nMFB_LOG_PHASE={{\"schema_version\":1,\"phase\":\"{expected}\"}}\n")
+                    .as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn shared_marker_writer_returns_io_errors() {
+        struct FailingWriter {
+            fail_write: bool,
+            fail_flush: bool,
+        }
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                if self.fail_write {
+                    Err(io::Error::other("write failed"))
+                } else {
+                    Ok(1)
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                if self.fail_flush {
+                    Err(io::Error::other("flush failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        for (mut writer, expected) in [
+            (
+                FailingWriter {
+                    fail_write: true,
+                    fail_flush: false,
+                },
+                "write failed",
+            ),
+            (
+                FailingWriter {
+                    fail_write: false,
+                    fail_flush: true,
+                },
+                "flush failed",
+            ),
+        ] {
+            let error = write_marker(&mut writer, "MFB_LOG_PHASE", b"{}").unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 
     #[test]
     fn coarse_file_count_preserves_max_after_out_of_order_updates() {

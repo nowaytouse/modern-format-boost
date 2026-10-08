@@ -492,7 +492,14 @@ mod tests {
             first.push_line("img", &format!("line {index}")).unwrap();
         }
         assert!(first.pending.is_empty(), "line threshold flushes the batch");
-        first.push_line("vid", "你好\nsecond line").unwrap();
+        let phase_output = concat!(
+            "你好\n",
+            "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"processing\"}\n",
+            "[ERROR] source retained\n",
+            "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"verification\"}\n",
+            "second line"
+        );
+        first.push_line("vid", phase_output).unwrap();
         second.push_line("img", "other session").unwrap();
         first.flush().unwrap();
         second.flush().unwrap();
@@ -507,7 +514,7 @@ mod tests {
         );
         assert_eq!(
             read_session_output_since(directory.path(), "first", 127).unwrap(),
-            "line 127\n你好\nsecond line\n"
+            format!("line 127\n{phase_output}\n")
         );
         assert_eq!(
             read_session_output_since(directory.path(), "second", 0).unwrap(),

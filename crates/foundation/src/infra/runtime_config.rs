@@ -86,9 +86,12 @@ impl PerformanceArgs {
     pub fn apply_to(&self, loaded: &mut LoadedConfig) {
         if let Some(mode) = self.mode {
             loaded.config.performance.mode = mode;
-            loaded
-                .sources
-                .insert("performance.mode".into(), "CLI".into());
+            record_source(
+                &mut loaded.sources,
+                &mut loaded.source_chain,
+                "performance.mode",
+                "CLI",
+            );
         }
     }
 }
@@ -272,6 +275,19 @@ impl RuntimeConfig {
 pub struct LoadedConfig {
     pub config: RuntimeConfig,
     pub sources: BTreeMap<String, String>,
+    pub source_chain: BTreeMap<String, Vec<String>>,
+}
+
+pub fn record_source(
+    sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
+    key: impl Into<String>,
+    source: impl Into<String>,
+) {
+    let key = key.into();
+    let source = source.into();
+    sources.insert(key.clone(), source.clone());
+    source_chain.entry(key).or_default().push(source);
 }
 
 impl LoadedConfig {
@@ -342,6 +358,7 @@ fn merge(
     source: &str,
     prefix: &str,
     sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
 ) {
     if let (Some(dst), Value::Object(src)) = (into.as_object_mut(), overlay) {
         for (key, value) in src {
@@ -352,11 +369,11 @@ fn merge(
             };
             if value.is_object() && dst.get(&key).is_some_and(Value::is_object) {
                 if let Some(child) = dst.get_mut(&key) {
-                    merge(child, value, source, &path, sources);
+                    merge(child, value, source, &path, sources, source_chain);
                 }
             } else {
                 dst.insert(key, value);
-                sources.insert(path, source.to_owned());
+                record_source(sources, source_chain, path, source);
             }
         }
     }
@@ -366,6 +383,7 @@ fn apply_file(
     value: &mut Value,
     path: &Path,
     sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
 ) -> Result<()> {
     let raw = std::fs::read(path).with_context(|| format!("read config {}", path.display()))?;
     let layer: Value =
@@ -378,7 +396,14 @@ fn apply_file(
         "{}: config_version must be 1",
         path.display()
     );
-    merge(value, layer, &path.display().to_string(), "", sources);
+    merge(
+        value,
+        layer,
+        &path.display().to_string(),
+        "",
+        sources,
+        source_chain,
+    );
     let parsed: RuntimeConfig = serde_json::from_value(value.clone())
         .with_context(|| format!("invalid config {}", path.display()))?;
     parsed
@@ -415,7 +440,12 @@ fn legacy_tool_name(name: &str) -> String {
     }
 }
 
-fn default_sources(value: &Value, prefix: &str, sources: &mut BTreeMap<String, String>) {
+fn default_sources(
+    value: &Value,
+    prefix: &str,
+    sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
+) {
     if let Some(object) = value.as_object() {
         for (key, child) in object {
             let path = if prefix.is_empty() {
@@ -423,10 +453,10 @@ fn default_sources(value: &Value, prefix: &str, sources: &mut BTreeMap<String, S
             } else {
                 format!("{prefix}.{key}")
             };
-            default_sources(child, &path, sources);
+            default_sources(child, &path, sources, source_chain);
         }
     } else {
-        sources.insert(prefix.to_owned(), "default".to_owned());
+        record_source(sources, source_chain, prefix, "default");
     }
 }
 
@@ -455,7 +485,8 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     );
     let mut value = serde_json::to_value(RuntimeConfig::default())?;
     let mut sources = BTreeMap::new();
-    default_sources(&value, "", &mut sources);
+    let mut source_chain = BTreeMap::new();
+    default_sources(&value, "", &mut sources, &mut source_chain);
     if let Some(mode) = legacy_env(crate::constants::ENV_MFB_PERF_TIER)? {
         let mode = match mode.trim().to_ascii_lowercase().as_str() {
             "adaptive" => PerformanceMode::Adaptive,
@@ -470,6 +501,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PERF_TIER",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(backend) = legacy_env("MFB_PHOTOS_IMPORT_BACKEND")? {
@@ -479,6 +511,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PHOTOS_IMPORT_BACKEND",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_PHOTOS_NATIVE_BATCH_SIZE")? {
@@ -491,6 +524,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PHOTOS_NATIVE_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE")? {
@@ -503,6 +537,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE")? {
@@ -515,6 +550,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     let heuristic = legacy_bool(crate::constants::HEURISTIC_QUALITY_ENV_KEY)?;
@@ -525,6 +561,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MODERN_FORMAT_ENABLE_IMAGE_QUALITY_HEURISTIC",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     let disable_feedback = legacy_bool(crate::constants::ENV_DISABLE_DB_FEEDBACK)?;
@@ -539,6 +576,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "legacy quality database gates",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     for (key, path) in std::env::vars_os() {
@@ -555,6 +593,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "legacy MFB_TOOL_ override",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if !no_config {
@@ -563,22 +602,26 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
                 .try_exists()
                 .with_context(|| format!("inspect config {}", path.display()))?
         {
-            apply_file(&mut value, &path, &mut sources)?;
+            apply_file(&mut value, &path, &mut sources, &mut source_chain)?;
         }
         let project = project_config_path()?;
         if project
             .try_exists()
             .with_context(|| format!("inspect config {}", project.display()))?
         {
-            apply_file(&mut value, &project, &mut sources)?;
+            apply_file(&mut value, &project, &mut sources, &mut source_chain)?;
         }
         if let Some(path) = explicit {
-            apply_file(&mut value, path, &mut sources)?;
+            apply_file(&mut value, path, &mut sources, &mut source_chain)?;
         }
     }
     let config: RuntimeConfig = serde_json::from_value(value)?;
     config.validate()?;
-    Ok(LoadedConfig { config, sources })
+    Ok(LoadedConfig {
+        config,
+        sources,
+        source_chain,
+    })
 }
 
 #[cfg(test)]
@@ -594,6 +637,7 @@ mod tests {
         let mut loaded = LoadedConfig {
             config,
             sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
         };
         let args = PerformanceArgs {
             mode: Some(PerformanceMode::Tight),
@@ -601,6 +645,7 @@ mod tests {
         args.apply_to(&mut loaded);
         assert_eq!(loaded.config.performance.mode, PerformanceMode::Tight);
         assert_eq!(loaded.sources["performance.mode"], "CLI");
+        assert_eq!(loaded.source_chain["performance.mode"], ["CLI"]);
         assert_eq!(args.cli_arguments(), ["--performance", "tight"]);
         assert_eq!(
             PerformanceArgs::default().cli_arguments(),
@@ -623,11 +668,15 @@ mod tests {
         let mut loaded = LoadedConfig {
             config: RuntimeConfig::default(),
             sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
         };
         loaded.config.performance.mode = PerformanceMode::Tight;
-        loaded
-            .sources
-            .insert("performance.mode".into(), "CLI".into());
+        record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "performance.mode",
+            "CLI",
+        );
         let mut output = Vec::new();
         loaded.write_history_marker("img", None, &mut output)?;
         loaded.write_history_marker("img", Some(OsStr::new("")), &mut output)?;
@@ -662,6 +711,7 @@ mod tests {
         let loaded = LoadedConfig {
             config: RuntimeConfig::default(),
             sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
         };
         let error = loaded
             .write_history_marker("vid", Some(OsStr::new("session")), &mut BrokenOutput)
@@ -680,9 +730,18 @@ mod tests {
         let file = tempfile::NamedTempFile::new()?;
         let mut value = serde_json::to_value(RuntimeConfig::default())?;
         let mut sources = BTreeMap::new();
-        default_sources(&value, "", &mut sources);
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        merge(
+            &mut value,
+            json!({"photos":{"native_batch_size":200}}),
+            "env:MFB_PHOTOS_NATIVE_BATCH_SIZE",
+            "",
+            &mut sources,
+            &mut source_chain,
+        );
         std::fs::write(file.path(), br#"{"config_version":1,"photos":{"native_batch_size":250},"img":{"fallback_policy":"same-semantics"}}"#)?;
-        apply_file(&mut value, file.path(), &mut sources)?;
+        apply_file(&mut value, file.path(), &mut sources, &mut source_chain)?;
         let parsed: RuntimeConfig = serde_json::from_value(value.clone())?;
         assert_eq!(parsed.photos.native_batch_size, 250);
         assert_eq!(parsed.photos.import_batch_size, 50);
@@ -692,13 +751,22 @@ mod tests {
             sources["photos.native_batch_size"],
             file.path().display().to_string()
         );
+        assert_eq!(
+            source_chain["photos.native_batch_size"],
+            vec![
+                "default".to_owned(),
+                "env:MFB_PHOTOS_NATIVE_BATCH_SIZE".to_owned(),
+                file.path().display().to_string()
+            ]
+        );
+        assert_eq!(source_chain["photos.import_batch_size"], ["default"]);
 
         let second = tempfile::NamedTempFile::new()?;
         std::fs::write(
             second.path(),
-            br#"{"config_version":1,"photos":{"import_batch_size":25}}"#,
+            br#"{"config_version":1,"photos":{"import_batch_size":25},"tools":{"paths":{"cjxl":"/bin/echo"}}}"#,
         )?;
-        apply_file(&mut value, second.path(), &mut sources)?;
+        apply_file(&mut value, second.path(), &mut sources, &mut source_chain)?;
         let parsed: RuntimeConfig = serde_json::from_value(value.clone())?;
         assert_eq!(parsed.photos.native_batch_size, 250);
         assert_eq!(parsed.photos.import_batch_size, 25);
@@ -710,6 +778,76 @@ mod tests {
             sources["photos.import_batch_size"],
             second.path().display().to_string()
         );
+        assert_eq!(
+            source_chain["photos.import_batch_size"],
+            vec!["default".to_owned(), second.path().display().to_string()]
+        );
+
+        let third = tempfile::NamedTempFile::new()?;
+        std::fs::write(
+            third.path(),
+            br#"{"config_version":1,"photos":{"native_batch_size":250},"tools":{"paths":{"cjxl":"/bin/echo"}}}"#,
+        )?;
+        apply_file(&mut value, third.path(), &mut sources, &mut source_chain)?;
+        assert_eq!(
+            source_chain["tools.paths.cjxl"],
+            vec![
+                second.path().display().to_string(),
+                third.path().display().to_string()
+            ]
+        );
+        assert_eq!(
+            sources["tools.paths.cjxl"],
+            third.path().display().to_string()
+        );
+        apply_file(&mut value, third.path(), &mut sources, &mut source_chain)?;
+        let mut loaded = LoadedConfig {
+            config: serde_json::from_value(value.clone())?,
+            sources: sources.clone(),
+            source_chain: source_chain.clone(),
+        };
+        loaded.config.photos.native_batch_size = 250;
+        record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "photos.native_batch_size",
+            "CLI",
+        );
+        assert_eq!(
+            loaded.source_chain["photos.native_batch_size"],
+            vec![
+                "default".to_owned(),
+                "env:MFB_PHOTOS_NATIVE_BATCH_SIZE".to_owned(),
+                file.path().display().to_string(),
+                third.path().display().to_string(),
+                third.path().display().to_string(),
+                "CLI".to_owned(),
+            ]
+        );
+        assert_eq!(loaded.config.photos.native_batch_size, 250);
+
+        record_source(
+            &mut sources,
+            &mut source_chain,
+            "photos.import_batch_size",
+            "CLI",
+        );
+        assert_eq!(
+            source_chain["photos.import_batch_size"],
+            vec![
+                "default".to_owned(),
+                second.path().display().to_string(),
+                "CLI".to_owned()
+            ]
+        );
+        assert_eq!(
+            sources["photos.import_batch_size"],
+            *source_chain["photos.import_batch_size"].last().unwrap()
+        );
+        assert_eq!(sources.len(), source_chain.len());
+        assert!(sources.iter().all(|(key, source)| {
+            source_chain.get(key).and_then(|chain| chain.last()) == Some(source)
+        }));
 
         for invalid in [
             r#"{"config_version":2}"#,
@@ -728,7 +866,13 @@ mod tests {
         ] {
             std::fs::write(file.path(), invalid)?;
             assert!(
-                apply_file(&mut value.clone(), file.path(), &mut sources.clone()).is_err(),
+                apply_file(
+                    &mut value.clone(),
+                    file.path(),
+                    &mut sources.clone(),
+                    &mut source_chain.clone()
+                )
+                .is_err(),
                 "accepted {invalid}"
             );
         }

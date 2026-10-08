@@ -478,6 +478,18 @@ view. Compact latest-error and latest-warning lines retain the specific cause
 through completion; generic summaries and exit messages cannot replace an existing
 error. Ordinary stderr output is not treated as a failure. These presentation-only
 highlights reset for the next batch and do not alter processor outcome counts.
+The live log follows explicit backend phases: file processing, then verification
+and delivery. Gate 1-3 share one view; short phases are combined to avoid rapid
+clearing. Phase changes only replace displayed text, preserving errors, warnings
+and recorded counts. Full worker output remains in SQLite history. Unknown phase
+events retain the current view with a warning instead of guessing a new phase.
+In Developer settings, the information button beside a runtime setting previews
+its actual value and applied configuration layers. IMG and VID are resolved
+separately when their performance settings differ. Previews do not save settings
+or run media processing. CLI `config show --effective` exposes the same ordered
+`source_chain` alongside each field's final `sources` entry; explicit overrides
+remain visible even when they keep the same value. History configuration snapshots
+continue to retain final sources, not this new preview-only override chain.
 **Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a
