@@ -92,6 +92,7 @@ photos_import_large_batch.rs
 !crates/gui/app-icon.png
 !crates/gui/src-tauri/icons/*.png
 !crates/gui/src-tauri/icons/*.ico
+!docs/assets/mfb-logo.png
 
 # Video
 *.mp4

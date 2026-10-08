@@ -911,7 +911,7 @@ fn parse_size_line_exact_bytes(rest: &str) -> Option<u64> {
         {
             return None;
         }
-        digits.replace(',', "").parse::<u64>().ok()
+        parse_size_metric_u64("exact bytes", &digits.replace(',', ""))
     })();
     if parsed.is_none() {
         eprintln!("invalid fast-img exact byte count: {rest}");

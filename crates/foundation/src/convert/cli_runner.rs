@@ -284,9 +284,10 @@ where
 
     let total_files = files.len();
     let pause_controller = Arc::new(PauseController::new());
-    let progress_bar = Arc::new(crate::CoarseProgressBar::new(
+    let progress_bar = Arc::new(crate::CoarseProgressBar::new_file_stage(
         crate::numeric_cast::usize_to_u64(total_files),
         &config.label,
+        crate::progress::FileProgressStage::VideoProcessing,
     ));
     let thread_config = crate::thread_manager::get_balanced_thread_config(
         crate::thread_manager::WorkloadType::Video,

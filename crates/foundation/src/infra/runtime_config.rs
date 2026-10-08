@@ -289,7 +289,7 @@ impl LoadedConfig {
         session_id: Option<&OsStr>,
         output: &mut impl Write,
     ) -> Result<()> {
-        if !session_id.is_some_and(|id| !id.is_empty()) {
+        if session_id.is_none_or(OsStr::is_empty) {
             return Ok(());
         }
         ensure!(
@@ -631,7 +631,7 @@ mod tests {
         let mut output = Vec::new();
         loaded.write_history_marker("img", None, &mut output)?;
         loaded.write_history_marker("img", Some(OsStr::new("")), &mut output)?;
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
         loaded.write_history_marker("img", Some(OsStr::new("session")), &mut output)?;
         let line = std::str::from_utf8(&output)?;
         let marker: Value = serde_json::from_str(

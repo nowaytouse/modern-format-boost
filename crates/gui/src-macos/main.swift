@@ -1840,6 +1840,71 @@ private func countStatusValue(in line: String) -> String? {
         .trimmingCharacters(in: .whitespaces)
 }
 
+private struct FileStageProgress {
+    struct Event: Decodable {
+        let schema_version: Int
+        let stage_id: String
+        let stage: String
+        let processed: UInt64
+        let total: UInt64
+        let state: String
+
+        var valid: Bool {
+            schema_version == 1 && !stage_id.isEmpty && stage_id.utf8.count <= 64
+                && ["image_processing", "video_processing", "fast_img_encode"].contains(stage)
+                && ["running", "finished"].contains(state)
+                && processed <= total && total <= UInt64(Int64.max)
+        }
+
+        var percentage: Double? {
+            guard total > 0 else { return nil }
+            // Do not round an unfinished stage up to 100.00%.
+            return processed == total ? 100 : min(99.99, Double(processed) / Double(total) * 100)
+        }
+    }
+
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    static func payload(_ line: String) -> Substring? {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_PROGRESS="
+        return raw.hasPrefix(prefix) ? raw.dropFirst(prefix.count) : nil
+    }
+
+    mutating func ingest(_ line: String) -> Bool {
+        guard let payload = Self.payload(line) else { return false }
+        guard payload.utf8.count <= 1_024,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)), next.valid else {
+            event = nil
+            invalid = true
+            return true
+        }
+        if let previous = event, previous.stage_id == next.stage_id {
+            guard previous.stage == next.stage, previous.total == next.total,
+                  next.processed >= previous.processed,
+                  previous.state != "finished" || next.state == "finished" else {
+                event = nil
+                invalid = true
+                return true
+            }
+        }
+        event = next
+        invalid = false
+        return true
+    }
+
+    var label: String {
+        guard let event else { return localized("progress.unavailable") }
+        let stage = localized("progress.stage.\(event.stage)")
+        if event.state == "finished" {
+            return localized("progress.stage_finished", stage, String(event.processed), String(event.total))
+        }
+        guard let percentage = event.percentage else { return localized("progress.empty", stage) }
+        return localized("progress.files", stage, String(event.processed), String(event.total), percentage)
+    }
+}
+
 private struct BatchResults {
     struct Event: Decodable {
         let schemaVersion: Int
@@ -2183,6 +2248,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     private var criticalBytes = 0
     private var criticalEntries = 0
     private var criticalOverflow = false
+    private var pendingProgress: String?
     private var omittedEntries: UInt64 = 0
     private var deliveryInFlight = false
 
@@ -2201,6 +2267,11 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
         // Control records and diagnostics have a separate bounded reserve, preserving arrival order.
         for line in entry.split(separator: "\n", omittingEmptySubsequences: false) {
             let text = String(line)
+            // Progress is a replaceable snapshot, not a result or diagnostic.
+            if let payload = FileStageProgress.payload(text) {
+                pendingProgress = payload.utf8.count <= 1_024 ? text : "MFB_PROGRESS={}"
+                continue
+            }
             let tone = LogTone.classify(text)
             let critical = text.contains("MFB_")
                 || text.contains("[PHOTOS PROFILE]") || countStatusValue(in: text) != nil
@@ -2237,6 +2308,10 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
         defer { lock.unlock() }
         guard deliveryInFlight else { return nil }
         var payload = pending
+        if let progress = pendingProgress {
+            payload = progress + (payload.isEmpty ? "" : "\n" + payload)
+        }
+        pendingProgress = nil
         if omittedEntries > 0 {
             if !payload.isEmpty { payload.append("\n") }
             payload.append(localized("log.omitted", omittedEntries))
@@ -2259,7 +2334,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     func finishDelivery() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0 || pendingProgress != nil
         if !hasPending { deliveryInFlight = false }
         return hasPending
     }
@@ -2267,7 +2342,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     var isIdle: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0 && omittedEntries == 0
+        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0 && omittedEntries == 0 && pendingProgress == nil
     }
 }
 
@@ -2883,6 +2958,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var countStatus: String?
     private let statusLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
+    private let fileProgressIndicator = NSProgressIndicator()
+    private let fileProgressLabel = NSTextField(labelWithString: "")
+    private let fileProgressRow = NSStackView()
+    private var fileProgress = FileStageProgress()
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
     private let backupButton = NSButton(title: "", target: nil, action: nil)
     private let backupRow = NSStackView()
@@ -3046,12 +3125,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         icon.action = #selector(showAbout)
         icon.toolTip = localized("menu.about")
         icon.setAccessibilityLabel(localized("menu.about"))
-        icon.image = NSImage(
-            systemSymbolName: "photo.stack.fill",
-            accessibilityDescription: "Modern Format Boost",
-        )
-        icon.image = icon.image?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 24, weight: .medium))
-        icon.contentTintColor = .controlAccentColor
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 36).isActive = true
         icon.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         subtitleLabel.font = .systemFont(ofSize: 12)
@@ -3249,6 +3326,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         countStatusLabel.isHidden = true
         countStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        fileProgressIndicator.style = .bar
+        fileProgressIndicator.minValue = 0
+        fileProgressIndicator.maxValue = 100
+        fileProgressIndicator.isIndeterminate = false
+        fileProgressIndicator.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        fileProgressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        fileProgressLabel.lineBreakMode = .byTruncatingTail
+        fileProgressLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fileProgressRow.orientation = .horizontal
+        fileProgressRow.alignment = .centerY
+        fileProgressRow.spacing = 12
+        fileProgressRow.addArrangedSubview(fileProgressIndicator)
+        fileProgressRow.addArrangedSubview(fileProgressLabel)
+        fileProgressRow.isHidden = true
+
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -3265,7 +3357,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.spacing = 8
         let stack = NSStackView(views: [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, logScroll, statusRow,
+            countStatusLabel, fileProgressRow, logScroll, statusRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3274,7 +3366,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, logScroll, statusRow,
+            countStatusLabel, fileProgressRow, logScroll, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -3457,6 +3549,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func clearBatchLog() {
         logView.string = ""
         batchResults = BatchResults()
+        fileProgress = FileStageProgress()
+        refreshFileProgress()
         photosDiagnostics.reset()
         refreshDiagnostics()
         countStatus = nil
@@ -3704,7 +3798,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func appendLog(_ text: String) {
-        let displayText = text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+        let displayText = text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
+            if fileProgress.ingest(String(line)) {
+                refreshFileProgress()
+                return nil
+            }
             if let summary = batchResults.ingest(String(line)) {
                 return developerMode ? "\(line)\n\(summary)" : summary
             }
@@ -3730,6 +3828,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 refreshCountStatus()
             }
         }
+        guard !displayText.isEmpty else { return }
         let storage = logView.textStorage!
         if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
         storage.append(styledLog(displayText))
@@ -3758,6 +3857,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         countStatusLabel.stringValue = localized("status.count", countStatus)
         countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal : .systemRed
         countStatusLabel.isHidden = false
+    }
+
+    private func refreshFileProgress() {
+        fileProgressRow.isHidden = fileProgress.event == nil && !fileProgress.invalid
+        fileProgressLabel.stringValue = fileProgress.label
+        fileProgressLabel.toolTip = fileProgress.label
+        fileProgressIndicator.isIndeterminate = fileProgress.invalid || fileProgress.event?.percentage == nil
+            || fileProgress.event?.state == "finished"
+        fileProgressIndicator.doubleValue = fileProgress.event?.percentage ?? 0
+        fileProgressIndicator.setAccessibilityLabel(fileProgress.label)
+        if fileProgressIndicator.isIndeterminate && !configurationControlsEnabled {
+            fileProgressIndicator.startAnimation(nil)
+        } else {
+            fileProgressIndicator.stopAnimation(nil)
+        }
     }
 
     private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest) {
@@ -3943,6 +4057,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
         replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
         refreshCountStatus()
+        refreshFileProgress()
         refreshDiagnostics()
         refreshProcessingStatus()
     }
@@ -4025,6 +4140,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             if let activity = processingActivity { ProcessInfo.processInfo.endActivity(activity) }
             processingActivity = nil
             progressIndicator.stopAnimation(nil)
+            fileProgress = FileStageProgress()
+            refreshFileProgress()
         }
     }
 
@@ -4045,8 +4162,24 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "Main form width, log area or visible version regressed")
         }
         appendLog("previous batch sentinel")
+        let progressLine = #"MFB_PROGRESS={"schema_version":1,"stage_id":"synthetic-1","stage":"fast_img_encode","processed":1,"total":3,"state":"running"}"#
+        appendLog(progressLine)
+        content.layoutSubtreeIfNeeded()
+        guard !fileProgressRow.isHidden, !fileProgressIndicator.isIndeterminate,
+              abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+              !logView.string.contains("MFB_PROGRESS="), batchResults.totals.isEmpty,
+              content.bounds.contains(content.convert(fileProgressRow.bounds, from: fileProgressRow)),
+              logScroll.frame.height >= 260 else {
+            throw HostError(message: "File progress layout or separation from outcomes failed")
+        }
+        appendLog(progressLine.replacingOccurrences(of: "running", with: "finished"))
+        guard fileProgressIndicator.isIndeterminate, fileProgress.event?.processed == 1,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "An incomplete stage was shown as batch completion")
+        }
         clearBatchLog()
-        guard !logView.string.contains("previous batch sentinel"),
+        guard fileProgressRow.isHidden, fileProgress.event == nil,
+              !logView.string.contains("previous batch sentinel"),
               logView.string.contains(initialHistoryDirectory(preferences: preferences).path) else {
             throw HostError(message: "Batch logs were not cleared with a history location")
         }
@@ -4391,6 +4524,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 private func runSelfTest() -> Int32 {
     do {
         try runProcessingHistorySelfTests()
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            guard let iconURL = Bundle.main.url(forResource: "icon", withExtension: "icns"),
+                  let image = NSImage(contentsOf: iconURL), image.isValid,
+                  image.representations.contains(where: { $0.pixelsWide == 1024 && $0.pixelsHigh == 1024 })
+            else {
+                fputs("native-host self-test bundled application icon failed\n", stderr)
+                return 1
+            }
+        }
         guard !mainWindowStyleMask.contains(.resizable),
               mainWindowContentSize == NSSize(width: 980, height: 720)
         else {
@@ -4684,6 +4826,43 @@ private func runSelfTest() -> Int32 {
             return 1
         }
         let backpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
+        var fileProgress = FileStageProgress()
+        let stageStart = #"MFB_PROGRESS={"schema_version":1,"stage_id":"unit-1","stage":"image_processing","processed":0,"total":20000,"state":"running"}"#
+        let almostComplete = stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":19999")
+        guard fileProgress.ingest(stageStart), fileProgress.event?.percentage == 0,
+              fileProgress.ingest(almostComplete), fileProgress.event?.percentage == 99.99,
+              fileProgress.ingest(almostComplete.replacingOccurrences(of: "running", with: "finished")),
+              fileProgress.event?.processed == 19999, fileProgress.event?.state == "finished",
+              fileProgress.ingest(stageStart), fileProgress.invalid, fileProgress.event == nil else {
+            throw HostError(message: "Progress regressed, rounded unfinished work to 100%, or fabricated completion")
+        }
+        for invalid in [
+            stageStart.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2"),
+            stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":-1"),
+            stageStart.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":20001"),
+            stageStart.replacingOccurrences(of: "20000", with: "18446744073709551616"),
+            stageStart.replacingOccurrences(of: "image_processing", with: "unknown_stage"),
+            "MFB_PROGRESS={}",
+        ] {
+            guard fileProgress.ingest(invalid), fileProgress.invalid, fileProgress.event == nil else {
+                throw HostError(message: "Invalid progress invented a percentage")
+            }
+        }
+        let emptyStage = stageStart.replacingOccurrences(of: "20000", with: "0")
+        guard fileProgress.ingest(emptyStage), fileProgress.event?.percentage == nil,
+              fileProgress.ingest(stageStart.replacingOccurrences(of: "unit-1", with: "unit-2")),
+              fileProgress.event?.percentage == 0 else {
+            throw HostError(message: "An empty or subsequent stage inherited a fake percentage")
+        }
+        let coalesced = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 1_024, maxCriticalEntries: 1)
+        for _ in 0..<1_000 { _ = coalesced.enqueue(stageStart) }
+        _ = coalesced.enqueue(almostComplete)
+        _ = coalesced.enqueue(skipped)
+        guard let snapshot = coalesced.takeDelivery(), snapshot.contains(almostComplete),
+              !snapshot.contains(stageStart), snapshot.contains(skipped), !snapshot.contains("MFB_BATCH_RESULT={}"),
+              !coalesced.finishDelivery(), coalesced.isIdle else {
+            throw HostError(message: "Progress flooded the diagnostic reserve or displaced a result")
+        }
         let expectedBackpressure = "first\nsecond\n\(localized("log.omitted", UInt64(1)))"
         guard backpressure.enqueue("first"), !backpressure.enqueue("second"),
               !backpressure.enqueue("omitted"),

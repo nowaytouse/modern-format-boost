@@ -368,6 +368,13 @@
 "history.issue.scan_limit" = "The history scan limit was reached; this record is incomplete.";
 "history.issue.conflicting_copies" = "Active and archived copies disagree; this batch cannot be confirmed.";
 "settings.search" = "Search Settings";
+"progress.stage.image_processing" = "Image processing";
+"progress.stage.video_processing" = "Video processing";
+"progress.stage.fast_img_encode" = "Fast IMG encoding";
+"progress.files" = "%@ · Files %@ / %@ · %.2f%%";
+"progress.stage_finished" = "%@ stage ended · %@ / %@ files";
+"progress.empty" = "%@ · No files in this stage";
+"progress.unavailable" = "File progress unavailable";
 "settings.search.results" = "Matching Settings";
 "settings.search.empty" = "No matching settings";
 "history.space.title" = "File Size Comparison";

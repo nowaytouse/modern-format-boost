@@ -2603,9 +2603,9 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
 ]
@@ -2952,9 +2952,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.6+spec-1.1.0"
+version = "1.1.7+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+checksum = "7874cd34dd99040fc24e30923aa64a60a81ff3ddfe2b8129ccc84ba24949deed"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -2967,18 +2967,18 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
 dependencies = [
  "serde_core",
 ]
 
 [[package]]
 name = "toml_edit"
-version = "0.25.15+spec-1.1.0"
+version = "0.25.16+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1340ea94a5856333492c9064b02c778b191dd2c853778d9609debdcdfea3a614"
+checksum = "88f38f3af8bf71841c67a990f4e2b52143b2d0a1a994c72513ff4c14977fc722"
 dependencies = [
  "indexmap",
  "toml_datetime",
@@ -2988,23 +2988,23 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.3+spec-1.1.0"
+version = "1.1.4+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+checksum = "bed810ee007d8e7f9cf20b4774e7198142fa27186e0f805871da7f3c39eaf333"
 dependencies = [
  "winnow",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -3014,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -3026,7 +3026,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3036,7 +3036,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "valuable",
 ]
@@ -3044,7 +3044,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "log",
  "once_cell",
@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "serde",
  "tracing-core",
@@ -3063,7 +3063,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#d9d4c542de10f5d3a711b7a45ffe450fd0666437"
+source = "git+https://github.com/tokio-rs/tracing#b0c674ca06632497a721763dcb597d53f2e18931"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -3607,7 +3607,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.61"
-source = "git+https://github.com/google/zerocopy#7bbce8dcf43f7c5038a398ce965c5cb114c90502"
+source = "git+https://github.com/google/zerocopy#12f746d2307c30455db1875b9b80e45ada5b8675"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3615,7 +3615,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.61"
-source = "git+https://github.com/google/zerocopy#7bbce8dcf43f7c5038a398ce965c5cb114c90502"
+source = "git+https://github.com/google/zerocopy#12f746d2307c30455db1875b9b80e45ada5b8675"
 dependencies = [
  "proc-macro2",
  "quote",

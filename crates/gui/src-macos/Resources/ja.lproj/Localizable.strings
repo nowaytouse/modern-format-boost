@@ -368,6 +368,13 @@
 "history.issue.scan_limit" = "履歴の読み取り上限に達したため、この記録は不完全です。";
 "history.issue.conflicting_copies" = "実行中とアーカイブの記録が一致しないため、結果を確認できません。";
 "settings.search" = "設定を検索";
+"progress.stage.image_processing" = "画像処理";
+"progress.stage.video_processing" = "動画処理";
+"progress.stage.fast_img_encode" = "Fast IMG エンコード";
+"progress.files" = "%@ · ファイル %@ / %@ · %.2f%%";
+"progress.stage_finished" = "%@段階終了 · %@ / %@ ファイル";
+"progress.empty" = "%@ · この段階のファイルなし";
+"progress.unavailable" = "ファイル進捗を取得できません";
 "settings.search.results" = "一致する設定";
 "settings.search.empty" = "一致する設定がありません";
 "history.space.title" = "ファイルサイズ比較";

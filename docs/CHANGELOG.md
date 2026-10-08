@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Stage-scoped live progress (2026-10-08)
+
+- Add shared, versioned file-progress snapshots for launcher-managed standard
+  IMG/VID batches and Fast IMG encoding. Native GUI shows the current stage,
+  processed/total files and a two-decimal percentage, independently of success
+  counts and final delivery results. Unknown or invalid progress is not shown as
+  zero or completion; unfinished work never rounds up to 100.00%.
+- Count Fast IMG encode dispositions only after wave results are persisted;
+  failures and skips advance the stage, while resume-reused outputs remain outside
+  its pending-job denominator. Early termination keeps the actual processed count.
+- Serialize parallel progress updates, prevent stale terminal updates from moving
+  counts backward, and frame structured records separately from PTY redraws.
+  Throttle emitted snapshots and coalesce GUI refreshes outside the diagnostic
+  reserve; launcher SQLite retains emitted records without replacing batch results.
+
+### Approved first logo and CI corrections (2026-10-08)
+
+- Adopt the approved first media-card logo in the macOS app icon, main-window
+  identity and both README pages. Package standard and Retina icon sizes without
+  redesigning the source artwork; native self-test verifies the bundled image.
+- Fix strict CI lint failures in session configuration and launcher error handling,
+  preserving output draining and the original error. Exact byte-count parsing now
+  reports numeric failures through the shared metric parser instead of discarding
+  the parse error; malformed or overflowing counts remain unknown, not zero.
+- Preserve the workspace dependency refresh for TOML, tracing and zerocopy,
+  plus the pinned OSS-Fuzz builder image update.
+
 ### Searchable Settings and scoped size history (2026-10-08)
 
 - Search native Settings by localized names, sections and choices; Developer mode

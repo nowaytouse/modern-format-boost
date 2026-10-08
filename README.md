@@ -1,5 +1,7 @@
 # Modern Format Boost
 
+<img src="docs/assets/mfb-logo.png" alt="Modern Format Boost" width="160" height="160">
+
 ![Version](https://img.shields.io/badge/version-0.12.0-0969DA?style=for-the-badge&logo=rust&logoColor=white)
 ![Rust](<https://img.shields.io/badge/rust-2024_edition_(nightly)-E57324?style=for-the-badge&logo=rust&logoColor=white>)
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
@@ -94,6 +96,16 @@ reused files are excluded; resume-only totals are not attributed to a new run.
 Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.
+
+### Live file progress
+
+During launcher-managed standard IMG/VID batches and Fast IMG encoding, the native
+GUI shows stage-specific file progress with processed/total counts and two decimal
+places. This is not a time estimate or whole-run completion: failed and skipped
+files can advance a stage, and verification/delivery may still follow. Fast IMG
+counts newly pending jobs only after their wave results are persisted, excluding
+resume-reused outputs. Other phases remain indeterminate until reliable totals
+are available; final success still comes from the processing result.
 
 ### Cache management
 

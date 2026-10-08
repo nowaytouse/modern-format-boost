@@ -772,10 +772,10 @@ impl LaunchCommand {
                 },
             );
             set_child_active(false);
-            if let Err(error) = output.flush() {
-                if session_log_error.is_none() {
-                    session_log_error = Some(error);
-                }
+            if let Err(error) = output.flush()
+                && session_log_error.is_none()
+            {
+                session_log_error = Some(error);
             }
             match result {
                 Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
@@ -846,10 +846,10 @@ impl LaunchCommand {
                 sess.append_line(&sess.session_log, &event),
                 sess.append_line(&sess.verbose_log, &event),
             ] {
-                if let Err(cause) = result {
-                    if collected_error.is_none() {
-                        collected_error = Some(cause);
-                    }
+                if let Err(cause) = result
+                    && collected_error.is_none()
+                {
+                    collected_error = Some(cause);
                 }
             }
             if stats.exit_code != 0 {
@@ -863,10 +863,10 @@ impl LaunchCommand {
                     sess.append_line(&sess.session_log, &error_event),
                     sess.append_line(&sess.verbose_log, &error_event),
                 ] {
-                    if let Err(cause) = result {
-                        if collected_error.is_none() {
-                            collected_error = Some(cause);
-                        }
+                    if let Err(cause) = result
+                        && collected_error.is_none()
+                    {
+                        collected_error = Some(cause);
                     }
                 }
             }
@@ -2718,13 +2718,13 @@ fn run_drag_drop_inner(
             size_summary_block = Some(block);
         }
     }
-    if let Some(sess) = session {
-        if let Err(error) = sess.finish_log(&summary, size_summary_block.as_deref()) {
-            if first_error.is_none() {
-                return Err(error).context("write final processing summary");
-            }
-            eprintln!("[LOG] final processing summary write failed: {error:#}");
+    if let Some(sess) = session
+        && let Err(error) = sess.finish_log(&summary, size_summary_block.as_deref())
+    {
+        if first_error.is_none() {
+            return Err(error).context("write final processing summary");
         }
+        eprintln!("[LOG] final processing summary write failed: {error:#}");
     }
     print_elapsed(started.elapsed());
     eprintln!(
@@ -3861,13 +3861,15 @@ mod tests {
         symlink("/bin/sh", &program).unwrap();
         let receipt = temp.path().join("session_id");
         let marker = format!("MFB_HISTORY_CONFIG={}", synthetic_config_marker("img"));
+        let progress = "MFB_PROGRESS={\"schema_version\":1,\"stage_id\":\"synthetic-1\",\"stage\":\"image_processing\",\"processed\":1,\"total\":1,\"state\":\"finished\"}";
         let command = LaunchCommand::from_argv(vec![
             program.to_string_lossy().into_owned(),
             "-c".into(),
-            "printf '%s\\n' \"$1\"; printf 'Succeeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'; printf '%s' \"$MFB_SESSION_ID\" > \"$2\"".into(),
+            "printf '%s\\n' \"$1\" \"$3\"; printf 'Succeeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'; printf '%s' \"$MFB_SESSION_ID\" > \"$2\"".into(),
             "test".into(),
             marker,
             receipt.to_string_lossy().into_owned(),
+            progress.to_owned(),
         ])
         .unwrap();
         for expected in 1..=2 {
@@ -3891,6 +3893,13 @@ mod tests {
         )
         .unwrap();
         assert!(!worker_output.contains("MFB_HISTORY_CONFIG="));
+        assert_eq!(
+            worker_output
+                .lines()
+                .filter(|line| *line == progress)
+                .count(),
+            2
+        );
     }
 
     #[cfg(unix)]

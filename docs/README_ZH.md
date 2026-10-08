@@ -1,5 +1,7 @@
 # Modern Format Boost
 
+<img src="assets/mfb-logo.png" alt="Modern Format Boost" width="160" height="160">
+
 ![Version](https://img.shields.io/badge/version-0.12.0-0969DA?style=for-the-badge&logo=rust&logoColor=white)
 ![Rust](<https://img.shields.io/badge/rust-2024_edition_(nightly)-E57324?style=for-the-badge&logo=rust&logoColor=white>)
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
@@ -77,6 +79,11 @@ JPEG 的 XMP 探测遵循数据段边界，包括渐进式图像的扫描间元�
 区分减少、增加和不变；跳过、失败、复用文件不计入，仅恢复旧进度也不冒充本次收益。
 缺少可比数据时明确显示未记录，体积记录损坏不抹掉有效处理计数或失败结果。
 这里显示文件体积差，不代表保留原件时磁盘空间已经释放。
+
+标准 IMG/VID 批处理与 Fast IMG 编码现在显示当前阶段的文件进度：已处理数、总数和
+两位小数的百分比。它不是耗时预测，也不代表整批完成；失败、跳过同样属于已处理，
+核验和交付仍可能继续。Fast IMG 仅统计本次待处理任务，在一批结果写入检查点后更新，
+不把恢复时复用的旧输出算入分母。没有可靠总数的步骤保持不确定状态，提前结束不会补成 100%。
 
 新批次的目录信息、计数、核验结果和结束状态统一保存到日志目录内的 `history.sqlite3`，
 与可清理的分析缓存分开。历史窗口只读查询近期批次，并限制读取条数和大小；旧 JSONL

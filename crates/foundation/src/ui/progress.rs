@@ -20,6 +20,157 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
+static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileProgressStage {
+    ImageProcessing,
+    VideoProcessing,
+    FastImgEncode,
+}
+
+#[derive(serde::Serialize)]
+struct FileProgressEvent<'a> {
+    schema_version: u8,
+    stage_id: &'a str,
+    stage: FileProgressStage,
+    processed: u64,
+    total: u64,
+    state: &'static str,
+}
+
+struct FileProgressState {
+    processed: u64,
+    total: u64,
+    finished: bool,
+    last_emit: Instant,
+}
+
+impl FileProgressState {
+    fn update(&mut self, processed: u64, finish: bool, now: Instant) -> bool {
+        if self.finished || processed > self.total {
+            return false;
+        }
+        self.processed = self.processed.max(processed);
+        self.finished = finish;
+        if finish || now.duration_since(self.last_emit) >= Duration::from_millis(250) {
+            self.last_emit = now;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Counts classified files within one stage, independently of terminal rendering.
+pub struct FileStageProgress {
+    stage_id: String,
+    stage: FileProgressStage,
+    state: Option<Mutex<FileProgressState>>,
+}
+
+impl FileStageProgress {
+    #[must_use]
+    pub fn new(total: u64, stage: FileProgressStage) -> Self {
+        let enabled = std::env::var_os("MFB_SESSION_ID").is_some_and(|id| !id.is_empty());
+        let reporter = Self {
+            stage_id: format!(
+                "{}-{}",
+                std::process::id(),
+                FILE_STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ),
+            stage,
+            state: enabled.then(|| {
+                Mutex::new(FileProgressState {
+                    processed: 0,
+                    total,
+                    finished: false,
+                    last_emit: Instant::now(),
+                })
+            }),
+        };
+        if let Some(snapshot) = &reporter.state {
+            let snapshot = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_start",
+                snapshot.lock(),
+            );
+            reporter.emit(&snapshot);
+        }
+        reporter
+    }
+
+    fn emit(&self, state: &FileProgressState) {
+        let event = FileProgressEvent {
+            schema_version: 1,
+            stage_id: &self.stage_id,
+            stage: self.stage,
+            processed: state.processed,
+            total: state.total,
+            state: if state.finished {
+                "finished"
+            } else {
+                "running"
+            },
+        };
+        let result = serde_json::to_vec(&event)
+            .map_err(io::Error::other)
+            .and_then(|json| {
+                // PTY stdout and stderr share a line; separate from terminal redraws.
+                let mut line = b"\nMFB_PROGRESS=".to_vec();
+                line.extend(json);
+                line.push(b'\n');
+                let _terminal_guard = crate::media_conversion_gate::delivery_terminal_lock_guard(
+                    "file_stage_progress_emit",
+                );
+                let mut stdout = io::stdout().lock();
+                stdout.write_all(&line)?;
+                stdout.flush()
+            });
+        if let Err(error) = result {
+            tracing::error!(%error, "failed to write file stage progress");
+        }
+    }
+
+    pub fn set(&self, processed: u64) {
+        if let Some(state) = &self.state {
+            let mut state = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_update",
+                state.lock(),
+            );
+            if processed > state.total {
+                tracing::error!(
+                    processed,
+                    total = state.total,
+                    "file stage progress exceeds inventory"
+                );
+                return;
+            }
+            if state.update(processed, false, Instant::now()) {
+                self.emit(&state);
+            }
+        }
+    }
+
+    pub fn finish(&self) {
+        if let Some(state) = &self.state {
+            let mut state = crate::media_conversion_gate::mutex_guard_or_recover(
+                "file_stage_progress_finish",
+                state.lock(),
+            );
+            let processed = state.processed;
+            if state.update(processed, true, Instant::now()) {
+                self.emit(&state);
+            }
+        }
+    }
+}
+
+impl Drop for FileStageProgress {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
 const SUB_SPINNER_TEMPLATE: &str = "  {spinner:.green} {prefix:.dim}: {msg}";
 const EXPLORE_BAR_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ \
                                     {percent:>3}% • {pos}/{len} • {msg}";
@@ -70,6 +221,7 @@ pub struct CoarseProgressBar {
     message: Arc<Mutex<String>>,
     is_finished: AtomicBool,
     enabled: bool,
+    file_stage: Option<FileStageProgress>,
 }
 
 fn progress_line_enabled() -> bool {
@@ -483,11 +635,22 @@ impl CoarseProgressBar {
             message: Arc::new(Mutex::new(String::new())),
             is_finished: AtomicBool::new(false),
             enabled,
+            file_stage: None,
         }
     }
 
+    #[must_use]
+    pub fn new_file_stage(total: u64, prefix: &str, stage: FileProgressStage) -> Self {
+        let mut bar = Self::new(total, prefix);
+        bar.file_stage = Some(FileStageProgress::new(total, stage));
+        bar
+    }
+
     pub fn set(&self, current: u64) {
-        self.current.store(current, Ordering::Relaxed);
+        self.current.fetch_max(current, Ordering::Relaxed);
+        if let Some(stage) = &self.file_stage {
+            stage.set(current);
+        }
 
         if !self.enabled {
             return;
@@ -510,6 +673,9 @@ impl CoarseProgressBar {
 
     pub fn inc(&self) {
         let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(stage) = &self.file_stage {
+            stage.set(current);
+        }
         if current.is_multiple_of(10) {
             self.set(current);
         }
@@ -587,6 +753,9 @@ impl CoarseProgressBar {
     }
 
     pub fn finish(&self) {
+        if let Some(stage) = &self.file_stage {
+            stage.finish();
+        }
         if self.is_finished.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -609,6 +778,9 @@ impl CoarseProgressBar {
     }
 
     pub fn finish_and_clear(&self) {
+        if let Some(stage) = &self.file_stage {
+            stage.finish();
+        }
         if self.is_finished.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -1835,6 +2007,64 @@ impl Default for GlobalProgressManager {
 mod tests {
     use super::*;
     use console::measure_text_width;
+
+    #[test]
+    fn coarse_file_count_preserves_max_after_out_of_order_updates() {
+        let bar = CoarseProgressBar::new(10, "test");
+        bar.set(7);
+        bar.set(3);
+        bar.set_message("updated label");
+        assert_eq!(bar.current.load(Ordering::Relaxed), 7);
+        bar.finish_and_clear();
+    }
+
+    #[test]
+    fn file_stage_updates_are_monotonic_throttled_and_finish_at_actual_count() {
+        let start = Instant::now();
+        let mut state = FileProgressState {
+            processed: 0,
+            total: 10,
+            finished: false,
+            last_emit: start,
+        };
+        assert!(!state.update(4, false, start + Duration::from_millis(100)));
+        assert_eq!(state.processed, 4);
+        assert!(state.update(2, false, start + Duration::from_millis(250)));
+        assert_eq!(state.processed, 4);
+        assert!(!state.update(11, false, start + Duration::from_millis(500)));
+        assert_eq!(state.processed, 4);
+        assert!(state.update(4, true, start + Duration::from_millis(251)));
+        assert_eq!(state.processed, 4);
+        assert!(state.finished);
+        assert!(!state.update(10, true, start + Duration::from_secs(1)));
+        assert_eq!(state.processed, 4);
+    }
+
+    #[test]
+    fn file_stage_event_has_explicit_schema_without_paths_or_success_claims() {
+        for (stage, expected) in [
+            (FileProgressStage::ImageProcessing, "image_processing"),
+            (FileProgressStage::VideoProcessing, "video_processing"),
+            (FileProgressStage::FastImgEncode, "fast_img_encode"),
+        ] {
+            let json = serde_json::to_value(FileProgressEvent {
+                schema_version: 1,
+                stage_id: "42-3",
+                stage,
+                processed: 2,
+                total: 7,
+                state: "finished",
+            })
+            .expect("serialize file progress event");
+            assert_eq!(
+                json,
+                serde_json::json!({
+                    "schema_version": 1, "stage_id": "42-3", "stage": expected,
+                    "processed": 2, "total": 7, "state": "finished",
+                })
+            );
+        }
+    }
 
     #[test]
     fn test_format_bytes() {

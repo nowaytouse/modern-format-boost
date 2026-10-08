@@ -2865,9 +2865,10 @@ fn auto_convert_directory(
     let abort_reason = std::sync::Mutex::new(None::<String>);
 
     foundation::progress_mode::enable_quiet_mode();
-    let progress_bar = Arc::new(foundation::CoarseProgressBar::new(
+    let progress_bar = Arc::new(foundation::CoarseProgressBar::new_file_stage(
         foundation::numeric_cast::usize_to_u64(total),
         "Image Optimization",
+        foundation::progress::FileProgressStage::ImageProcessing,
     ));
 
     let max_threads = pool_size;
@@ -9405,6 +9406,11 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
         "source JPEG"
     };
     let pending = jobs.len();
+    let encode_progress = foundation::progress::FileStageProgress::new(
+        u64::try_from(pending).context("fast-img pending count exceeds u64")?,
+        foundation::progress::FileProgressStage::FastImgEncode,
+    );
+    let mut classified = 0u64;
     if pending > 0 {
         let thread_config = foundation::thread_manager::get_balanced_thread_config(
             foundation::thread_manager::WorkloadType::Image,
@@ -9485,6 +9491,19 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                 src_dir,
                 working_copy,
             )?;
+            let failed = u64::try_from(wave_summary.session_failed)
+                .context("fast-img failed count exceeds u64")?;
+            let skipped = u64::try_from(wave_summary.session_skipped)
+                .context("fast-img skipped count exceeds u64")?;
+            let wave_classified = wave_summary
+                .session_converted
+                .checked_add(failed)
+                .and_then(|count| count.checked_add(skipped))
+                .context("fast-img wave disposition count overflow")?;
+            classified = classified
+                .checked_add(wave_classified)
+                .context("fast-img processed count overflow")?;
+            encode_progress.set(classified);
             summary.encoded = wave_summary.encoded;
             summary.session_converted += wave_summary.session_converted;
             summary.session_source_bytes = summary
@@ -9499,6 +9518,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             summary.session_skipped += wave_summary.session_skipped;
         }
         foundation::batch_control::checkpoint()?;
+        encode_progress.finish();
         print_fast_img_session_size_summary(
             summary.session_converted,
             summary.session_source_bytes,
@@ -9548,6 +9568,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             );
         }
     } else {
+        encode_progress.finish();
         marker.encoded_count = completed_from_resume;
         println!(
             "[{encode_label}] 0 pending · reused {completed_from_resume}/{total} verified outputs"
