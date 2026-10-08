@@ -474,7 +474,11 @@ and uses **unknown** when a child did not report a count. A nonzero child exit
 or a reported file failure cannot become an all-success completion message.
 
 The GUI always enables detailed logs and starts each batch with a clean log
-view. **Processing History** opens a read-only recent-batch inspector with search,
+view. Compact latest-error and latest-warning lines retain the specific cause
+through completion; generic summaries and exit messages cannot replace an existing
+error. Ordinary stderr output is not treated as a failure. These presentation-only
+highlights reset for the next batch and do not alter processor outcome counts.
+**Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a
 batch to inspect its details or open its corresponding log without browsing
@@ -493,9 +497,13 @@ over a session's legacy audit, so archiving cannot duplicate its counts. Unknown
 database versions and write failures are explicit errors, never automatic resets.
 The launcher's captured combined worker output is now buffered into the same
 database, not duplicated into session and verbose text logs. **View processing
-output** reads the selected batch's latest 1,000 records, bounded to 2 MB, and
-shows the displayed/total record count. Batch sequence boundaries keep watch-mode
-runs separate; output is not interpreted as authoritative failure/warning counts.
+output** opens its latest page, with older/newer navigation and a Summary/Output
+switch. Each page is bounded to 1,000 records and 2 MiB; record ranges and totals
+refer to the captured output snapshot, not files. A Diagnostics filter shows only
+warnings, errors and unreadable-row notices on the current page. Oversized or
+invalid records are explicitly marked without blocking navigation. Refresh to
+include output appended since the snapshot. Batch sequence boundaries keep
+watch-mode runs separate; output is not interpreted as authoritative failure counts.
 History schema v1 upgrades transactionally to v2 while retaining earlier events.
 Batch details also retain the running version and explicit retry/resume requests.
 Internal tracing, pipeline audit files and recovery checkpoints have not yet fully

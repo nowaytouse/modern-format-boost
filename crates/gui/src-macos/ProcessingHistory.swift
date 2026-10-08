@@ -301,10 +301,23 @@ private enum HistoryStore {
     static let maximumConfigSnapshots = 64
 
     struct Output {
-        let text: String
-        let shown: Int
+        struct Row {
+            let sequence: Int64
+            let text: String
+            let diagnostic: Bool
+        }
+        let rows: [Row]
         let total: Int64
+        let upper: Int64
+        let firstOrdinal: Int64
+        let issues: [String]
+        var text: String { rows.map(\.text).joined(separator: "\n") }
+        var shown: Int { rows.count }
+        var hasOlder: Bool { shown > 0 && firstOrdinal > 1 }
+        var hasNewer: Bool { shown > 0 && firstOrdinal + Int64(shown) - 1 < total }
     }
+
+    enum OutputDirection { case older, newer }
 
     struct Candidate {
         let stamp: String
@@ -548,10 +561,11 @@ private enum HistoryStore {
         return parent + "/" + url.lastPathComponent
     }
 
-    static func output(for entry: HistoryEntry) throws -> Output {
+    static func output(for entry: HistoryEntry, cursor: Int64? = nil,
+                       direction: OutputDirection = .older, upperSnapshot: Int64? = nil) throws -> Output {
         guard entry.hasStoredOutput, let start = entry.context?.output_sequence, start >= 0,
               regularFile(entry.audit) else { throw databaseError(nil, "processing output is unavailable") }
-        let end = entry.finished?.output_sequence ?? entry.outputUpperSequence ?? Int64.max
+        var end = entry.finished?.output_sequence ?? entry.outputUpperSequence ?? Int64.max
         guard end >= start else { throw databaseError(nil, "invalid processing output range") }
         let path = try databasePath(entry.audit)
         var handle: OpaquePointer?
@@ -570,6 +584,14 @@ private enum HistoryStore {
         guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
             throw databaseError(database, "unsupported output schema")
         }
+        if let upperSnapshot { end = min(end, upperSnapshot) }
+        else {
+            let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
+            defer { sqlite3_finalize(maximum) }
+            guard entry.stamp.withCString({ sqlite3_bind_text(maximum, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+                  sqlite3_step(maximum) == SQLITE_ROW else { throw databaseError(database) }
+            end = min(end, max(start, sqlite3_column_int64(maximum, 0)))
+        }
         func bind(_ query: OpaquePointer) throws {
             guard entry.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
                   sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
@@ -582,26 +604,55 @@ private enum HistoryStore {
         guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER,
               sqlite3_column_int64(count, 0) >= 0 else { throw databaseError(database, "invalid output count") }
         let total = sqlite3_column_int64(count, 0)
-        let query = try statement(database, "SELECT ts, pipeline, line FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence DESC LIMIT \(maximumOutputLines)")
+        let ascending = direction == .newer
+        // Inspect lengths before fetching payloads so an oversized row can become an explicit, navigable placeholder.
+        let columns = ["ts", "pipeline", "line"].map {
+            "CASE WHEN typeof(\($0))='text' AND length(CAST(\($0) AS BLOB))<=\(maximumOutputBytes) THEN \($0) ELSE NULL END"
+        }.joined(separator: ", ")
+        let cursorClause = cursor == nil ? "" : " AND sequence\(ascending ? ">" : "<")?"
+        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?\(cursorClause) ORDER BY sequence \(ascending ? "ASC" : "DESC") LIMIT \(maximumOutputLines)")
         defer { sqlite3_finalize(query) }
         try bind(query)
-        var lines: [String] = []
+        if let cursor, sqlite3_bind_int64(query, 4, cursor) != SQLITE_OK { throw databaseError(database) }
+        var rows: [Output.Row] = []
+        var issues: [String] = []
         var bytes = 0
         while true {
             let result = sqlite3_step(query)
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else { throw databaseError(database) }
-            let ts = try databaseText(query, 0, database: database)
-            let pipeline = try databaseText(query, 1, database: database)
-            let line = try databaseText(query, 2, database: database)
-            let text = "[\(ts)] \(pipeline): \(line)"
+            let sequence = sqlite3_column_int64(query, 0)
+            var text: String
+            var diagnostic = false
+            do {
+                let ts = try databaseText(query, 1, database: database)
+                let pipeline = try databaseText(query, 2, database: database)
+                let line = try databaseText(query, 3, database: database)
+                text = "[\(ts)] \(pipeline): \(line)"
+                let tone = LogTone.classify(line)
+                diagnostic = tone == .warning || tone == .failure
+                if text.utf8.count + 1 > maximumOutputBytes { throw HistoryParseError.invalid }
+            } catch {
+                text = localized("history.output.row_issue", sequence)
+                issues.append(text)
+                diagnostic = true
+            }
             let size = text.utf8.count + 1
             guard size <= maximumOutputBytes - bytes else { break }
             bytes += size
-            lines.append(text)
+            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic))
+        }
+        if !ascending { rows.reverse() }
+        var ordinal: Int64 = 0
+        if let first = rows.first {
+            let rank = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+            defer { sqlite3_finalize(rank) }
+            try bind(rank)
+            guard sqlite3_bind_int64(rank, 3, first.sequence) == SQLITE_OK, sqlite3_step(rank) == SQLITE_ROW else { throw databaseError(database) }
+            ordinal = sqlite3_column_int64(rank, 0)
         }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
-        return Output(text: lines.reversed().joined(separator: "\n"), shown: lines.count, total: total)
+        return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
     }
 
     private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
@@ -881,6 +932,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
+    private let detailMode = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private var olderButton = NSButton()
+    private var newerButton = NSButton()
+    private var outputPage: HistoryStore.Output?
+    private var outputLoading = false
     private let status = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
     private let splitController = NSSplitViewController()
@@ -929,6 +986,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func refresh(directory: URL) {
+        resetOutput()
         self.directory = directory
         let token = UUID()
         generation = token
@@ -1038,7 +1096,35 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         listItem.preferredThicknessFraction = 0.57
         listItem.holdingPriority = .defaultLow
         let detailController = NSViewController()
-        detailController.view = detailScroll
+        detailMode.selectedSegment = 0
+        detailMode.target = self
+        detailMode.action = #selector(detailModeChanged)
+        outputFilter.selectedSegment = 0
+        outputFilter.target = self
+        outputFilter.action = #selector(outputFilterChanged)
+        olderButton = iconButton("chevron.left", key: "history.output.older", action: #selector(olderOutput))
+        newerButton = iconButton("chevron.right", key: "history.output.newer", action: #selector(newerOutput))
+        outputFilter.controlSize = .small
+        outputFilter.font = HistoryLayout.smallFont
+        let navigation = NSStackView(views: [detailMode, olderButton, newerButton])
+        navigation.spacing = 4
+        let detailRoot = NSStackView(views: [navigation, outputFilter, detailScroll])
+        detailRoot.orientation = .vertical
+        detailRoot.alignment = .leading
+        detailRoot.spacing = 6
+        detailRoot.translatesAutoresizingMaskIntoConstraints = false
+        detailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        detailScroll.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
+        // Keep toolbar intrinsic widths out of the split item's sizing negotiation.
+        let detailContainer = NSView(frame: NSRect(x: 0, y: 0, width: 433, height: 540))
+        detailContainer.addSubview(detailRoot)
+        NSLayoutConstraint.activate([
+            detailRoot.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
+            detailRoot.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
+            detailRoot.topAnchor.constraint(equalTo: detailContainer.topAnchor),
+            detailRoot.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor)
+        ])
+        detailController.view = detailContainer
         let detailItem = NSSplitViewItem(viewController: detailController)
         detailItem.minimumThickness = 280
         detailItem.preferredThicknessFraction = 0.43
@@ -1090,9 +1176,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         filter.setAccessibilityLabel(localized("history.filter"))
         table.setAccessibilityLabel(localized("history.title"))
         detail.setAccessibilityLabel(localized("history.details"))
+        detailMode.setLabel(localized("history.summary"), forSegment: 0)
+        detailMode.setLabel(localized("history.output.title"), forSegment: 1)
+        outputFilter.setLabel(localized("history.output.all_page"), forSegment: 0)
+        outputFilter.setLabel(localized("history.output.diagnostics_page"), forSegment: 1)
+        outputFilter.setAccessibilityLabel(localized("history.output.filter_page"))
         for column in table.tableColumns { column.title = localized("history.column.\(column.identifier.rawValue)") }
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
-                              (revealButton, "history.reveal"), (copyButton, "history.copy_sources")] {
+                              (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
+                              (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
             button.setAccessibilityLabel(localized(key))
         }
@@ -1118,12 +1210,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         if let index = displayed.firstIndex(where: { $0.id == selectedID }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         } else if !displayed.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        showSelected()
+    }
+
+    private func updateHistoryStatus() {
         status.stringValue = entries.isEmpty ? localized("history.empty")
             : localized("history.shown", displayed.count, entries.count)
         if limited { status.stringValue += " · " + localized("history.limited") }
         if !loadIssues.isEmpty { status.stringValue += " · " + loadIssues.joined(separator: " · ") }
         status.toolTip = directory.path
-        showSelected()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { displayed.count }
@@ -1175,7 +1270,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func showSelected() {
-        outputGeneration = UUID()
+        resetOutput()
+        updateHistoryStatus()
         detail.string = selected.map(Self.render) ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select")
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
@@ -1259,37 +1355,92 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        logButton.isEnabled = selected?.hasStoredOutput == true || selected?.logs.isEmpty == false
+        logButton.isEnabled = !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
+        detailMode.setEnabled(selected?.hasStoredOutput == true, forSegment: 1)
+        olderButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
+        newerButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
+        outputFilter.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
         revealButton.isEnabled = selected != nil
         copyButton.isEnabled = selected?.context?.inputs.isEmpty == false
     }
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
-            let token = UUID()
-            outputGeneration = token
-            status.stringValue = localized("history.output.loading")
-            logButton.isEnabled = false
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                let result = Swift.Result { try HistoryStore.output(for: entry) }
-                DispatchQueue.main.async {
-                    guard let self, self.outputGeneration == token, self.selected?.id == entry.id else { return }
-                    self.updateActions()
-                    switch result {
-                    case let .success(output):
-                        let label = localized("history.output.count", output.shown, output.total)
-                        self.detail.string = Self.render(entry) + "\n\n" + label + "\n" + output.text
-                        self.detail.scrollToEndOfDocument(nil)
-                        self.status.stringValue = label
-                    case let .failure(error):
-                        self.status.stringValue = error.localizedDescription
-                        self.detail.string = Self.render(entry) + "\n\n" + error.localizedDescription
-                    }
-                }
-            }
+            detailMode.selectedSegment = 1
+            loadOutput(entry: entry)
             return
         }
         guard let url = selected?.logs.first, HistoryStore.regularFile(url), NSWorkspace.shared.open(url) else {
             status.stringValue = localized("history.issue.open_log"); return
+        }
+    }
+
+    private func resetOutput() {
+        outputGeneration = UUID()
+        outputLoading = false
+        outputPage = nil
+        outputFilter.selectedSegment = 0
+        detailMode.selectedSegment = 0
+    }
+
+    @objc private func detailModeChanged() {
+        outputGeneration = UUID()
+        outputLoading = false
+        if detailMode.selectedSegment == 0 {
+            detail.string = selected.map(Self.render) ?? localized("history.select")
+            updateHistoryStatus()
+        }
+        else if outputPage != nil { renderOutput() }
+        else if let entry = selected { loadOutput(entry: entry) }
+        updateActions()
+    }
+    @objc private func outputFilterChanged() {
+        outputGeneration = UUID()
+        outputLoading = false
+        renderOutput()
+        updateActions()
+    }
+    @objc private func olderOutput() {
+        guard let entry = selected, let page = outputPage, page.hasOlder else { return }
+        loadOutput(entry: entry, cursor: page.rows.first?.sequence, direction: .older, upper: page.upper)
+    }
+    @objc private func newerOutput() {
+        guard let entry = selected, let page = outputPage, page.hasNewer else { return }
+        loadOutput(entry: entry, cursor: page.rows.last?.sequence, direction: .newer, upper: page.upper)
+    }
+    private func renderOutput() {
+        guard let page = outputPage else { return }
+        let rows = outputFilter.selectedSegment == 1 ? page.rows.filter(\.diagnostic) : page.rows
+        let end = page.shown == 0 ? 0 : page.firstOrdinal + Int64(page.shown) - 1
+        let label = localized("history.output.range", page.firstOrdinal, end, page.total)
+        detail.string = label + "\n" + localized("history.output.visible_page", rows.count, page.shown)
+            + "\n\n" + rows.map(\.text).joined(separator: "\n")
+        detail.scrollToBeginningOfDocument(nil)
+        status.stringValue = label
+    }
+    private func loadOutput(entry: HistoryEntry, cursor: Int64? = nil,
+                            direction: HistoryStore.OutputDirection = .older, upper: Int64? = nil) {
+        let token = UUID()
+        outputGeneration = token
+        outputLoading = true
+        status.stringValue = localized("history.output.loading")
+        updateActions()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try HistoryStore.output(for: entry, cursor: cursor, direction: direction, upperSnapshot: upper) }
+            DispatchQueue.main.async {
+                guard let self, self.outputGeneration == token, self.selected?.id == entry.id else { return }
+                self.outputLoading = false
+                switch result {
+                case let .success(output):
+                    self.outputPage = output
+                    self.renderOutput()
+                case let .failure(error):
+                    self.outputPage = nil
+                    self.outputFilter.selectedSegment = 0
+                    self.status.stringValue = error.localizedDescription
+                    self.detail.string = error.localizedDescription
+                }
+                self.updateActions()
+            }
         }
     }
     @objc private func revealAudit() {
@@ -1351,6 +1502,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
               split.frame.maxX <= content.bounds.maxX else {
             throw HostError(message: "History controls clipped at minimum size")
         }
+        let detailBounds = split.arrangedSubviews[1].bounds
+        for control in [detailMode, outputFilter, olderButton, newerButton] as [NSView] {
+            let rect = control.convert(control.bounds, to: split.arrangedSubviews[1])
+            guard rect.minX >= -1, rect.maxX <= detailBounds.maxX + 1,
+                  rect.minY >= -1, rect.maxY <= detailBounds.maxY + 1 else {
+                throw HostError(message: "History output toolbar clipped at minimum size")
+            }
+        }
         window?.setFrame(original, display: false)
     }
 
@@ -1393,6 +1552,45 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         while !logButton.isEnabled, Date() < nextDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         guard logButton.isEnabled, detail.string.contains("synthetic next run 1002"), !detail.string.contains("synthetic first failure") else {
             throw HostError(message: "History output action lost its bounded latest records")
+        }
+        detailMode.selectedSegment = 0
+        detailModeChanged()
+        guard status.stringValue == localized("history.shown", displayed.count, entries.count) else {
+            throw HostError(message: "Summary retained output-page status")
+        }
+        detailMode.selectedSegment = 1
+        detailModeChanged()
+        let invalid = HistoryEntry(id: selected!.id, stamp: "output", audit: directory.appendingPathComponent("absent/history.sqlite3"),
+                                   timestamp: "synthetic", context: selected!.context)
+        loadOutput(entry: invalid)
+        let errorDeadline = Date().addingTimeInterval(5)
+        while outputLoading, Date() < errorDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard outputPage == nil, !olderButton.isEnabled, !newerButton.isEnabled, logButton.isEnabled else {
+            throw HostError(message: "Output failure retained stale navigation or disabled recovery")
+        }
+        openLog()
+        let retryDeadline = Date().addingTimeInterval(5)
+        while outputLoading, Date() < retryDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard outputPage != nil else { throw HostError(message: "Output failure could not be retried") }
+        outputFilter.selectedSegment = 1
+        outputFilterChanged()
+        guard !detail.string.contains("synthetic next run"), outputPage?.shown == HistoryStore.maximumOutputLines else {
+            throw HostError(message: "Page diagnostics changed pagination or exposed routine records")
+        }
+        olderOutput()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        showSelected()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard outputFilter.selectedSegment == 0, detailMode.selectedSegment == 0, outputPage == nil,
+              status.stringValue == localized("history.shown", displayed.count, entries.count),
+              !detail.string.contains("synthetic next run") else {
+            throw HostError(message: "Selection did not reset page filtering or reject stale navigation")
+        }
+        openLog()
+        applyFilter()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard outputPage == nil, detailMode.selectedSegment == 0 else {
+            throw HostError(message: "History filtering accepted stale output")
         }
     }
 }
@@ -1830,6 +2028,17 @@ func runProcessingHistorySelfTests() throws {
                 && nextOutput.shown == HistoryStore.maximumOutputLines
                 && !nextOutput.text.contains("first failure") && nextOutput.text.hasSuffix("synthetic next run 1002"),
                 "Bounded output lost latest records or invented a count")
+    let olderOutput = try HistoryStore.output(for: outputEntries[1], cursor: nextOutput.rows.first!.sequence,
+                                            direction: .older, upperSnapshot: nextOutput.upper)
+    try require(olderOutput.shown == 2 && !olderOutput.hasOlder && olderOutput.hasNewer
+                && olderOutput.firstOrdinal == 1 && nextOutput.firstOrdinal == 3
+                && olderOutput.rows.last!.sequence + 1 == nextOutput.rows.first!.sequence,
+                "Keyset navigation overlapped, skipped, or miscounted output rows")
+    let newerOutput = try HistoryStore.output(for: outputEntries[1], cursor: olderOutput.rows.last!.sequence,
+                                            direction: .newer, upperSnapshot: olderOutput.upper)
+    try require(newerOutput.rows.map(\.sequence) == nextOutput.rows.map(\.sequence)
+                && !newerOutput.hasNewer && newerOutput.total == nextOutput.total,
+                "Newer navigation did not reproduce the bounded snapshot")
     let interrupted = HistoryStore.parse(data: try records([firstContext, secondContext, secondFinished]), stamp: "output", audit: databaseURL)
     try require(try HistoryStore.output(for: interrupted.entries[0]).total == 1,
                 "An incomplete earlier batch leaked later output")
@@ -1839,6 +2048,54 @@ func runProcessingHistorySelfTests() throws {
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output view mutated the history database")
     try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateOutputForSelfTest() }
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output action mutated the history database")
+    var fixtureDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &fixtureDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let fixtureDB else {
+        throw HostError(message: "Synthetic byte-budget fixture open failed")
+    }
+    let byteSQL = """
+    UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes / 2)) AS TEXT) WHERE sequence IN (1001,1002);
+    UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes + 1)) AS TEXT) WHERE sequence=1003;
+    UPDATE history_output SET line=x'ff' WHERE sequence=1000;
+    """
+    let byteResult = sqlite3_exec(fixtureDB, byteSQL, nil, nil, nil)
+    sqlite3_close(fixtureDB)
+    try require(byteResult == SQLITE_OK, "Synthetic byte-budget fixture insert failed")
+    let byteSnapshot = try Data(contentsOf: databaseURL)
+    let bytePage = try HistoryStore.output(for: outputEntries[1])
+    try require(bytePage.text.utf8.count <= HistoryStore.maximumOutputBytes && !bytePage.issues.isEmpty
+                && bytePage.rows.last?.sequence == 1003 && bytePage.hasOlder,
+                "Oversized first row did not produce an explicit, bounded, navigable issue")
+    let byteOlder = try HistoryStore.output(for: outputEntries[1], cursor: bytePage.rows.first!.sequence,
+                                          direction: .older, upperSnapshot: bytePage.upper)
+    try require(!byteOlder.rows.isEmpty && byteOlder.rows.last!.sequence < bytePage.rows.first!.sequence
+                && byteOlder.text.utf8.count <= HistoryStore.maximumOutputBytes && !byteOlder.issues.isEmpty,
+                "Byte-limited output navigation did not make forward progress")
+    try require(try Data(contentsOf: databaseURL) == byteSnapshot, "Byte-budget navigation mutated the database")
+    var ongoing = outputEntries[1]
+    ongoing.finished = nil
+    ongoing.outputUpperSequence = nil
+    let ongoingPage = try HistoryStore.output(for: ongoing)
+    var appendDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &appendDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let appendDB else {
+        throw HostError(message: "Synthetic snapshot fixture open failed")
+    }
+    let appended = sqlite3_exec(appendDB, "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('output', 'synthetic', 'IMG', 'appended after snapshot')", nil, nil, nil)
+    sqlite3_close(appendDB)
+    try require(appended == SQLITE_OK, "Synthetic snapshot append failed")
+    let frozenPage = try HistoryStore.output(for: ongoing, upperSnapshot: ongoingPage.upper)
+    let refreshedPage = try HistoryStore.output(for: ongoing)
+    try require(frozenPage.total == ongoingPage.total && frozenPage.upper == ongoingPage.upper
+                && frozenPage.rows.map(\.sequence) == ongoingPage.rows.map(\.sequence)
+                && !frozenPage.text.contains("appended after snapshot")
+                && refreshedPage.total == ongoingPage.total + 1 && refreshedPage.text.contains("appended after snapshot"),
+                "Ongoing output snapshot shifted after an append")
+    var emptyOutput = outputEntries[0]
+    emptyOutput.finished = nil
+    emptyOutput.outputUpperSequence = 0
+    let emptyPage = try HistoryStore.output(for: emptyOutput)
+    try require(emptyPage.rows.isEmpty && emptyPage.total == 0 && emptyPage.firstOrdinal == 0
+                && !emptyPage.hasOlder && !emptyPage.hasNewer && emptyPage.issues.isEmpty,
+                "Empty output invented a range, issue, or navigation")
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

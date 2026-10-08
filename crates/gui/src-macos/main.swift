@@ -2136,15 +2136,25 @@ private struct PhotosDiagnostics {
     }
 }
 
-private enum LogTone: Equatable {
+enum LogTone: Equatable {
     case muted, normal, stage, result, warning, failure
 
+    static func message(_ line: String) -> String {
+        var text = line.replacingOccurrences(of: #"\x1B\[[0-?]*[ -/]*[@-~]"#,
+                                             with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("ERR:") { text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
+        return text
+    }
+
     static func classify(_ line: String) -> Self {
+        let line = message(line)
+        // The stderr transport prefix is not evidence of an error.
         if let count = countStatusValue(in: line) { return count.uppercased() == "MATCH" ? .result : .failure }
-        if line.range(of: #"(?i)(?:\[ERROR\s*\]|\[FAIL(?:ED)?\s*\]|✗|^\s*ERR:(?!\s*\[)|\bfailed=[1-9]\d*|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b))"#, options: .regularExpression) != nil {
+        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
             return .failure
         }
-        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\]|⚠|\bwarning:)"#, options: .regularExpression) != nil { return .warning }
+        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):)"#, options: .regularExpression) != nil { return .warning }
         if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
         if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS)\s*\])"#, options: .regularExpression) != nil { return .stage }
         if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
@@ -2164,6 +2174,38 @@ private enum LogTone: Equatable {
 
     var font: NSFont {
         .monospacedSystemFont(ofSize: 12, weight: self == .normal || self == .muted ? .regular : .semibold)
+    }
+}
+
+private struct LatestDiagnostics {
+    private(set) var failure: String?
+    private(set) var warning: String?
+    private var failureIsSummary = false
+
+    mutating func ingest(_ line: String) -> Bool {
+        let tone = LogTone.classify(line)
+        guard tone == .failure || tone == .warning else { return false }
+        let message = LogTone.message(line)
+        // Keep presentation bounded; the launcher retains the full output in history.
+        let scalars = message.unicodeScalars
+        let bounded = String(String.UnicodeScalarView(scalars.prefix(4_096)))
+            + (scalars.count > 4_096 ? "…" : "")
+        switch tone {
+        case .failure:
+            let isSummary = countStatusValue(in: message) != nil
+                || message.range(of: #"(?i)^(?:\[Summary\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\])\s*)?exiting with failures\b)"#,
+                                 options: .regularExpression) != nil
+            // A final aggregate must not hide the most recent actionable error.
+            guard !isSummary || failure == nil || failureIsSummary else { return false }
+            guard failure != bounded else { return false }
+            failure = bounded
+            failureIsSummary = isSummary
+        case .warning:
+            guard warning != bounded else { return false }
+            warning = bounded
+        default: return false
+        }
+        return true
     }
 }
 
@@ -2962,6 +3004,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var latestDiagnostics = LatestDiagnostics()
+    private let latestFailureLabel = NSTextField(labelWithString: "")
+    private let latestWarningLabel = NSTextField(labelWithString: "")
+    private let latestDiagnosticsRow = NSStackView()
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
     private let backupButton = NSButton(title: "", target: nil, action: nil)
     private let backupRow = NSStackView()
@@ -3341,6 +3387,20 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressRow.addArrangedSubview(fileProgressLabel)
         fileProgressRow.isHidden = true
 
+        latestDiagnosticsRow.orientation = .vertical
+        latestDiagnosticsRow.alignment = .leading
+        latestDiagnosticsRow.spacing = 4
+        for (label, color) in [(latestFailureLabel, NSColor.systemRed), (latestWarningLabel, NSColor.systemOrange)] {
+            label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+            label.textColor = color
+            label.lineBreakMode = .byTruncatingMiddle
+            label.isSelectable = true
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            latestDiagnosticsRow.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: latestDiagnosticsRow.widthAnchor).isActive = true
+        }
+        latestDiagnosticsRow.isHidden = true
+
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -3357,7 +3417,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.spacing = 8
         let stack = NSStackView(views: [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, logScroll, statusRow,
+            countStatusLabel, fileProgressRow, logScroll, latestDiagnosticsRow, statusRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -3366,7 +3426,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, logScroll, statusRow,
+            countStatusLabel, fileProgressRow, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -3549,6 +3609,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func clearBatchLog() {
         logView.string = ""
         batchResults = BatchResults()
+        latestDiagnostics = LatestDiagnostics()
+        refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
         refreshFileProgress()
         photosDiagnostics.reset()
@@ -3797,7 +3859,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func appendLog(_ text: String) {
+    private func appendLog(_ text: String, captureDiagnostics: Bool = true) {
+        var latestChanged = false
         let displayText = text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
             if fileProgress.ingest(String(line)) {
                 refreshFileProgress()
@@ -3806,8 +3869,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             if let summary = batchResults.ingest(String(line)) {
                 return developerMode ? "\(line)\n\(summary)" : summary
             }
+            if captureDiagnostics && latestDiagnostics.ingest(String(line)) { latestChanged = true }
             return String(line)
         }.joined(separator: "\n")
+        if latestChanged { refreshLatestDiagnostics() }
         var diagnosticsChanged = false
         for line in text.split(separator: "\n") {
             if photosDiagnostics.ingest(String(line)) { diagnosticsChanged = true }
@@ -3859,6 +3924,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         countStatusLabel.isHidden = false
     }
 
+    private func refreshLatestDiagnostics() {
+        for (label, value, key) in [
+            (latestFailureLabel, latestDiagnostics.failure, "log.latest_failure"),
+            (latestWarningLabel, latestDiagnostics.warning, "log.latest_warning"),
+        ] {
+            label.isHidden = value == nil
+            label.stringValue = value.map { localized(key, $0) } ?? ""
+            label.toolTip = label.stringValue
+            label.setAccessibilityLabel(label.stringValue)
+        }
+        latestDiagnosticsRow.isHidden = latestDiagnostics.failure == nil && latestDiagnostics.warning == nil
+    }
+
     private func refreshFileProgress() {
         fileProgressRow.isHidden = fileProgress.event == nil && !fileProgress.invalid
         fileProgressLabel.stringValue = fileProgress.label
@@ -3904,14 +3982,14 @@ private final class AppController: NSObject, NSWindowDelegate {
             if batchResults.hasFailure {
                 statusLabel.stringValue = localized(batchResults.hasFileFailures
                     ? "result.finished_with_failures" : "result.stopped_with_error")
-                appendLog("[FAIL] \(statusLabel.stringValue)")
+                appendLog("[FAIL] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.failure == nil)
             } else if batchResults.isIncomplete
                 || (batchResults.hasUnprocessed && host.controlState != "paused")
                 || (batchResults.totals.isEmpty
                 && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
                 statusLabel.stringValue = localized(batchResults.isIncomplete || batchResults.totals.isEmpty
                     ? "result.incomplete" : "result.unfinished")
-                appendLog("[WARN] \(statusLabel.stringValue)")
+                appendLog("[WARN] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.warning == nil)
             } else {
                 statusLabel.stringValue = message
                 appendLog("✓ \(message)")
@@ -3919,7 +3997,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .failure(error):
             photosDiagnostics.markFailed()
             refreshDiagnostics()
-            appendLog("✗ \(error.localizedDescription)")
+            appendLog("✗ \(error.localizedDescription)", captureDiagnostics: latestDiagnostics.failure == nil)
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
@@ -3940,6 +4018,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
                 sawResumeDecision = false
                 batchResults = BatchResults()
+                latestDiagnostics = LatestDiagnostics()
+                refreshLatestDiagnostics()
+                fileProgress = FileStageProgress()
+                refreshFileProgress()
                 photosDiagnostics.reset()
                 refreshDiagnostics()
                 setProcessing(true)
@@ -3947,7 +4029,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             } else {
                 setProcessing(false)
                 statusLabel.stringValue = batchResults.hasFileFailures
-                    ? localized("result.finished_with_failures") + " · " + error.localizedDescription
+                    ? localized("result.finished_with_failures")
                     : error.localizedDescription
             }
         }
@@ -4058,6 +4140,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
         refreshCountStatus()
         refreshFileProgress()
+        refreshLatestDiagnostics()
         refreshDiagnostics()
         refreshProcessingStatus()
     }
@@ -4200,7 +4283,13 @@ private final class AppController: NSObject, NSWindowDelegate {
               LogTone.classify("ERR: Count status: MATCH") == .result,
               LogTone.classify("Integrity: CLEAN") == .result,
               LogTone.classify("[Summary] succeeded=4 failed=0") == .result,
-              LogTone.classify("ERR: Permission denied") == .failure
+              LogTone.classify("ERR: Permission denied") == .failure,
+              LogTone.classify("ERR: frame=20 fps=10") == .normal,
+              LogTone.classify("ERR: [WARN   ] metadata could not be copied") == .warning,
+              LogTone.classify("\u{1B}[31mError: encoder unavailable\u{1B}[0m") == .failure,
+              LogTone.classify("[GATE 2] verification FAIL") == .failure,
+              LogTone.classify("Converted /tmp/failed-file.jpg") == .normal,
+              LogTone.classify("Converted /tmp/failed=1.jpg") == .normal
         else { throw HostError(message: "Log priority or MATCH status presentation failed") }
         let summaryOffset = (logView.string as NSString).range(of: "[Summary] succeeded=4 failed=0").location
         guard summaryOffset != NSNotFound,
@@ -4213,10 +4302,40 @@ private final class AppController: NSObject, NSWindowDelegate {
               countStatusLabel.textColor == .systemRed,
               LogTone.classify("[Summary] succeeded=3 failed=1") == .failure,
               logView.string.contains("ERR: Permission denied"),
-              logView.string.contains("    Count status:    MATCH")
+              logView.string.contains("    Count status:    MATCH"),
+              latestDiagnostics.failure == "Permission denied"
         else { throw HostError(message: "Non-MATCH status hid preceding diagnostics") }
+        appendLog("ERR: [WARN] synthetic metadata warning\nERR: frame=20 fps=10\nError: exiting with failures")
+        appendLog(progressLine)
+        content.layoutSubtreeIfNeeded()
+        guard latestDiagnostics.failure == "Permission denied",
+              latestDiagnostics.warning == "[WARN] synthetic metadata warning",
+              !latestDiagnosticsRow.isHidden, !latestFailureLabel.isHidden, !latestWarningLabel.isHidden,
+              latestFailureLabel.stringValue == localized("log.latest_failure", "Permission denied"),
+              content.bounds.contains(content.convert(latestDiagnosticsRow.bounds, from: latestDiagnosticsRow)),
+              logScroll.frame.height >= 260,
+              batchResults.totals.isEmpty else {
+            throw HostError(message: "Latest diagnostics lost their cause, altered counts or overflowed the main layout")
+        }
+        processingCompleted(.failure(HostError(message: "Worker exited with code 1")))
+        guard latestDiagnostics.failure == "Permission denied",
+              logView.string.contains("Worker exited with code 1") else {
+            throw HostError(message: "Completion boilerplate replaced the actionable error")
+        }
+        var boundedDiagnostics = LatestDiagnostics()
+        _ = boundedDiagnostics.ingest("[Summary] succeeded=0 failed=1")
+        _ = boundedDiagnostics.ingest("[ERROR] " + String(repeating: "中", count: 5_000))
+        guard boundedDiagnostics.failure?.unicodeScalars.count == 4_097,
+              boundedDiagnostics.failure?.hasSuffix("…") == true else {
+            throw HostError(message: "Latest diagnostic text was not Unicode-safe and bounded")
+        }
+        _ = boundedDiagnostics.ingest("Error: a later concrete failure")
+        guard boundedDiagnostics.failure == "Error: a later concrete failure" else {
+            throw HostError(message: "A later concrete failure was not shown")
+        }
         clearBatchLog()
-        guard countStatusLabel.isHidden, countStatus == nil else {
+        guard countStatusLabel.isHidden, countStatus == nil, latestDiagnosticsRow.isHidden,
+              latestDiagnostics.failure == nil, latestDiagnostics.warning == nil else {
             throw HostError(message: "Previous batch count status leaked into the next batch")
         }
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"exit_code":0}"#)

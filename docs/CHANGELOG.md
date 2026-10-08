@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Visible diagnostics and navigable history output (2026-10-08)
+
+- Keep the latest error and warning visible below the native GUI log. Preserve a
+  concrete cause through aggregate summaries and completion boilerplate, reset
+  diagnostics for new batches and resumed attempts, and avoid repeating an exit
+  message beside an already confirmed file-failure status. Stored output remains
+  intact and diagnostic highlighting never changes authoritative outcome counts.
+- Share log severity classification between live presentation and history filters.
+  Strip ANSI decoration and distinguish the stderr transport prefix from actual
+  errors; routine encoder output and filenames containing `failed=1` are not failures.
+- Add Summary/Output controls, older/newer cursor navigation and a current-page
+  diagnostic filter. Each page is bounded to 1,000 records and 2 MiB, scoped to a
+  stable sequence snapshot within its session and batch. Show record ranges and
+  counts explicitly, never as failed-file totals.
+- Keep malformed or oversized output rows visible as navigable notices. Reject
+  stale asynchronous pages after selection, filter, mode or refresh changes;
+  selection changes clear the previous batch's range, and failed loads clear stale
+  navigation and allow retry. Add synthetic regression
+  coverage without reading or modifying production history or Photos libraries.
+- Preserve the workspace's zerocopy/zerocopy-derive 0.8.62 refresh and native
+  AppKit design-verification guidance. Confirm the preceding `fe06358d` revision
+  passed all 15 jobs in workflow run `37745986860`, including Nightly publishing;
+  the older `794ea8c5` failures were already corrected in that revision.
+
 ### Stage-scoped live progress (2026-10-08)
 
 - Add shared, versioned file-progress snapshots for launcher-managed standard

@@ -296,7 +296,6 @@
 "history.refresh" = "履歴を更新";
 "history.open_log" = "処理出力を表示";
 "history.output.loading" = "処理出力を読み込み中...";
-"history.output.count" = "処理出力：最近の %ld / %lld 件";
 "history.detail.version" = "MFB バージョン";
 "history.detail.retry" = "再試行の要求";
 "history.detail.resume" = "再開の要求";
@@ -375,6 +374,18 @@
 "progress.stage_finished" = "%@段階終了 · %@ / %@ ファイル";
 "progress.empty" = "%@ · この段階のファイルなし";
 "progress.unavailable" = "ファイル進捗を取得できません";
+"log.latest_failure" = "直近のエラー: %@";
+"log.latest_warning" = "直近の警告: %@";
+"history.summary" = "概要";
+"history.output.title" = "出力";
+"history.output.older" = "前の出力ページ";
+"history.output.newer" = "次の出力ページ";
+"history.output.all_page" = "すべて（このページ）";
+"history.output.diagnostics_page" = "診断（このページ）";
+"history.output.filter_page" = "このページの出力記録を絞り込む";
+"history.output.range" = "出力記録 %lld–%lld / %lld 件（スナップショット）";
+"history.output.visible_page" = "このページの %d / %d 件を表示";
+"history.output.row_issue" = "出力記録 %lld は無効またはページのバイト上限超過のため内容を表示できません";
 "settings.search.results" = "一致する設定";
 "settings.search.empty" = "一致する設定がありません";
 "history.space.title" = "ファイルサイズ比較";

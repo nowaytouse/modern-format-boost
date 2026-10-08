@@ -296,7 +296,6 @@
 "history.refresh" = "刷新记录";
 "history.open_log" = "查看处理输出";
 "history.output.loading" = "正在读取处理输出...";
-"history.output.count" = "处理输出：最近 %ld / %lld 条记录";
 "history.detail.version" = "MFB 版本";
 "history.detail.retry" = "请求重试失败项";
 "history.detail.resume" = "显式请求继续运行";
@@ -375,6 +374,18 @@
 "progress.stage_finished" = "%@阶段已结束 · %@ / %@ 个文件";
 "progress.empty" = "%@ · 当前阶段没有文件";
 "progress.unavailable" = "文件进度暂不可用";
+"log.latest_failure" = "最近错误：%@";
+"log.latest_warning" = "最近警告：%@";
+"history.summary" = "概览";
+"history.output.title" = "输出";
+"history.output.older" = "较早输出页";
+"history.output.newer" = "较新输出页";
+"history.output.all_page" = "全部（本页）";
+"history.output.diagnostics_page" = "异常日志（本页）";
+"history.output.filter_page" = "筛选本页输出记录";
+"history.output.range" = "输出记录 %lld–%lld，共 %lld 条（快照）";
+"history.output.visible_page" = "显示本页 %d / %d 条记录";
+"history.output.row_issue" = "输出记录 %lld 无效或超出本页字节上限，内容未显示";
 "settings.search.results" = "匹配的设置";
 "settings.search.empty" = "没有匹配的设置";
 "history.space.title" = "文件体积对比";
