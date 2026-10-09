@@ -126,6 +126,24 @@ An oversized snapshot is explicitly not saved, without evicting existing entries
 Eviction and admission are atomic and never apply to durable or unknown namespaces.
 The budget does not include SQLite pages, WAL, or protected state.
 
+IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
+`--cache-ttl-seconds`. Explicit flags override configuration files; omitted flags
+retain inherited values, and `config show --effective` reports their source chain.
+Both accept positive integers up to 9223372036854775807. GUI forwarding of these
+two overrides is not yet available; configuration files remain supported.
+
+Use `cache_cleaner --prune --yes --json` to apply the configured TTL and capacity
+without processing media or clearing all useful cache. `--config PATH`,
+`--no-config`, and the same cache flags can select its policy. The JSON `pruning`
+receipt includes that policy plus distinct expired/time-invalid and LRU removal
+counts. Pruning is transactional, retains formal state and unknown namespaces,
+does not create/migrate a missing/unsupported store, and does not remove legacy
+cache files or vacuum the database. Without `--yes`, interactive confirmation is
+required; prompts go to stderr so JSON stdout remains machine-readable. If deletion
+committed but subsequent inspection fails, the error states the committed counts.
+Do not combine pruning with `--stats`, integrity inspection, a target
+path, PostgreSQL cleanup, or session-state cleanup.
+
 The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
 confirmed cleanup removes only local path-tree snapshots and obsolete analysis

@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Shared cache overrides and selective maintenance (2026-10-09)
+
+- Expose `--cache-max-bytes` and `--cache-ttl-seconds` in IMG/Fast IMG and VID,
+  using one validated argument model and the existing effective-config source chain.
+  Omitted flags preserve inherited values; invalid integers fail before processing.
+- Add explicit `cache_cleaner --prune` with layered configuration and a JSON policy
+  receipt. Reuse automatic TTL/LRU rules in one transaction, report disjoint removal
+  counts, retain useful snapshots and protected state, and roll back on deletion failure.
+  No media processing, missing-store creation, migration, vacuum or legacy-file cleanup.
+- Keep prune distinct from full cleanup and read-only inspection, with confirmation
+  and conflicting-mode rejection. Confirmation uses stderr to preserve JSON stdout;
+  post-commit inspection failures explicitly retain the committed deletion counts.
+  Recheck store version under the write lock before pruning. GUI per-run cache
+  overrides remain pending.
+- Preserve the workspace's existing tokio-util and tracing dependency refresh;
+  no new dependency was added for cache maintenance.
+
 ### Bounded directory cache and read-only database inspection (2026-10-09)
 
 - Add shared typed cache capacity and idle-lifetime settings, visible in effective

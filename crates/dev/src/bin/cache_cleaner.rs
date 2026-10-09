@@ -58,6 +58,27 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     about = "Modern Format Boost Cache Cleaner"
 )]
 struct Args {
+    #[arg(long, conflicts_with_all = ["stats", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Remove only expired or over-budget directory snapshots, retaining useful cache and all formal state")]
+    prune: bool,
+
+    #[arg(
+        long,
+        requires = "prune",
+        conflicts_with = "no_config",
+        help = "Overlay an explicit JSON configuration for cache pruning"
+    )]
+    config: Option<PathBuf>,
+
+    #[arg(
+        long,
+        requires = "prune",
+        help = "Ignore configuration files when pruning"
+    )]
+    no_config: bool,
+
+    #[command(flatten)]
+    cache: foundation::runtime_config::cache_args::CacheArgs,
+
     #[arg(long, conflicts_with_all = ["path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Inspect local cache without deleting or rebuilding anything")]
     stats: bool,
 
@@ -421,6 +442,15 @@ struct CacheStatus {
     removed_files: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     integrity: Option<CacheIntegrity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pruning: Option<CachePruning>,
+}
+
+#[derive(Debug, Serialize)]
+struct CachePruning {
+    policy: foundation::runtime_config::CachePolicy,
+    #[serde(flatten)]
+    removed: foundation::mfb_sqlite_store::CachePruneResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -569,6 +599,7 @@ fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Resul
         removed_rows: 0,
         removed_files: 0,
         integrity: check_integrity.then(CacheIntegrity::new),
+        pruning: None,
     };
     let mut phase = "managed_paths";
     let inspection = (|| -> Result<()> {
@@ -742,6 +773,32 @@ fn purge_local_cache(cache_dir: &Path, target: Option<&Path>) -> Result<CacheSta
     let mut status = cache_status(cache_dir)?;
     status.removed_rows = removed_rows;
     status.removed_files = removed_files;
+    Ok(status)
+}
+
+fn prune_local_cache(
+    cache_dir: &Path,
+    policy: foundation::runtime_config::CachePolicy,
+) -> Result<CacheStatus> {
+    policy.validate()?;
+    cache_status(cache_dir)?;
+    let store = cache_dir.join("mfb_store.sqlite");
+    let removed = if regular_file_size(&store)?.is_some() {
+        let mut conn = open_cache_store(&store, false)?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        foundation::mfb_sqlite_store::prune_path_tree_cache(&mut conn, policy)?
+    } else {
+        foundation::mfb_sqlite_store::CachePruneResult::default()
+    };
+    let mut status = cache_status(cache_dir).with_context(|| format!(
+        "cache pruning committed ({} expired/time-invalid, {} over-budget rows); post-prune inspection failed",
+        removed.expired_rows, removed.evicted_rows
+    ))?;
+    status.removed_rows = removed
+        .expired_rows
+        .checked_add(removed.evicted_rows)
+        .context("cache pruning count overflow")?;
+    status.pruning = Some(CachePruning { policy, removed });
     Ok(status)
 }
 
@@ -1129,9 +1186,9 @@ fn confirm_cleanup(yes: bool, prompt: &str) -> Result<bool> {
         sys_stdin_stdout_isatty(),
         "cleanup requires --yes in non-interactive mode; use --stats to inspect only"
     );
-    println!("{YELLOW}{prompt}{RESET}");
-    print!("   {CYAN}Type 'yes' to proceed: {RESET}");
-    io::stdout().flush()?;
+    eprintln!("{YELLOW}{prompt}{RESET}");
+    eprint!("   {CYAN}Type 'yes' to proceed: {RESET}");
+    io::stderr().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(matches!(input.trim().to_lowercase().as_str(), "yes" | "y"))
@@ -1168,6 +1225,15 @@ fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
             "Removed: {} cache rows, {} obsolete cache files",
             status.removed_rows, status.removed_files
         );
+        if let Some(pruning) = &status.pruning {
+            println!(
+                "Pruned: {} expired/time-invalid rows, {} over-budget rows; policy: {} payload bytes, {} idle seconds",
+                pruning.removed.expired_rows,
+                pruning.removed.evicted_rows,
+                pruning.policy.path_tree_max_bytes,
+                pruning.policy.path_tree_ttl_seconds
+            );
+        }
         if let Some(integrity) = &status.integrity {
             println!(
                 "Integrity: {} (SQLite: {}; foreign keys: {}; payload scan complete: {})",
@@ -1200,6 +1266,35 @@ fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    anyhow::ensure!(
+        args.prune || args.cache.is_empty(),
+        "cache policy flags require --prune; no action taken"
+    );
+
+    if args.prune {
+        let mut loaded = foundation::runtime_config::load(args.config.as_deref(), args.no_config)?;
+        args.cache.apply_to(&mut loaded);
+        loaded.config.validate()?;
+        let cache_dir = get_mfb_state_root()?.join("cache");
+        let before = cache_status(&cache_dir)?;
+        if !args.json {
+            print_cache_status(&before, false)?;
+            println!(
+                "Pruning policy: {} payload bytes, {} idle seconds",
+                loaded.config.cache.path_tree_max_bytes, loaded.config.cache.path_tree_ttl_seconds
+            );
+        }
+        if !confirm_cleanup(
+            args.yes,
+            "Prune expired and over-budget directory snapshots only? Formal state is retained.",
+        )? {
+            anyhow::bail!("cache pruning cancelled; no action taken");
+        }
+        return print_cache_status(
+            &prune_local_cache(&cache_dir, loaded.config.cache)?,
+            args.json,
+        );
+    }
 
     if args.purge_animation_cache {
         perform_animation_cache_cleanup(args.yes)?;

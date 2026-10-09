@@ -38,6 +38,8 @@ pub(super) struct RuntimeArgs {
     photos: PhotosArgs,
     #[command(flatten)]
     performance: runtime_config::PerformanceArgs,
+    #[command(flatten)]
+    cache: runtime_config::cache_args::CacheArgs,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
     tools: Vec<(String, PathBuf)>,
@@ -190,6 +192,7 @@ impl RuntimeArgs {
         }
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
+        self.cache.apply_to(&mut loaded);
         loaded.config.validate()?;
         Ok(loaded)
     }
@@ -199,6 +202,35 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn cache_flags_reach_image_and_fast_image_runtime() -> Result<()> {
+        for command in ["config", "fast-img"] {
+            let tail = if command == "config" {
+                "show"
+            } else {
+                "/unused"
+            };
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                command,
+                tail,
+                "--no-config",
+                "--cache-max-bytes",
+                "4096",
+                "--cache-ttl-seconds",
+                "60",
+            ])?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.cache.path_tree_max_bytes, 4096);
+            assert_eq!(loaded.config.cache.path_tree_ttl_seconds, 60);
+            assert_eq!(
+                loaded.source_chain["cache.path_tree_ttl_seconds"],
+                ["default", "CLI"]
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn runtime_flags_override_legacy_expert_without_global_mutation() -> Result<()> {

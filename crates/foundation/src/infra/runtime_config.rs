@@ -500,6 +500,7 @@ fn default_sources(
     }
 }
 
+pub mod cache_args;
 pub mod photos_args;
 
 #[must_use]

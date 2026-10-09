@@ -132,6 +132,117 @@ fn health_fixture(root: &Path) -> Connection {
     conn
 }
 
+#[test]
+fn cli_pruning_obeys_layered_policy_keeps_state_and_does_not_clear_useful_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let conn = health_fixture(root.path());
+    let config = root.path().join("policy.json");
+    fs::write(
+        &config,
+        r#"{"config_version":1,"cache":{"path_tree_max_bytes":1,"path_tree_ttl_seconds":3600}}"#,
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO blob_store SELECT namespace, 'fresh', schema_version, root_path,
+        payload, payload_blake3, unixepoch() FROM blob_store WHERE namespace = 'path_tree'",
+        [],
+    )
+    .unwrap();
+    conn.execute("INSERT INTO blob_store SELECT namespace, 'older', schema_version, root_path,
+        payload, payload_blake3, unixepoch() - 60 FROM blob_store WHERE namespace = 'path_tree' AND cache_key = 'fresh'", []).unwrap();
+    let args = [
+        "--prune",
+        "--config",
+        config.to_str().unwrap(),
+        "--cache-max-bytes",
+        "20",
+        "--json",
+    ];
+    assert!(!run(root.path(), &args).status.success());
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM blob_store", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    let output = run(root.path(), &[args.as_slice(), &["--yes"]].concat());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["pruning"]["policy"]["path_tree_max_bytes"], 20);
+    assert_eq!(result["pruning"]["policy"]["path_tree_ttl_seconds"], 3600);
+    assert_eq!(result["pruning"]["expired_rows"], 1);
+    assert_eq!(result["pruning"]["evicted_rows"], 1);
+    assert_eq!(result["removed_rows"], 2);
+    assert_eq!(result["removed_files"], 0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM blob_store WHERE namespace != 'path_tree' AND updated_at = 123",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT cache_key FROM blob_store WHERE namespace = 'path_tree'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "fresh"
+    );
+    let repeated = run(root.path(), &[args.as_slice(), &["--yes"]].concat());
+    assert!(repeated.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(result["removed_rows"], 0);
+}
+
+#[test]
+fn cli_pruning_rejects_ambiguous_actions_and_never_creates_or_migrates_a_store() {
+    let root = tempfile::tempdir().unwrap();
+    for arguments in [
+        vec!["--prune", "--stats"],
+        vec!["--prune", "--check-integrity"],
+        vec!["--prune", "--postgres"],
+        vec!["--prune", "/unused"],
+        vec!["--prune", "--purge-session-state"],
+        vec!["--prune", "--purge-animation-cache"],
+        vec!["--stats", "--cache-max-bytes", "20"],
+        vec!["--prune", "--yes", "--cache-ttl-seconds", "0"],
+    ] {
+        assert!(
+            !run(root.path(), &arguments).status.success(),
+            "{arguments:?}"
+        );
+    }
+    let output = run(root.path(), &["--prune", "--no-config", "--yes", "--json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["removed_rows"], 0);
+    assert!(!root.path().join("cache").exists());
+    let conn = health_fixture(root.path());
+    conn.execute("UPDATE store_metadata SET value = 99", [])
+        .unwrap();
+    drop(conn);
+    let store = root.path().join("cache/mfb_store.sqlite");
+    let before = fs::read(&store).unwrap();
+    assert!(
+        !run(root.path(), &["--prune", "--no-config", "--yes"])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read(&store).unwrap(), before);
+}
+
 fn health(root: &Path) -> (Output, serde_json::Value) {
     let output = run(root, &["--stats", "--check-integrity", "--json"]);
     let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {

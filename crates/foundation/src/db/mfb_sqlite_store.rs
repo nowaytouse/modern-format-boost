@@ -323,6 +323,68 @@ fn cache_policy() -> CachePolicy {
     crate::runtime_config::active().map_or_else(CachePolicy::default, |config| config.cache)
 }
 
+/// Committed removals from reconstructable directory snapshots only.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct CachePruneResult {
+    pub expired_rows: u64,
+    pub evicted_rows: u64,
+}
+
+/// Apply the idle TTL and payload budget to an already validated store.
+/// Does not create/migrate storage or touch formal state and unknown namespaces.
+///
+/// # Errors
+/// Returns invalid policy, clock or database errors; deletion is atomic.
+pub fn prune_path_tree_cache(
+    conn: &mut Connection,
+    policy: CachePolicy,
+) -> Result<CachePruneResult> {
+    prune_path_tree_at(conn, policy, now_unix_secs)
+}
+
+fn prune_path_tree_at(
+    conn: &mut Connection,
+    policy: CachePolicy,
+    clock: impl FnOnce() -> Result<i64>,
+) -> Result<CachePruneResult> {
+    policy.validate()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    anyhow::ensure!(
+        schema_version(&tx)? == Some(STORE_SCHEMA_VERSION),
+        "cache pruning requires the current store schema; database retained without migration"
+    );
+    let expired_rows = expire_path_trees(&tx, policy, clock()?)?;
+    let evicted_rows = evict_path_trees(&tx, None, i64::try_from(policy.path_tree_max_bytes)?)?;
+    tx.commit()?;
+    Ok(CachePruneResult {
+        expired_rows,
+        evicted_rows,
+    })
+}
+
+fn expire_path_trees(conn: &Connection, policy: CachePolicy, now: i64) -> Result<u64> {
+    let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
+    rows_affected_u64(conn.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1 AND (updated_at <= ?2 OR updated_at > ?3)",
+        params![NS_PATH_TREE, cutoff, now],
+    )?)
+}
+
+fn evict_path_trees(conn: &Connection, reserved_key: Option<&str>, budget: i64) -> Result<u64> {
+    // Retain the newest prefix using lengths only; an admitted payload can reserve space.
+    rows_affected_u64(conn.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key IN (
+             SELECT cache_key FROM (
+                 SELECT cache_key, SUM(length(payload)) OVER (
+                     ORDER BY updated_at DESC, cache_key DESC ROWS UNBOUNDED PRECEDING
+                 ) AS retained_bytes
+                 FROM blob_store WHERE namespace = ?1 AND (?2 IS NULL OR cache_key != ?2)
+             ) WHERE retained_bytes > ?3
+         )",
+        params![NS_PATH_TREE, reserved_key, budget],
+    )?)
+}
+
 fn path_tree_get(
     conn: &mut Connection,
     cache_key: &str,
@@ -466,11 +528,7 @@ fn path_tree_put(
     );
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let now = clock()?;
-    let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
-    let expired = tx.execute(
-        "DELETE FROM blob_store WHERE namespace = ?1 AND (updated_at <= ?2 OR updated_at > ?3)",
-        params![NS_PATH_TREE, cutoff, now],
-    )?;
+    let expired = expire_path_trees(&tx, policy, now)?;
     upsert_blob(
         &tx,
         NS_PATH_TREE,
@@ -480,18 +538,7 @@ fn path_tree_put(
         payload,
         now,
     )?;
-    // Reserve the admitted payload, then retain the newest prefix using lengths only.
-    let evicted = tx.execute(
-        "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key IN (
-             SELECT cache_key FROM (
-                 SELECT cache_key, SUM(length(payload)) OVER (
-                     ORDER BY updated_at DESC, cache_key DESC ROWS UNBOUNDED PRECEDING
-                 ) AS retained_bytes
-                 FROM blob_store WHERE namespace = ?1 AND cache_key != ?2
-             ) WHERE retained_bytes > ?3
-         )",
-        params![NS_PATH_TREE, cache_key, max_bytes - payload_bytes],
-    )?;
+    let evicted = evict_path_trees(&tx, Some(cache_key), max_bytes - payload_bytes)?;
     tx.commit()?;
     if expired > 0 || evicted > 0 {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
@@ -618,6 +665,67 @@ pub fn set_test_store_path_for_tests(path: PathBuf) -> TestStoreGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_pruning_counts_each_removal_once_and_rolls_back_on_failure() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 4,
+            path_tree_ttl_seconds: 10,
+        };
+        for (key, time) in [
+            ("expired", 90),
+            ("future", 101),
+            ("older", 91),
+            ("newest", 100),
+        ] {
+            upsert_blob(&conn, NS_PATH_TREE, key, 3, None, b"data", time)?;
+        }
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "unknown"] {
+            upsert_blob(&conn, namespace, "protected", 2, None, b"proof", 0)?;
+        }
+        conn.execute_batch("CREATE TRIGGER reject_eviction BEFORE DELETE ON blob_store
+            WHEN OLD.cache_key = 'older' BEGIN SELECT RAISE(ABORT, 'injected eviction failure'); END;")?;
+        assert!(prune_path_tree_at(&mut conn, policy, || Ok(100)).is_err());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM blob_store", [], |r| r
+                .get::<_, i64>(0))?,
+            7
+        );
+        conn.execute_batch("DROP TRIGGER reject_eviction")?;
+        let result = prune_path_tree_at(&mut conn, policy, || Ok(100))?;
+        assert_eq!((result.expired_rows, result.evicted_rows), (2, 1));
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "newest", 3)?,
+            Some(b"data".to_vec())
+        );
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "unknown"] {
+            assert_eq!(
+                read_blob(&conn, namespace, "protected", 2)?,
+                Some(b"proof".to_vec())
+            );
+        }
+        let repeated = prune_path_tree_at(&mut conn, policy, || Ok(100))?;
+        assert_eq!((repeated.expired_rows, repeated.evicted_rows), (0, 0));
+        assert!(
+            prune_path_tree_at(&mut conn, policy, || anyhow::bail!("clock unavailable")).is_err()
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM blob_store", [], |r| r
+                .get::<_, i64>(0))?,
+            4
+        );
+        conn.execute("UPDATE store_metadata SET value = 99", [])?;
+        assert!(prune_path_tree_at(&mut conn, policy, || Ok(200)).is_err());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM blob_store", [], |r| r
+                .get::<_, i64>(0))?,
+            4
+        );
+        Ok(())
+    }
 
     #[test]
     fn path_tree_idle_expiry_covers_boundary_future_clock_and_read_refresh() -> Result<()> {

@@ -28,6 +28,8 @@ struct Cli {
     codec: Option<foundation::runtime_config::VidCodec>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
+    #[command(flatten)]
+    cache: foundation::runtime_config::cache_args::CacheArgs,
     #[command(subcommand)]
     command: Commands,
 }
@@ -151,6 +153,7 @@ enum ConfigCommand {
 fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::LoadedConfig> {
     let mut loaded = foundation::runtime_config::load(cli.config.as_deref(), cli.no_config)?;
     cli.performance.apply_to(&mut loaded);
+    cli.cache.apply_to(&mut loaded);
     if let Some(codec) = cli.codec {
         loaded.config.vid.codec = codec;
         foundation::runtime_config::record_source(
@@ -1682,6 +1685,30 @@ mod fast_gif_tests {
             Cli::try_parse_from(["vid", "config", "show", "--config", &path, "--no-config",])
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cache_flags_reach_video_inspection_and_processing() -> anyhow::Result<()> {
+        for (command, tail) in [("config", "show"), ("run", "/unused")] {
+            let cli = Cli::try_parse_from([
+                "vid",
+                command,
+                tail,
+                "--no-config",
+                "--cache-max-bytes",
+                "4096",
+                "--cache-ttl-seconds",
+                "60",
+            ])?;
+            let loaded = resolve_runtime(&cli)?;
+            assert_eq!(loaded.config.cache.path_tree_max_bytes, 4096);
+            assert_eq!(loaded.config.cache.path_tree_ttl_seconds, 60);
+            assert_eq!(
+                loaded.source_chain["cache.path_tree_max_bytes"],
+                ["default", "CLI"]
+            );
+        }
         Ok(())
     }
 
