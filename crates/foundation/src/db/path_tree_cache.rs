@@ -1,54 +1,19 @@
-//! Path-tree scan snapshots — `PostgreSQL` primary + `SQLite` offline replica
-//! (M213/M214).
-//!
-//! Table DDL must match `crates/dev/src/config/sql/analysis_cache_pg.sql`
-//! (`path_tree_snapshots`).
+//! Reconstructable path-tree scan snapshots in the shared local SQLite store.
+//! Advanced analysis databases are not dependencies of directory discovery.
 
 use anyhow::{Context, Result};
-use postgres::Client;
-use postgres::types::Json;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::path::Path;
 
 use crate::mfb_sqlite_store::{self, NS_PATH_TREE};
 
-/// Path-tree snapshot schema version (bump to invalidate all tiers).
-pub const PATH_TREE_SCHEMA_VERSION: u32 = 2;
-
-const PATH_TREE_TABLE_SQL: &str = r"
-CREATE TABLE IF NOT EXISTS path_tree_snapshots (
-    cache_key TEXT PRIMARY KEY,
-    media_kind TEXT NOT NULL,
-    root_path TEXT NOT NULL,
-    schema_version INT NOT NULL,
-    payload JSONB NOT NULL,
-    updated_at BIGINT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_path_tree_root ON path_tree_snapshots(root_path);
-CREATE INDEX IF NOT EXISTS idx_path_tree_media_kind ON path_tree_snapshots(media_kind);
-";
-
-fn now_unix_secs() -> Result<i64> {
-    let secs = crate::media_conversion_gate::unix_epoch_secs_optional()
-        .context("path_tree updated_at: system clock before UNIX epoch")?;
-    i64::try_from(secs)
-        .with_context(|| "path_tree updated_at: epoch seconds exceeded i64".to_string())
-}
+/// Path-tree snapshot schema version (bump when snapshot semantics change).
+pub const PATH_TREE_SCHEMA_VERSION: u32 = 3;
 
 fn schema_i32(schema_version: u32) -> Result<i32> {
     i32::try_from(schema_version)
         .with_context(|| format!("path_tree schema_version {schema_version} exceeds i32"))
-}
-
-fn open_pg_client() -> Result<Client> {
-    crate::database::open_pg_client()
-}
-
-fn ensure_path_tree_table(client: &mut Client) -> Result<()> {
-    client
-        .batch_execute(PATH_TREE_TABLE_SQL)
-        .context("Failed to ensure path_tree_snapshots table")
 }
 
 fn decode_snapshot<T: DeserializeOwned>(bytes: &[u8], cache_key: &str) -> Result<T> {
@@ -56,7 +21,11 @@ fn decode_snapshot<T: DeserializeOwned>(bytes: &[u8], cache_key: &str) -> Result
         .with_context(|| format!("path_tree snapshot JSON decode failed for cache_key={cache_key}"))
 }
 
-fn load_sqlite_snapshot<T: DeserializeOwned>(
+/// Load a local snapshot. Callers must still validate filesystem freshness.
+///
+/// # Errors
+/// Propagates database and deserialization errors; `Ok(None)` is a cache miss.
+pub fn load_path_tree_snapshot<T: DeserializeOwned>(
     cache_key: &str,
     expected_schema_version: u32,
 ) -> Result<Option<T>> {
@@ -67,88 +36,21 @@ fn load_sqlite_snapshot<T: DeserializeOwned>(
     decode_snapshot(&bytes, cache_key).map(Some)
 }
 
-fn save_sqlite_snapshot<T: Serialize>(
+/// Persist a snapshot locally, without an advanced database service.
+///
+/// # Errors
+/// Returns serialization, path or database errors without reporting a successful save.
+pub fn save_path_tree_snapshot<T: Serialize>(
     cache_key: &str,
     root_path: &Path,
     schema_version: u32,
     snapshot: &T,
 ) -> Result<()> {
+    let schema = schema_i32(schema_version)?;
+    let root = crate::media_conversion_gate::canonicalize_for_tool_input(root_path);
+    anyhow::ensure!(root.to_str().is_some(), "path_tree root is not valid UTF-8");
     let bytes = serde_json::to_vec(snapshot).context("path_tree snapshot serialize")?;
-    mfb_sqlite_store::blob_put(
-        NS_PATH_TREE,
-        cache_key,
-        schema_i32(schema_version)?,
-        Some(root_path),
-        &bytes,
-    )
-}
-
-fn load_pg_snapshot<T: DeserializeOwned>(
-    cache_key: &str,
-    expected_schema_version: u32,
-) -> Result<Option<T>> {
-    let mut client = open_pg_client()?;
-    ensure_path_tree_table(&mut client)?;
-    let Some(row) = client.query_opt(
-        "SELECT payload, schema_version FROM path_tree_snapshots WHERE cache_key = $1",
-        &[&cache_key],
-    )?
-    else {
-        return Ok(None);
-    };
-    let schema: i32 = row.get(1);
-    if u32::try_from(schema)? != expected_schema_version {
-        client.execute(
-            "DELETE FROM path_tree_snapshots WHERE cache_key = $1",
-            &[&cache_key],
-        )?;
-        crate::media_conversion_gate::delivery_pipeline_batch_audit(
-            "delivery_pipeline_batch",
-            format!(
-                "CACHE AUDIT: path_tree schema mismatch for key '{cache_key}' (PG row deleted)"
-            ),
-        );
-        return Ok(None);
-    }
-    let payload: Json<serde_json::Value> = row.get(0);
-    let value = serde_json::from_value(payload.0)
-        .with_context(|| format!("path_tree JSONB decode failed for cache_key={cache_key}"))?;
-    Ok(Some(value))
-}
-
-fn save_pg_snapshot<T: Serialize>(
-    cache_key: &str,
-    media_kind: &str,
-    root_path: &Path,
-    schema_version: u32,
-    snapshot: &T,
-) -> Result<()> {
-    let payload_value = serde_json::to_value(snapshot).context("path_tree snapshot serialize")?;
-    let schema_i32 = schema_i32(schema_version)?;
-    let root = root_path.to_string_lossy().into_owned();
-    let updated_at = now_unix_secs()?;
-    let mut client = open_pg_client()?;
-    ensure_path_tree_table(&mut client)?;
-    client.execute(
-        "INSERT INTO path_tree_snapshots (cache_key, media_kind, root_path, schema_version, \
-         payload, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (cache_key) DO UPDATE SET
-            media_kind = EXCLUDED.media_kind,
-            root_path = EXCLUDED.root_path,
-            schema_version = EXCLUDED.schema_version,
-            payload = EXCLUDED.payload,
-            updated_at = EXCLUDED.updated_at",
-        &[
-            &cache_key,
-            &media_kind,
-            &root,
-            &schema_i32,
-            &Json(payload_value),
-            &updated_at,
-        ],
-    )?;
-    Ok(())
+    mfb_sqlite_store::blob_put(NS_PATH_TREE, cache_key, schema, Some(&root), &bytes)
 }
 
 /// Stable cache key for a path-tree configuration.
@@ -160,94 +62,36 @@ pub fn path_tree_cache_key(
     media_kind: &str,
 ) -> String {
     let canonical_dir = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
-    let mut input = canonical_dir.to_string_lossy().into_owned();
-    input.push('|');
-    input.push_str(media_kind);
-    input.push('|');
-    input.push_str(if recursive { "recursive" } else { "flat" });
+    let mut identity = blake3::Hasher::new_derive_key("MFB path-tree cache identity v3");
+    // Fixed-width field digests avoid delimiter ambiguity and preserve native path bytes.
+    identity.update(blake3::hash(canonical_dir.as_os_str().as_encoded_bytes()).as_bytes());
+    identity.update(blake3::hash(media_kind.as_bytes()).as_bytes());
+    identity.update(&[u8::from(recursive)]);
+    identity.update(&PATH_TREE_SCHEMA_VERSION.to_le_bytes());
     let mut exts: Vec<String> = extensions.iter().map(|e| e.to_ascii_lowercase()).collect();
     exts.sort_unstable();
     exts.dedup();
-    input.push('|');
-    input.push_str(&exts.join(","));
-    blake3::hash(input.as_bytes()).to_hex().to_string()
-}
-
-/// Load a path-tree snapshot (`PostgreSQL`, then `SQLite` replica).
-///
-/// # Errors
-/// Propagates database errors. `Ok(None)` is a cache miss only.
-pub fn load_path_tree_snapshot<T: DeserializeOwned>(
-    cache_key: &str,
-    expected_schema_version: u32,
-) -> Result<Option<T>> {
-    match load_pg_snapshot(cache_key, expected_schema_version) {
-        Ok(Some(snapshot)) => Ok(Some(snapshot)),
-        Ok(None) => load_sqlite_snapshot(cache_key, expected_schema_version),
-        Err(pg_err) => {
-            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                "delivery_pipeline_batch",
-                format!("path_tree PG load failed ({pg_err}); trying SQLite replica"),
-            );
-            load_sqlite_snapshot(cache_key, expected_schema_version).map_err(|sqlite_err| {
-                pg_err.context(format!(
-                    "path_tree SQLite replica load failed: {sqlite_err}"
-                ))
-            })
-        }
+    for extension in exts {
+        identity.update(blake3::hash(extension.as_bytes()).as_bytes());
     }
+    identity.finalize().to_hex().to_string()
 }
 
-/// Persist a path-tree snapshot to `PostgreSQL` (required) and `SQLite`
-/// replica.
+/// Delete local snapshots whose `root_path` equals or is under `target`.
 ///
 /// # Errors
-/// Returns an error when the `PostgreSQL` write fails.
-pub fn save_path_tree_snapshot<T: Serialize>(
-    cache_key: &str,
-    media_kind: &str,
-    root_path: &Path,
-    schema_version: u32,
-    snapshot: &T,
-) -> Result<()> {
-    save_pg_snapshot(cache_key, media_kind, root_path, schema_version, snapshot)?;
-    save_sqlite_snapshot(cache_key, root_path, schema_version, snapshot)
-}
-
-/// Delete snapshots whose `root_path` equals or is under `target`.
-///
-/// # Errors
-/// Returns an error if either backend purge fails.
+/// Returns invalid path encoding or database deletion errors.
 pub fn purge_path_tree_under(target: &Path) -> Result<u64> {
-    let mut client = open_pg_client()?;
-    ensure_path_tree_table(&mut client)?;
-    let target_abs = target
-        .to_str()
-        .context("path-tree deletion target is not valid UTF-8")?;
-    let prefix = format!("{}/", target_abs.trim_end_matches('/'));
-    let pg_rows = client.execute(
-        "DELETE FROM path_tree_snapshots WHERE root_path = $1 OR left(root_path, length($2)) = $2",
-        &[&target_abs, &prefix],
-    )?;
-    pg_rows
-        .checked_add(mfb_sqlite_store::blob_delete_under_root(
-            NS_PATH_TREE,
-            target,
-        )?)
-        .context("path-tree deletion count overflow")
+    let target = crate::media_conversion_gate::canonicalize_for_tool_input(target);
+    mfb_sqlite_store::blob_delete_under_root(NS_PATH_TREE, &target)
 }
 
-/// Remove all path-tree snapshots.
+/// Remove all local snapshots, retaining durable and unknown namespaces.
 ///
 /// # Errors
-/// Returns an error if either backend purge fails.
+/// Returns an error if deletion fails.
 pub fn purge_all_path_tree_snapshots() -> Result<u64> {
-    let mut client = open_pg_client()?;
-    ensure_path_tree_table(&mut client)?;
-    let pg_rows = client.execute("DELETE FROM path_tree_snapshots", &[])?;
-    pg_rows
-        .checked_add(mfb_sqlite_store::blob_delete_namespace(NS_PATH_TREE)?)
-        .context("path-tree deletion count overflow")
+    mfb_sqlite_store::blob_delete_namespace(NS_PATH_TREE)
 }
 
 #[cfg(test)]
@@ -261,5 +105,134 @@ mod tests {
         assert_eq!(a, b);
         let c = path_tree_cache_key(Path::new("/tmp/a"), &["png"], false, "image");
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn path_tree_cache_identity_distinguishes_options_and_ambiguous_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        let key = path_tree_cache_key(path, &["PNG", "jpg", "png"], true, "image");
+        assert_eq!(
+            key,
+            path_tree_cache_key(path, &["jpg", "png"], true, "image")
+        );
+        assert_eq!(
+            key,
+            path_tree_cache_key(&path.join("."), &["png", "jpg"], true, "image")
+        );
+        for other in [
+            path_tree_cache_key(path, &["png", "jpg"], false, "image"),
+            path_tree_cache_key(path, &["png", "jpg"], true, "video"),
+            path_tree_cache_key(path, &["png"], true, "image"),
+            path_tree_cache_key(&path.join("child"), &["png", "jpg"], true, "image"),
+        ] {
+            assert_ne!(key, other);
+        }
+        assert_ne!(
+            path_tree_cache_key(path, &["a,b"], true, "image"),
+            path_tree_cache_key(path, &["a", "b"], true, "image")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_identity_does_not_collapse_non_utf8_names() {
+        use std::os::unix::ffi::OsStrExt;
+        let first = Path::new(std::ffi::OsStr::from_bytes(b"/missing/\xff"));
+        let second = Path::new(std::ffi::OsStr::from_bytes(b"/missing/\xfe"));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            path_tree_cache_key(first, &["png"], true, "image"),
+            path_tree_cache_key(second, &["png"], true, "image")
+        );
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store.sqlite");
+        let _guard = mfb_sqlite_store::set_test_store_path_for_tests(store.clone());
+        assert!(save_path_tree_snapshot("invalid", first, 2, &vec!["value"]).is_err());
+        assert!(
+            !store.exists(),
+            "invalid root must not create or mutate storage"
+        );
+    }
+
+    #[test]
+    fn local_roundtrip_and_cleanup_retain_formal_state() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard =
+            mfb_sqlite_store::set_test_store_path_for_tests(root.path().join("store.sqlite"));
+        let source = root.path().join("source_100%");
+        let child = source.join("child");
+        let sibling = root.path().join("source_100%other");
+        for dir in [&source, &child, &sibling] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for (key, dir) in [("root", &source), ("child", &child), ("sibling", &sibling)] {
+            save_path_tree_snapshot(key, dir, PATH_TREE_SCHEMA_VERSION, &vec![key]).unwrap();
+            assert_eq!(
+                load_path_tree_snapshot::<Vec<String>>(key, PATH_TREE_SCHEMA_VERSION).unwrap(),
+                Some(vec![key.to_owned()])
+            );
+        }
+        for namespace in [
+            mfb_sqlite_store::NS_CHECKPOINT,
+            mfb_sqlite_store::NS_PROCESSED,
+            "future_state",
+        ] {
+            mfb_sqlite_store::blob_put(namespace, "state", 2, Some(&source), b"receipt").unwrap();
+        }
+        assert_eq!(purge_path_tree_under(&source.join(".")).unwrap(), 2);
+        assert!(
+            load_path_tree_snapshot::<Vec<String>>("sibling", PATH_TREE_SCHEMA_VERSION)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(purge_all_path_tree_snapshots().unwrap(), 1);
+        assert_eq!(purge_all_path_tree_snapshots().unwrap(), 0);
+        for namespace in [
+            mfb_sqlite_store::NS_CHECKPOINT,
+            mfb_sqlite_store::NS_PROCESSED,
+            "future_state",
+        ] {
+            assert_eq!(
+                mfb_sqlite_store::blob_get(namespace, "state", 2).unwrap(),
+                Some(b"receipt".to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_snapshot_and_write_failure_are_explicit_and_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard =
+            mfb_sqlite_store::set_test_store_path_for_tests(root.path().join("store.sqlite"));
+        mfb_sqlite_store::blob_put(NS_PATH_TREE, "invalid", 2, None, b"not-json").unwrap();
+        assert!(load_path_tree_snapshot::<Vec<String>>("invalid", 2).is_err());
+        assert_eq!(
+            load_path_tree_snapshot::<Vec<String>>("missing", 2).unwrap(),
+            None
+        );
+        assert!(load_path_tree_snapshot::<Vec<String>>("invalid", u32::MAX).is_err());
+        let conn = mfb_sqlite_store::open_store_connection().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_cache BEFORE INSERT ON blob_store
+            WHEN NEW.namespace = 'path_tree' BEGIN SELECT RAISE(ABORT, 'test write failure'); END;",
+        )
+        .unwrap();
+        assert!(save_path_tree_snapshot("new", root.path(), 2, &vec!["new"]).is_err());
+        assert_eq!(
+            load_path_tree_snapshot::<Vec<String>>("new", 2).unwrap(),
+            None
+        );
+        conn.execute_batch("DROP TRIGGER reject_cache;").unwrap();
+        save_path_tree_snapshot("new", root.path(), 2, &vec!["new"]).unwrap();
+        assert_eq!(
+            load_path_tree_snapshot::<Vec<String>>("new", 2).unwrap(),
+            Some(vec!["new".to_owned()])
+        );
+        assert!(
+            load_path_tree_snapshot::<Vec<String>>("new", 1)
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -1385,6 +1385,25 @@ pub fn probe_palette_color_diversity_ratio(palette_size: usize) -> f64 {
         .min(1.0)
 }
 
+/// Full-resolution directory mtime for cache validation; unknown is never fresh.
+#[must_use]
+pub fn delivery_directory_modified_time_optional(path: &Path) -> Option<(i64, u32)> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            let time = filetime::FileTime::from_last_modification_time(&metadata);
+            Some((time.unix_seconds(), time.nanoseconds()))
+        }
+        result => {
+            let reason = match result {
+                Ok(_) => "path is no longer a directory".to_string(),
+                Err(error) => format!("directory metadata unavailable: {error}"),
+            };
+            delivery_pipeline_path_audit("delivery_pipeline_batch", path, reason);
+            None
+        }
+    }
+}
+
 /// Path mtime for batch ordering (`None` when metadata unavailable).
 #[must_use]
 pub fn delivery_path_modified_unix_secs_optional(path: &Path) -> Option<u64> {

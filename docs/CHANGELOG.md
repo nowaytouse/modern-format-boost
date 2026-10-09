@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Local directory-cache unification (2026-10-09)
+
+- Read, write and purge ordinary directory scan snapshots through shared local
+  SQLite only. Remove PostgreSQL-first reads, required PostgreSQL writes and dual
+  replica cleanup from this Core path; explicit advanced analysis/cleanup remains.
+- Hash native path bytes and each normalized option as separate fixed-width fields
+  under a versioned identity domain. Old ambiguous keys are not silently reused.
+- Require root-directory evidence and known full-resolution directory timestamps
+  for IMG/VID snapshot reuse. Same-second changes, deleted directories, replacement
+  files and missing evidence invalidate the snapshot; schema 3 excludes the old
+  seconds-only format. Media verification remains mandatory.
+- Preserve explicit cache read/write failures and retry behavior. Namespace-scoped
+  local cleanup reports actual deleted rows and retains checkpoints, processed
+  receipts and unknown state. No user database is reset or migrated by development
+  tests; cache capacity, TTL/LRU and complete run-state unification remain separate.
+
 ### Durable SQLite state boundaries (2026-10-09)
 
 - Preserve checkpoint, processed-file and unknown-namespace rows on schema or

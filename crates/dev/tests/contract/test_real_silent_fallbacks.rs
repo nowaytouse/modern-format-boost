@@ -9100,19 +9100,12 @@ fn media_conversion_batch_path_tree_m103() {
 }
 
 #[test]
-fn media_conversion_path_tree_cache_pg_m213() {
+fn media_conversion_path_tree_cache_sqlite_m213() {
     let root = workspace_root();
     let contract = read_hardening_doc(&root, "MEDIA_CONVERSION_LAYER_CONTRACT.md"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         contract_documents_milestone(&contract, 213),
         "contract must document M213"
-    );
-
-    let sql = fs::read_to_string(root.join("crates/dev/src/config/sql/analysis_cache_pg.sql"))
-        .expect("analysis_cache_pg.sql must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
-    assert!(
-        sql.contains("path_tree_snapshots"),
-        "PG schema must define path_tree_snapshots (M213)"
     );
 
     let ptc = fs::read_to_string(join_legacy_aware(
@@ -9122,14 +9115,31 @@ fn media_conversion_path_tree_cache_pg_m213() {
     .expect("path_tree_cache.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         ptc.contains("save_path_tree_snapshot") && ptc.contains("load_path_tree_snapshot"),
-        "path_tree_cache must expose PG load/save (M213)"
+        "path_tree_cache must expose local load/save (M213)"
+    );
+    for retired in [
+        "postgres::",
+        "open_pg_client",
+        "load_pg_snapshot",
+        "save_pg_snapshot",
+    ] {
+        assert!(
+            !ptc.contains(retired),
+            "Core path-tree cache must not depend on {retired}"
+        );
+    }
+    assert!(
+        ptc.contains("new_derive_key")
+            && ptc.contains("as_encoded_bytes")
+            && !ptc.contains("exts.join(\",\")"),
+        "path-tree identity must preserve native bytes and unambiguous scan options"
     );
 
     let batch = fs::read_to_string(join_legacy_aware(&root, "crates/foundation/src/batch.rs"))
         .expect("batch.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         batch.contains("path_tree_cache::save_path_tree_snapshot"),
-        "batch must persist via path_tree_cache PG (M213)"
+        "batch must persist via local path_tree_cache (M213)"
     );
     assert!(
         !batch.contains("serde_json::to_string_pretty(snapshot)"),
@@ -9193,8 +9203,11 @@ fn media_conversion_m214_sqlite_store_ssot() {
     ))
     .expect("path_tree_cache.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        ptc.contains("save_sqlite_snapshot") && ptc.contains("load_sqlite_snapshot"),
-        "path_tree must tier PG + SQLite (M214)"
+        ptc.contains("mfb_sqlite_store::blob_put")
+            && ptc.contains("mfb_sqlite_store::blob_get")
+            && ptc.contains("mfb_sqlite_store::blob_delete_under_root(NS_PATH_TREE")
+            && ptc.contains("mfb_sqlite_store::blob_delete_namespace(NS_PATH_TREE)"),
+        "path_tree must use the shared SQLite store and namespace-scoped cleanup (M214)"
     );
     assert!(
         ptc.contains("PATH_TREE_SCHEMA_VERSION"),

@@ -23,9 +23,8 @@ use walkdir::{DirEntry, WalkDir};
 struct CachedDirectoryState {
     /// The absolute path to the directory.
     path: PathBuf,
-    /// The last modification time of the directory in Unix seconds (`None` when
-    /// unavailable).
-    modified_unix_secs: Option<u64>,
+    /// Native modification time (seconds, nanoseconds); `None` is not valid evidence.
+    modified_time: Option<(i64, u32)>,
 }
 
 /// Cached entry for an image file in the sorted path tree.
@@ -601,16 +600,15 @@ fn codec_matches_requested_extensions(
             .any(|extension| codec.is_extension_compatible(extension.trim_start_matches('.')))
 }
 
-/// Gets the last modification time of a path in Unix seconds.
-///
-/// # Arguments
-/// * `path` - The file or directory path
-///
-/// # Returns
-/// Last modification time as Unix seconds (`None` when metadata is
-/// unavailable).
-fn path_modified_unix_secs(path: &Path) -> Option<u64> {
-    crate::media_conversion_gate::delivery_path_modified_unix_secs_optional(path)
+fn cached_directories_are_current(directories: &[CachedDirectoryState], root: &Path) -> bool {
+    directories.iter().any(|directory| directory.path == root)
+        && directories.iter().all(|directory| {
+            directory.modified_time.is_some_and(|expected| {
+                crate::media_conversion_gate::delivery_directory_modified_time_optional(
+                    &directory.path,
+                ) == Some(expected)
+            })
+        })
 }
 
 /// Relative depth from batch root (`None` when `path` is not under `root`).
@@ -847,7 +845,6 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
     );
     crate::path_tree_cache::save_path_tree_snapshot(
         &cache_key,
-        "image",
         &snapshot.root,
         crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
         snapshot,
@@ -909,7 +906,6 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
     );
     crate::path_tree_cache::save_path_tree_snapshot(
         &cache_key,
-        "video",
         &snapshot.root,
         crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
         snapshot,
@@ -949,10 +945,7 @@ fn validate_cached_image_tree(
         return false;
     }
 
-    snapshot.directories.iter().all(|directory| {
-        let current_mtime = path_modified_unix_secs(&directory.path);
-        current_mtime == directory.modified_unix_secs
-    })
+    cached_directories_are_current(&snapshot.directories, &expected_root)
 }
 
 /// Validates that a cached video tree snapshot matches the expected
@@ -987,10 +980,7 @@ fn validate_cached_video_tree(
         return false;
     }
 
-    snapshot.directories.iter().all(|directory| {
-        let current_mtime = path_modified_unix_secs(&directory.path);
-        current_mtime == directory.modified_unix_secs
-    })
+    cached_directories_are_current(&snapshot.directories, &expected_root)
 }
 
 /// Scans the filesystem to create a fresh image tree snapshot.
@@ -1027,7 +1017,7 @@ fn scan_image_tree_snapshot(
                     if recursive || entry.depth() == 0 {
                         directories.push(CachedDirectoryState {
                             path: entry.path().to_path_buf(),
-                            modified_unix_secs: path_modified_unix_secs(entry.path()),
+                            modified_time: crate::media_conversion_gate::delivery_directory_modified_time_optional(entry.path()),
                         });
                     }
                     continue;
@@ -1131,7 +1121,10 @@ fn scan_image_tree_snapshot_from_files(
             Ok(entry) if entry.file_type().is_dir() && (recursive || entry.depth() == 0) => {
                 directories.push(CachedDirectoryState {
                     path: entry.path().to_path_buf(),
-                    modified_unix_secs: path_modified_unix_secs(entry.path()),
+                    modified_time:
+                        crate::media_conversion_gate::delivery_directory_modified_time_optional(
+                            entry.path(),
+                        ),
                 });
             }
             Ok(_) => {}
@@ -1343,7 +1336,7 @@ fn scan_video_tree_snapshot(
                     if recursive || entry.depth() == 0 {
                         directories.push(CachedDirectoryState {
                             path: entry.path().to_path_buf(),
-                            modified_unix_secs: path_modified_unix_secs(entry.path()),
+                            modified_time: crate::media_conversion_gate::delivery_directory_modified_time_optional(entry.path()),
                         });
                     }
                     continue;
@@ -1820,6 +1813,9 @@ mod tests {
     #[test]
     fn tree_scans_reject_missing_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
+        let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+            temp_dir.path().join("test-store.sqlite"),
+        );
         let missing = temp_dir.path().join("missing");
 
         assert!(scan_image_files(&missing, &["jpg"], true).is_err());
@@ -1891,20 +1887,99 @@ mod tests {
         let snapshot = scan_image_tree_snapshot(root, &["jpg"], true)?;
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
-        let bumped = FileTime::from_unix_time(
-            crate::numeric_cast::u64_to_i64_strict(
-                path_modified_unix_secs(&nested).expect("nested dir mtime must be readable"),
-                "mtime",
-            )
-            .expect("Failed to get mtime for test directory")
-                + 10,
-            0,
-        );
+        let current = FileTime::from_last_modification_time(&fs::metadata(&nested)?);
+        let bumped = FileTime::from_unix_time(current.unix_seconds() + 10, 0);
         filetime::set_file_mtime(&nested, bumped).map_err(|e| anyhow::anyhow!("set mtime: {e}"))?;
 
         assert!(
             !validate_cached_image_tree(&snapshot, root, &["jpg"], true),
             "Directory mtime drift should invalidate the cached path tree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cached_tree_freshness_requires_complete_full_resolution_directory_evidence()
+    -> anyhow::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = fs::canonicalize(temp_dir.path())?;
+        let nested = root.join("nested");
+        fs::create_dir(&nested)?;
+        let original_time = FileTime::from_unix_time(1_700_000_000, 100_000_000);
+        write_test_image(&nested.join("sample.jpg"), 8, 8, ImageFormat::Jpeg);
+        filetime::set_file_mtime(&nested, original_time)?;
+        let original = scan_image_tree_snapshot(&root, &["jpg"], true)?;
+        let valid = |image: &CachedImageTreeSnapshot| {
+            let video = CachedVideoTreeSnapshot {
+                schema_version: image.schema_version,
+                root: image.root.clone(),
+                recursive: image.recursive,
+                extensions: image.extensions.clone(),
+                directories: image.directories.clone(),
+                files: Vec::new(),
+            };
+            (
+                validate_cached_image_tree(image, &root, &["jpg"], true),
+                validate_cached_video_tree(&video, &root, &["jpg"], true),
+            )
+        };
+        assert_eq!(valid(&original), (true, true));
+        filetime::set_file_mtime(
+            &nested,
+            FileTime::from_unix_time(1_700_000_000, 200_000_000),
+        )?;
+        assert_eq!(
+            valid(&original),
+            (false, false),
+            "same-second directory changes must invalidate both caches"
+        );
+        filetime::set_file_mtime(&nested, original_time)?;
+        assert_eq!(valid(&original), (true, true));
+
+        let mut invalid = original.clone();
+        invalid.directories.clear();
+        assert_eq!(
+            valid(&invalid),
+            (false, false),
+            "empty evidence must not validate vacuously"
+        );
+        invalid = original.clone();
+        invalid
+            .directories
+            .retain(|directory| directory.path != root);
+        assert_eq!(valid(&invalid), (false, false), "root evidence is required");
+        invalid = original.clone();
+        for directory in &mut invalid.directories {
+            directory.modified_time = None;
+        }
+        assert_eq!(
+            valid(&invalid),
+            (false, false),
+            "unknown timestamps are not proof of freshness"
+        );
+        invalid = original.clone();
+        invalid.schema_version -= 1;
+        assert_eq!(
+            valid(&invalid),
+            (false, false),
+            "old seconds-only snapshots cannot be reused"
+        );
+
+        let root_time = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        fs::remove_dir_all(&nested)?;
+        filetime::set_file_mtime(&root, root_time)?;
+        assert_eq!(
+            valid(&original),
+            (false, false),
+            "missing directories invalidate snapshots"
+        );
+        fs::write(&nested, b"not a directory")?;
+        filetime::set_file_mtime(&nested, original_time)?;
+        filetime::set_file_mtime(&root, root_time)?;
+        assert_eq!(
+            valid(&original),
+            (false, false),
+            "file replacement cannot masquerade as a directory"
         );
         Ok(())
     }

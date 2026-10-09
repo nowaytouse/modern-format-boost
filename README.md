@@ -109,6 +109,14 @@ are available; final success still comes from the processing result.
 
 ### Cache management
 
+Directory scan snapshots now read and write only the shared local SQLite store;
+this cache path does not connect to PostgreSQL or maintain a second replica.
+Versioned cache identities preserve native path bytes and normalized scan options.
+Directory freshness uses full-resolution timestamps, requires root evidence, and
+rejects missing or unknown evidence. Older scan identities are rebuilt on demand;
+checkpoints and processed-file records are not invalidated. This does not replace
+media verification or establish content identity from directory timestamps.
+
 The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
 confirmed cleanup removes only local path-tree snapshots and obsolete analysis
@@ -940,7 +948,7 @@ winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool \
 ### 🗄️ Database Setup
 
 Modern Format Boost uses PostgreSQL (with the `pgvector` extension) for Vid,
-training, cache-management commands and explicitly enabled quality heuristics.
+training, explicitly requested advanced cache cleanup and enabled quality heuristics.
 Normal `img run`, FastImg and JPEG restoration use exact local detection by
 default and do not connect to PostgreSQL. When a database-backed feature is
 selected, an unreachable database remains a fail-closed startup error.

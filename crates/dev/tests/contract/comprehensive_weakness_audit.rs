@@ -1172,8 +1172,8 @@ fn check_tier_c(root: &Path, inventory: &mut Vec<String>) {
             ));
         }
     }
-    if !batch_prod.contains("delivery_path_modified_unix_secs_optional") {
-        inventory.push("A0 batch.rs must use delivery_path_modified_unix_secs_optional".into());
+    if !batch_prod.contains("delivery_directory_modified_time_optional") {
+        inventory.push("A0 batch.rs must use full-resolution optional directory timestamps".into());
     }
     if !batch_prod.contains("delivery_batch_relative_depth_optional") {
         inventory.push("A0 batch.rs must use delivery_batch_relative_depth_optional".into());
