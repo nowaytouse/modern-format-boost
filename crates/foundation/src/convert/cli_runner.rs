@@ -3,14 +3,14 @@ use crate::common_utils::has_extension;
 use crate::file_copier::{
     SUPPORTED_VIDEO_EXTENSIONS, VerifyDomain, copy_unsupported_files, verify_output_count,
 };
-use crate::report::print_summary;
+use crate::report::{ConvertedByteTotals, print_summary};
 use crate::smart_file_copier::fix_extension_if_mismatch;
 use anyhow::{Context, Result};
 
 use rayon::prelude::*;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -172,7 +172,12 @@ where
                 SUPPORTED_VIDEO_EXTENSIONS.join(", ")
             ),
         );
-        print_summary(&Summary::new(), start_time.elapsed(), 0, 0, &config.label);
+        print_summary(
+            &Summary::new(),
+            start_time.elapsed(),
+            ConvertedByteTotals::default(),
+            &config.label,
+        );
         return Ok(());
     }
 
@@ -298,8 +303,7 @@ where
     let ignored = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
     let processed = AtomicUsize::new(0);
-    let total_input_bytes = AtomicU64::new(0);
-    let total_output_bytes = AtomicU64::new(0);
+    let converted_bytes = Mutex::new(ConvertedByteTotals::default());
     let errors: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
     let abort_requested = AtomicBool::new(false);
     let abort_reason: Mutex<Option<String>> = Mutex::new(None);
@@ -645,15 +649,11 @@ where
                             );
                             succeeded.fetch_add(1, Ordering::Relaxed);
                             crate::progress_mode::video_processed_success();
-                            total_input_bytes.fetch_add(result.input_size(), Ordering::Relaxed);
-                            total_output_bytes.fetch_add(
-                                crate::media_conversion_gate::delivery_batch_output_bytes_or_input(
-                                    result.output_size(),
-                                    result.input_size(),
-                                    "cli_runner batch success",
-                                ),
-                                Ordering::Relaxed,
-                            );
+                            crate::media_conversion_gate::mutex_guard_or_recover(
+                                "cli_batch_converted_bytes",
+                                converted_bytes.lock(),
+                            )
+                            .record(result.input_size(), result.output_size());
 
                             log_live_audit_to_jsonl(
                                 result.blake3(),
@@ -935,8 +935,10 @@ where
     print_summary(
         &batch_result,
         start_time.elapsed(),
-        total_input_bytes.load(Ordering::Relaxed),
-        total_output_bytes.load(Ordering::Relaxed),
+        *crate::media_conversion_gate::mutex_guard_or_recover(
+            "cli_batch_converted_bytes",
+            converted_bytes.lock(),
+        ),
         &config.label,
     );
 

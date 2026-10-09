@@ -2249,8 +2249,7 @@ struct ImageBatchCounters {
     failed: AtomicUsize,
     ignored: AtomicUsize,
     processed: AtomicUsize,
-    input_bytes: core::sync::atomic::AtomicU64,
-    output_bytes: core::sync::atomic::AtomicU64,
+    converted_bytes: std::sync::Mutex<foundation::report::ConvertedByteTotals>,
 }
 
 struct ImageBatchWorker<'a> {
@@ -2374,14 +2373,11 @@ impl ImageBatchWorker<'_> {
                     );
                     self.counters.success.fetch_add(1, Ordering::Relaxed);
                     foundation::progress_mode::image_processed_success();
-                    self.counters
-                        .input_bytes
-                        .fetch_add(result.original_size, Ordering::Relaxed);
-                    if let Some(output_size) = result.output_size {
-                        self.counters
-                            .output_bytes
-                            .fetch_add(output_size, Ordering::Relaxed);
-                    }
+                    foundation::media_conversion_gate::mutex_guard_or_recover(
+                        "img_batch_converted_bytes",
+                        self.counters.converted_bytes.lock(),
+                    )
+                    .record(result.original_size, result.output_size);
                 }
             }
             Err(error) => {
@@ -2650,8 +2646,10 @@ impl ImageBatchFinalization<'_> {
         print_summary(
             &result,
             self.start_time.elapsed(),
-            self.counters.input_bytes.load(Ordering::Relaxed),
-            self.counters.output_bytes.load(Ordering::Relaxed),
+            *foundation::media_conversion_gate::mutex_guard_or_recover(
+                "img_batch_converted_bytes",
+                self.counters.converted_bytes.lock(),
+            ),
             "Image Conversion",
         );
 
@@ -2804,8 +2802,7 @@ fn auto_convert_directory(
         print_summary(
             &Summary::new(),
             start_time.elapsed(),
-            0,
-            0,
+            foundation::report::ConvertedByteTotals::default(),
             "Image Conversion",
         );
         return Ok(());

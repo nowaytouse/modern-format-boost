@@ -4043,25 +4043,6 @@ pub fn rwlock_write_guard_or_recover<'a, T>(
     })
 }
 
-/// Batch byte totals when post-encode `output_size` is missing (strict-gated).
-#[must_use]
-pub fn delivery_batch_output_bytes_or_input(
-    output_bytes: Option<u64>,
-    input_bytes: u64,
-    context: &str,
-) -> u64 {
-    output_bytes.unwrap_or_else(|| {
-        delivery_strict_batch_audit(
-            "batch_output_size_missing",
-            format!(
-                "{context}: output_size missing after reported success; using input_size \
-                 {input_bytes} for batch totals"
-            ),
-        );
-        input_bytes
-    })
-}
-
 /// Recover a poisoned session-logging mutex and warn on stderr (M44).
 pub fn logging_mutex_guard_or_recover<'a, T>(
     branch: &'static str,

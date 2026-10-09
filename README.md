@@ -490,6 +490,10 @@ or run media processing. CLI `config show --effective` exposes the same ordered
 `source_chain` alongside each field's final `sources` entry; explicit overrides
 remain visible even when they keep the same value. History configuration snapshots
 continue to retain final sources, not this new preview-only override chain.
+Standard IMG/VID batch reports aggregate only this run's successful conversions.
+Missing output measurements or overflowing byte totals remain unknown and suppress
+size-difference percentages; input size is never substituted for missing output.
+This CLI accounting does not yet add standard IMG/VID size totals to history.
 **Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a

@@ -12777,14 +12777,12 @@ fn media_conversion_delivery_batch_mutex_m165() {
         "mutex_into_inner_or_recover",
         "rwlock_read_guard_or_recover",
         "rwlock_write_guard_or_recover",
-        "delivery_batch_output_bytes_or_input",
     ] {
         assert!(gate.contains(sym), "gate must export {sym} (M165)");
     }
-    let output_body = gate_fn_body(&gate, "delivery_batch_output_bytes_or_input");
     assert!(
-        output_body.contains("delivery_strict_batch_audit"),
-        "delivery_batch_output_bytes_or_input must strict-gate (M165)"
+        !gate.contains("delivery_batch_output_bytes_or_input"),
+        "missing output bytes must not be replaced with input bytes (M165)"
     );
 
     let forbidden = [
@@ -12817,13 +12815,28 @@ fn media_conversion_delivery_batch_mutex_m165() {
     for needle in [
         "mutex_guard_or_recover",
         "mutex_into_inner_or_recover",
-        "delivery_batch_output_bytes_or_input",
+        "ConvertedByteTotals",
     ] {
         assert!(
             prod_cli.contains(needle),
             "cli_runner must route batch paths through {needle} (M165)"
         );
     }
+    let report = fs::read_to_string(join_legacy_aware(&root, "crates/foundation/src/report.rs"))
+        .expect("report.rs must be readable");
+    assert!(
+        report.contains("total.checked_add(input)")
+            && report.contains("total.checked_add(bytes)")
+            && report.contains("diff=unknown, change=N/A"),
+        "converted totals must reject overflow and expose unknown size differences (M165)"
+    );
+    let img = fs::read_to_string(root.join("crates/img/src/main.rs"))
+        .expect("img main.rs must be readable");
+    assert!(
+        img.contains("Mutex<foundation::report::ConvertedByteTotals>")
+            && img.contains(".record(result.original_size, result.output_size)"),
+        "IMG must use the same nullable byte totals as VID (M165)"
+    );
     let builders = fs::read_to_string(join_legacy_aware(
         &root,
         "crates/foundation/src/builder_base.rs",

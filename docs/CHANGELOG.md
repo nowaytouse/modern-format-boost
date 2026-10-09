@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Accurate standard batch byte totals (2026-10-09)
+
+- Share checked, nullable converted-byte totals between standard IMG and VID.
+  Missing output sizes no longer count as zero in IMG or as input sizes in VID.
+  Overflow invalidates the affected total instead of wrapping to a smaller value.
+- Keep incomplete totals unknown across later successful files and suppress size
+  differences and percentages when either operand is unavailable. Outcome counts,
+  source retention, and verification policies are unchanged.
+- Remove the substituted-size helper and strengthen the existing M165 contract to
+  prevent its return. Standard IMG/VID history size integration remains separate.
+
 ### Effective configuration provenance (2026-10-09)
 
 - Record ordered configuration source layers in the shared resolver, including
