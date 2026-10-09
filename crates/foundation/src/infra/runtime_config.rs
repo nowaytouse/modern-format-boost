@@ -181,6 +181,43 @@ pub struct ToolsPolicy {
     pub paths: BTreeMap<String, PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CachePolicy {
+    /// Total serialized path-tree payload bytes, excluding SQLite overhead and durable state.
+    pub path_tree_max_bytes: u64,
+    /// Idle lifetime; successful cache reads refresh the timestamp.
+    pub path_tree_ttl_seconds: u64,
+}
+
+impl Default for CachePolicy {
+    fn default() -> Self {
+        Self {
+            path_tree_max_bytes: 256 * 1024 * 1024,
+            path_tree_ttl_seconds: 30 * 24 * 60 * 60,
+        }
+    }
+}
+
+impl CachePolicy {
+    /// Reject unusable limits before any cache mutation.
+    ///
+    /// # Errors
+    /// Returns an error for zero or values outside SQLite's signed integer range.
+    pub fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("path_tree_max_bytes", self.path_tree_max_bytes),
+            ("path_tree_ttl_seconds", self.path_tree_ttl_seconds),
+        ] {
+            ensure!(
+                value > 0 && i64::try_from(value).is_ok(),
+                "cache.{name} must be positive and fit a SQLite signed 64-bit integer"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
@@ -190,6 +227,7 @@ pub struct RuntimeConfig {
     pub photos: PhotosPolicy,
     pub tools: ToolsPolicy,
     pub performance: PerformancePolicy,
+    pub cache: CachePolicy,
 }
 
 impl Default for RuntimeConfig {
@@ -201,12 +239,14 @@ impl Default for RuntimeConfig {
             photos: PhotosPolicy::default(),
             tools: ToolsPolicy::default(),
             performance: PerformancePolicy::default(),
+            cache: CachePolicy::default(),
         }
     }
 }
 
 impl RuntimeConfig {
     pub fn validate(&self) -> Result<()> {
+        self.cache.validate()?;
         ensure!(
             self.config_version == 1,
             "unsupported config_version {}",
@@ -627,6 +667,55 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_policy_defaults_layers_and_integer_bounds() -> Result<()> {
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        assert_eq!(value["cache"]["path_tree_max_bytes"], 268_435_456_u64);
+        assert_eq!(value["cache"]["path_tree_ttl_seconds"], 2_592_000_u64);
+        assert_eq!(sources["cache.path_tree_max_bytes"], "default");
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("config.json");
+        std::fs::write(
+            &file,
+            r#"{"config_version":1,"cache":{"path_tree_max_bytes":16}}"#,
+        )?;
+        apply_file(&mut value, &file, &mut sources, &mut source_chain)?;
+        let config: RuntimeConfig = serde_json::from_value(value.clone())?;
+        assert_eq!(config.cache.path_tree_max_bytes, 16);
+        assert_eq!(config.cache.path_tree_ttl_seconds, 2_592_000);
+        assert_eq!(
+            source_chain["cache.path_tree_max_bytes"],
+            ["default", file.to_str().unwrap()]
+        );
+        assert_eq!(source_chain["cache.path_tree_ttl_seconds"], ["default"]);
+        let loaded = LoadedConfig {
+            config,
+            sources,
+            source_chain,
+        };
+        let effective: Value = serde_json::from_str(&loaded.to_json(false)?)?;
+        assert_eq!(effective["config"]["cache"]["path_tree_max_bytes"], 16);
+        for field in ["path_tree_max_bytes", "path_tree_ttl_seconds"] {
+            for invalid in [json!(0), json!(-1), json!(u64::MAX), json!(1.5)] {
+                let mut candidate = value.clone();
+                candidate["cache"][field] = invalid;
+                assert!(
+                    serde_json::from_value::<RuntimeConfig>(candidate)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|config| config.validate())
+                        .is_err()
+                );
+            }
+            let mut boundary = value.clone();
+            boundary["cache"][field] = json!(i64::MAX);
+            serde_json::from_value::<RuntimeConfig>(boundary)?.validate()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn defaults_and_explicit_performance_keep_one_policy() {

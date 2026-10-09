@@ -623,7 +623,7 @@ private struct EffectiveRuntimeSettings {
     }
 }
 
-private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval = 10) throws -> Data {
+private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval = 10, acceptedExitCodes: Set<Int32> = [0]) throws -> Data {
     let process = Process()
     process.executableURL = binary
     process.arguments = arguments
@@ -636,7 +636,7 @@ private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: Tim
     defer { watchdog.cancel() }
     let capture = try readBoundedProcessOutput(output.fileHandleForReading, limit: 1024 * 1024)
     process.waitUntilExit()
-    guard !capture.exceeded, process.terminationStatus == 0 else {
+    guard !capture.exceeded, process.terminationReason == .exit, acceptedExitCodes.contains(process.terminationStatus) else {
         let detail = String(decoding: capture.data.prefix(8192), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         throw HostError(message: detail.isEmpty ? localized("settings.backend_failed", process.terminationStatus) : detail)
     }
@@ -652,6 +652,46 @@ private func queryRuntimeSettings(arguments: [String], tool: String = "img") thr
 }
 
 private struct LocalCacheStatus: Decodable {
+    struct Integrity: Decodable {
+        struct Issue: Decodable { let code: String; let message: String }
+        enum Status: String, Decodable { case healthy, unhealthy, error, absent }
+        enum Check: String, Decodable { case ok, failed, notChecked = "not_checked" }
+        let schemaVersion: Int
+        let status: Status
+        let sqliteIntegrity: Check
+        let foreignKeys: Check
+        let blobScanComplete: Bool
+        let checkedCacheRows: UInt64
+        let checkedProtectedRows: UInt64
+        let corruptCacheRows: UInt64
+        let corruptProtectedRows: UInt64
+        let issueCount: UInt64
+        let issues: [Issue]
+
+        func validate() throws {
+            guard schemaVersion == 1, issues.count <= 20, UInt64(issues.count) <= issueCount,
+                  corruptCacheRows <= checkedCacheRows, corruptProtectedRows <= checkedProtectedRows,
+                  issues.allSatisfy({ !$0.code.isEmpty && !$0.message.isEmpty }) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+            let complete = sqliteIntegrity == .ok && foreignKeys == .ok && blobScanComplete
+            switch status {
+            case .healthy:
+                guard complete, issueCount == 0, corruptCacheRows == 0, corruptProtectedRows == 0 else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            case .absent:
+                guard sqliteIntegrity == .notChecked, foreignKeys == .notChecked, !blobScanComplete,
+                      checkedCacheRows == 0, checkedProtectedRows == 0, issueCount == 0 else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            case .unhealthy, .error:
+                guard issueCount > 0, !issues.isEmpty else {
+                    throw HostError(message: localized("settings.cache.invalid"))
+                }
+            }
+        }
+    }
     struct Namespace: Decodable {
         let name: String
         let rows: UInt64
@@ -666,6 +706,7 @@ private struct LocalCacheStatus: Decodable {
     let legacyAnalysisFiles: UInt64
     let removedRows: UInt64
     let removedFiles: UInt64
+    let integrity: Integrity?
 
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
         var rows: UInt64 = 0, bytes: UInt64 = 0
@@ -693,16 +734,30 @@ private struct LocalCacheStatus: Decodable {
         }
         _ = try status.totals(rebuildable: true)
         _ = try status.totals(rebuildable: false)
+        try status.integrity?.validate()
+        if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
+            guard integrity.blobScanComplete,
+                  integrity.checkedCacheRows == (try status.totals(rebuildable: true).rows),
+                  integrity.checkedProtectedRows == (try status.totals(rebuildable: false).rows) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
         return status
     }
 }
 
-private func queryLocalCache(clear: Bool) throws -> LocalCacheStatus {
+private func queryLocalCache(clear: Bool, checkIntegrity: Bool = false) throws -> LocalCacheStatus {
     guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
         throw HostError(message: localized("settings.cache.backend_missing"))
     }
-    return try LocalCacheStatus.decode(settingsToolOutput(binary,
-        arguments: clear ? ["--yes", "--json"] : ["--stats", "--json"], timeout: 30))
+    var arguments = clear ? ["--yes", "--json"] : ["--stats", "--json"]
+    if checkIntegrity { arguments.append("--check-integrity") }
+    let status = try LocalCacheStatus.decode(settingsToolOutput(binary, arguments: arguments,
+        timeout: checkIntegrity ? 120 : 30, acceptedExitCodes: checkIntegrity ? [0, 1] : [0]))
+    guard !checkIntegrity || status.integrity != nil else {
+        throw HostError(message: localized("settings.cache.invalid"))
+    }
+    return status
 }
 
 @MainActor
@@ -752,6 +807,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let applyButton = NSButton()
     private let cacheRefresh = NSButton()
     private let cacheClear = NSButton()
+    private let cacheCheck = NSButton()
     private var cacheLabels: [String: NSTextField] = [:]
     private let cacheMessage = NSTextField(wrappingLabelWithString: "")
     private var cacheMessageRow: NSGridRow?
@@ -977,7 +1033,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
-                          "settings.cache.clear"].map { localized($0) }.joined(separator: " ")
+                          "settings.cache.clear", "settings.cache.check"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1077,9 +1133,18 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheClear.target = self
         cacheClear.action = #selector(clearCache)
         cacheClear.isEnabled = false
-        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheClear])]).yPlacement = .center
+        cacheCheck.title = localized("settings.cache.check")
+        cacheCheck.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
+        cacheCheck.imagePosition = .imageLeading
+        cacheCheck.toolTip = localized("settings.cache.check")
+        cacheCheck.setAccessibilityLabel(localized("settings.cache.check"))
+        cacheCheck.bezelStyle = .rounded
+        cacheCheck.target = self
+        cacheCheck.action = #selector(checkCacheIntegrity)
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheClear, cacheCheck])]).yPlacement = .center
         cacheMessage.font = .systemFont(ofSize: 11)
-        cacheMessage.maximumNumberOfLines = 3
+        cacheMessage.maximumNumberOfLines = 4
+        cacheMessage.isSelectable = true
         cacheMessageRow = grid.addRow(with: [NSView(), cacheMessage])
         cacheMessageRow?.isHidden = true
         grid.column(at: 0).width = 240
@@ -1111,10 +1176,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
         cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
+        cacheCheck.isEnabled = !cacheBusy
         cacheLoaded = true
     }
 
     @objc private func refreshCache() { updateCache(clear: false) }
+    @objc private func checkCacheIntegrity() { updateCache(clear: false, checkIntegrity: true) }
 
     @objc private func clearCache() {
         guard !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
@@ -1129,27 +1196,32 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
     }
 
-    private func updateCache(clear: Bool) {
+    private func updateCache(clear: Bool, checkIntegrity: Bool = false) {
         guard !cacheBusy else { return }
         cacheBusy = true
         cacheRefresh.isEnabled = false
         cacheClear.isEnabled = false
-        cacheMessage.stringValue = localized(clear ? "settings.cache.clearing" : "settings.cache.loading")
+        cacheCheck.isEnabled = false
+        cacheMessage.toolTip = nil
+        cacheMessage.maximumNumberOfLines = 4
+        cacheMessage.stringValue = localized(checkIntegrity ? "settings.cache.checking" : (clear ? "settings.cache.clearing" : "settings.cache.loading"))
         cacheMessage.textColor = .secondaryLabelColor
         cacheMessageRow?.isHidden = false
         updatePanelSize()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Result { try queryLocalCache(clear: clear) }
+            let result = Result { try queryLocalCache(clear: clear, checkIntegrity: checkIntegrity) }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.cacheBusy = false
                 self.cacheRefresh.isEnabled = true
+                self.cacheCheck.isEnabled = true
                 do {
                     let snapshot = try result.get()
                     try self.displayCache(snapshot)
                     self.cacheMessage.stringValue = clear
                         ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
                     self.cacheMessageRow?.isHidden = !clear
+                    if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
                 } catch {
                     self.cacheLoaded = false
                     for label in self.cacheLabels.values { label.stringValue = localized("settings.cache.unavailable"); label.toolTip = nil }
@@ -1160,6 +1232,27 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 self.updatePanelSize()
             }
         }
+    }
+
+    private func displayCacheIntegrity(_ report: LocalCacheStatus.Integrity) {
+        cacheMessage.maximumNumberOfLines = 0
+        if report.status == .error {
+            cacheLoaded = false
+            cacheClear.isEnabled = false
+            for (key, label) in cacheLabels where key != "path" {
+                label.stringValue = localized("settings.cache.unavailable")
+                label.toolTip = nil
+            }
+        }
+        cacheMessage.stringValue = localized("settings.cache.integrity.\(report.status.rawValue)")
+        if report.status != .absent {
+            cacheMessage.stringValue += "\n" + localized("settings.cache.checked",
+                String(report.checkedCacheRows), String(report.checkedProtectedRows),
+                String(report.corruptCacheRows), String(report.corruptProtectedRows), String(report.issueCount))
+        }
+        cacheMessage.textColor = report.status == .unhealthy || report.status == .error ? .systemRed : .labelColor
+        cacheMessage.toolTip = report.issues.map { "\($0.code): \($0.message)" }.joined(separator: "\n")
+        cacheMessageRow?.isHidden = false
     }
 
     func show(for window: NSWindow) {
@@ -1748,13 +1841,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try displayCache(snapshot)
         tabs.selectTabViewItem(withIdentifier: "cache")
         guard cacheClear.isEnabled, resetButton.isHidden, applyButton.isHidden,
-              cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
+              cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
         }
         cacheBusy = true
         try displayCache(snapshot)
         updatePanelSize()
-        guard !cacheClear.isEnabled, !cancelButton.isEnabled else {
+        guard !cacheClear.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false
@@ -1769,6 +1862,54 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
               cacheLabels.values.allSatisfy({ grid.bounds.contains($0.alignmentRect(forFrame: $0.frame)) }) else {
             let labels = cacheLabels.map { "\($0.key)=\($0.value.frame)" }.joined(separator: ", ")
             throw HostError(message: "Long cache paths or errors escaped the Settings tab: content=\(String(describing: tabs.selectedTabViewItem?.view?.bounds)), grid=\(String(describing: grids["cache"]?.frame)), labels=\(labels)")
+        }
+        cacheMessageRow?.isHidden = true
+        try displayCache(snapshot)
+        let healthy: [String: Any] = ["schema_version": 1, "status": "healthy",
+            "sqlite_integrity": "ok", "foreign_keys": "ok", "blob_scan_complete": true,
+            "checked_cache_rows": 3, "checked_protected_rows": 6,
+            "corrupt_cache_rows": 0, "corrupt_protected_rows": 0, "issue_count": 0, "issues": []]
+        var checked = document
+        checked["integrity"] = healthy
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)).integrity?.status == .healthy else {
+            throw HostError(message: "Database integrity result was not decoded")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("status", "unknown"),
+                             ("checked_cache_rows", 4), ("blob_scan_complete", false),
+                             ("corrupt_protected_rows", 1), ("issue_count", 1)] {
+            var report = healthy
+            report[key] = value
+            checked["integrity"] = report
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)) }
+            catch { continue }
+            throw HostError(message: "Invalid database integrity receipt was accepted: \(key)")
+        }
+        for state in ["unhealthy", "error"] {
+            var report = healthy
+            report["status"] = state
+            report["corrupt_protected_rows"] = 1
+            report["issue_count"] = 1
+            report["issues"] = [["code": "protected_payload", "message": "Invalid digest."]]
+            checked["integrity"] = report
+            let decoded = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked))
+            guard let integrity = decoded.integrity, integrity.status.rawValue == state else { throw HostError(message: "Integrity failure was lost") }
+            displayCacheIntegrity(integrity)
+            guard cacheMessage.textColor == .systemRed, cacheMessageRow?.isHidden == false,
+                  state != "error" || (!cacheClear.isEnabled && !cacheLoaded) else {
+                throw HostError(message: "Incomplete integrity check was shown as available or successful")
+            }
+        }
+        var absent = healthy
+        absent["status"] = "absent"
+        absent["sqlite_integrity"] = "not_checked"
+        absent["foreign_keys"] = "not_checked"
+        absent["blob_scan_complete"] = false
+        absent["checked_cache_rows"] = 0
+        absent["checked_protected_rows"] = 0
+        checked["integrity"] = absent
+        checked["namespaces"] = []
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: checked)).integrity?.status == .absent else {
+            throw HostError(message: "Missing database was not distinguished from healthy")
         }
         cacheMessageRow?.isHidden = true
         try displayCache(snapshot)

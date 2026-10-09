@@ -6,6 +6,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::runtime_config::CachePolicy;
+
 pub const STORE_SCHEMA_VERSION: i32 = 2;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_CHECKPOINT: &str = "checkpoint";
@@ -304,59 +306,114 @@ pub fn blob_get(
     cache_key: &str,
     expected_schema_version: i32,
 ) -> Result<Option<Vec<u8>>> {
-    with_conn(|conn| {
-        let row = match conn.query_row(
-            "SELECT schema_version, payload, payload_blake3 FROM blob_store
+    if namespace == NS_PATH_TREE {
+        let mut conn = open_connection()?;
+        return path_tree_get(
+            &mut conn,
+            cache_key,
+            expected_schema_version,
+            cache_policy(),
+            now_unix_secs,
+        );
+    }
+    with_conn(|conn| read_blob(conn, namespace, cache_key, expected_schema_version))
+}
+
+fn cache_policy() -> CachePolicy {
+    crate::runtime_config::active().map_or_else(CachePolicy::default, |config| config.cache)
+}
+
+fn path_tree_get(
+    conn: &mut Connection,
+    cache_key: &str,
+    expected_schema_version: i32,
+    policy: CachePolicy,
+    clock: impl FnOnce() -> Result<i64>,
+) -> Result<Option<Vec<u8>>> {
+    policy.validate()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let now = clock()?;
+    let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
+    // Future timestamps cannot establish freshness after a backwards clock adjustment.
+    let expired = tx.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2
+         AND (updated_at <= ?3 OR updated_at > ?4)",
+        params![NS_PATH_TREE, cache_key, cutoff, now],
+    )?;
+    let payload = read_blob(&tx, NS_PATH_TREE, cache_key, expected_schema_version)?;
+    if payload.is_some() {
+        tx.execute(
+            "UPDATE blob_store SET updated_at = ?1 WHERE namespace = ?2 AND cache_key = ?3",
+            params![now, NS_PATH_TREE, cache_key],
+        )?;
+    }
+    tx.commit()?;
+    if expired > 0 {
+        crate::media_conversion_gate::delivery_runtime_batch_audit(
+            "delivery_runtime",
+            "SQLITE AUDIT: expired path_tree cache entry removed",
+        );
+    }
+    Ok(payload)
+}
+
+fn read_blob(
+    conn: &Connection,
+    namespace: &str,
+    cache_key: &str,
+    expected_schema_version: i32,
+) -> Result<Option<Vec<u8>>> {
+    let row = match conn.query_row(
+        "SELECT schema_version, payload, payload_blake3 FROM blob_store
              WHERE namespace = ?1 AND cache_key = ?2",
-            params![namespace, cache_key],
-            |row| {
-                Ok((
-                    row.get::<_, i32>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
-                ))
-            },
-        ) {
-            Ok(v) => v,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let (schema, payload, stored_blake3) = row;
-        let expected_blake3 = blake3::hash(&payload);
-        let invalid = if schema != expected_schema_version {
-            Some("schema mismatch")
-        } else if stored_blake3.as_slice() != expected_blake3.as_bytes() {
-            Some("BLAKE3 mismatch")
-        } else {
-            None
-        };
-        if let Some(reason) = invalid {
-            anyhow::ensure!(
-                namespace == NS_PATH_TREE,
-                "SQLite {namespace} state {reason}; saved record retained, recovery cannot continue"
-            );
-            // Do not delete a newer value committed after this read.
-            conn.execute(
-                "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2
+        params![namespace, cache_key],
+        |row| {
+            Ok((
+                row.get::<_, i32>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        },
+    ) {
+        Ok(v) => v,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let (schema, payload, stored_blake3) = row;
+    let expected_blake3 = blake3::hash(&payload);
+    let invalid = if schema != expected_schema_version {
+        Some("schema mismatch")
+    } else if stored_blake3.as_slice() != expected_blake3.as_bytes() {
+        Some("BLAKE3 mismatch")
+    } else {
+        None
+    };
+    if let Some(reason) = invalid {
+        anyhow::ensure!(
+            namespace == NS_PATH_TREE,
+            "SQLite {namespace} state {reason}; saved record retained, recovery cannot continue"
+        );
+        // Do not delete a newer value committed after this read.
+        conn.execute(
+            "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2
                  AND schema_version = ?3 AND payload = ?4 AND payload_blake3 = ?5",
-                params![namespace, cache_key, schema, payload, stored_blake3],
-            )?;
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_runtime",
-                format!(
-                    "SQLITE AUDIT: {reason} for reconstructable {namespace} cache (invalid snapshot evicted if unchanged)"
-                ),
-            );
-            return Ok(None);
-        }
-        Ok(Some(payload))
-    })
+            params![namespace, cache_key, schema, payload, stored_blake3],
+        )?;
+        crate::media_conversion_gate::delivery_runtime_batch_audit(
+            "delivery_runtime",
+            format!(
+                "SQLITE AUDIT: {reason} for reconstructable {namespace} cache (invalid snapshot evicted if unchanged)"
+            ),
+        );
+        return Ok(None);
+    }
+    Ok(Some(payload))
 }
 
 /// Upsert a blob payload with a full BLAKE3 integrity digest.
 ///
 /// # Errors
-/// Returns an error if the write fails.
+/// Returns an error if the write fails or a path-tree payload exceeds its cache budget.
 pub fn blob_put(
     namespace: &str,
     cache_key: &str,
@@ -365,11 +422,100 @@ pub fn blob_put(
     payload: &[u8],
 ) -> Result<()> {
     let root = root_path.map(|p| p.to_string_lossy().into_owned());
-    let digest = blake3::hash(payload);
+    if namespace == NS_PATH_TREE {
+        let mut conn = open_connection()?;
+        return path_tree_put(
+            &mut conn,
+            cache_key,
+            schema_version,
+            root.as_deref(),
+            payload,
+            cache_policy(),
+            now_unix_secs,
+        );
+    }
     let updated_at = now_unix_secs()?;
     with_conn(|conn| {
-        conn.execute(
-            "INSERT INTO blob_store (namespace, cache_key, schema_version, root_path, payload, \
+        upsert_blob(
+            conn,
+            namespace,
+            cache_key,
+            schema_version,
+            root.as_deref(),
+            payload,
+            updated_at,
+        )
+    })
+}
+
+fn path_tree_put(
+    conn: &mut Connection,
+    cache_key: &str,
+    schema_version: i32,
+    root: Option<&str>,
+    payload: &[u8],
+    policy: CachePolicy,
+    clock: impl FnOnce() -> Result<i64>,
+) -> Result<()> {
+    policy.validate()?;
+    let max_bytes = i64::try_from(policy.path_tree_max_bytes)?;
+    let payload_bytes = i64::try_from(payload.len()).context("path_tree payload exceeds i64")?;
+    anyhow::ensure!(
+        payload_bytes <= max_bytes,
+        "path_tree cache not saved: payload {payload_bytes} bytes exceeds cache.path_tree_max_bytes={max_bytes}; existing cache retained"
+    );
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let now = clock()?;
+    let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
+    let expired = tx.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1 AND (updated_at <= ?2 OR updated_at > ?3)",
+        params![NS_PATH_TREE, cutoff, now],
+    )?;
+    upsert_blob(
+        &tx,
+        NS_PATH_TREE,
+        cache_key,
+        schema_version,
+        root,
+        payload,
+        now,
+    )?;
+    // Reserve the admitted payload, then retain the newest prefix using lengths only.
+    let evicted = tx.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key IN (
+             SELECT cache_key FROM (
+                 SELECT cache_key, SUM(length(payload)) OVER (
+                     ORDER BY updated_at DESC, cache_key DESC ROWS UNBOUNDED PRECEDING
+                 ) AS retained_bytes
+                 FROM blob_store WHERE namespace = ?1 AND cache_key != ?2
+             ) WHERE retained_bytes > ?3
+         )",
+        params![NS_PATH_TREE, cache_key, max_bytes - payload_bytes],
+    )?;
+    tx.commit()?;
+    if expired > 0 || evicted > 0 {
+        crate::media_conversion_gate::delivery_runtime_batch_audit(
+            "delivery_runtime",
+            format!(
+                "SQLITE AUDIT: path_tree lifecycle removed {expired} expired and {evicted} LRU entries"
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn upsert_blob(
+    conn: &Connection,
+    namespace: &str,
+    cache_key: &str,
+    schema_version: i32,
+    root: Option<&str>,
+    payload: &[u8],
+    updated_at: i64,
+) -> Result<()> {
+    let digest = blake3::hash(payload);
+    conn.execute(
+        "INSERT INTO blob_store (namespace, cache_key, schema_version, root_path, payload, \
               payload_blake3, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(namespace, cache_key) DO UPDATE SET
@@ -378,18 +524,17 @@ pub fn blob_put(
                 payload = excluded.payload,
                 payload_blake3 = excluded.payload_blake3,
                 updated_at = excluded.updated_at",
-            params![
-                namespace,
-                cache_key,
-                schema_version,
-                root.as_deref(),
-                payload,
-                digest.as_bytes().as_slice(),
-                updated_at
-            ],
-        )?;
-        Ok(())
-    })
+        params![
+            namespace,
+            cache_key,
+            schema_version,
+            root,
+            payload,
+            digest.as_bytes().as_slice(),
+            updated_at
+        ],
+    )?;
+    Ok(())
 }
 
 /// Delete blobs under a namespace whose `root_path` equals or is prefixed by
@@ -473,6 +618,219 @@ pub fn set_test_store_path_for_tests(path: PathBuf) -> TestStoreGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_tree_idle_expiry_covers_boundary_future_clock_and_read_refresh() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 100,
+            path_tree_ttl_seconds: 10,
+        };
+        for (key, timestamp) in [
+            ("old", 89),
+            ("boundary", 90),
+            ("fresh", 91),
+            ("future", 101),
+        ] {
+            upsert_blob(&conn, NS_PATH_TREE, key, 1, None, b"data", timestamp)?;
+        }
+        for key in ["old", "boundary", "future"] {
+            assert_eq!(path_tree_get(&mut conn, key, 1, policy, || Ok(100))?, None);
+        }
+        for now in [100, 109, 118] {
+            assert_eq!(
+                path_tree_get(&mut conn, "fresh", 1, policy, || Ok(now))?,
+                Some(b"data".to_vec())
+            );
+        }
+        assert_eq!(
+            path_tree_get(&mut conn, "fresh", 1, policy, || Ok(128))?,
+            None
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM blob_store", [], |r| r
+                .get::<_, i64>(0))?,
+            0
+        );
+        let longest_ttl = CachePolicy {
+            path_tree_ttl_seconds: i64::MAX.unsigned_abs(),
+            ..policy
+        };
+        upsert_blob(&conn, NS_PATH_TREE, "epoch", 1, None, b"data", 0)?;
+        assert!(path_tree_get(&mut conn, "epoch", 1, longest_ttl, || Ok(0))?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn path_tree_lru_admission_expiry_and_formal_state_are_isolated() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 8,
+            path_tree_ttl_seconds: 10,
+        };
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "future_state"] {
+            upsert_blob(
+                &conn,
+                namespace,
+                "state",
+                7,
+                Some("/synthetic"),
+                b"durable-state",
+                0,
+            )?;
+        }
+        path_tree_put(&mut conn, "first", 1, None, b"1111", policy, || Ok(100))?;
+        path_tree_put(&mut conn, "second", 1, None, b"2222", policy, || Ok(101))?;
+        assert!(path_tree_get(&mut conn, "first", 1, policy, || Ok(102))?.is_some());
+        path_tree_put(&mut conn, "third", 1, None, b"3333", policy, || Ok(103))?;
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "second", 1)?, None);
+        assert!(read_blob(&conn, NS_PATH_TREE, "first", 1)?.is_some());
+        let error = path_tree_put(&mut conn, "first", 1, None, b"oversized", policy, || {
+            Ok(200)
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("cache not saved"));
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "first", 1)?,
+            Some(b"1111".to_vec())
+        );
+        assert!(read_blob(&conn, NS_PATH_TREE, "third", 1)?.is_some());
+        path_tree_put(
+            &mut conn,
+            "exact-budget",
+            1,
+            None,
+            b"12345678",
+            policy,
+            || Ok(104),
+        )?;
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM blob_store WHERE namespace='path_tree'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        upsert_blob(&conn, NS_PATH_TREE, "future", 1, None, b"future", 200)?;
+        path_tree_put(&mut conn, "after-expiry", 1, None, b"new", policy, || {
+            Ok(114)
+        })?;
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "exact-budget", 1)?, None);
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "future", 1)?, None);
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "future_state"] {
+            assert_eq!(
+                blob_get(namespace, "state", 7)?,
+                Some(b"durable-state".to_vec())
+            );
+            let (timestamp, root): (i64, String) = conn.query_row(
+                "SELECT updated_at, root_path FROM blob_store WHERE namespace=?1",
+                params![namespace],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert_eq!(timestamp, 0);
+            assert_eq!(root, "/synthetic");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_path_tree_admission_keeps_one_budget_and_preserves_state() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join(STORE_FILE_NAME);
+        let _guard = set_test_store_path_for_tests(path.clone());
+        blob_put(NS_CHECKPOINT, "retained", 1, None, b"state")?;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || -> Result<()> {
+                    let _guard = set_test_store_path_for_tests(path);
+                    barrier.wait();
+                    let mut conn = open_connection()?;
+                    path_tree_put(
+                        &mut conn,
+                        &index.to_string(),
+                        1,
+                        None,
+                        b"12345678",
+                        CachePolicy {
+                            path_tree_max_bytes: 32,
+                            path_tree_ttl_seconds: 10,
+                        },
+                        || Ok(100),
+                    )
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap()?;
+        }
+        let conn = open_connection()?;
+        let (rows, bytes): (i64, i64) = conn.query_row(
+            "SELECT count(*), sum(length(payload)) FROM blob_store WHERE namespace='path_tree'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!((rows, bytes), (4, 32));
+        assert_eq!(
+            blob_get(NS_CHECKPOINT, "retained", 1)?,
+            Some(b"state".to_vec())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn path_tree_failed_eviction_or_touch_rolls_back_entire_transaction() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 4,
+            path_tree_ttl_seconds: 10,
+        };
+        upsert_blob(&conn, NS_PATH_TREE, "expired", 1, None, b"old", 0)?;
+        upsert_blob(&conn, NS_PATH_TREE, "recent", 1, None, b"good", 100)?;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_lru BEFORE DELETE ON blob_store
+             WHEN OLD.cache_key = 'recent' BEGIN SELECT RAISE(ABORT, 'test eviction failure'); END;",
+        )?;
+        assert!(path_tree_put(&mut conn, "new", 1, None, b"new", policy, || Ok(101)).is_err());
+        assert!(read_blob(&conn, NS_PATH_TREE, "expired", 1)?.is_some());
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "recent", 1)?,
+            Some(b"good".to_vec())
+        );
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "new", 1)?, None);
+        conn.execute_batch(
+            "DROP TRIGGER reject_lru;
+             CREATE TRIGGER reject_touch BEFORE UPDATE ON blob_store
+             BEGIN SELECT RAISE(ABORT, 'test touch failure'); END;",
+        )?;
+        assert!(path_tree_get(&mut conn, "recent", 1, policy, || Ok(101)).is_err());
+        assert_eq!(
+            conn.query_row(
+                "SELECT updated_at FROM blob_store WHERE cache_key='recent'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            100
+        );
+        conn.execute_batch("DROP TRIGGER reject_touch;")?;
+        path_tree_put(&mut conn, "new", 1, None, b"new", policy, || Ok(101))?;
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "expired", 1)?, None);
+        assert_eq!(read_blob(&conn, NS_PATH_TREE, "recent", 1)?, None);
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "new", 1)?,
+            Some(b"new".to_vec())
+        );
+        Ok(())
+    }
 
     #[test]
     fn blob_put_get_roundtrip() {

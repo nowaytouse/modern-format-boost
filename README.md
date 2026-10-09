@@ -117,12 +117,32 @@ rejects missing or unknown evidence. Older scan identities are rebuilt on demand
 checkpoints and processed-file records are not invalidated. This does not replace
 media verification or establish content identity from directory timestamps.
 
+Shared configuration controls the directory cache with `cache.path_tree_max_bytes`
+(default 268435456, 256 MiB of serialized payload) and `cache.path_tree_ttl_seconds`
+(default 2592000, 30 idle days). Successful reads refresh its last-use time;
+expired entries are rejected and writes evict least-recently-used entries within
+the payload budget. Equal-second accesses use a deterministic key tie-break.
+An oversized snapshot is explicitly not saved, without evicting existing entries.
+Eviction and admission are atomic and never apply to durable or unknown namespaces.
+The budget does not include SQLite pages, WAL, or protected state.
+
 The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
 confirmed cleanup removes only local path-tree snapshots and obsolete analysis
 cache files. History, checkpoints, processed-file receipts, verification state,
 models and unrecognized namespaces/files remain intact. SQLite reuses deleted
 pages, so database file size is not a promise of immediately reclaimable space.
+
+**Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
+checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read
+snapshot. It distinguishes healthy, damaged, incomplete and not-yet-created stores,
+with separate checked/damaged cache and protected-state counts. Failure exits
+nonzero while preserving valid JSON; details are bounded and do not expose stored
+payloads. Inspection does not repair, migrate, vacuum or delete data. It includes
+committed WAL data; SQLite may update shared-memory reader coordination, but not
+the database or WAL contents. This checks storage integrity, not media fidelity or
+the completeness of every historical run. A successful result applies to that
+snapshot only; no background monitoring is started.
 
 CLI: `cache_cleaner --stats --json` inspects local cache; `cache_cleaner --yes
 --json` clears the managed local cache; a positional path scopes snapshot deletion

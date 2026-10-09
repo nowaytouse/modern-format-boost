@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Bounded directory cache and read-only database inspection (2026-10-09)
+
+- Add shared typed cache capacity and idle-lifetime settings, visible in effective
+  configuration provenance. Apply TTL and LRU only to reconstructable path-tree
+  records, with atomic admission/eviction and rollback on failure. Reject oversized
+  admission explicitly; preserve checkpoints, processed records and unknown state.
+- Add `cache_cleaner --stats --check-integrity --json` and a native Settings/Cache
+  action. Inspect structure, foreign keys and BLAKE3 payloads from one read snapshot,
+  including committed WAL records. Do not repair, delete or reset a damaged store.
+- Separate healthy, unhealthy, incomplete and absent results, keep cache/state
+  counts distinct, bound sanitized details, and preserve machine-readable JSON on
+  failure. The GUI invalidates incomplete statistics and prevents overlapping actions.
+- Preserve the workspace's existing dependency refresh for tracing, thiserror,
+  TOML, pinned Rust toolchain Actions and the OSS-Fuzz base image. No additional
+  runtime dependency is introduced for either feature.
+
 ### Local directory-cache unification (2026-10-09)
 
 - Read, write and purge ordinary directory scan snapshots through shared local

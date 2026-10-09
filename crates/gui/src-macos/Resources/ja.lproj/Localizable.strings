@@ -185,6 +185,13 @@
 "settings.cache.files" = "%@ ファイル · %@";
 "settings.cache.refresh" = "キャッシュ統計を更新";
 "settings.cache.clear" = "キャッシュを削除";
+"settings.cache.check" = "データベースを検査";
+"settings.cache.checking" = "データベース構造と保存データの整合性を検査中…";
+"settings.cache.integrity.healthy" = "今回の検査に合格しました。整合性の問題はありません。";
+"settings.cache.integrity.unhealthy" = "整合性の問題が見つかりました。データは変更していません。";
+"settings.cache.integrity.error" = "検査が完了せず、整合性を確認できませんでした。";
+"settings.cache.integrity.absent" = "ローカルデータベースは未作成です。検査対象はありません。";
+"settings.cache.checked" = "検査：キャッシュ %@ 件、状態 %@ 件。破損：キャッシュ %@ 件、状態 %@ 件。問題 %@ 件。";
 "settings.cache.close" = "閉じる";
 "settings.cache.not_loaded" = "未取得";
 "settings.cache.unavailable" = "取得できません";

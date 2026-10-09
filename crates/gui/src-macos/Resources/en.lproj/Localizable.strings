@@ -185,6 +185,13 @@
 "settings.cache.files" = "%@ files · %@";
 "settings.cache.refresh" = "Refresh cache statistics";
 "settings.cache.clear" = "Clear Cache";
+"settings.cache.check" = "Check Database";
+"settings.cache.checking" = "Checking database structure and stored hashes…";
+"settings.cache.integrity.healthy" = "Check passed for this snapshot. No integrity issues found.";
+"settings.cache.integrity.unhealthy" = "Integrity issues found. Data was not changed.";
+"settings.cache.integrity.error" = "Check incomplete. Database health could not be confirmed.";
+"settings.cache.integrity.absent" = "No local database has been created. Nothing was checked.";
+"settings.cache.checked" = "Checked: %@ cache, %@ state records. Damaged: %@ cache, %@ state. Issues: %@.";
 "settings.cache.close" = "Close";
 "settings.cache.not_loaded" = "Not loaded";
 "settings.cache.unavailable" = "Unavailable";

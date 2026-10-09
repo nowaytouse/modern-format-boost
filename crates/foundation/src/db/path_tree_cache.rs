@@ -21,7 +21,8 @@ fn decode_snapshot<T: DeserializeOwned>(bytes: &[u8], cache_key: &str) -> Result
         .with_context(|| format!("path_tree snapshot JSON decode failed for cache_key={cache_key}"))
 }
 
-/// Load a local snapshot. Callers must still validate filesystem freshness.
+/// Load a local snapshot within the configured idle TTL, refreshing its last-use time.
+/// Callers must still validate filesystem freshness.
 ///
 /// # Errors
 /// Propagates database and deserialization errors; `Ok(None)` is a cache miss.
@@ -39,7 +40,8 @@ pub fn load_path_tree_snapshot<T: DeserializeOwned>(
 /// Persist a snapshot locally, without an advanced database service.
 ///
 /// # Errors
-/// Returns serialization, path or database errors without reporting a successful save.
+/// Returns serialization, path, capacity or database errors without reporting a successful save.
+/// An oversized snapshot retains existing cache entries and reports an explicit not-saved error.
 pub fn save_path_tree_snapshot<T: Serialize>(
     cache_key: &str,
     root_path: &Path,

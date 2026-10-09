@@ -61,6 +61,9 @@ struct Args {
     #[arg(long, conflicts_with_all = ["path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Inspect local cache without deleting or rebuilding anything")]
     stats: bool,
 
+    #[arg(long, requires = "stats", conflicts_with_all = ["yes", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Check SQLite and stored payload hashes without repairing or deleting data")]
+    check_integrity: bool,
+
     #[arg(long, conflicts_with_all = ["postgres", "purge_animation_cache", "purge_session_state"], help = "Return versioned local cache statistics as JSON")]
     json: bool,
 
@@ -416,6 +419,54 @@ struct CacheStatus {
     legacy_analysis_files: u64,
     removed_rows: u64,
     removed_files: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    integrity: Option<CacheIntegrity>,
+}
+
+#[derive(Debug, Serialize)]
+struct IntegrityIssue {
+    code: &'static str,
+    message: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct CacheIntegrity {
+    schema_version: u8,
+    status: &'static str,
+    sqlite_integrity: &'static str,
+    foreign_keys: &'static str,
+    blob_scan_complete: bool,
+    checked_cache_rows: u64,
+    checked_protected_rows: u64,
+    corrupt_cache_rows: u64,
+    corrupt_protected_rows: u64,
+    issue_count: u64,
+    issues: Vec<IntegrityIssue>,
+}
+
+impl CacheIntegrity {
+    fn new() -> Self {
+        Self {
+            schema_version: 1,
+            status: "absent",
+            sqlite_integrity: "not_checked",
+            foreign_keys: "not_checked",
+            blob_scan_complete: false,
+            checked_cache_rows: 0,
+            checked_protected_rows: 0,
+            corrupt_cache_rows: 0,
+            corrupt_protected_rows: 0,
+            issue_count: 0,
+            issues: Vec::new(),
+        }
+    }
+
+    fn issue(&mut self, code: &'static str, message: &'static str) {
+        self.issue_count += 1;
+        if self.issues.len() < 20 {
+            self.issues.push(IntegrityIssue { code, message });
+        }
+    }
 }
 
 fn ensure_cache_directory(cache_dir: &Path) -> Result<()> {
@@ -445,6 +496,12 @@ fn regular_file_size(path: &Path) -> Result<Option<u64>> {
 }
 
 fn open_cache_store(store: &Path, read_only: bool) -> Result<Connection> {
+    let conn = open_cache_connection(store, read_only)?;
+    validate_cache_schema(&conn)?;
+    Ok(conn)
+}
+
+fn open_cache_connection(store: &Path, read_only: bool) -> Result<Connection> {
     let directory = store
         .parent()
         .context("cache database has no parent")?
@@ -464,6 +521,10 @@ fn open_cache_store(store: &Path, read_only: bool) -> Result<Connection> {
     if read_only {
         conn.pragma_update(None, "query_only", true)?;
     }
+    Ok(conn)
+}
+
+fn validate_cache_schema(conn: &Connection) -> Result<()> {
     let version: i32 = conn.query_row(
         "SELECT value FROM store_metadata WHERE key = 'schema_version'",
         [],
@@ -473,7 +534,7 @@ fn open_cache_store(store: &Path, read_only: bool) -> Result<Connection> {
         version == foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION,
         "unsupported cache store schema {version}; database retained"
     );
-    Ok(conn)
+    Ok(())
 }
 
 fn legacy_analysis_sqlite_paths(cache_dir: &Path) -> Vec<PathBuf> {
@@ -491,7 +552,10 @@ fn nonnegative_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result
 }
 
 fn cache_status(cache_dir: &Path) -> Result<CacheStatus> {
-    ensure_cache_directory(cache_dir)?;
+    cache_status_with_integrity(cache_dir, false)
+}
+
+fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Result<CacheStatus> {
     let mut status = CacheStatus {
         schema_version: 1,
         cache_directory: cache_dir
@@ -504,46 +568,127 @@ fn cache_status(cache_dir: &Path) -> Result<CacheStatus> {
         legacy_analysis_files: 0,
         removed_rows: 0,
         removed_files: 0,
+        integrity: check_integrity.then(CacheIntegrity::new),
     };
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        if let Some(bytes) =
-            regular_file_size(&cache_dir.join(format!("mfb_store.sqlite{suffix}")))?
-        {
-            status.store_bytes = status
-                .store_bytes
-                .checked_add(bytes)
-                .context("cache store size overflow")?;
+    let mut phase = "managed_paths";
+    let inspection = (|| -> Result<()> {
+        ensure_cache_directory(cache_dir)?;
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            if let Some(bytes) =
+                regular_file_size(&cache_dir.join(format!("mfb_store.sqlite{suffix}")))?
+            {
+                status.store_bytes = status
+                    .store_bytes
+                    .checked_add(bytes)
+                    .context("cache store size overflow")?;
+            }
         }
-    }
-    let store = cache_dir.join("mfb_store.sqlite");
-    if regular_file_size(&store)?.is_some() {
-        let mut conn = open_cache_store(&store, true)?;
-        let snapshot = conn.transaction()?;
-        {
-            let mut statement = snapshot.prepare(
+        let store = cache_dir.join("mfb_store.sqlite");
+        if regular_file_size(&store)?.is_some() {
+            phase = "store_open";
+            let mut conn = open_cache_connection(&store, true)?;
+            let snapshot = conn.transaction()?;
+            phase = "schema";
+            validate_cache_schema(&snapshot)?;
+            if let Some(integrity) = &mut status.integrity {
+                phase = "sqlite_integrity";
+                let mut statement = snapshot.prepare("PRAGMA integrity_check")?;
+                let mut rows = statement.query([])?;
+                integrity.sqlite_integrity = "ok";
+                while let Some(row) = rows.next()? {
+                    if row.get::<_, String>(0)? != "ok" {
+                        integrity.sqlite_integrity = "failed";
+                        // SQLite diagnostics can contain stored values; publish only fixed messages.
+                        integrity.issue(
+                            "sqlite_integrity",
+                            "SQLite reported a structural integrity failure.",
+                        );
+                    }
+                }
+                phase = "foreign_keys";
+                let mut statement = snapshot.prepare("PRAGMA foreign_key_check")?;
+                let mut rows = statement.query([])?;
+                integrity.foreign_keys = "ok";
+                while rows.next()?.is_some() {
+                    integrity.foreign_keys = "failed";
+                    integrity.issue("foreign_key", "SQLite reported a foreign key violation.");
+                }
+                phase = "blob_hashes";
+                let mut statement = snapshot
+                    .prepare("SELECT namespace = ?1, payload, payload_blake3 FROM blob_store")?;
+                let mut rows = statement.query([foundation::mfb_sqlite_store::NS_PATH_TREE])?;
+                while let Some(row) = rows.next()? {
+                    let rebuildable = row.get::<_, Option<bool>>(0)?.unwrap_or(false);
+                    if rebuildable {
+                        integrity.checked_cache_rows += 1;
+                    } else {
+                        integrity.checked_protected_rows += 1;
+                    }
+                    let payload = row.get_ref(1)?;
+                    let expected = row.get_ref(2)?;
+                    let valid = match (payload.as_blob(), expected.as_blob()) {
+                        (Ok(payload), Ok(expected)) => blake3::hash(payload).as_bytes() == expected,
+                        _ => false,
+                    };
+                    if !valid {
+                        if rebuildable {
+                            integrity.corrupt_cache_rows += 1;
+                            integrity.issue("cache_payload", "A rebuildable cache payload has an invalid BLAKE3 digest or storage type.");
+                        } else {
+                            integrity.corrupt_protected_rows += 1;
+                            integrity.issue("protected_payload", "A protected state payload has an invalid BLAKE3 digest or storage type.");
+                        }
+                    }
+                }
+                integrity.blob_scan_complete = true;
+                integrity.status = if integrity.issue_count == 0 {
+                    "healthy"
+                } else {
+                    "unhealthy"
+                };
+            }
+            phase = "namespace_statistics";
+            {
+                let mut statement = snapshot.prepare(
                 "SELECT namespace, COUNT(*), SUM(length(payload)) FROM blob_store GROUP BY namespace ORDER BY namespace",
             )?;
-            status.namespaces = statement
-                .query_map([], |row| {
-                    let name: String = row.get(0)?;
-                    Ok(CacheNamespace {
-                        rebuildable: name == foundation::mfb_sqlite_store::NS_PATH_TREE,
-                        name,
-                        rows: nonnegative_column(row, 1)?,
-                        payload_bytes: nonnegative_column(row, 2)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+                status.namespaces = statement
+                    .query_map([], |row| {
+                        let name: String = row.get(0)?;
+                        Ok(CacheNamespace {
+                            rebuildable: name == foundation::mfb_sqlite_store::NS_PATH_TREE,
+                            name,
+                            rows: nonnegative_column(row, 1)?,
+                            payload_bytes: nonnegative_column(row, 2)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+            }
+            snapshot.commit()?;
         }
-        snapshot.commit()?;
-    }
-    for path in legacy_analysis_sqlite_paths(cache_dir) {
-        if let Some(bytes) = regular_file_size(&path)? {
-            status.legacy_analysis_bytes = status
-                .legacy_analysis_bytes
-                .checked_add(bytes)
-                .context("legacy cache size overflow")?;
-            status.legacy_analysis_files += 1;
+        phase = "managed_paths";
+        for path in legacy_analysis_sqlite_paths(cache_dir) {
+            if let Some(bytes) = regular_file_size(&path)? {
+                status.legacy_analysis_bytes = status
+                    .legacy_analysis_bytes
+                    .checked_add(bytes)
+                    .context("legacy cache size overflow")?;
+                status.legacy_analysis_files += 1;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = inspection {
+        if let Some(integrity) = &mut status.integrity {
+            integrity.status = "error";
+            integrity.issue(phase, match phase {
+                "schema" => "The store schema is missing, unreadable, or unsupported; inspection could not complete.",
+                "store_open" => "The store could not be opened read-only; inspection could not complete.",
+                "managed_paths" => "A managed path is unreadable or is not a regular file or directory; inspection could not complete.",
+                _ => "A database query failed during integrity inspection; the reported check is incomplete.",
+            });
+        } else {
+            return Err(error);
         }
     }
     Ok(status)
@@ -1023,6 +1168,32 @@ fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
             "Removed: {} cache rows, {} obsolete cache files",
             status.removed_rows, status.removed_files
         );
+        if let Some(integrity) = &status.integrity {
+            println!(
+                "Integrity: {} (SQLite: {}; foreign keys: {}; payload scan complete: {})",
+                integrity.status,
+                integrity.sqlite_integrity,
+                integrity.foreign_keys,
+                integrity.blob_scan_complete
+            );
+            println!(
+                "Checked: {} cache rows, {} protected state rows; corrupt: {} cache rows, {} protected state rows",
+                integrity.checked_cache_rows,
+                integrity.checked_protected_rows,
+                integrity.corrupt_cache_rows,
+                integrity.corrupt_protected_rows
+            );
+            for issue in &integrity.issues {
+                println!("  {}: {}", issue.code, issue.message);
+            }
+            if integrity.issue_count > integrity.issues.len() as u64 {
+                println!(
+                    "  {} issues total; details limited to {}",
+                    integrity.issue_count,
+                    integrity.issues.len()
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -1041,9 +1212,27 @@ fn main() -> Result<()> {
     }
 
     let cache_dir = get_mfb_state_root()?.join("cache");
-    let before = cache_status(&cache_dir)?;
+    let before = cache_status_with_integrity(&cache_dir, args.check_integrity)?;
     if args.stats {
-        return print_cache_status(&before, args.json);
+        print_cache_status(&before, args.json)?;
+        if args.json
+            && before
+                .integrity
+                .as_ref()
+                .is_some_and(|report| matches!(report.status, "unhealthy" | "error"))
+        {
+            // Keep machine-readable stdout valid even when inspection fails.
+            io::stdout().flush()?;
+            std::process::exit(1);
+        }
+        anyhow::ensure!(
+            before
+                .integrity
+                .as_ref()
+                .is_none_or(|report| matches!(report.status, "healthy" | "absent")),
+            "cache integrity check failed; see inspection report"
+        );
+        return Ok(());
     }
     let target = args
         .path
@@ -1345,7 +1534,70 @@ mod tests {
             Args::try_parse_from(["cache_cleaner", "--stats", "--purge-session-state"]).is_err()
         );
         assert!(Args::try_parse_from(["cache_cleaner", "--json", "--postgres"]).is_err());
+        assert!(Args::try_parse_from(["cache_cleaner", "--check-integrity"]).is_err());
+        assert!(
+            Args::try_parse_from(["cache_cleaner", "--stats", "--check-integrity", "--json"])
+                .unwrap()
+                .check_integrity
+        );
+        for incompatible in [
+            "--yes",
+            "--postgres",
+            "--purge-session-state",
+            "--purge-animation-cache",
+            "/synthetic",
+        ] {
+            assert!(
+                Args::try_parse_from([
+                    "cache_cleaner",
+                    "--stats",
+                    "--check-integrity",
+                    incompatible
+                ])
+                .is_err()
+            );
+        }
         assert!(confirm_cleanup(true, "synthetic").unwrap());
+    }
+
+    #[test]
+    fn integrity_counts_all_corrupt_rows_but_bounds_details_without_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        let store = cache.join("mfb_store.sqlite");
+        let conn = Connection::open(&store).unwrap();
+        for index in 0..30 {
+            conn.execute(
+                "INSERT INTO blob_store VALUES ('path_tree', ?1, 2, NULL, ?2, ?3, 123)",
+                params![
+                    index.to_string(),
+                    b"private payload never print",
+                    &[0u8; 31]
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "UPDATE blob_store SET payload = 'wrong storage type' WHERE namespace = 'checkpoint'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let before = fs::read(&store).unwrap();
+        let status = cache_status_with_integrity(&cache, true).unwrap();
+        let json = serde_json::to_string(&status).unwrap();
+        let report = status.integrity.unwrap();
+        assert_eq!(report.status, "unhealthy");
+        assert_eq!(report.checked_cache_rows, 31);
+        assert_eq!(report.corrupt_cache_rows, 31);
+        assert_eq!(report.checked_protected_rows, 3);
+        assert_eq!(report.corrupt_protected_rows, 3);
+        assert_eq!(report.issue_count, 34);
+        assert_eq!(report.issues.len(), 20);
+        assert!(report.blob_scan_complete);
+        assert!(!json.contains("private payload"));
+        assert!(!json.contains("wrong storage type"));
+        assert_eq!(fs::read(store).unwrap(), before);
     }
 
     #[test]

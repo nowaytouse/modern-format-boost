@@ -185,6 +185,13 @@
 "settings.cache.files" = "%@ 个文件 · %@";
 "settings.cache.refresh" = "刷新缓存统计";
 "settings.cache.clear" = "清理缓存";
+"settings.cache.check" = "检查数据库";
+"settings.cache.checking" = "正在检查数据库结构和已存记录的完整性…";
+"settings.cache.integrity.healthy" = "本次检查通过，未发现完整性问题。";
+"settings.cache.integrity.unhealthy" = "发现完整性问题，未更改任何记录。";
+"settings.cache.integrity.error" = "检查未完成，无法确认数据库是否完整。";
+"settings.cache.integrity.absent" = "尚未建立本地数据库，无可检查的记录。";
+"settings.cache.checked" = "已检查：缓存 %@ 条、状态 %@ 条。损坏：缓存 %@ 条、状态 %@ 条。共 %@ 项问题。";
 "settings.cache.close" = "关闭";
 "settings.cache.not_loaded" = "尚未读取";
 "settings.cache.unavailable" = "无法读取";
