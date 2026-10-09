@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Durable SQLite state boundaries (2026-10-09)
+
+- Preserve checkpoint, processed-file and unknown-namespace rows on schema or
+  BLAKE3 failure and return an explicit error. Only reconstructable path-tree
+  cache may be evicted; conditional deletion preserves a concurrently repaired row.
+- Reject unknown, unversioned nonempty and incomplete stores before any schema or
+  journal changes. Initialize and migrate atomically under a write transaction,
+  rechecking the version after obtaining the lock. Current stores skip DDL.
+- Stream legacy payload migration one row at a time. A CRC32 failure in durable
+  state rolls back the complete migration, while invalid path-tree cache may be
+  discarded. Use WAL/FULL commits and remove advice to delete the shared database.
+- Retain the in-memory processed set if deleting its persisted record fails.
+  Isolate checkpoint regression databases in temporary directories and serialize
+  tests that reset shared processed state. History/audit/run-state unification
+  remains an ongoing task; no production databases are rewritten by this update's
+  development tests.
+- Serialize checkpoint mutations through their database commit, rolling back the
+  in-memory change on failure. Failed writes remain retryable, changed file
+  signatures can replace an old entry, and older snapshots cannot overwrite newer
+  commits from the same manager. Checkpoint cleanup now propagates deletion and
+  lock-release errors. Processed-set load/save/clear use the same lock discipline.
+
 ### Accurate standard batch byte totals (2026-10-09)
 
 - Share checked, nullable converted-byte totals between standard IMG and VID.

@@ -1044,7 +1044,7 @@ impl Manager {
                         path.display()
                     ),
                 );
-                if let Err(err) = self.drop_completed_entry(&key) {
+                if let Err(err) = self.drop_completed_entry(&key, &entry) {
                     crate::media_conversion_gate::delivery_checkpoint_path_audit(
                         "checkpoint_lock",
                         &self.lock_file,
@@ -1080,21 +1080,28 @@ impl Manager {
     pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
         let entry = CheckpointEntry::from_path(path)?;
         let key = entry.path.clone();
+        let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
+            "checkpoint_completed",
+            self.completed.lock(),
+        );
+        if completed.get(&key) == Some(&entry) {
+            return Ok(());
+        }
+        let previous = completed.insert(key.clone(), entry);
+        if let Err(error) = save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)
         {
-            let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
-                "checkpoint_completed",
-                self.completed.lock(),
-            );
-            if completed.contains_key(&key) {
-                return Ok(());
+            if let Some(previous) = previous {
+                completed.insert(key, previous);
+            } else {
+                completed.remove(&key);
             }
-            completed.insert(key, entry);
+            return Err(error);
         }
         self.resume_mode.store(true, Ordering::Relaxed);
-        self.persist_progress()?;
 
         // Also sync to the global processed list in conversion module
         crate::conversion::mark_as_processed(path);
+        drop(completed);
         Ok(())
     }
 
@@ -1112,17 +1119,18 @@ impl Manager {
     ///
     /// Returns an error if the progress file cannot be removed.
     pub fn clear_progress(&self) -> io::Result<()> {
-        crate::media_conversion_gate::mutex_guard_or_recover(
+        let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
             self.completed.lock(),
-        )
-        .clear();
-        self.resume_mode.store(false, Ordering::Relaxed);
+        );
         crate::mfb_sqlite_store::blob_delete(
             crate::mfb_sqlite_store::NS_CHECKPOINT,
             &self.checkpoint_key,
         )
         .map_err(io::Error::other)?;
+        completed.clear();
+        self.resume_mode.store(false, Ordering::Relaxed);
+        drop(completed);
         Ok(())
     }
 
@@ -1158,33 +1166,8 @@ impl Manager {
     ///
     /// Returns an error if the progress or lock files cannot be removed.
     pub fn cleanup(&self) -> io::Result<()> {
-        if let Err(err) = crate::mfb_sqlite_store::blob_delete(
-            crate::mfb_sqlite_store::NS_CHECKPOINT,
-            &self.checkpoint_key,
-        ) {
-            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                "checkpoint_progress",
-                &self.progress_dir,
-                format!(
-                    "Failed to remove checkpoint blob for key {}: {err}",
-                    self.checkpoint_key
-                ),
-            );
-        }
-        if self.lock_file.exists()
-            && let Err(err) = fs::remove_file(&self.lock_file)
-        {
-            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                "checkpoint_lock",
-                &self.lock_file,
-                format!(
-                    "Failed to remove lock file {}: {}",
-                    self.lock_file.display(),
-                    err
-                ),
-            );
-        }
-        Ok(())
+        self.clear_progress()?;
+        self.release_lock()
     }
 
     fn normalize_path_to_buf(path: &Path) -> PathBuf {
@@ -1330,28 +1313,33 @@ impl Manager {
     }
 
     fn persist_progress(&self) -> io::Result<()> {
-        let entries: HashMap<String, CheckpointEntry> =
-            crate::media_conversion_gate::mutex_guard_or_recover(
-                "checkpoint_completed",
-                self.completed.lock(),
-            )
-            .clone();
+        let entries = crate::media_conversion_gate::mutex_guard_or_recover(
+            "checkpoint_completed",
+            self.completed.lock(),
+        );
         save_progress_to_sqlite(&self.checkpoint_key, &self.header, &entries)
     }
 
-    fn drop_completed_entry(&self, key: &str) -> io::Result<()> {
-        let became_empty = {
-            let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
-                "checkpoint_completed",
-                self.completed.lock(),
-            );
-            completed.remove(key);
-            completed.is_empty()
-        };
-        if became_empty {
-            self.resume_mode.store(false, Ordering::Relaxed);
+    fn drop_completed_entry(&self, key: &str, expected: &CheckpointEntry) -> io::Result<()> {
+        let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
+            "checkpoint_completed",
+            self.completed.lock(),
+        );
+        if completed.get(key) != Some(expected) {
+            return Ok(());
         }
-        self.persist_progress()
+        let Some(previous) = completed.remove(key) else {
+            return Ok(());
+        };
+        if let Err(error) = save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)
+        {
+            completed.insert(key.to_owned(), previous);
+            return Err(error);
+        }
+        self.resume_mode
+            .store(!completed.is_empty(), Ordering::Relaxed);
+        drop(completed);
+        Ok(())
     }
 }
 
@@ -1622,12 +1610,22 @@ pub(crate) fn files_alias_same_inode(input: &Path, output: &Path) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as std_mutex;
     use tempfile::TempDir;
-    static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
-    fn setup_test_env() -> anyhow::Result<(TempDir, TempDir, std::sync::MutexGuard<'static, ()>)> {
-        let guard = TEST_LOCK
+    struct TestEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _store: crate::mfb_sqlite_store::TestStoreGuard,
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: The test environment lock remains held until this guard is dropped.
+            unsafe { std::env::remove_var("MFB_PROGRESS_DIR") };
+        }
+    }
+
+    fn setup_test_env() -> anyhow::Result<(TempDir, TempDir, TestEnvGuard)> {
+        let guard = crate::conversion::TEST_PROCESSED_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp_target = TempDir::new().map_err(|e| anyhow::anyhow!("target temp dir: {e}"))?;
@@ -1635,13 +1633,20 @@ mod tests {
             TempDir::new().map_err(|e| anyhow::anyhow!("progress temp dir: {e}"))?;
         // SAFETY: Test setup, sequential context.
         unsafe { std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path()) };
-        Ok((temp_target, temp_progress, guard))
+        let store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+            temp_progress.path().join("mfb_store.sqlite"),
+        );
+        Ok((
+            temp_target,
+            temp_progress,
+            TestEnvGuard {
+                _lock: guard,
+                _store: store,
+            },
+        ))
     }
 
-    fn teardown_test_env(_guard: std::sync::MutexGuard<'static, ()>) {
-        // SAFETY: Test teardown, sequential context.
-        unsafe { std::env::remove_var("MFB_PROGRESS_DIR") };
-    }
+    fn teardown_test_env(_guard: TestEnvGuard) {}
 
     fn create_test_file(path: &Path) -> io::Result<()> {
         fs::write(path, b"checkpoint-test")
@@ -1714,6 +1719,118 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_write_and_delete_failures_leave_both_states_unchanged() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
+        let input = temp.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let manager = Manager::new(temp.path())?;
+        let conn = crate::mfb_sqlite_store::open_store_connection()?;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_checkpoint_write BEFORE INSERT ON blob_store
+             WHEN NEW.namespace = 'checkpoint' BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;",
+        )?;
+        for _ in 0..2 {
+            assert!(manager.mark_completed(&input).is_err());
+            assert_eq!(manager.completed_count(), 0);
+            assert!(!manager.is_resume_mode());
+            assert!(!crate::conversion::is_already_processed(&input));
+            assert!(load_progress_from_sqlite(&manager.checkpoint_key)?.is_none());
+        }
+        conn.execute_batch("DROP TRIGGER reject_checkpoint_write;")?;
+        manager.mark_completed(&input)?;
+        let saved = load_progress_from_sqlite(&manager.checkpoint_key)?
+            .unwrap()
+            .entries;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_checkpoint_write BEFORE INSERT ON blob_store
+             WHEN NEW.namespace = 'checkpoint' BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END;
+             CREATE TRIGGER reject_checkpoint_delete BEFORE DELETE ON blob_store
+             WHEN OLD.namespace = 'checkpoint' BEGIN SELECT RAISE(ABORT, 'fixture delete failure'); END;",
+        )?;
+        let key = Manager::normalize_path(&input);
+        assert!(manager.drop_completed_entry(&key, &saved[&key]).is_err());
+        assert!(manager.clear_progress().is_err());
+        assert!(manager.cleanup().is_err());
+        assert_eq!(manager.completed_count(), 1);
+        assert!(manager.is_resume_mode());
+        assert!(manager.is_completed(&input));
+        assert_eq!(
+            load_progress_from_sqlite(&manager.checkpoint_key)?
+                .unwrap()
+                .entries,
+            saved
+        );
+
+        std::fs::write(&input, b"changed checkpoint input")?;
+        assert!(manager.mark_completed(&input).is_err());
+        assert_eq!(
+            load_progress_from_sqlite(&manager.checkpoint_key)?
+                .unwrap()
+                .entries,
+            saved
+        );
+        conn.execute_batch(
+            "DROP TRIGGER reject_checkpoint_write; DROP TRIGGER reject_checkpoint_delete;",
+        )?;
+        manager.mark_completed(&input)?;
+        assert!(manager.is_completed(&input));
+        assert_ne!(
+            load_progress_from_sqlite(&manager.checkpoint_key)?
+                .unwrap()
+                .entries,
+            saved
+        );
+        manager.drop_completed_entry(&key, &saved[&key])?;
+        assert!(
+            manager.is_completed(&input),
+            "stale validation must not remove a newer entry"
+        );
+        manager.cleanup()?;
+        assert_eq!(manager.completed_count(), 0);
+        assert!(!manager.is_resume_mode());
+        assert!(load_progress_from_sqlite(&manager.checkpoint_key)?.is_none());
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_checkpoint_writes_keep_every_committed_entry() -> anyhow::Result<()> {
+        let (temp, progress, guard) = setup_test_env()?;
+        let manager = Manager::new(temp.path())?;
+        let store = progress.path().join("mfb_store.sqlite");
+        let paths: Vec<_> = (0..12)
+            .map(|index| temp.path().join(format!("{index}.mp4")))
+            .collect();
+        for path in &paths {
+            create_test_file(path)?;
+        }
+        let barrier = std::sync::Barrier::new(paths.len());
+        std::thread::scope(|scope| {
+            for path in &paths {
+                let manager = &manager;
+                let store = &store;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let _store =
+                        crate::mfb_sqlite_store::set_test_store_path_for_tests(store.clone());
+                    barrier.wait();
+                    manager.mark_completed(path).unwrap();
+                });
+            }
+        });
+        assert_eq!(manager.completed_count(), paths.len());
+        let loaded = load_progress_from_sqlite(&manager.checkpoint_key)?.unwrap();
+        assert_eq!(loaded.entries.len(), paths.len());
+        assert!(
+            paths
+                .iter()
+                .all(|p| loaded.entries.contains_key(&Manager::normalize_path(p)))
+        );
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
     fn legacy_checkpoint_key_is_migrated_to_blake3() -> anyhow::Result<()> {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
@@ -1739,6 +1856,41 @@ mod tests {
         drop(checkpoint);
 
         Manager::discard_saved_progress(target)?;
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_saved_state_blocks_inspection_and_resume_without_overwriting_it()
+    -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
+        let target = temp.path();
+        let input = target.join("saved.mp4");
+        create_test_file(&input)?;
+        let manager = Manager::new(target)?;
+        manager.mark_completed(&input)?;
+        let key = manager.checkpoint_key.clone();
+        drop(manager);
+
+        let conn = crate::mfb_sqlite_store::open_store_connection()?;
+        for mutation in ["payload_blake3 = X'00'", "schema_version = 999"] {
+            conn.execute(
+                &format!("UPDATE blob_store SET {mutation} WHERE namespace = 'checkpoint' AND cache_key = ?1"),
+                [&key],
+            )?;
+            let read_row = || {
+                conn.query_row(
+                "SELECT schema_version, payload, payload_blake3 FROM blob_store WHERE namespace = 'checkpoint' AND cache_key = ?1",
+                [&key],
+                |r| Ok((r.get::<_, i32>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Vec<u8>>(2)?)),
+            )
+            };
+            let before = read_row()?;
+            assert!(Manager::saved_entry_count(target, None).is_err());
+            assert!(Manager::new_resuming(target).is_err());
+            assert_eq!(read_row()?, before);
+            assert_eq!(std::fs::read(&input)?, b"checkpoint-test");
+        }
         teardown_test_env(guard);
         Ok(())
     }

@@ -125,6 +125,23 @@ separate destructive maintenance command, never used by GUI Clear Cache; unatten
 cleanup requires `--yes`. Unknown/corrupt schemas and linked managed cache files
 are rejected without resetting the database.
 
+The shared `mfb_store.sqlite` also holds durable checkpoint and processed-file
+records; its location under the cache directory does not make the entire file
+disposable. Invalid record versions or BLAKE3 digests stop state recovery and leave
+the saved row intact. Only reconstructable path-tree cache may become a cache miss.
+Unknown namespaces receive the same preservation policy as durable state.
+
+Store initialization and CRC32-to-BLAKE3 migration use one transaction. A corrupt
+durable row aborts the entire migration; valid records are never partially promoted.
+Migration reads one payload at a time, and current stores skip schema creation on
+reopen. Connections use WAL with `synchronous=FULL` for durable commits, favoring
+saved-state reliability over minimum write latency. Unknown, unversioned nonempty,
+and incomplete stores are rejected before initialization, not silently repaired.
+This does not yet unify every history, audit and run-state database or file.
+Checkpoint updates are acknowledged only after persistence succeeds. Failed
+writes or deletions retain the previous in-memory state and can be retried;
+concurrent calls on one manager cannot commit snapshots out of order.
+
 ### What it guarantees—and what it does not
 
 - A conversion candidate is delivered only after its route-specific decode,

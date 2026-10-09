@@ -1278,6 +1278,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn one_failed_file_does_not_stop_the_batch() -> anyhow::Result<()> {
+        let _lock = crate::conversion::TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _skip_disk_precheck =
             crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
         let temp = tempfile::tempdir()?;
@@ -1317,6 +1320,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fail_fast_recoverable_error_stops_before_next_file() -> anyhow::Result<()> {
+        let _lock = crate::conversion::TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _low_memory =
             crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
         let _skip_disk_precheck =
@@ -1356,6 +1362,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn normal_mode_unknown_error_stops_before_next_file() -> anyhow::Result<()> {
+        let _lock = crate::conversion::TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _low_memory =
             crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
         let _skip_disk_precheck =
@@ -1393,6 +1402,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn skipped_source_copy_failure_is_fatal_in_normal_mode() -> anyhow::Result<()> {
+        let _lock = crate::conversion::TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _low_memory =
             crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_LOW_MEMORY, "1");
         let _skip_disk_precheck =
