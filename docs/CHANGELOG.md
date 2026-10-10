@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Analysis-cache accounting and checkpoint identity (2026-10-10)
+
+- Complete launcher forwarding of explicit cache capacity/TTL overrides for IMG,
+  VID and fast processing modes, including launcher effective configuration.
+  Omitted values remain inherited; maintenance-only modes reject these flags.
+  GUI controls remain a separate pending step.
+- Replace the PostgreSQL analysis cache's hardcoded zero size with allocated
+  relation sizes, including indexes and TOAST. Keep the scope distinct from the
+  shared database and reclaimable space; collect counts and version distribution
+  in one repeatable-read snapshot and propagate invalid values instead of saturating.
+- Make age-based analysis/quality/video cache deletion and orphan-index cleanup
+  atomic. Reject negative retention, check count arithmetic, and report success only
+  after commit. Orphan indexes are also cleaned when no analysis records expire.
+- Preserve whole seconds as well as fractional nanoseconds in Unix status-change
+  timestamps used by checkpoints and analysis-cache signatures. Old fractional-only
+  signatures fail freshness checks and are revalidated; no source media is removed.
+
 ### Shared cache overrides and selective maintenance (2026-10-09)
 
 - Expose `--cache-max-bytes` and `--cache-ttl-seconds` in IMG/Fast IMG and VID,

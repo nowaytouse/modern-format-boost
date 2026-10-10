@@ -129,8 +129,9 @@ The budget does not include SQLite pages, WAL, or protected state.
 IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
 `--cache-ttl-seconds`. Explicit flags override configuration files; omitted flags
 retain inherited values, and `config show --effective` reports their source chain.
-Both accept positive integers up to 9223372036854775807. GUI forwarding of these
-two overrides is not yet available; configuration files remain supported.
+Both accept positive integers up to 9223372036854775807. The launcher forwards
+explicit overrides to IMG/VID and fast modes without inserting defaults. GUI
+controls for these two overrides are not yet available; configuration files remain supported.
 
 Use `cache_cleaner --prune --yes --json` to apply the configured TTL and capacity
 without processing media or clearing all useful cache. `--config PATH`,
@@ -143,6 +144,13 @@ required; prompts go to stderr so JSON stdout remains machine-readable. If delet
 committed but subsequent inspection fails, the error states the committed counts.
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
+
+The optional PostgreSQL analysis cache reports record counts and algorithm-version
+counts from one read snapshot. Its allocated size covers the analysis, quality,
+video, path-index and metadata relations, including indexes/TOAST, not the whole
+shared database or immediately reclaimable space. Age-based maintenance deletes
+records and orphan path indexes atomically; invalid retention or count errors fail
+explicitly. This is separate from SQLite directory-cache TTL/LRU maintenance above.
 
 The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its

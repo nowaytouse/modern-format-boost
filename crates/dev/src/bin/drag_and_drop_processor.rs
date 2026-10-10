@@ -179,6 +179,8 @@ struct Args {
     vid_config: Option<PathBuf>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
+    #[command(flatten)]
+    cache: foundation::runtime_config::cache_args::CacheArgs,
 
     /// Permitted image encoding attempts, independent of batch failure handling.
     #[arg(long, value_enum)]
@@ -1318,6 +1320,18 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        args.cache.is_empty()
+            || matches!(
+                args.mode,
+                LaunchMode::Auto
+                    | LaunchMode::Images
+                    | LaunchMode::Videos
+                    | LaunchMode::FastImg
+                    | LaunchMode::FastVid
+            ),
+        "cache policy settings require media processing mode"
+    );
+    anyhow::ensure!(
         args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
         "Photos import settings require --mode fast-img"
     );
@@ -1794,6 +1808,7 @@ fn fast_img_launch_command(
 
 fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     command.extend(args.performance.cli_arguments());
+    command.extend(args.cache.cli_arguments());
     command.extend(args.photos.cli_arguments());
     if let Some(path) = &args.img_config {
         command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
@@ -1874,6 +1889,7 @@ fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -
         }
         "vid" => {
             command.extend(args.performance.cli_arguments());
+            command.extend(args.cache.cli_arguments());
             if let Some(path) = &args.vid_config {
                 command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
             }
@@ -2009,6 +2025,7 @@ fn plan_cli_invocations(
                     args.strategy.as_deref(),
                 ))?;
                 command.args.extend(args.performance.cli_arguments());
+                command.args.extend(args.cache.cli_arguments());
                 commands.push(command);
             }
             LaunchMode::Collect | LaunchMode::Compare => {
@@ -2895,6 +2912,7 @@ fn execute_menu_quick_pick(
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     strategy: &str,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Result<()> {
     let (cat, sub) = match choice {
         1 => (0, 0),
@@ -2918,6 +2936,7 @@ fn execute_menu_quick_pick(
         target,
         ProcessingFilter::Both,
         strategy,
+        cache,
     )?;
     Ok(())
 }
@@ -2932,7 +2951,12 @@ fn execute_menu_selection(
     target: &Path,
     filter: ProcessingFilter,
     strategy: &str,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Result<bool> {
+    anyhow::ensure!(
+        selected == 0 || cache.is_empty(),
+        "cache policy settings require media processing mode"
+    );
     let root = resolve_runtime_root()?;
     match selected {
         0 => {
@@ -2959,6 +2983,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if actual == 1 {
@@ -2975,6 +3000,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
@@ -2989,6 +3015,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
@@ -3012,6 +3039,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -3032,6 +3060,7 @@ fn execute_menu_selection(
                 false,
                 ProcessingFilter::Both,
                 None,
+                cache,
             );
             if collecting_recovery_originals {
                 let Some(backup) = prompt_for_input()? else {
@@ -3052,6 +3081,7 @@ fn execute_menu_selection(
                     false,
                     ProcessingFilter::Both,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -3099,6 +3129,7 @@ fn build_run_args(
     shortest_path: bool,
     filter: ProcessingFilter,
     strategy: Option<String>,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Args {
     Args {
         inputs: vec![target.to_path_buf()],
@@ -3126,6 +3157,7 @@ fn build_run_args(
         img_config: None,
         vid_config: None,
         performance: Default::default(),
+        cache: cache.clone(),
         img_fallback_policy: None,
         img_tool_policy: None,
         img_jpeg_effort: None,
@@ -3273,7 +3305,14 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                     Some(v) => v as usize,
                     None => 0,
                 };
-                execute_menu_quick_pick(n, session, &mut dir_lock, &target, &strategy)?;
+                execute_menu_quick_pick(
+                    n,
+                    session,
+                    &mut dir_lock,
+                    &target,
+                    &strategy,
+                    &args.cache,
+                )?;
                 wait_enter();
             }
             NavKey::Enter => {
@@ -3287,6 +3326,7 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                     &target,
                     filter,
                     &strategy,
+                    &args.cache,
                 )?;
                 wait_enter();
             }
@@ -3428,6 +3468,7 @@ fn main() -> Result<()> {
     let args = apply_mode_overrides(Args::parse());
     let mut runtime = foundation::runtime_config::load(None, false)?;
     args.performance.apply_to(&mut runtime);
+    args.cache.apply_to(&mut runtime);
     foundation::runtime_config::install(runtime.config)?;
     let mut session = DragDropSession::start()?;
     println!(
@@ -4134,6 +4175,60 @@ mod tests {
     }
 
     #[test]
+    fn cache_policy_is_forwarded_only_to_supported_processing_modes() {
+        for mode in ["images", "videos", "fast-img", "fast-vid"] {
+            let args = Args::try_parse_from([
+                "mfb",
+                "--mode",
+                mode,
+                "--cache-max-bytes",
+                "8192",
+                "--cache-ttl-seconds",
+                "60",
+                "synthetic-input",
+            ])
+            .unwrap();
+            let commands = plan_cli_invocations(&args, Path::new("/tmp"), None).unwrap();
+            assert!(!commands.is_empty());
+            for command in commands {
+                for expected in [["--cache-max-bytes", "8192"], ["--cache-ttl-seconds", "60"]] {
+                    assert_eq!(
+                        command
+                            .args
+                            .windows(2)
+                            .filter(|pair| *pair == expected)
+                            .count(),
+                        1
+                    );
+                }
+            }
+        }
+        let mut args = Args::try_parse_from(["mfb", "--cache-ttl-seconds", "60"]).unwrap();
+        args.mode = LaunchMode::RestoreJpeg;
+        assert!(validate_media_options(&args).is_err());
+        let interactive = build_run_args(
+            Path::new("input"),
+            LaunchMode::Auto,
+            None,
+            false,
+            false,
+            false,
+            ProcessingFilter::Both,
+            None,
+            &args.cache,
+        );
+        assert_eq!(
+            interactive.cache.cli_arguments(),
+            ["--cache-ttl-seconds", "60"]
+        );
+        let default = Args::try_parse_from(["mfb"]).unwrap();
+        for bin in ["img", "vid"] {
+            let command = rust_run_command(Path::new("/tmp"), bin, &default, Path::new("input"));
+            assert!(!command.args.iter().any(|arg| arg.starts_with("--cache-")));
+        }
+    }
+
+    #[test]
     fn photos_settings_are_forwarded_only_to_fast_img() {
         let mut args = Args::try_parse_from([
             "mfb",
@@ -4569,6 +4664,7 @@ mod tests {
             img_config: None,
             vid_config: None,
             performance: Default::default(),
+            cache: Default::default(),
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
@@ -4673,6 +4769,7 @@ mod tests {
                 img_config: None,
                 vid_config: None,
                 performance: Default::default(),
+                cache: Default::default(),
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
@@ -4718,6 +4815,7 @@ mod tests {
             img_config: None,
             vid_config: None,
             performance: Default::default(),
+            cache: Default::default(),
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
@@ -4785,6 +4883,7 @@ mod tests {
                 img_config: None,
                 vid_config: None,
                 performance: Default::default(),
+                cache: Default::default(),
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,

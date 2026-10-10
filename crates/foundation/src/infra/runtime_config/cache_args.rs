@@ -14,6 +14,20 @@ pub struct CacheArgs {
 
 impl CacheArgs {
     #[must_use]
+    pub fn cli_arguments(&self) -> Vec<String> {
+        let mut arguments = Vec::new();
+        for (flag, value) in [
+            ("--cache-max-bytes", self.cache_max_bytes),
+            ("--cache-ttl-seconds", self.cache_ttl_seconds),
+        ] {
+            if let Some(value) = value {
+                arguments.extend([flag.to_owned(), value.to_string()]);
+            }
+        }
+        arguments
+    }
+
+    #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.cache_max_bytes.is_none() && self.cache_ttl_seconds.is_none()
     }
@@ -55,10 +69,15 @@ mod tests {
         let mut loaded = crate::runtime_config::load(None, true).unwrap();
         let default = Cli::try_parse_from(["test"]).unwrap();
         assert!(default.cache.is_empty());
+        assert!(default.cache.cli_arguments().is_empty());
         default.cache.apply_to(&mut loaded);
         assert_eq!(loaded.sources["cache.path_tree_max_bytes"], "default");
         let cli = Cli::try_parse_from(["test", "--cache-max-bytes", "268435456"]).unwrap();
         assert!(!cli.cache.is_empty());
+        assert_eq!(
+            cli.cache.cli_arguments(),
+            ["--cache-max-bytes", "268435456"]
+        );
         cli.cache.apply_to(&mut loaded);
         assert_eq!(loaded.config.cache.path_tree_max_bytes, 268_435_456);
         assert_eq!(

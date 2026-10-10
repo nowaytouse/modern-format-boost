@@ -120,11 +120,11 @@ struct CheckpointEntry {
     path: String,
     /// File size in bytes.
     size: i64,
-    /// Last modification time in Unix seconds.
+    /// Last modification time in Unix nanoseconds.
     mtime: i64,
-    /// Creation time in Unix seconds.
+    /// Unix status-change time in nanoseconds, or Windows last-write ticks.
     ctime: i64,
-    /// Birth time in Unix seconds (if available).
+    /// Birth time in Unix nanoseconds (if available).
     #[serde(default)]
     btime: Option<i64>,
 }
@@ -152,7 +152,7 @@ impl CheckpointEntry {
         #[cfg(unix)]
         let ctime = {
             use std::os::unix::fs::MetadataExt;
-            metadata.ctime_nsec()
+            crate::numeric_cast::unix_parts_to_nanos(metadata.ctime(), metadata.ctime_nsec())?
         };
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
@@ -1611,6 +1611,19 @@ pub(crate) fn files_alias_same_inode(input: &Path, output: &Path) -> io::Result<
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_keeps_full_status_change_time() {
+        use std::os::unix::fs::MetadataExt;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let metadata = file.as_file().metadata().unwrap();
+        let entry = CheckpointEntry::from_path(file.path()).unwrap();
+        assert_eq!(
+            i128::from(entry.ctime),
+            i128::from(metadata.ctime()) * 1_000_000_000 + i128::from(metadata.ctime_nsec())
+        );
+    }
 
     struct TestEnvGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
