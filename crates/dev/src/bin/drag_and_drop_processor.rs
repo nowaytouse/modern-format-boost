@@ -23,7 +23,9 @@ use dev::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
     format_session_stamp,
 };
-use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
+use dev::infra::process_stream::{
+    ProcessorByteTotals, ProcessorStats, stream_process_with_pty_with_env,
+};
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
@@ -754,8 +756,10 @@ impl LaunchCommand {
                         }
                         return;
                     }
-                    println!("{line}");
-                    let _ = io::stdout().flush();
+                    if !line.starts_with("MFB_CONVERTED_BYTES=") {
+                        println!("{line}");
+                        let _ = io::stdout().flush();
+                    }
                     if session_log_error.is_none()
                         && let Err(error) = output.push_line(&pipeline_label, line)
                     {
@@ -1428,6 +1432,13 @@ fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json:
 }
 
 fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
+    let active = [
+        (&summary.img, summary.has_image_stats()),
+        (&summary.vid, summary.has_video_stats()),
+    ];
+    let size_invalid = active
+        .iter()
+        .any(|(stats, enabled)| *enabled && stats.converted_bytes_invalid);
     let size = (summary
         .fast_img_session_converted
         .is_some_and(|count| count > 0)
@@ -1439,6 +1450,30 @@ fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
             "input_bytes": summary.fast_img_session_source_bytes,
             "output_bytes": summary.fast_img_session_output_bytes,
         })
+    })
+    .or_else(|| {
+        if size_invalid
+            || !active
+                .iter()
+                .any(|(stats, enabled)| *enabled && stats.converted_bytes.is_some())
+        {
+            return None;
+        }
+        let bytes = active
+            .iter()
+            .filter(|(_, enabled)| *enabled)
+            .map(|(stats, _)| {
+                stats
+                    .converted_bytes
+                    .unwrap_or_else(ProcessorByteTotals::unknown)
+            })
+            .reduce(ProcessorByteTotals::merge)?;
+        let supported = |value: Option<u64>| value.filter(|bytes| i64::try_from(*bytes).is_ok());
+        Some(serde_json::json!({
+            "scope": "converted_this_run",
+            "input_bytes": supported(bytes.input_bytes),
+            "output_bytes": supported(bytes.output_bytes),
+        }))
     });
     serde_json::json!({
         "schema_version": 1,
@@ -1452,6 +1487,7 @@ fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
         "failed_files": summary.failed_file_names,
         "skipped_files": summary.skipped_file_names,
         "size": size,
+        "size_invalid": size_invalid,
     })
 }
 
@@ -3839,6 +3875,43 @@ mod tests {
         assert!(!current.contains("prior"));
     }
 
+    #[test]
+    fn ordinary_history_bytes_cover_all_active_workers_without_inventing_totals() {
+        let measured = ProcessorStats {
+            succeeded: 1,
+            reported: [true; 4],
+            converted_bytes: Some(ProcessorByteTotals {
+                input_bytes: Some(1000),
+                output_bytes: Some(1200),
+            }),
+            ..ProcessorStats::default()
+        };
+        let mut summary = PipelineSummary::default();
+        summary.add_video_stats(&measured);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["scope"], "converted_this_run");
+        assert_eq!(payload["size"]["input_bytes"], 1000);
+        assert_eq!(payload["size"]["output_bytes"], 1200);
+        summary.add_image_stats(&measured);
+        assert_eq!(
+            history_summary_payload(&summary)["size"]["input_bytes"],
+            2000
+        );
+        summary.add_image_stats(&ProcessorStats::default());
+        let partial = history_summary_payload(&summary);
+        assert!(partial["size"]["input_bytes"].is_null());
+        assert!(partial["size"]["output_bytes"].is_null());
+        assert_eq!(partial["size_invalid"], false);
+        summary.add_video_stats(&ProcessorStats {
+            converted_bytes_invalid: true,
+            ..ProcessorStats::default()
+        });
+        let invalid = history_summary_payload(&summary);
+        assert_eq!(invalid["size_invalid"], true);
+        assert!(invalid["size"].is_null());
+        assert_eq!(invalid["vid"]["active"], true);
+    }
+
     #[cfg(unix)]
     #[test]
     fn launcher_output_is_sqlite_only_and_write_failure_does_not_interrupt_child() {
@@ -3846,13 +3919,21 @@ mod tests {
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let command = LaunchCommand::from_argv(vec![
             "/bin/sh".into(), "-c".into(),
-            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'".into(),
+            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":1000,\"output_bytes\":1200}\\n'".into(),
         ]).unwrap();
         let stats = command
             .run_collecting(false, Some(&session), false)
             .unwrap();
         assert_eq!(stats.succeeded, 1);
         assert!(stats.counts_complete());
+        assert_eq!(
+            stats.converted_bytes,
+            Some(ProcessorByteTotals {
+                input_bytes: Some(1000),
+                output_bytes: Some(1200)
+            })
+        );
+        assert!(!stats.converted_bytes_invalid);
         let text = dev::infra::history_store::read_session_output_since(
             &session.log_dir,
             &session.stamp,
@@ -3860,6 +3941,7 @@ mod tests {
         )
         .unwrap();
         assert!(text.contains("synthetic worker output"));
+        assert!(text.contains("MFB_CONVERTED_BYTES="));
         for path in [&session.session_log, &session.verbose_log] {
             assert!(
                 !fs::read_to_string(path)

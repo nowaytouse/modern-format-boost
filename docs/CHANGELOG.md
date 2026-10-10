@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Standard batch size history (2026-10-10)
+
+- Carry exact current-run converted bytes from standard IMG/VID reports through
+  the launcher into SQLite history and the native Processing History window.
+  Versioned integer receipts exclude skipped, failed and reused files.
+- Preserve unknown measurements and checked-sum overflow across worker invocations;
+  reject malformed or conflicting receipts without losing valid outcome counts.
+  Display reductions, growth and unchanged sizes for IMG, VID and mixed batches.
+  Older and single-file invocations without receipts remain unrecorded.
+- Retain the workspace dependency lock refresh and pinned OSS-Fuzz base image
+  update. Rust regressions use the refreshed lock; the fuzz container itself was
+  not rebuilt in this batch.
+
 ### Native cache settings and inherited values (2026-10-10)
 
 - Expose directory snapshot capacity and idle TTL in the existing Cache settings

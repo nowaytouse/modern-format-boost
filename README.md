@@ -90,9 +90,13 @@ Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
 
-Processing History now highlights recorded Fast IMG size changes, with exact input
-and output byte counts for files newly converted in that run. Skipped, failed and
-reused files are excluded; resume-only totals are not attributed to a new run.
+Processing History highlights recorded Fast IMG and standard IMG/VID batch size
+changes, with exact input and output byte counts for files newly converted in that
+run. Skipped, failed and reused files are excluded; resume-only totals are not
+attributed to a new run. Standard workers emit structured integer receipts instead
+of parsing display units. Multiple active workers are combined with checked sums;
+missing measurements keep totals unknown. Single-file and older invocations without
+a receipt remain unrecorded.
 Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.

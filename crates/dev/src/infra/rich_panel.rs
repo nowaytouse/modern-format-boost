@@ -399,6 +399,14 @@ fn add_processor_stats(total: &mut ProcessorStats, next: &ProcessorStats, first:
         .zip(next.unprocessed)
         .and_then(|(left, right)| left.checked_add(right));
     total.unprocessed_invalid |= next.unprocessed_invalid;
+    total.converted_bytes_invalid |= next.converted_bytes_invalid;
+    total.converted_bytes = match (total.converted_bytes, next.converted_bytes) {
+        (None, None) => None,
+        (left, right) => Some(
+            left.unwrap_or_else(super::process_stream::ProcessorByteTotals::unknown)
+                .merge(right.unwrap_or_else(super::process_stream::ProcessorByteTotals::unknown)),
+        ),
+    };
     if next.exit_code != 0 {
         total.exit_code = next.exit_code;
     }
@@ -603,6 +611,50 @@ pub fn pause_before_gui_exit() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_aggregation_does_not_restore_missing_or_overflowing_totals() {
+        use crate::infra::process_stream::ProcessorByteTotals;
+        let measured = ProcessorStats {
+            converted_bytes: Some(ProcessorByteTotals {
+                input_bytes: Some(100),
+                output_bytes: Some(120),
+            }),
+            ..ProcessorStats::default()
+        };
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&measured);
+        summary.add_image_stats(&measured);
+        assert_eq!(
+            summary.img.converted_bytes,
+            Some(ProcessorByteTotals {
+                input_bytes: Some(200),
+                output_bytes: Some(240)
+            })
+        );
+        summary.add_image_stats(&ProcessorStats::default());
+        summary.add_image_stats(&measured);
+        assert_eq!(
+            summary.img.converted_bytes,
+            Some(ProcessorByteTotals::unknown())
+        );
+        summary.add_image_stats(&ProcessorStats {
+            converted_bytes_invalid: true,
+            ..ProcessorStats::default()
+        });
+        assert!(summary.img.converted_bytes_invalid);
+        let oversized = ProcessorByteTotals {
+            input_bytes: Some(u64::MAX),
+            output_bytes: Some(1),
+        };
+        assert_eq!(
+            oversized.merge(oversized),
+            ProcessorByteTotals {
+                input_bytes: None,
+                output_bytes: Some(2)
+            }
+        );
+    }
 
     #[test]
     fn pipeline_failure_panel_does_not_invent_a_processor_crash_or_exit_code() {

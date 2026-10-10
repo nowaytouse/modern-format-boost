@@ -410,6 +410,7 @@
 "history.space.increased" = "%@ 増加";
 "history.space.unchanged" = "サイズ変化なし";
 "history.space.scope" = "今回変換したファイルのみ。スキップ・失敗・再利用は含みません。";
+"history.space.converted_scope" = "今回変換に成功した画像と動画のみ。スキップ・失敗・再開時に再利用した結果は含みません。";
 "history.space.note" = "ファイルサイズの比較です。ディスク容量の解放を示すものではありません。";
 "history.space.not_recorded" = "比較可能なサイズデータの記録なし";
 "history.space.invalid" = "サイズの記録が無効なため、サイズ変化を確認できません。";

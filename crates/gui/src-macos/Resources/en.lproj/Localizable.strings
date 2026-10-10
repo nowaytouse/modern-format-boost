@@ -410,6 +410,7 @@
 "history.space.increased" = "Increased by %@";
 "history.space.unchanged" = "No size change";
 "history.space.scope" = "Only files converted in this run; skipped, failed and reused files excluded.";
+"history.space.converted_scope" = "Only image and video files successfully converted in this run; skipped, failed and resumed results excluded.";
 "history.space.note" = "File size comparison; disk space may not have been freed.";
 "history.space.not_recorded" = "No comparable size data recorded";
 "history.space.invalid" = "The size record is invalid; the size change cannot be confirmed.";

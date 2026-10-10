@@ -410,6 +410,7 @@
 "history.space.increased" = "增加 %@";
 "history.space.unchanged" = "体积未变化";
 "history.space.scope" = "仅统计本次成功转换的文件；不含跳过、失败和复用文件。";
+"history.space.converted_scope" = "仅统计本次成功转换的图像和视频；不含跳过、失败或断点恢复时复用的结果。";
 "history.space.note" = "文件体积对比；不代表磁盘空间已释放。";
 "history.space.not_recorded" = "未记录可比的体积数据";
 "history.space.invalid" = "体积记录无效，无法确认体积变化。";

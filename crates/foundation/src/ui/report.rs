@@ -84,6 +84,18 @@ impl ConvertedByteTotals {
             .map(|(input, output)| SizeComparison::new(input, output))
     }
 
+    fn receipt_line(self) -> String {
+        format!(
+            "MFB_CONVERTED_BYTES={}",
+            serde_json::json!({
+                "schema_version": 1,
+                "scope": "converted_this_run",
+                "input_bytes": self.input,
+                "output_bytes": self.output,
+            })
+        )
+    }
+
     fn log_fragment(self) -> String {
         self.comparison().map_or_else(
             || {
@@ -343,6 +355,7 @@ pub fn print_summary(
     print_time_info(result, duration);
     print_error_summary(result);
     print_pause_info(result);
+    println!("{}", bytes.receipt_line());
 }
 
 /// Size reduction percent for summary reporting. Returns `None` when input size
@@ -685,6 +698,26 @@ mod tests {
     }
     use super::*;
 
+    fn receipt_payload(bytes: ConvertedByteTotals) -> serde_json::Value {
+        let line = bytes.receipt_line();
+        assert_eq!(line.lines().count(), 1);
+        serde_json::from_str(line.strip_prefix("MFB_CONVERTED_BYTES=").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn converted_byte_receipt_preserves_exact_integers_and_scope() {
+        for (input, output) in [(0, 0), (1_200, 1_250), (u64::MAX, u64::MAX - 1)] {
+            let mut bytes = ConvertedByteTotals::default();
+            bytes.record(input, Some(output));
+            let payload = receipt_payload(bytes);
+            assert_eq!(payload.as_object().unwrap().len(), 4);
+            assert_eq!(payload["schema_version"], 1);
+            assert_eq!(payload["scope"], "converted_this_run");
+            assert_eq!(payload["input_bytes"].as_u64(), Some(input));
+            assert_eq!(payload["output_bytes"].as_u64(), Some(output));
+        }
+    }
+
     #[test]
     fn converted_byte_totals_keep_missing_and_overflow_unknown() {
         let mut bytes = ConvertedByteTotals::default();
@@ -697,6 +730,9 @@ mod tests {
         assert_eq!(bytes.input, Some(1_400));
         assert_eq!(bytes.output, None);
         assert_eq!(bytes.comparison(), None);
+        let payload = receipt_payload(bytes);
+        assert_eq!(payload["input_bytes"], 1_400);
+        assert!(payload["output_bytes"].is_null());
         assert_eq!(
             bytes.log_fragment(),
             format!(
@@ -715,6 +751,9 @@ mod tests {
             overflow.record(0, Some(0));
             assert_eq!(overflow.input, expected_input);
             assert_eq!(overflow.output, expected_output);
+            let payload = receipt_payload(overflow);
+            assert_eq!(payload["input_bytes"], serde_json::json!(expected_input));
+            assert_eq!(payload["output_bytes"], serde_json::json!(expected_output));
             assert!(overflow.comparison().is_none());
             assert!(overflow.log_fragment().contains("diff=unknown, change=N/A"));
         }

@@ -68,9 +68,13 @@ private struct HistorySummary: Decodable, Equatable {
         let output_bytes: UInt64?
 
         var valid: Bool {
-            scope == "fast_img_converted_this_run"
-                && (input_bytes != nil || output_bytes != nil)
+            (scope == "converted_this_run"
+                || (scope == "fast_img_converted_this_run" && (input_bytes != nil || output_bytes != nil)))
                 && [input_bytes, output_bytes].compactMap { $0 }.allSatisfy { $0 <= UInt64(Int64.max) }
+        }
+
+        var scopeKey: String {
+            scope == "converted_this_run" ? "history.space.converted_scope" : "history.space.scope"
         }
     }
     let schema_version: Int
@@ -84,7 +88,7 @@ private struct HistorySummary: Decodable, Equatable {
     var sizeInvalid: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case schema_version, count_scope, img, vid, integrity, failed_files, skipped_files, size
+        case schema_version, count_scope, img, vid, integrity, failed_files, skipped_files, size, size_invalid
     }
 
     init(schema_version: Int, count_scope: String, img: HistoryMedia, vid: HistoryMedia,
@@ -109,18 +113,17 @@ private struct HistorySummary: Decodable, Equatable {
         integrity = try values.decode(Integrity.self, forKey: .integrity)
         failed_files = try values.decode([String].self, forKey: .failed_files)
         skipped_files = try values.decode([String].self, forKey: .skipped_files)
+        size = nil
+        sizeInvalid = values.contains(.size_invalid) ? ((try? values.decode(Bool.self, forKey: .size_invalid)) ?? true) : false
+        guard !sizeInvalid else { return }
         if values.contains(.size), try !values.decodeNil(forKey: .size) {
             let candidate = try? values.decode(Size.self, forKey: .size)
-            if let candidate, candidate.valid, img.active {
+            if let candidate, candidate.valid,
+               (candidate.scope == "converted_this_run" ? (img.active || vid.active) : img.active) {
                 size = candidate
-                sizeInvalid = false
             } else {
-                size = nil
                 sizeInvalid = true
             }
-        } else {
-            size = nil
-            sizeInvalid = false
         }
     }
 
@@ -1287,7 +1290,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             lines += [entry.sizeOutcome,
                       row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
                       row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
-                      localized("history.space.scope"), localized("history.space.note")]
+                      localized(size.scopeKey), localized("history.space.note")]
         } else if entry.summary?.sizeInvalid == true {
             lines.append(localized("history.space.invalid"))
         } else {
@@ -1687,6 +1690,54 @@ func runProcessingHistorySelfTests() throws {
     try require(inactiveSize.summary?.sizeInvalid == true && inactiveSize.summary?.size == nil
                 && inactiveSize.summary?.vid.active == false,
                 "Size evidence without an image run changed media outcomes")
+    for (image, video) in [(media, inactive), (inactive, media), (media, media)] {
+        var ordinarySummary = summaryValue
+        ordinarySummary["img"] = image
+        ordinarySummary["vid"] = video
+        ordinarySummary["size_invalid"] = false
+        for (input, output, outcome) in [
+            (1_024 as Any, 512 as Any, localized("history.space.saved", HistoryEntry.sizeLabel(512))),
+            (512 as Any, 1_024 as Any, localized("history.space.increased", HistoryEntry.sizeLabel(512))),
+            (Int64.max as Any, Int64.max as Any, localized("history.space.unchanged")),
+            (512 as Any, NSNull() as Any, localized("result.unknown")),
+            (NSNull() as Any, 512 as Any, localized("result.unknown")),
+            (NSNull() as Any, NSNull() as Any, localized("result.unknown"))
+        ] {
+            ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": input, "output_bytes": output]
+            let ordinary = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+            try require(ordinary.summary?.size != nil && ordinary.summary?.sizeInvalid == false
+                        && ordinary.statusKey == "history.status.completed" && ordinary.sizeOutcome == outcome
+                        && ordinary.summary?.size?.scopeKey == "history.space.converted_scope",
+                        "IMG/VID converted bytes were rejected, unknown bytes became zero, or growth became savings")
+        }
+    }
+    var ordinarySummary = summaryValue
+    ordinarySummary["img"] = failedImage
+    ordinarySummary["failed_files"] = ["/synthetic/failed.jpg"]
+    ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    for invalidFlag in [true, "true", 1, NSNull()] as [Any] {
+        ordinarySummary["size_invalid"] = invalidFlag
+        for finish in [completed, failed] {
+            let invalid = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), finish]).entries[0]
+            try require(invalid.summary?.sizeInvalid == true && invalid.summary?.size == nil
+                        && invalid.summary?.img.failed == 1 && invalid.succeededLabel == "2"
+                        && invalid.summary?.failed_files == ["/synthetic/failed.jpg"]
+                        && invalid.sizeOutcome == localized("result.unknown")
+                        && invalid.statusKey == (finish == completed ? "history.status.file_failures" : "history.status.failed"),
+                        "An invalid size flag hid file outcomes or terminal failure")
+        }
+    }
+    ordinarySummary = summaryValue
+    ordinarySummary["img"] = inactive
+    ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": NSNull(), "output_bytes": NSNull()]
+    let inactiveOrdinary = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+    try require(inactiveOrdinary.summary?.sizeInvalid == true && inactiveOrdinary.summary?.size == nil,
+                "Converted bytes were accepted without an active pipeline")
+    ordinarySummary["vid"] = media
+    ordinarySummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 256]
+    let wrongPipeline = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+    try require(wrongPipeline.summary?.sizeInvalid == true && wrongPipeline.summary?.size == nil,
+                "Fast IMG byte evidence was accepted for a video-only run")
     let imgConfigValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
         "config": ["config_version": 1, "performance": ["mode": "tight"]],
         "sources": ["config_version": "default", "performance.mode": "CLI"]]
