@@ -175,6 +175,10 @@
 "menu.front" = "全部置于前面";
 "settings.title" = "媒体设置";
 "settings.section.cache" = "缓存";
+"settings.cacheMaxBytes" = "目录快照缓存上限（字节）";
+"settings.cacheMaxBytes.help" = "须为正整数。仅限制可重建的目录快照缓存内容，不限制整个数据库文件的大小。取消单独设置后仍沿用继承的配置。";
+"settings.cacheTtlSeconds" = "缓存空闲有效期（秒）";
+"settings.cacheTtlSeconds.help" = "须为正整数。缓存命中会重新开始空闲计时，过期快照会重建。历史记录和断点恢复记录会保留。";
 "settings.backend_failed" = "设置工具运行失败（状态码 %d）。";
 "settings.cache.path" = "缓存位置";
 "settings.cache.rebuildable" = "可重建缓存内容";

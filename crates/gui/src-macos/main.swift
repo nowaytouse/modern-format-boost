@@ -281,14 +281,18 @@ private enum MediaSetting: String, CaseIterable {
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
     case performance
+    case cacheMaxBytes, cacheTtlSeconds
 
     var isImage: Bool { rawValue.hasPrefix("img") }
     var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
+    var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
+    var isShared: Bool { self == .performance || isCache }
     var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy].contains(self) }
     var section: String {
         if self == .performance { return "performance" }
+        if isCache { return "cache" }
         if isDeveloper { return "developer" }
         if isPhotos { return "photos" }
         if isFastImage { return "fast" }
@@ -297,6 +301,8 @@ private enum MediaSetting: String, CaseIterable {
     var flag: String {
         switch self {
         case .performance: "--performance"
+        case .cacheMaxBytes: "--cache-max-bytes"
+        case .cacheTtlSeconds: "--cache-ttl-seconds"
         case .imgConfig, .fastConfig: "--img-config"
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
@@ -339,12 +345,15 @@ private enum MediaSetting: String, CaseIterable {
         case .photosNativeBatch, .photosVerificationBatch, .photosMinimumBatch, .photosMaximumBatch: 1...1000
         case .photosAppleScriptBatch: 1...50
         case .photosTargetSeconds: 1...600
+        case .cacheMaxBytes, .cacheTtlSeconds: 1...Int.max
         default: nil
         }
     }
     var runtimeKey: String? {
         switch self {
         case .performance: "performance.mode"
+        case .cacheMaxBytes: "cache.path_tree_max_bytes"
+        case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
@@ -422,6 +431,8 @@ private struct MediaSettings {
     var videoCodec: VideoCodec?
     var videoConfigurationFile: String?
     var performance: String?
+    var cacheMaxBytes: Int?
+    var cacheTtlSeconds: Int?
     private var invalidValues: [MediaSetting: String] = [:]
 
     // String values are the control/persistence boundary; processing uses typed groups.
@@ -429,6 +440,7 @@ private struct MediaSettings {
         get {
             let stored: [MediaSetting: String?] = [
                 .performance: performance,
+                .cacheMaxBytes: cacheMaxBytes.map(String.init), .cacheTtlSeconds: cacheTtlSeconds.map(String.init),
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
@@ -460,6 +472,8 @@ private struct MediaSettings {
                 }
                 switch field {
                 case .performance: performance = value
+                case .cacheMaxBytes: cacheMaxBytes = Int(value)
+                case .cacheTtlSeconds: cacheTtlSeconds = Int(value)
                 case .imgConfig: image.configurationFile = value
                 case .imgFallback: image.fallback = ImageFallback(rawValue: value)
                 case .imgJpegEffort: image.jpegEffort = Int(value)
@@ -543,7 +557,7 @@ private struct MediaSettings {
         let images = operation == .adjacent && processing != .videosOnly
         let videos = operation == .adjacent && processing != .imagesOnly
         let fields = MediaSetting.allCases.filter {
-            if $0 == .performance { return images || videos || fastImages }
+            if $0.isShared { return images || videos || fastImages || ($0.isCache && operation == .fastVid) }
             return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
         try validate(fields)
@@ -555,7 +569,7 @@ private struct MediaSettings {
 
     func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
         MediaSetting.allCases.filter {
-            ($0 == .performance || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+            ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && $0 != .imgErrorMode && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
@@ -569,6 +583,8 @@ private struct MediaSettings {
         var arguments = videoConfigurationFile.map { ["--config", $0] } ?? []
         if !inheritedOnly {
             if let performance { arguments += ["--performance", performance] }
+            if let cacheMaxBytes { arguments += ["--cache-max-bytes", String(cacheMaxBytes)] }
+            if let cacheTtlSeconds { arguments += ["--cache-ttl-seconds", String(cacheTtlSeconds)] }
             if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
         }
         return arguments
@@ -780,7 +796,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var restored = MediaSettings()
     private var inherited: [MediaSetting: String] = [:]
     private var inheritedSources: [MediaSetting: String] = [:]
-    private var inheritedMixedPerformance = false
+    private var inheritedMixed: Set<MediaSetting> = []
     private var displayed: [MediaSetting: String] = [:]
     private var rows: [MediaSetting: NSGridRow] = [:]
     private let developer: Bool
@@ -841,9 +857,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         configureSearch()
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
-        for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) {
+        for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"] {
             let fields = MediaSetting.allCases.filter { field in
                 if field == .performance { return section == "performance" }
+                if field.isCache { return section == "cache" }
                 if field.isDeveloper {
                     if field.isVideo { return developer && section == "developer" && !fast }
                     return developer && section == "developer" && !videos && (fast ? field.isFastImage : field.isImage)
@@ -881,7 +898,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                     textFields[field] = text
-                    if let range = field.range {
+                    if field.isCache {
+                        // Keep full Int64 precision; NSStepper stores its value as Double.
+                        text.placeholderString = localized("settings.automatic")
+                        control = text
+                    } else if let range = field.range {
                         text.widthAnchor.constraint(equalToConstant: 100).isActive = true
                         let stepper = NSStepper()
                         stepper.minValue = Double(range.lowerBound)
@@ -915,6 +936,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 fieldSections[field] = section
                 row.yPlacement = .center
             }
+            if section == "cache" { addCacheRows(to: grid) }
             grid.column(at: 0).xPlacement = .leading
             grid.column(at: 0).width = 240
             grid.column(at: 1).xPlacement = .fill
@@ -935,7 +957,6 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             tab.view = content
             tabs.addTabViewItem(tab)
         }
-        addCacheTab()
         root.addArrangedSubview(tabs)
         tabHeight = tabs.heightAnchor.constraint(equalToConstant: 210)
         tabHeight?.isActive = true
@@ -1107,12 +1128,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         return false
     }
 
-    private func addCacheTab() {
-        let tab = NSTabViewItem(identifier: "cache")
-        tab.label = localized("settings.section.cache")
-        let grid = NSGridView()
-        grid.rowSpacing = 10
-        grid.columnSpacing = 12
+    private func addCacheRows(to grid: NSGridView) {
         for key in ["path", "rebuildable", "retained", "store", "obsolete"] {
             let value = NSTextField(labelWithString: localized("settings.cache.not_loaded"))
             value.isSelectable = true
@@ -1147,20 +1163,6 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheMessage.isSelectable = true
         cacheMessageRow = grid.addRow(with: [NSView(), cacheMessage])
         cacheMessageRow?.isHidden = true
-        grid.column(at: 0).width = 240
-        grid.column(at: 0).xPlacement = .leading
-        grid.column(at: 1).xPlacement = .fill
-        grids["cache"] = grid
-        let content = NSView()
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(grid)
-        NSLayoutConstraint.activate([
-            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
-        ])
-        tab.view = content
-        tabs.addTabViewItem(tab)
     }
 
     private func displayCache(_ snapshot: LocalCacheStatus) throws {
@@ -1270,9 +1272,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard let section = tabs.selectedTabViewItem?.identifier as? String,
               let grid = grids[section], let tabHeight else { return }
         advanced.isHidden = developer || section != "photos"
-        resetButton.isHidden = section == "cache"
-        applyButton.isHidden = section == "cache"
-        cancelButton.title = localized(section == "cache" ? "settings.cache.close" : "alert.cancel")
+        cancelButton.title = localized("alert.cancel")
         cancelButton.isEnabled = !cacheBusy
         resetButton.isEnabled = !cacheBusy
         applyButton.isEnabled = !cacheBusy && !applying
@@ -1322,7 +1322,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     let draft = self.draft()
                     self.inherited.removeAll()
                     self.inheritedSources.removeAll()
-                    self.inheritedMixedPerformance = false
+                    self.inheritedMixed.removeAll()
                     self.restore(draft)
                     self.status.stringValue = error.localizedDescription
                 }
@@ -1335,19 +1335,20 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                                     video: EffectiveRuntimeSettings?) {
         inherited.removeAll()
         inheritedSources.removeAll()
-        inheritedMixedPerformance = false
+        inheritedMixed.removeAll()
         for field in MediaSetting.allCases {
             guard let key = field.runtimeKey else { continue }
-            let effective = field == .performance ? (self.fast ? fast : (videos ? video : standard))
+            let effective = field.isShared ? (self.fast ? fast : (videos ? video : standard))
                 : (field.isFastImage || field.isPhotos ? fast : (field.isVideo ? video : standard))
             inherited[field] = effective?[key]
             inheritedSources[field] = effective?.sourceChain[key]?.joined(separator: " → ")
         }
-        if !self.fast, !videos, let imageMode = standard?["performance.mode"],
-           let videoMode = video?["performance.mode"], imageMode != videoMode {
-            inheritedMixedPerformance = true
-            inherited[.performance] = nil
-            inheritedSources[.performance] = "IMG: \(imageMode) (\(standard?.sources["performance.mode"] ?? localized("result.unknown")))\nVID: \(videoMode) (\(video?.sources["performance.mode"] ?? localized("result.unknown")))"
+        for field in MediaSetting.allCases where field.isShared && !self.fast && !videos {
+            guard let key = field.runtimeKey, let imageValue = standard?[key],
+                  let videoValue = video?[key], imageValue != videoValue else { continue }
+            inheritedMixed.insert(field)
+            inherited[field] = nil
+            inheritedSources[field] = "IMG: \(imageValue) (\(standard?.sources[key] ?? localized("result.unknown")))\nVID: \(videoValue) (\(video?.sources[key] ?? localized("result.unknown")))"
         }
     }
 
@@ -1359,6 +1360,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         for (field, text) in textFields {
             text.stringValue = displayed[field] ?? ""
+            if field.isCache {
+                text.placeholderString = localized(inheritedMixed.contains(field) ? "settings.performance.per_pipeline" : "settings.automatic")
+            }
             updateStepper(for: field)
         }
         for (field, toggle) in toggles {
@@ -1374,7 +1378,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
-            if field == .performance && inheritedMixedPerformance {
+            if field == .performance && inheritedMixed.contains(field) {
                 popup.insertItem(withTitle: localized("settings.performance.per_pipeline"), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0) }
             }
@@ -1410,7 +1414,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
-            if field == .performance, inheritedMixedPerformance, popup.indexOfSelectedItem == 0 {
+            if field == .performance, inheritedMixed.contains(field), popup.indexOfSelectedItem == 0 {
                 settings.values[field] = nil
                 continue
             }
@@ -1487,13 +1491,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             sourceGeneration = UUID()
             let generation = sourceGeneration
             let requests: [(String, String, [String])]
-            if field == .performance && !fast && !videos {
+            if field.isShared && !fast && !videos {
                 requests = [("IMG", "img", settings.runtimeArguments(fast: false, inheritedOnly: false)),
                             ("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
-            } else if field.isVideo || (field == .performance && videos) {
+            } else if field.isVideo || (field.isShared && videos) {
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
-                let useFast = field.isFastImage || field.isPhotos || (field == .performance && fast)
+                let useFast = field.isFastImage || field.isPhotos || (field.isShared && fast)
                 requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -1594,6 +1598,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         validatingLayout = true
         defer { validatingLayout = false }
         try validateCacheForSelfTest()
+        try validateCachePolicyForSelfTest()
         try validatePhotosForSelfTest()
         try validateSearchForSelfTest()
         var settings = MediaSettings()
@@ -1705,7 +1710,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             throw HostError(message: "Configuration source controls escaped Developer mode or lost their fixed size")
         }
         if !fast && !videos {
-            guard inheritedMixedPerformance, popups[.performance]?.indexOfSelectedItem == 0,
+            guard inheritedMixed.contains(.performance), popups[.performance]?.indexOfSelectedItem == 0,
                   draft().values[.performance] == nil, inherited[.vidCodec] == "av1" else {
                 throw HostError(message: "Mixed pipeline defaults became a fabricated shared performance override")
             }
@@ -1725,7 +1730,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 throw HostError(message: "Repeated reload duplicated the per-pipeline choice")
             }
         } else {
-            guard !inheritedMixedPerformance, inherited[.performance] == (fast ? "adaptive" : "relaxed") else {
+            guard !inheritedMixed.contains(.performance), inherited[.performance] == (fast ? "adaptive" : "relaxed") else {
                 throw HostError(message: "Performance inheritance used the wrong pipeline")
             }
         }
@@ -1740,7 +1745,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         inherited.removeAll()
         inheritedSources.removeAll()
-        inheritedMixedPerformance = false
+        inheritedMixed.removeAll()
         restore(MediaSettings())
     }
 
@@ -1826,6 +1831,64 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
     }
 
+    func validateCachePolicyForSelfTest() throws {
+        let previous = restored
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previous)
+        }
+        let key = "cache.path_tree_max_bytes"
+        let ttl = "cache.path_tree_ttl_seconds"
+        let standard = EffectiveRuntimeSettings(values: [key: "1024", ttl: "60"], sources: [:], sourceChain: [:])
+        let fastValues = EffectiveRuntimeSettings(values: [key: "2048", ttl: "60"], sources: [:], sourceChain: [:])
+        let video = EffectiveRuntimeSettings(values: [key: "4096", ttl: "60"], sources: [:], sourceChain: [:])
+        setInheritedValues(standard: standard, fast: fastValues, video: video)
+        restore(MediaSettings())
+        tabs.selectTabViewItem(withIdentifier: "cache")
+        guard textFields[.cacheMaxBytes] != nil, textFields[.cacheTtlSeconds]?.stringValue == "60",
+              steppers[.cacheMaxBytes] == nil, steppers[.cacheTtlSeconds] == nil,
+              draft().values.isEmpty, !applyButton.isHidden, !resetButton.isHidden else {
+            throw HostError(message: "Cache controls lost inherited values or created overrides")
+        }
+        if !fast && !videos {
+            guard inheritedMixed.contains(.cacheMaxBytes), textFields[.cacheMaxBytes]?.stringValue.isEmpty == true else {
+                throw HostError(message: "Different pipeline cache limits became a shared default")
+            }
+        } else if textFields[.cacheMaxBytes]?.stringValue != (fast ? "2048" : "4096") {
+            throw HostError(message: "Cache inheritance used another pipeline")
+        }
+        textFields[.cacheMaxBytes]?.stringValue = String(Int.max)
+        textFields[.cacheTtlSeconds]?.stringValue = "1"
+        let explicit = draft()
+        try explicit.save(to: preferences)
+        guard MediaSettings(preferences: preferences).cacheMaxBytes == Int.max,
+              explicit.cacheTtlSeconds == 1 else {
+            throw HostError(message: "Cache settings lost integer precision or persistence")
+        }
+        restore(explicit)
+        textFields[.cacheMaxBytes]?.stringValue = ""
+        guard draft().cacheMaxBytes == nil else { throw HostError(message: "Clearing cache limit kept an override") }
+        for value in ["0", "-1", "1.5", "9223372036854775808", "bad"] {
+            textFields[.cacheMaxBytes]?.stringValue = value
+            do { try draft().validate() }
+            catch { continue }
+            throw HostError(message: "Invalid cache limit accepted: \(value)")
+        }
+        var independent = explicit
+        independent.values[.vidCodec] = "av1"
+        restore(independent)
+        resetTab()
+        guard draft().values == [.vidCodec: "av1"] else {
+            throw HostError(message: "Cache reset retained overrides or changed another section")
+        }
+        try previous.save(to: preferences)
+    }
+
     private func validateCacheForSelfTest() throws {
         let document: [String: Any] = ["schema_version": 1, "cache_directory": "/synthetic/cache",
             "store_bytes": 1024, "legacy_analysis_bytes": 64, "legacy_analysis_files": 1,
@@ -1840,7 +1903,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         try displayCache(snapshot)
         tabs.selectTabViewItem(withIdentifier: "cache")
-        guard cacheClear.isEnabled, resetButton.isHidden, applyButton.isHidden,
+        guard cacheClear.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
               cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
         }
@@ -5095,6 +5158,33 @@ private func runSelfTest() -> Int32 {
                 == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"] else {
             throw HostError(message: "Tool selection was not resolved or leaked into video settings")
         }
+        var cacheSettings = MediaSettings()
+        cacheSettings.values = [.cacheMaxBytes: "123456789", .cacheTtlSeconds: "654321"]
+        let cacheArguments = ["--cache-max-bytes", "123456789", "--cache-ttl-seconds", "654321"]
+        for mode in [OperationMode.adjacent, .fastImgJxl, .fastImgAvif, .fastVid] {
+            guard try cacheSettings.arguments(operation: mode, processing: .videosOnly) == cacheArguments else {
+                throw HostError(message: "Cache settings did not reach a processing mode")
+            }
+        }
+        guard try cacheSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty,
+              cacheSettings.runtimeArguments(fast: false, inheritedOnly: true).isEmpty,
+              cacheSettings.runtimeArguments(fast: true, inheritedOnly: true).isEmpty,
+              cacheSettings.videoRuntimeArguments(inheritedOnly: true).isEmpty else {
+            throw HostError(message: "Cache overrides leaked into inherited config or restoration")
+        }
+        for (tool, arguments) in [
+            ("img", cacheSettings.runtimeArguments(fast: false, inheritedOnly: false)),
+            ("img", cacheSettings.runtimeArguments(fast: true, inheritedOnly: false)),
+            ("vid", cacheSettings.videoRuntimeArguments(inheritedOnly: false)),
+        ] {
+            let resolved = try queryRuntimeSettings(arguments: ["--no-config"] + arguments, tool: tool)
+            guard resolved["cache.path_tree_max_bytes"] == "123456789",
+                  resolved["cache.path_tree_ttl_seconds"] == "654321",
+                  resolved.sources["cache.path_tree_max_bytes"] == "CLI",
+                  resolved.sources["cache.path_tree_ttl_seconds"] == "CLI" else {
+                throw HostError(message: "Cache controls disagree with the effective backend configuration")
+            }
+        }
         configured.mediaSettings.values[.fastJpegEffort] = "12"
         do {
             _ = try ProcessorCommand.arguments(from: configured)
@@ -5491,8 +5581,11 @@ private func runSelfTest() -> Int32 {
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, fast: true, applied: {}).validateForSelfTest()
-            try MediaSettingsPanel(preferences: preferences, videos: true, applied: {}).validatePhotosForSelfTest()
-            try MediaSettingsPanel(preferences: preferences, developer: true, videos: true, applied: {}).validatePhotosForSelfTest()
+            for developer in [false, true] {
+                let videoPanel = MediaSettingsPanel(preferences: preferences, developer: developer, videos: true, applied: {})
+                try videoPanel.validatePhotosForSelfTest()
+                try videoPanel.validateCachePolicyForSelfTest()
+            }
         }
         print("native-host self-test passed")
         return 0

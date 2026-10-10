@@ -175,6 +175,10 @@
 "menu.front" = "Bring All to Front";
 "settings.title" = "Media Settings";
 "settings.section.cache" = "Cache";
+"settings.cacheMaxBytes" = "Snapshot cache limit (bytes)";
+"settings.cacheMaxBytes.help" = "Positive integer. Limits only rebuildable directory snapshot payloads, not the total database file size. Clearing this override preserves inherited configuration.";
+"settings.cacheTtlSeconds" = "Idle cache lifetime (seconds)";
+"settings.cacheTtlSeconds.help" = "Positive integer. Cache hits restart the idle timer; expired snapshots are rebuilt. History and resume records are retained.";
 "settings.backend_failed" = "Settings tool failed (exit status %d).";
 "settings.cache.path" = "Cache location";
 "settings.cache.rebuildable" = "Rebuildable cache payload";

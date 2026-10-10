@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Native cache settings and inherited values (2026-10-10)
+
+- Expose directory snapshot capacity and idle TTL in the existing Cache settings
+  tab, alongside statistics, cleanup and database inspection. Positive integer
+  inputs preserve the full supported range without a floating-point stepper.
+- Preserve per-pipeline inheritance, including different IMG/VID cache limits;
+  blank inputs remove explicit overrides and tab reset leaves other sections intact.
+  Developer source previews use each actual backend configuration.
+- Forward saved overrides through normal and fast processing modes, validate them
+  against IMG/VID effective configuration before saving, and keep maintenance and
+  restoration modes free of unrelated cache flags. Add native regression coverage
+  and English, Simplified Chinese and Japanese labels and help text.
+
 ### Analysis-cache accounting and checkpoint identity (2026-10-10)
 
 - Complete launcher forwarding of explicit cache capacity/TTL overrides for IMG,

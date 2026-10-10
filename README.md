@@ -130,8 +130,11 @@ IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
 `--cache-ttl-seconds`. Explicit flags override configuration files; omitted flags
 retain inherited values, and `config show --effective` reports their source chain.
 Both accept positive integers up to 9223372036854775807. The launcher forwards
-explicit overrides to IMG/VID and fast modes without inserting defaults. GUI
-controls for these two overrides are not yet available; configuration files remain supported.
+explicit overrides to IMG/VID and fast modes without inserting defaults. Settings >
+Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
+inherit configuration; resetting this tab removes only cache overrides. If IMG and
+VID inherit different limits, the combined view keeps their separate values until
+an explicit shared override is entered. Developer mode shows each source chain.
 
 Use `cache_cleaner --prune --yes --json` to apply the configured TTL and capacity
 without processing media or clearing all useful cache. `--config PATH`,

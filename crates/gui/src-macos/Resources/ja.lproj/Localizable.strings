@@ -175,6 +175,10 @@
 "menu.front" = "すべてを手前に移動";
 "settings.title" = "メディア設定";
 "settings.section.cache" = "キャッシュ";
+"settings.cacheMaxBytes" = "スナップショット上限（バイト）";
+"settings.cacheMaxBytes.help" = "正の整数を指定します。再作成可能なディレクトリスナップショットのデータ量のみを制限し、データベース全体のファイルサイズは制限しません。個別指定を解除すると、継承した設定が引き続き適用されます。";
+"settings.cacheTtlSeconds" = "キャッシュの未使用期間（秒）";
+"settings.cacheTtlSeconds.help" = "正の整数を指定します。キャッシュが使われると未使用時間の計測が再開し、期限切れのスナップショットは再作成されます。履歴と再開用レコードは保持されます。";
 "settings.backend_failed" = "設定ツールが失敗しました（終了コード %d）。";
 "settings.cache.path" = "キャッシュの場所";
 "settings.cache.rebuildable" = "再作成可能なキャッシュ";
