@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SQLite3
 import Darwin
+import CoreFoundation
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -61,6 +62,21 @@ private struct HistorySummary: Decodable, Equatable {
         let state: String?
         let issue_count: Int?
     }
+    struct Size: Decodable, Equatable {
+        let scope: String
+        let input_bytes: UInt64?
+        let output_bytes: UInt64?
+
+        var valid: Bool {
+            (scope == "converted_this_run"
+                || (scope == "fast_img_converted_this_run" && (input_bytes != nil || output_bytes != nil)))
+                && [input_bytes, output_bytes].compactMap { $0 }.allSatisfy { $0 <= UInt64(Int64.max) }
+        }
+
+        var scopeKey: String {
+            scope == "converted_this_run" ? "history.space.converted_scope" : "history.space.scope"
+        }
+    }
     let schema_version: Int
     let count_scope: String
     let img: HistoryMedia
@@ -68,6 +84,48 @@ private struct HistorySummary: Decodable, Equatable {
     let integrity: Integrity
     let failed_files: [String]
     let skipped_files: [String]
+    var size: Size?
+    var sizeInvalid: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case schema_version, count_scope, img, vid, integrity, failed_files, skipped_files, size, size_invalid
+    }
+
+    init(schema_version: Int, count_scope: String, img: HistoryMedia, vid: HistoryMedia,
+         integrity: Integrity, failed_files: [String], skipped_files: [String]) {
+        self.schema_version = schema_version
+        self.count_scope = count_scope
+        self.img = img
+        self.vid = vid
+        self.integrity = integrity
+        self.failed_files = failed_files
+        self.skipped_files = skipped_files
+        size = nil
+        sizeInvalid = false
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schema_version = try values.decode(Int.self, forKey: .schema_version)
+        count_scope = try values.decode(String.self, forKey: .count_scope)
+        img = try values.decode(HistoryMedia.self, forKey: .img)
+        vid = try values.decode(HistoryMedia.self, forKey: .vid)
+        integrity = try values.decode(Integrity.self, forKey: .integrity)
+        failed_files = try values.decode([String].self, forKey: .failed_files)
+        skipped_files = try values.decode([String].self, forKey: .skipped_files)
+        size = nil
+        sizeInvalid = values.contains(.size_invalid) ? ((try? values.decode(Bool.self, forKey: .size_invalid)) ?? true) : false
+        guard !sizeInvalid else { return }
+        if values.contains(.size), try !values.decodeNil(forKey: .size) {
+            let candidate = try? values.decode(Size.self, forKey: .size)
+            if let candidate, candidate.valid,
+               (candidate.scope == "converted_this_run" ? (img.active || vid.active) : img.active) {
+                size = candidate
+            } else {
+                sizeInvalid = true
+            }
+        }
+    }
 
     var valid: Bool {
         guard schema_version == 1, count_scope == "processor_outcomes", img.valid, vid.valid,
@@ -77,6 +135,12 @@ private struct HistorySummary: Decodable, Equatable {
             if let left = pair.0, let right = pair.1, left.addingReportingOverflow(right).overflow { return false }
         }
         return true
+    }
+
+    func sameOutcomes(as other: HistorySummary) -> Bool {
+        schema_version == other.schema_version && count_scope == other.count_scope
+            && img == other.img && vid == other.vid && integrity == other.integrity
+            && failed_files == other.failed_files && skipped_files == other.skipped_files
     }
 }
 
@@ -107,6 +171,20 @@ private struct HistoryVerification: Decodable, Equatable {
     }
 }
 
+private struct HistoryConfigSnapshot: Hashable {
+    let pipeline: String
+    let packageVersion: String
+    let values: String
+    let sources: String
+}
+
+private struct HistoryConfigMetadata: Decodable {
+    let schema_version: Int
+    let pipeline: String
+    let package_version: String
+    let sources: [String: String]
+}
+
 private struct HistoryRecord: Decodable {
     let ts: String
     let event: String
@@ -120,6 +198,11 @@ private struct HistoryEntry {
     var context: HistoryContext?
     var summary: HistorySummary?
     var verification: HistoryVerification?
+    var configSnapshots: [HistoryConfigSnapshot] = []
+    var configSet: Set<HistoryConfigSnapshot> = []
+    var configInvocationCount = 0
+    var configMarkerSeen = false
+    var configEvidenceInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -146,13 +229,13 @@ private struct HistoryEntry {
         if finished?.outcome == "failed" { return "history.status.failed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if hasProcessorError { return "history.status.failed" }
+        if hasFailures { return "history.status.file_failures" }
         if legacy { return "history.status.legacy" }
         if issues.isEmpty, context?.dry_run == true, finished?.outcome == "completed" {
             return "history.status.preview"
         }
         guard issues.isEmpty, context != nil, let summary, summary.img.complete, summary.vid.complete,
               finished?.outcome == "completed" else { return "history.status.incomplete" }
-        if hasFailures { return "history.status.file_failures" }
         if hasPending { return "history.status.unfinished" }
         if hasVerificationWarnings { return "history.status.verification_warnings" }
         return "history.status.completed"
@@ -181,6 +264,17 @@ private struct HistoryEntry {
         }
         return String(total)
     }
+    var sizeOutcome: String {
+        guard let input = summary?.size?.input_bytes, let output = summary?.size?.output_bytes else {
+            return localized("result.unknown")
+        }
+        if input > output { return localized("history.space.saved", Self.sizeLabel(input - output)) }
+        if output > input { return localized("history.space.increased", Self.sizeLabel(output - input)) }
+        return localized("history.space.unchanged")
+    }
+    static func sizeLabel(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) + " (\(bytes) B)"
+    }
 }
 
 private struct HistoryAudit {
@@ -190,7 +284,8 @@ private struct HistoryAudit {
     var evidenceWeight: Int {
         entries.reduce(0) { total, entry in
             total + (entry.context == nil ? 0 : 1) + (entry.summary == nil ? 0 : 1)
-                + (entry.verification == nil ? 0 : 1) + (entry.finished == nil ? 0 : 1)
+                + (entry.verification == nil ? 0 : 1) + (entry.configSnapshots.isEmpty ? 0 : 1)
+                + (entry.finished == nil ? 0 : 1)
         }
     }
 }
@@ -205,12 +300,27 @@ private enum HistoryStore {
     static let maximumScanBytes = 64 * 1024 * 1024
     static let maximumOutputLines = 1_000
     static let maximumOutputBytes = 2 * 1024 * 1024
+    static let maximumConfigBytes = 32 * 1024
+    static let maximumConfigSnapshots = 64
 
     struct Output {
-        let text: String
-        let shown: Int
+        struct Row {
+            let sequence: Int64
+            let text: String
+            let diagnostic: Bool
+        }
+        let rows: [Row]
         let total: Int64
+        let upper: Int64
+        let firstOrdinal: Int64
+        let issues: [String]
+        var text: String { rows.map(\.text).joined(separator: "\n") }
+        var shown: Int { rows.count }
+        var hasOlder: Bool { shown > 0 && firstOrdinal > 1 }
+        var hasNewer: Bool { shown > 0 && firstOrdinal + Int64(shown) - 1 < total }
     }
+
+    enum OutputDirection { case older, newer }
 
     struct Candidate {
         let stamp: String
@@ -255,6 +365,33 @@ private enum HistoryStore {
         func decode<T: Decodable>(_ type: T.Type, from event: String, prefix: String) throws -> T {
             try decoder.decode(type, from: Data(event.dropFirst(prefix.count).utf8))
         }
+        func decodeConfig(_ event: String) throws -> HistoryConfigSnapshot {
+            let data = Data(event.dropFirst("MFB_HISTORY_CONFIG=".count).utf8)
+            guard data.count <= maximumConfigBytes,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let values = object["config"] as? [String: Any] else { throw HistoryParseError.invalid }
+            let metadata = try decoder.decode(HistoryConfigMetadata.self, from: data)
+            func leafPaths(_ object: [String: Any], prefix: String = "") -> Set<String> {
+                object.reduce(into: Set<String>()) { paths, field in
+                    let path = prefix.isEmpty ? field.key : prefix + "." + field.key
+                    if let nested = field.value as? [String: Any] { paths.formUnion(leafPaths(nested, prefix: path)) }
+                    else { paths.insert(path) }
+                }
+            }
+            guard metadata.schema_version == 1, ["img", "vid"].contains(metadata.pipeline),
+                  !metadata.package_version.isEmpty, !metadata.sources.isEmpty,
+                  metadata.sources.values.allSatisfy({ !$0.isEmpty }),
+                  Set(metadata.sources.keys) == leafPaths(values),
+                  let version = values["config_version"] as? NSNumber,
+                  CFGetTypeID(version) != CFBooleanGetTypeID(), version == NSNumber(value: 1)
+            else { throw HistoryParseError.invalid }
+            let valuesData = try JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])
+            let sourcesData = try JSONSerialization.data(withJSONObject: metadata.sources, options: [.prettyPrinted, .sortedKeys])
+            guard let valuesJSON = String(data: valuesData, encoding: .utf8),
+                  let sourcesJSON = String(data: sourcesData, encoding: .utf8) else { throw HistoryParseError.invalid }
+            return HistoryConfigSnapshot(pipeline: metadata.pipeline, packageVersion: metadata.package_version,
+                                         values: valuesJSON, sources: sourcesJSON)
+        }
         for (index, record) in records.enumerated() {
             guard index < maximumRecordsPerSession else {
                 current.issues.append(localized("history.issue.entry_limit")); break
@@ -287,12 +424,25 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     let summary = try decode(HistorySummary.self, from: event, prefix: "MFB_HISTORY_SUMMARY=")
                     guard summary.valid, !current.contradictoryFields.contains("summary") else { throw HistoryParseError.invalid }
-                    if let previous = current.summary, previous != summary {
-                        current.summary = nil
-                        current.contradictoryFields.insert("summary")
-                        throw HistoryParseError.invalid
+                    if let previous = current.summary {
+                        guard previous.sameOutcomes(as: summary) else {
+                            current.summary = nil
+                            current.contradictoryFields.insert("summary")
+                            throw HistoryParseError.invalid
+                        }
+                        if previous.size != summary.size || previous.sizeInvalid != summary.sizeInvalid {
+                            var merged = previous
+                            merged.size = nil
+                            merged.sizeInvalid = true
+                            current.summary = merged
+                        }
+                    } else {
+                        current.summary = summary
                     }
-                    current.summary = summary
+                    if current.summary?.sizeInvalid == true, current.issues.count < 32,
+                       !current.issues.contains(localized("history.space.invalid")) {
+                        current.issues.append(localized("history.space.invalid"))
+                    }
                 } else if event.hasPrefix("MFB_HISTORY_VERIFICATION=") {
                     let verification = try decode(HistoryVerification.self, from: event, prefix: "MFB_HISTORY_VERIFICATION=")
                     guard verification.valid, !current.contradictoryFields.contains("verification") else { throw HistoryParseError.invalid }
@@ -302,6 +452,15 @@ private enum HistoryStore {
                         throw HistoryParseError.invalid
                     }
                     current.verification = verification
+                } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
+                    current.configMarkerSeen = true
+                    let snapshot = try decodeConfig(event)
+                    current.configInvocationCount += 1
+                    if !current.configSet.contains(snapshot) {
+                        guard current.configSnapshots.count < maximumConfigSnapshots else { throw HistoryParseError.invalid }
+                        current.configSet.insert(snapshot)
+                        current.configSnapshots.append(snapshot)
+                    }
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -327,6 +486,7 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
                 if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     current.summary = nil
                     current.contradictoryFields.insert("summary")
@@ -404,10 +564,11 @@ private enum HistoryStore {
         return parent + "/" + url.lastPathComponent
     }
 
-    static func output(for entry: HistoryEntry) throws -> Output {
+    static func output(for entry: HistoryEntry, cursor: Int64? = nil,
+                       direction: OutputDirection = .older, upperSnapshot: Int64? = nil) throws -> Output {
         guard entry.hasStoredOutput, let start = entry.context?.output_sequence, start >= 0,
               regularFile(entry.audit) else { throw databaseError(nil, "processing output is unavailable") }
-        let end = entry.finished?.output_sequence ?? entry.outputUpperSequence ?? Int64.max
+        var end = entry.finished?.output_sequence ?? entry.outputUpperSequence ?? Int64.max
         guard end >= start else { throw databaseError(nil, "invalid processing output range") }
         let path = try databasePath(entry.audit)
         var handle: OpaquePointer?
@@ -426,6 +587,14 @@ private enum HistoryStore {
         guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
             throw databaseError(database, "unsupported output schema")
         }
+        if let upperSnapshot { end = min(end, upperSnapshot) }
+        else {
+            let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
+            defer { sqlite3_finalize(maximum) }
+            guard entry.stamp.withCString({ sqlite3_bind_text(maximum, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+                  sqlite3_step(maximum) == SQLITE_ROW else { throw databaseError(database) }
+            end = min(end, max(start, sqlite3_column_int64(maximum, 0)))
+        }
         func bind(_ query: OpaquePointer) throws {
             guard entry.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
                   sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
@@ -438,26 +607,55 @@ private enum HistoryStore {
         guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER,
               sqlite3_column_int64(count, 0) >= 0 else { throw databaseError(database, "invalid output count") }
         let total = sqlite3_column_int64(count, 0)
-        let query = try statement(database, "SELECT ts, pipeline, line FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence DESC LIMIT \(maximumOutputLines)")
+        let ascending = direction == .newer
+        // Inspect lengths before fetching payloads so an oversized row can become an explicit, navigable placeholder.
+        let columns = ["ts", "pipeline", "line"].map {
+            "CASE WHEN typeof(\($0))='text' AND length(CAST(\($0) AS BLOB))<=\(maximumOutputBytes) THEN \($0) ELSE NULL END"
+        }.joined(separator: ", ")
+        let cursorClause = cursor == nil ? "" : " AND sequence\(ascending ? ">" : "<")?"
+        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?\(cursorClause) ORDER BY sequence \(ascending ? "ASC" : "DESC") LIMIT \(maximumOutputLines)")
         defer { sqlite3_finalize(query) }
         try bind(query)
-        var lines: [String] = []
+        if let cursor, sqlite3_bind_int64(query, 4, cursor) != SQLITE_OK { throw databaseError(database) }
+        var rows: [Output.Row] = []
+        var issues: [String] = []
         var bytes = 0
         while true {
             let result = sqlite3_step(query)
             if result == SQLITE_DONE { break }
             guard result == SQLITE_ROW else { throw databaseError(database) }
-            let ts = try databaseText(query, 0, database: database)
-            let pipeline = try databaseText(query, 1, database: database)
-            let line = try databaseText(query, 2, database: database)
-            let text = "[\(ts)] \(pipeline): \(line)"
+            let sequence = sqlite3_column_int64(query, 0)
+            var text: String
+            var diagnostic = false
+            do {
+                let ts = try databaseText(query, 1, database: database)
+                let pipeline = try databaseText(query, 2, database: database)
+                let line = try databaseText(query, 3, database: database)
+                text = "[\(ts)] \(pipeline): \(line)"
+                let tone = LogTone.classify(line)
+                diagnostic = tone == .warning || tone == .failure
+                if text.utf8.count + 1 > maximumOutputBytes { throw HistoryParseError.invalid }
+            } catch {
+                text = localized("history.output.row_issue", sequence)
+                issues.append(text)
+                diagnostic = true
+            }
             let size = text.utf8.count + 1
             guard size <= maximumOutputBytes - bytes else { break }
             bytes += size
-            lines.append(text)
+            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic))
+        }
+        if !ascending { rows.reverse() }
+        var ordinal: Int64 = 0
+        if let first = rows.first {
+            let rank = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+            defer { sqlite3_finalize(rank) }
+            try bind(rank)
+            guard sqlite3_bind_int64(rank, 3, first.sequence) == SQLITE_OK, sqlite3_step(rank) == SQLITE_ROW else { throw databaseError(database) }
+            ordinal = sqlite3_column_int64(rank, 0)
         }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
-        return Output(text: lines.reversed().joined(separator: "\n"), shown: lines.count, total: total)
+        return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
     }
 
     private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
@@ -541,7 +739,8 @@ private enum HistoryStore {
                     guard !stamp.isEmpty else { continue }
                     candidates.append(Candidate(stamp: stamp, url: url, archived: archived,
                                                 modified: values.contentModificationDate ?? .distantPast))
-                } else if !archived, values.isDirectory == true, name.hasPrefix("Bundle_") {
+                } else if !archived, values.isDirectory == true,
+                          name.hasPrefix("Bundle_") || (name.contains("_Bundle_") && !name.hasPrefix("_Bundle_")) {
                     bundles.append(url)
                 }
             }
@@ -669,6 +868,10 @@ private enum HistoryStore {
                         if let a = left.context, let b = right.context, a != b { conflictingCopies = true }
                         if let a = left.summary, let b = right.summary, a != b { conflictingCopies = true }
                         if let a = left.verification, let b = right.verification, a != b { conflictingCopies = true }
+                        if !left.configSet.isEmpty && !right.configSet.isEmpty,
+                           !left.configSet.isSubset(of: right.configSet), !right.configSet.isSubset(of: left.configSet) {
+                            conflictingCopies = true
+                        }
                         if let a = left.finished, let b = right.finished, a != b { conflictingCopies = true }
                     }
                     if audit.entries.count > previous.1.entries.count { selected = (candidate, audit) }
@@ -709,6 +912,10 @@ private enum HistoryStore {
                         entry.context = nil
                         entry.summary = nil
                         entry.verification = nil
+                        entry.configSnapshots = []
+                        entry.configSet = []
+                        entry.configInvocationCount = 0
+                        entry.configMarkerSeen = true
                         entry.finished = nil
                         entry.issues.append(localized("history.issue.conflicting_copies"))
                     }
@@ -728,6 +935,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
+    private let detailMode = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private var olderButton = NSButton()
+    private var newerButton = NSButton()
+    private var outputPage: HistoryStore.Output?
+    private var outputLoading = false
     private let status = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
     private let splitController = NSSplitViewController()
@@ -776,6 +989,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func refresh(directory: URL) {
+        resetOutput()
         self.directory = directory
         let token = UUID()
         generation = token
@@ -885,7 +1099,35 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         listItem.preferredThicknessFraction = 0.57
         listItem.holdingPriority = .defaultLow
         let detailController = NSViewController()
-        detailController.view = detailScroll
+        detailMode.selectedSegment = 0
+        detailMode.target = self
+        detailMode.action = #selector(detailModeChanged)
+        outputFilter.selectedSegment = 0
+        outputFilter.target = self
+        outputFilter.action = #selector(outputFilterChanged)
+        olderButton = iconButton("chevron.left", key: "history.output.older", action: #selector(olderOutput))
+        newerButton = iconButton("chevron.right", key: "history.output.newer", action: #selector(newerOutput))
+        outputFilter.controlSize = .small
+        outputFilter.font = HistoryLayout.smallFont
+        let navigation = NSStackView(views: [detailMode, olderButton, newerButton])
+        navigation.spacing = 4
+        let detailRoot = NSStackView(views: [navigation, outputFilter, detailScroll])
+        detailRoot.orientation = .vertical
+        detailRoot.alignment = .leading
+        detailRoot.spacing = 6
+        detailRoot.translatesAutoresizingMaskIntoConstraints = false
+        detailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        detailScroll.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
+        // Keep toolbar intrinsic widths out of the split item's sizing negotiation.
+        let detailContainer = NSView(frame: NSRect(x: 0, y: 0, width: 433, height: 540))
+        detailContainer.addSubview(detailRoot)
+        NSLayoutConstraint.activate([
+            detailRoot.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
+            detailRoot.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
+            detailRoot.topAnchor.constraint(equalTo: detailContainer.topAnchor),
+            detailRoot.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor)
+        ])
+        detailController.view = detailContainer
         let detailItem = NSSplitViewItem(viewController: detailController)
         detailItem.minimumThickness = 280
         detailItem.preferredThicknessFraction = 0.43
@@ -937,9 +1179,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         filter.setAccessibilityLabel(localized("history.filter"))
         table.setAccessibilityLabel(localized("history.title"))
         detail.setAccessibilityLabel(localized("history.details"))
+        detailMode.setLabel(localized("history.summary"), forSegment: 0)
+        detailMode.setLabel(localized("history.output.title"), forSegment: 1)
+        outputFilter.setLabel(localized("history.output.all_page"), forSegment: 0)
+        outputFilter.setLabel(localized("history.output.diagnostics_page"), forSegment: 1)
+        outputFilter.setAccessibilityLabel(localized("history.output.filter_page"))
         for column in table.tableColumns { column.title = localized("history.column.\(column.identifier.rawValue)") }
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
-                              (revealButton, "history.reveal"), (copyButton, "history.copy_sources")] {
+                              (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
+                              (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
             button.setAccessibilityLabel(localized(key))
         }
@@ -965,12 +1213,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         if let index = displayed.firstIndex(where: { $0.id == selectedID }) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         } else if !displayed.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        showSelected()
+    }
+
+    private func updateHistoryStatus() {
         status.stringValue = entries.isEmpty ? localized("history.empty")
             : localized("history.shown", displayed.count, entries.count)
         if limited { status.stringValue += " · " + localized("history.limited") }
         if !loadIssues.isEmpty { status.stringValue += " · " + loadIssues.joined(separator: " · ") }
         status.toolTip = directory.path
-        showSelected()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { displayed.count }
@@ -1022,7 +1273,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func showSelected() {
-        outputGeneration = UUID()
+        resetOutput()
+        updateHistoryStatus()
         detail.string = selected.map(Self.render) ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select")
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
@@ -1033,6 +1285,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
         func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
         var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), "",
+                     localized("history.space.title")]
+        if let size = entry.summary?.size {
+            lines += [entry.sizeOutcome,
+                      row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
+                      row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
+                      localized(size.scopeKey), localized("history.space.note")]
+        } else if entry.summary?.sizeInvalid == true {
+            lines.append(localized("history.space.invalid"))
+        } else {
+            lines.append(localized("history.space.not_recorded"))
+        }
+        lines += ["",
                      row("mode", entry.context?.mode ?? unknown),
                      row("sources", entry.context?.inputs.isEmpty == false ? entry.context!.inputs.joined(separator: "\n") : unknown),
                      row("output", entry.verification?.output_path ?? entry.context?.output ?? unknown),
@@ -1044,6 +1308,19 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             lines.append(row("version", context.version ?? unknown))
             for (key, value) in [("retry", context.retry), ("resume", context.resume), ("no_resume", context.no_resume)] {
                 lines.append(row(key, value.map { localized($0 ? "settings.value.true" : "settings.value.false") } ?? unknown))
+            }
+        }
+        lines += ["", localized("history.effective_config")]
+        if entry.configSnapshots.isEmpty {
+            lines.append(localized(entry.configMarkerSeen ? "history.config.invalid" : "history.config.not_recorded"))
+        } else {
+            lines.append(row("config_invocations", String(entry.configInvocationCount)))
+            for (index, snapshot) in entry.configSnapshots.enumerated() {
+                lines += ["", row("config_snapshot", String(index + 1)),
+                          row("config_pipeline", snapshot.pipeline),
+                          row("config_package_version", snapshot.packageVersion),
+                          row("config_values", snapshot.values),
+                          row("config_sources", snapshot.sources)]
             }
         }
         lines += ["", localized("history.processor_counts")]
@@ -1081,37 +1358,92 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        logButton.isEnabled = selected?.hasStoredOutput == true || selected?.logs.isEmpty == false
+        logButton.isEnabled = !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
+        detailMode.setEnabled(selected?.hasStoredOutput == true, forSegment: 1)
+        olderButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
+        newerButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
+        outputFilter.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
         revealButton.isEnabled = selected != nil
         copyButton.isEnabled = selected?.context?.inputs.isEmpty == false
     }
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
-            let token = UUID()
-            outputGeneration = token
-            status.stringValue = localized("history.output.loading")
-            logButton.isEnabled = false
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                let result = Swift.Result { try HistoryStore.output(for: entry) }
-                DispatchQueue.main.async {
-                    guard let self, self.outputGeneration == token, self.selected?.id == entry.id else { return }
-                    self.updateActions()
-                    switch result {
-                    case let .success(output):
-                        let label = localized("history.output.count", output.shown, output.total)
-                        self.detail.string = Self.render(entry) + "\n\n" + label + "\n" + output.text
-                        self.detail.scrollToEndOfDocument(nil)
-                        self.status.stringValue = label
-                    case let .failure(error):
-                        self.status.stringValue = error.localizedDescription
-                        self.detail.string = Self.render(entry) + "\n\n" + error.localizedDescription
-                    }
-                }
-            }
+            detailMode.selectedSegment = 1
+            loadOutput(entry: entry)
             return
         }
         guard let url = selected?.logs.first, HistoryStore.regularFile(url), NSWorkspace.shared.open(url) else {
             status.stringValue = localized("history.issue.open_log"); return
+        }
+    }
+
+    private func resetOutput() {
+        outputGeneration = UUID()
+        outputLoading = false
+        outputPage = nil
+        outputFilter.selectedSegment = 0
+        detailMode.selectedSegment = 0
+    }
+
+    @objc private func detailModeChanged() {
+        outputGeneration = UUID()
+        outputLoading = false
+        if detailMode.selectedSegment == 0 {
+            detail.string = selected.map(Self.render) ?? localized("history.select")
+            updateHistoryStatus()
+        }
+        else if outputPage != nil { renderOutput() }
+        else if let entry = selected { loadOutput(entry: entry) }
+        updateActions()
+    }
+    @objc private func outputFilterChanged() {
+        outputGeneration = UUID()
+        outputLoading = false
+        renderOutput()
+        updateActions()
+    }
+    @objc private func olderOutput() {
+        guard let entry = selected, let page = outputPage, page.hasOlder else { return }
+        loadOutput(entry: entry, cursor: page.rows.first?.sequence, direction: .older, upper: page.upper)
+    }
+    @objc private func newerOutput() {
+        guard let entry = selected, let page = outputPage, page.hasNewer else { return }
+        loadOutput(entry: entry, cursor: page.rows.last?.sequence, direction: .newer, upper: page.upper)
+    }
+    private func renderOutput() {
+        guard let page = outputPage else { return }
+        let rows = outputFilter.selectedSegment == 1 ? page.rows.filter(\.diagnostic) : page.rows
+        let end = page.shown == 0 ? 0 : page.firstOrdinal + Int64(page.shown) - 1
+        let label = localized("history.output.range", page.firstOrdinal, end, page.total)
+        detail.string = label + "\n" + localized("history.output.visible_page", rows.count, page.shown)
+            + "\n\n" + rows.map(\.text).joined(separator: "\n")
+        detail.scrollToBeginningOfDocument(nil)
+        status.stringValue = label
+    }
+    private func loadOutput(entry: HistoryEntry, cursor: Int64? = nil,
+                            direction: HistoryStore.OutputDirection = .older, upper: Int64? = nil) {
+        let token = UUID()
+        outputGeneration = token
+        outputLoading = true
+        status.stringValue = localized("history.output.loading")
+        updateActions()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try HistoryStore.output(for: entry, cursor: cursor, direction: direction, upperSnapshot: upper) }
+            DispatchQueue.main.async {
+                guard let self, self.outputGeneration == token, self.selected?.id == entry.id else { return }
+                self.outputLoading = false
+                switch result {
+                case let .success(output):
+                    self.outputPage = output
+                    self.renderOutput()
+                case let .failure(error):
+                    self.outputPage = nil
+                    self.outputFilter.selectedSegment = 0
+                    self.status.stringValue = error.localizedDescription
+                    self.detail.string = error.localizedDescription
+                }
+                self.updateActions()
+            }
         }
     }
     @objc private func revealAudit() {
@@ -1173,6 +1505,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
               split.frame.maxX <= content.bounds.maxX else {
             throw HostError(message: "History controls clipped at minimum size")
         }
+        let detailBounds = split.arrangedSubviews[1].bounds
+        for control in [detailMode, outputFilter, olderButton, newerButton] as [NSView] {
+            let rect = control.convert(control.bounds, to: split.arrangedSubviews[1])
+            guard rect.minX >= -1, rect.maxX <= detailBounds.maxX + 1,
+                  rect.minY >= -1, rect.maxY <= detailBounds.maxY + 1 else {
+                throw HostError(message: "History output toolbar clipped at minimum size")
+            }
+        }
         window?.setFrame(original, display: false)
     }
 
@@ -1216,6 +1556,45 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard logButton.isEnabled, detail.string.contains("synthetic next run 1002"), !detail.string.contains("synthetic first failure") else {
             throw HostError(message: "History output action lost its bounded latest records")
         }
+        detailMode.selectedSegment = 0
+        detailModeChanged()
+        guard status.stringValue == localized("history.shown", displayed.count, entries.count) else {
+            throw HostError(message: "Summary retained output-page status")
+        }
+        detailMode.selectedSegment = 1
+        detailModeChanged()
+        let invalid = HistoryEntry(id: selected!.id, stamp: "output", audit: directory.appendingPathComponent("absent/history.sqlite3"),
+                                   timestamp: "synthetic", context: selected!.context)
+        loadOutput(entry: invalid)
+        let errorDeadline = Date().addingTimeInterval(5)
+        while outputLoading, Date() < errorDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard outputPage == nil, !olderButton.isEnabled, !newerButton.isEnabled, logButton.isEnabled else {
+            throw HostError(message: "Output failure retained stale navigation or disabled recovery")
+        }
+        openLog()
+        let retryDeadline = Date().addingTimeInterval(5)
+        while outputLoading, Date() < retryDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard outputPage != nil else { throw HostError(message: "Output failure could not be retried") }
+        outputFilter.selectedSegment = 1
+        outputFilterChanged()
+        guard !detail.string.contains("synthetic next run"), outputPage?.shown == HistoryStore.maximumOutputLines else {
+            throw HostError(message: "Page diagnostics changed pagination or exposed routine records")
+        }
+        olderOutput()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        showSelected()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard outputFilter.selectedSegment == 0, detailMode.selectedSegment == 0, outputPage == nil,
+              status.stringValue == localized("history.shown", displayed.count, entries.count),
+              !detail.string.contains("synthetic next run") else {
+            throw HostError(message: "Selection did not reset page filtering or reject stale navigation")
+        }
+        openLog()
+        applyFilter()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard outputPage == nil, detailMode.selectedSegment == 0 else {
+            throw HostError(message: "History filtering accepted stale output")
+        }
     }
 }
 
@@ -1248,6 +1627,179 @@ func runProcessingHistorySelfTests() throws {
     let success = try parsed(["SESSION_STARTED", context, summary, completed])
     try require(success.entries.count == 1 && success.entries[0].statusKey == "history.status.completed"
                 && success.entries[0].context?.output == nil && success.entries[0].succeededLabel == "2", "Typed history did not retain nullable paths or active counts")
+    try require(success.entries[0].configSnapshots.isEmpty && !success.entries[0].configMarkerSeen,
+                "Old history invented an effective configuration")
+    try require(success.entries[0].summary?.size == nil && success.entries[0].sizeOutcome == localized("result.unknown"),
+                "Old history invented a size comparison")
+    var sizedSummary = summaryValue
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    let reduced = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(reduced.summary?.size?.input_bytes == 1_024 && reduced.summary?.size?.output_bytes == 512
+                && reduced.sizeOutcome == localized("history.space.saved", HistoryEntry.sizeLabel(512)),
+                "Exact session bytes or reduction disappeared from history")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 1_024]
+    let expanded = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), failed]).entries[0]
+    try require(expanded.statusKey == "history.status.failed"
+                && expanded.sizeOutcome == localized("history.space.increased", HistoryEntry.sizeLabel(512)),
+                "Expansion was shown as savings or hid the batch failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": NSNull()]
+    let partialSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(partialSize.summary?.size?.input_bytes == 512 && partialSize.sizeOutcome == localized("result.unknown"),
+                "Partial size evidence became a claimed saving")
+    for invalidSize in [
+        ["scope": "directory_total", "input_bytes": 512, "output_bytes": 256],
+        ["scope": "fast_img_converted_this_run", "input_bytes": NSNull(), "output_bytes": NSNull()],
+        ["scope": "fast_img_converted_this_run", "input_bytes": -1, "output_bytes": 256],
+        ["scope": "fast_img_converted_this_run", "input_bytes": UInt64.max, "output_bytes": 256]
+    ] as [[String: Any]] {
+        sizedSummary["size"] = invalidSize
+        let invalidEvent = try payload("MFB_HISTORY_SUMMARY", sizedSummary)
+        let invalid = try parsed([context, invalidEvent, completed]).entries[0]
+        try require(invalid.summary?.img.succeeded == 2 && invalid.succeededLabel == "2"
+                    && invalid.summary?.size == nil && invalid.summary?.sizeInvalid == true
+                    && invalid.sizeOutcome == localized("result.unknown")
+                    && invalid.issues.contains(localized("history.space.invalid"))
+                    && invalid.statusKey == "history.status.incomplete",
+                    "Invalid size evidence erased counts or appeared as a saving")
+        let failedInvalid = try parsed([context, invalidEvent, failed]).entries[0]
+        try require(failedInvalid.statusKey == "history.status.failed" && failedInvalid.succeededLabel == "2",
+                    "Invalid size evidence erased a terminal failure or valid counts")
+    }
+    sizedSummary["size"] = "malformed"
+    let malformedSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), failed]).entries[0]
+    try require(malformedSize.summary?.sizeInvalid == true && malformedSize.statusKey == "history.status.failed"
+                && malformedSize.succeededLabel == "2", "Malformed size erased the summary or final failure")
+    var fileFailureWithBadSize = sizedSummary
+    var failedImage = media
+    failedImage["failed"] = 1
+    fileFailureWithBadSize["img"] = failedImage
+    let fileFailureSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", fileFailureWithBadSize), completed]).entries[0]
+    try require(fileFailureSize.statusKey == "history.status.file_failures" && fileFailureSize.summary?.img.failed == 1,
+                "An auxiliary size issue hid a recorded file failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    var otherSizeSummary = summaryValue
+    otherSizeSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 1_024, "output_bytes": 600]
+    let conflictingSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary),
+                                      try payload("MFB_HISTORY_SUMMARY", otherSizeSummary), failed]).entries[0]
+    try require(conflictingSize.summary?.sizeInvalid == true && conflictingSize.summary?.size == nil
+                && conflictingSize.succeededLabel == "2" && conflictingSize.statusKey == "history.status.failed",
+                "Conflicting size evidence erased counts or a terminal failure")
+    sizedSummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 256]
+    sizedSummary["img"] = inactive
+    let inactiveSize = try parsed([context, try payload("MFB_HISTORY_SUMMARY", sizedSummary), completed]).entries[0]
+    try require(inactiveSize.summary?.sizeInvalid == true && inactiveSize.summary?.size == nil
+                && inactiveSize.summary?.vid.active == false,
+                "Size evidence without an image run changed media outcomes")
+    for (image, video) in [(media, inactive), (inactive, media), (media, media)] {
+        var ordinarySummary = summaryValue
+        ordinarySummary["img"] = image
+        ordinarySummary["vid"] = video
+        ordinarySummary["size_invalid"] = false
+        for (input, output, outcome) in [
+            (1_024 as Any, 512 as Any, localized("history.space.saved", HistoryEntry.sizeLabel(512))),
+            (512 as Any, 1_024 as Any, localized("history.space.increased", HistoryEntry.sizeLabel(512))),
+            (Int64.max as Any, Int64.max as Any, localized("history.space.unchanged")),
+            (512 as Any, NSNull() as Any, localized("result.unknown")),
+            (NSNull() as Any, 512 as Any, localized("result.unknown")),
+            (NSNull() as Any, NSNull() as Any, localized("result.unknown"))
+        ] {
+            ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": input, "output_bytes": output]
+            let ordinary = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+            try require(ordinary.summary?.size != nil && ordinary.summary?.sizeInvalid == false
+                        && ordinary.statusKey == "history.status.completed" && ordinary.sizeOutcome == outcome
+                        && ordinary.summary?.size?.scopeKey == "history.space.converted_scope",
+                        "IMG/VID converted bytes were rejected, unknown bytes became zero, or growth became savings")
+        }
+    }
+    var ordinarySummary = summaryValue
+    ordinarySummary["img"] = failedImage
+    ordinarySummary["failed_files"] = ["/synthetic/failed.jpg"]
+    ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    for invalidFlag in [true, "true", 1, NSNull()] as [Any] {
+        ordinarySummary["size_invalid"] = invalidFlag
+        for finish in [completed, failed] {
+            let invalid = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), finish]).entries[0]
+            try require(invalid.summary?.sizeInvalid == true && invalid.summary?.size == nil
+                        && invalid.summary?.img.failed == 1 && invalid.succeededLabel == "2"
+                        && invalid.summary?.failed_files == ["/synthetic/failed.jpg"]
+                        && invalid.sizeOutcome == localized("result.unknown")
+                        && invalid.statusKey == (finish == completed ? "history.status.file_failures" : "history.status.failed"),
+                        "An invalid size flag hid file outcomes or terminal failure")
+        }
+    }
+    ordinarySummary = summaryValue
+    ordinarySummary["img"] = inactive
+    ordinarySummary["size"] = ["scope": "converted_this_run", "input_bytes": NSNull(), "output_bytes": NSNull()]
+    let inactiveOrdinary = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+    try require(inactiveOrdinary.summary?.sizeInvalid == true && inactiveOrdinary.summary?.size == nil,
+                "Converted bytes were accepted without an active pipeline")
+    ordinarySummary["vid"] = media
+    ordinarySummary["size"] = ["scope": "fast_img_converted_this_run", "input_bytes": 512, "output_bytes": 256]
+    let wrongPipeline = try parsed([context, try payload("MFB_HISTORY_SUMMARY", ordinarySummary), completed]).entries[0]
+    try require(wrongPipeline.summary?.sizeInvalid == true && wrongPipeline.summary?.size == nil,
+                "Fast IMG byte evidence was accepted for a video-only run")
+    let imgConfigValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
+        "config": ["config_version": 1, "performance": ["mode": "tight"]],
+        "sources": ["config_version": "default", "performance.mode": "CLI"]]
+    var vidConfigValue = imgConfigValue
+    vidConfigValue["pipeline"] = "vid"
+    vidConfigValue["config"] = ["config_version": 1, "performance": ["mode": "relaxed"]]
+    let imgConfig = try payload("MFB_HISTORY_CONFIG", imgConfigValue)
+    let vidConfig = try payload("MFB_HISTORY_CONFIG", vidConfigValue)
+    let withConfigs = try parsed([context, imgConfig, imgConfig, vidConfig, summary, completed])
+    let configEntry = withConfigs.entries[0]
+    let shownValues = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].values.utf8)) as? [String: Any]
+    let shownSources = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].sources.utf8)) as? [String: String]
+    try require(configEntry.configInvocationCount == 3 && configEntry.configSnapshots.count == 2
+                && configEntry.configSnapshots.map(\.pipeline) == ["img", "vid"]
+                && ((shownValues?["performance"] as? [String: Any])?["mode"] as? String) == "tight"
+                && shownSources?["performance.mode"] == "CLI"
+                && configEntry.succeededLabel == "2" && configEntry.statusKey == "history.status.completed",
+                "Child configuration snapshots changed media counts or lost distinct invocations")
+    let configBatches = try parsed([context, imgConfig, summary, completed, context, vidConfig, summary, completed])
+    try require(configBatches.entries.count == 2 && configBatches.entries[0].configSnapshots.map(\.pipeline) == ["img"]
+                && configBatches.entries[1].configSnapshots.map(\.pipeline) == ["vid"],
+                "Effective configurations crossed batch boundaries")
+    let invalidConfigs: [[String: Any]] = [
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "sources": [:]],
+        ["schema_version": 1, "pipeline": "other", "package_version": "0.12.0", "config": [:], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": 12, "config": [:], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "config": [], "sources": [:]],
+        ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "config": [:], "sources": ["mode": 1]],
+        ["schema_version": 2, "pipeline": "img", "package_version": "0.12.0", "config": [:], "sources": [:]],
+    ]
+    for invalidConfig in invalidConfigs {
+        let invalidEvent = try payload("MFB_HISTORY_CONFIG", invalidConfig)
+        let history = try parsed([context, imgConfig, invalidEvent, summary, completed])
+        try require(history.entries[0].statusKey == "history.status.incomplete"
+                    && history.entries[0].configSnapshots.count == 1
+                    && history.entries[0].configInvocationCount == 1
+                    && history.entries[0].summary?.img.succeeded == 2,
+                    "Invalid config evidence erased a valid snapshot or processor counts")
+    }
+    let malformedConfig = try parsed([context, imgConfig, "MFB_HISTORY_CONFIG={", summary, failed])
+    try require(malformedConfig.entries[0].configEvidenceInvalid
+                && malformedConfig.entries[0].statusKey == "history.status.failed"
+                && malformedConfig.entries[0].configSnapshots.count == 1
+                && malformedConfig.entries[0].summary?.img.succeeded == 2,
+                "Malformed config hid the batch failure, captured configuration or media counts")
+    var configSequence = [context]
+    for index in 0...HistoryStore.maximumConfigSnapshots {
+        var distinct = imgConfigValue
+        distinct["package_version"] = "0.12.\(index)"
+        configSequence.append(try payload("MFB_HISTORY_CONFIG", distinct))
+    }
+    configSequence += [summary, completed]
+    let limitedConfigs = try parsed(configSequence).entries[0]
+    try require(limitedConfigs.configEvidenceInvalid
+                && limitedConfigs.configSnapshots.count == HistoryStore.maximumConfigSnapshots
+                && limitedConfigs.configInvocationCount == HistoryStore.maximumConfigSnapshots + 1
+                && limitedConfigs.succeededLabel == "2", "Snapshot limit changed processor counts or concealed truncation")
+    var oversizedConfigValue = imgConfigValue
+    oversizedConfigValue["config"] = ["long": String(repeating: "x", count: HistoryStore.maximumConfigBytes)]
+    let oversizedConfig = try parsed([context, try payload("MFB_HISTORY_CONFIG", oversizedConfigValue), summary, completed])
+    try require(oversizedConfig.entries[0].configEvidenceInvalid && oversizedConfig.entries[0].configSnapshots.isEmpty,
+                "Oversized effective configuration escaped the history display bound")
     let failure = try parsed([context, summary, failed])
     try require(failure.entries[0].statusKey == "history.status.failed" && failure.entries[0].succeededLabel == "2",
                 "Converted items hid a final session failure")
@@ -1361,6 +1913,16 @@ func runProcessingHistorySelfTests() throws {
     let conflict = try HistoryStore.load(directory: directory)
     try require(conflict.entries[0].summary == nil && conflict.entries[0].finished == nil
                 && conflict.entries[0].needsAttention, "Conflicting archive copies concealed a terminal failure")
+
+    let namedRoot = directory.appendingPathComponent("named-archive-case")
+    let namedArchive = namedRoot.appendingPathComponent("Photos_Bundle_named")
+    try FileManager.default.createDirectory(at: namedArchive, withIntermediateDirectories: true)
+    try records([context, summary, completed]).write(to: namedArchive.appendingPathComponent("session_audit_named.jsonl"))
+    let named = try HistoryStore.load(directory: namedRoot)
+    try require(named.entries.count == 1
+                && named.entries[0].audit.deletingLastPathComponent().resolvingSymlinksInPath().path
+                    == namedArchive.resolvingSymlinksInPath().path,
+                "Named archive was not discovered: \(named.entries.map { $0.audit.path })")
 
     let databaseURL = directory.appendingPathComponent("history.sqlite3")
     func writeDatabase(_ sessions: [(String, [String])], schema: Int = 1) throws {
@@ -1517,6 +2079,17 @@ func runProcessingHistorySelfTests() throws {
                 && nextOutput.shown == HistoryStore.maximumOutputLines
                 && !nextOutput.text.contains("first failure") && nextOutput.text.hasSuffix("synthetic next run 1002"),
                 "Bounded output lost latest records or invented a count")
+    let olderOutput = try HistoryStore.output(for: outputEntries[1], cursor: nextOutput.rows.first!.sequence,
+                                            direction: .older, upperSnapshot: nextOutput.upper)
+    try require(olderOutput.shown == 2 && !olderOutput.hasOlder && olderOutput.hasNewer
+                && olderOutput.firstOrdinal == 1 && nextOutput.firstOrdinal == 3
+                && olderOutput.rows.last!.sequence + 1 == nextOutput.rows.first!.sequence,
+                "Keyset navigation overlapped, skipped, or miscounted output rows")
+    let newerOutput = try HistoryStore.output(for: outputEntries[1], cursor: olderOutput.rows.last!.sequence,
+                                            direction: .newer, upperSnapshot: olderOutput.upper)
+    try require(newerOutput.rows.map(\.sequence) == nextOutput.rows.map(\.sequence)
+                && !newerOutput.hasNewer && newerOutput.total == nextOutput.total,
+                "Newer navigation did not reproduce the bounded snapshot")
     let interrupted = HistoryStore.parse(data: try records([firstContext, secondContext, secondFinished]), stamp: "output", audit: databaseURL)
     try require(try HistoryStore.output(for: interrupted.entries[0]).total == 1,
                 "An incomplete earlier batch leaked later output")
@@ -1526,6 +2099,54 @@ func runProcessingHistorySelfTests() throws {
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output view mutated the history database")
     try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateOutputForSelfTest() }
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output action mutated the history database")
+    var fixtureDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &fixtureDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let fixtureDB else {
+        throw HostError(message: "Synthetic byte-budget fixture open failed")
+    }
+    let byteSQL = """
+    UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes / 2)) AS TEXT) WHERE sequence IN (1001,1002);
+    UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes + 1)) AS TEXT) WHERE sequence=1003;
+    UPDATE history_output SET line=x'ff' WHERE sequence=1000;
+    """
+    let byteResult = sqlite3_exec(fixtureDB, byteSQL, nil, nil, nil)
+    sqlite3_close(fixtureDB)
+    try require(byteResult == SQLITE_OK, "Synthetic byte-budget fixture insert failed")
+    let byteSnapshot = try Data(contentsOf: databaseURL)
+    let bytePage = try HistoryStore.output(for: outputEntries[1])
+    try require(bytePage.text.utf8.count <= HistoryStore.maximumOutputBytes && !bytePage.issues.isEmpty
+                && bytePage.rows.last?.sequence == 1003 && bytePage.hasOlder,
+                "Oversized first row did not produce an explicit, bounded, navigable issue")
+    let byteOlder = try HistoryStore.output(for: outputEntries[1], cursor: bytePage.rows.first!.sequence,
+                                          direction: .older, upperSnapshot: bytePage.upper)
+    try require(!byteOlder.rows.isEmpty && byteOlder.rows.last!.sequence < bytePage.rows.first!.sequence
+                && byteOlder.text.utf8.count <= HistoryStore.maximumOutputBytes && !byteOlder.issues.isEmpty,
+                "Byte-limited output navigation did not make forward progress")
+    try require(try Data(contentsOf: databaseURL) == byteSnapshot, "Byte-budget navigation mutated the database")
+    var ongoing = outputEntries[1]
+    ongoing.finished = nil
+    ongoing.outputUpperSequence = nil
+    let ongoingPage = try HistoryStore.output(for: ongoing)
+    var appendDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &appendDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let appendDB else {
+        throw HostError(message: "Synthetic snapshot fixture open failed")
+    }
+    let appended = sqlite3_exec(appendDB, "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('output', 'synthetic', 'IMG', 'appended after snapshot')", nil, nil, nil)
+    sqlite3_close(appendDB)
+    try require(appended == SQLITE_OK, "Synthetic snapshot append failed")
+    let frozenPage = try HistoryStore.output(for: ongoing, upperSnapshot: ongoingPage.upper)
+    let refreshedPage = try HistoryStore.output(for: ongoing)
+    try require(frozenPage.total == ongoingPage.total && frozenPage.upper == ongoingPage.upper
+                && frozenPage.rows.map(\.sequence) == ongoingPage.rows.map(\.sequence)
+                && !frozenPage.text.contains("appended after snapshot")
+                && refreshedPage.total == ongoingPage.total + 1 && refreshedPage.text.contains("appended after snapshot"),
+                "Ongoing output snapshot shifted after an append")
+    var emptyOutput = outputEntries[0]
+    emptyOutput.finished = nil
+    emptyOutput.outputUpperSequence = 0
+    let emptyPage = try HistoryStore.output(for: emptyOutput)
+    try require(emptyPage.rows.isEmpty && emptyPage.total == 0 && emptyPage.firstOrdinal == 0
+                && !emptyPage.hasOlder && !emptyPage.hasNewer && emptyPage.issues.isEmpty,
+                "Empty output invented a range, issue, or navigation")
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

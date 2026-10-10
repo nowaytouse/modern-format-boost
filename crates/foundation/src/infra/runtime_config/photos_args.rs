@@ -1,5 +1,5 @@
 //! Shared Photos overrides for direct CLI and GUI launcher requests.
-use super::{LoadedConfig, PhotosBackend};
+use super::{LoadedConfig, PhotosBackend, record_source};
 use clap::{Args, ValueEnum};
 
 #[derive(Args, Debug, Default, Clone)]
@@ -37,7 +37,8 @@ impl PhotosArgs {
             ($($field:ident => $key:ident),* $(,)?) => {$(
                 if let Some(value) = &self.$field {
                     loaded.config.photos.$key = *value;
-                    loaded.sources.insert(concat!("photos.", stringify!($key)).into(), "CLI".into());
+                    record_source(&mut loaded.sources, &mut loaded.source_chain,
+                        concat!("photos.", stringify!($key)), "CLI");
                 }
             )*};
         }
@@ -60,7 +61,7 @@ impl PhotosArgs {
         ] {
             if let Some(value) = value {
                 *target = Some(value.clone());
-                loaded.sources.insert(key.into(), "CLI".into());
+                record_source(&mut loaded.sources, &mut loaded.source_chain, key, "CLI");
             }
         }
     }

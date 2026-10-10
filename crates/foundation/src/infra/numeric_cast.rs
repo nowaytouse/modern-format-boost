@@ -1892,6 +1892,21 @@ pub fn unix_secs_i64_result() -> Result<i64, std::time::SystemTimeError> {
     Ok(u64_to_i64_sat(secs))
 }
 
+/// Combine a Unix timestamp's seconds and fractional nanoseconds without truncation.
+///
+/// # Errors
+/// Rejects invalid fractions and timestamps outside signed 64-bit nanoseconds.
+pub fn unix_parts_to_nanos(seconds: i64, nanos: i64) -> std::io::Result<i64> {
+    if !(0..1_000_000_000).contains(&nanos) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid Unix timestamp nanosecond fraction",
+        ));
+    }
+    i64::try_from(i128::from(seconds) * 1_000_000_000 + i128::from(nanos))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 // ---------------------------------------------------------------------------
 // Robust Floating Point Comparisons
 // ---------------------------------------------------------------------------
@@ -2117,6 +2132,17 @@ mod tests {
     }
 
     // -- timestamp --
+
+    #[test]
+    fn unix_parts_preserve_seconds_and_reject_invalid_timestamps() {
+        assert_eq!(unix_parts_to_nanos(1, 42).unwrap(), 1_000_000_042);
+        assert_eq!(unix_parts_to_nanos(2, 42).unwrap(), 2_000_000_042);
+        assert_eq!(unix_parts_to_nanos(-1, 999_999_999).unwrap(), -1);
+        assert!(unix_parts_to_nanos(0, -1).is_err());
+        assert!(unix_parts_to_nanos(0, 1_000_000_000).is_err());
+        assert!(unix_parts_to_nanos(i64::MAX, 0).is_err());
+        assert!(unix_parts_to_nanos(i64::MIN, 0).is_err());
+    }
 
     #[test]
     fn unix_secs_i64_is_positive() {

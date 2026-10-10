@@ -1385,6 +1385,25 @@ pub fn probe_palette_color_diversity_ratio(palette_size: usize) -> f64 {
         .min(1.0)
 }
 
+/// Full-resolution directory mtime for cache validation; unknown is never fresh.
+#[must_use]
+pub fn delivery_directory_modified_time_optional(path: &Path) -> Option<(i64, u32)> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            let time = filetime::FileTime::from_last_modification_time(&metadata);
+            Some((time.unix_seconds(), time.nanoseconds()))
+        }
+        result => {
+            let reason = match result {
+                Ok(_) => "path is no longer a directory".to_string(),
+                Err(error) => format!("directory metadata unavailable: {error}"),
+            };
+            delivery_pipeline_path_audit("delivery_pipeline_batch", path, reason);
+            None
+        }
+    }
+}
+
 /// Path mtime for batch ordering (`None` when metadata unavailable).
 #[must_use]
 pub fn delivery_path_modified_unix_secs_optional(path: &Path) -> Option<u64> {
@@ -4040,25 +4059,6 @@ pub fn rwlock_write_guard_or_recover<'a, T>(
     lock_result.unwrap_or_else(|err| {
         delivery_strict_batch_audit(branch, "rwlock write poisoned; recovering inner state");
         err.into_inner()
-    })
-}
-
-/// Batch byte totals when post-encode `output_size` is missing (strict-gated).
-#[must_use]
-pub fn delivery_batch_output_bytes_or_input(
-    output_bytes: Option<u64>,
-    input_bytes: u64,
-    context: &str,
-) -> u64 {
-    output_bytes.unwrap_or_else(|| {
-        delivery_strict_batch_audit(
-            "batch_output_size_missing",
-            format!(
-                "{context}: output_size missing after reported success; using input_size \
-                 {input_bytes} for batch totals"
-            ),
-        );
-        input_bytes
     })
 }
 

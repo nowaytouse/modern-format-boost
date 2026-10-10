@@ -23,7 +23,9 @@ use dev::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
     format_session_stamp,
 };
-use dev::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
+use dev::infra::process_stream::{
+    ProcessorByteTotals, ProcessorStats, stream_process_with_pty_with_env,
+};
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
@@ -45,8 +47,10 @@ use dev::media::scope::{
     report_handoff_preserve_gaps_from_paths,
 };
 use foundation::BatchErrorMode;
-use foundation::infra::runtime_config::FallbackPolicy;
+use foundation::infra::runtime_config::{FallbackPolicy, RuntimeConfig, ToolPolicy, VidCodec};
 use foundation::process_lock::DirLock;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -93,21 +97,6 @@ impl ErrorModeOption {
         match self {
             Self::LogAndContinue => BatchErrorMode::LogAndContinue,
             Self::FailFast => BatchErrorMode::FailFast,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum VideoCodecOption {
-    Hevc,
-    Av1,
-}
-
-impl VideoCodecOption {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Hevc => "hevc",
-            Self::Av1 => "av1",
         }
     }
 }
@@ -187,12 +176,21 @@ struct Args {
     /// Image runtime JSON overlay; the file is not modified.
     #[arg(long, value_name = "PATH")]
     img_config: Option<PathBuf>,
+    /// Video runtime JSON overlay; the file is not modified.
+    #[arg(long, value_name = "PATH")]
+    vid_config: Option<PathBuf>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
+    #[command(flatten)]
+    cache: foundation::runtime_config::cache_args::CacheArgs,
 
     /// Permitted image encoding attempts, independent of batch failure handling.
     #[arg(long, value_enum)]
     img_fallback_policy: Option<FallbackPolicy>,
+
+    /// Whether image encoding can attempt configured fallback tools.
+    #[arg(long, value_enum)]
+    img_tool_policy: Option<ToolPolicy>,
 
     /// JPEG reversible recompression effort, from 1 through 11.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
@@ -219,7 +217,7 @@ struct Args {
 
     /// Standard video codec; AV1 explicitly disables Apple compatibility.
     #[arg(long, value_enum)]
-    vid_codec: Option<VideoCodecOption>,
+    vid_codec: Option<VidCodec>,
 
     /// Restrict restore-jpeg to one native Photos album UUID.
     #[arg(long, conflicts_with = "photos_folder_id")]
@@ -235,6 +233,88 @@ struct LaunchCommand {
     program: PathBuf,
     args: Vec<String>,
     env_overrides: Vec<(String, Option<String>)>,
+}
+
+#[derive(Debug)]
+struct CollectedChildError {
+    stats: ProcessorStats,
+    cause: anyhow::Error,
+}
+
+impl std::fmt::Display for CollectedChildError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.cause)
+    }
+}
+
+impl std::error::Error for CollectedChildError {}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ChildConfigMarker {
+    schema_version: u32,
+    pipeline: String,
+    package_version: String,
+    config: RuntimeConfig,
+    sources: BTreeMap<String, String>,
+}
+
+impl ChildConfigMarker {
+    fn parse(payload: &str, expected_pipeline: &str) -> Result<Self> {
+        anyhow::ensure!(
+            matches!(expected_pipeline, "img" | "vid"),
+            "unexpected config marker from non-media child"
+        );
+        let raw: serde_json::Value =
+            serde_json::from_str(payload).context("parse child config marker")?;
+        let marker: Self =
+            serde_json::from_value(raw.clone()).context("decode child config marker")?;
+        anyhow::ensure!(
+            marker.schema_version == 1,
+            "unsupported child config marker version"
+        );
+        anyhow::ensure!(
+            marker.pipeline == expected_pipeline,
+            "child config marker pipeline mismatch: expected {expected_pipeline}"
+        );
+        anyhow::ensure!(
+            !marker.package_version.trim().is_empty(),
+            "child config marker package_version is empty"
+        );
+        marker.config.validate()?;
+        anyhow::ensure!(
+            raw.get("config") == Some(&serde_json::to_value(&marker.config)?),
+            "child config marker omits or changes resolved configuration fields"
+        );
+        let mut leaf_paths = BTreeSet::new();
+        collect_config_leaf_paths(&serde_json::to_value(&marker.config)?, "", &mut leaf_paths);
+        anyhow::ensure!(
+            marker.sources.keys().all(|key| !key.is_empty())
+                && marker.sources.values().all(|source| !source.is_empty())
+                && marker.sources.keys().cloned().collect::<BTreeSet<_>>() == leaf_paths,
+            "child config marker sources do not cover the resolved configuration"
+        );
+        Ok(marker)
+    }
+}
+
+fn collect_config_leaf_paths(
+    value: &serde_json::Value,
+    prefix: &str,
+    paths: &mut BTreeSet<String>,
+) {
+    if let Some(object) = value.as_object() {
+        for (key, child) in object {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            collect_config_leaf_paths(child, &path, paths);
+        }
+    } else {
+        paths.insert(prefix.to_owned());
+    }
 }
 
 struct DragDropSession {
@@ -623,28 +703,63 @@ impl LaunchCommand {
                 .context("performance mode has no CLI value")?;
             cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
         }
+        let mut collected_error = None;
         let stats = if let Some(sess) = session {
             let mut output =
                 dev::infra::history_store::HistoryOutputWriter::open(&sess.log_dir, &sess.stamp)?;
             let heartbeat = sess.session_audit.clone();
             let mut last_heartbeat = Instant::now();
             let pipeline_label = self.pipeline_label().to_string();
+            let expected_config_pipeline = match self.pipeline_label() {
+                "IMG" => "img",
+                "VID" => "vid",
+                _ => "",
+            };
             let pipeline_started_at = Instant::now();
             let argv = self.argv();
-            let env_overrides = self
+            let mut env_overrides = self
                 .env_overrides
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_deref()))
                 .collect::<Vec<_>>();
+            env_overrides.push(("MFB_SESSION_ID", Some(sess.stamp.as_str())));
             set_child_active(true);
             let mut session_log_error = None;
+            let mut config_marker_error = None;
+            let mut seen_config_marker = false;
             let result = stream_process_with_pty_with_env(
                 &argv,
                 None,
                 &env_overrides,
                 |line| {
-                    println!("{line}");
-                    let _ = io::stdout().flush();
+                    if let Some(payload) = line.strip_prefix("MFB_HISTORY_CONFIG=") {
+                        if config_marker_error.is_some() {
+                            return;
+                        }
+                        if seen_config_marker {
+                            config_marker_error = Some(anyhow::anyhow!(
+                                "duplicate child config marker in one invocation"
+                            ));
+                        } else {
+                            seen_config_marker = true;
+                            if let Err(error) =
+                                ChildConfigMarker::parse(payload, expected_config_pipeline)
+                                    .and_then(|marker| {
+                                        sess.append_history_event(
+                                            "MFB_HISTORY_CONFIG",
+                                            serde_json::to_value(marker)?,
+                                        )
+                                    })
+                            {
+                                config_marker_error = Some(error);
+                            }
+                        }
+                        return;
+                    }
+                    if !line.starts_with("MFB_CONVERTED_BYTES=") {
+                        println!("{line}");
+                        let _ = io::stdout().flush();
+                    }
                     if session_log_error.is_none()
                         && let Err(error) = output.push_line(&pipeline_label, line)
                     {
@@ -663,15 +778,21 @@ impl LaunchCommand {
                 },
             );
             set_child_active(false);
-            if session_log_error.is_none()
-                && let Err(error) = output.flush()
+            if let Err(error) = output.flush()
+                && session_log_error.is_none()
             {
                 session_log_error = Some(error);
             }
             match result {
-                Ok(_) if session_log_error.is_some() => {
-                    return Err(session_log_error.expect("checked session stream log error"))
-                        .context("write session child output to processing history");
+                Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
+                    collected_error = match (session_log_error, config_marker_error) {
+                        (Some(output_error), Some(config_error)) => Some(anyhow::anyhow!(
+                            "processing history output write failed: {output_error:#}; child configuration marker failed: {config_error:#}"
+                        )),
+                        (Some(error), None) | (None, Some(error)) => Some(error),
+                        (None, None) => unreachable!("checked child history errors"),
+                    };
+                    stats
                 }
                 Ok(stats) => stats,
                 Err(error) => {
@@ -682,6 +803,9 @@ impl LaunchCommand {
                     let _ = append_jsonl_audit_record(&heartbeat, &event);
                     if let Some(log_error) = session_log_error {
                         eprintln!("[LOG] processing history output write failed: {log_error:#}");
+                    }
+                    if let Some(config_error) = config_marker_error {
+                        eprintln!("[LOG] child configuration marker failed: {config_error:#}");
                     }
                     if let Err(log_error) = sess.append_line(&sess.session_log, &event) {
                         eprintln!("[LOG] session stream error write failed: {log_error:#}");
@@ -723,9 +847,17 @@ impl LaunchCommand {
                     .unprocessed
                     .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
             );
-            append_jsonl_audit_record(&sess.session_audit, &event)?;
-            sess.append_line(&sess.session_log, &event)?;
-            sess.append_line(&sess.verbose_log, &event)?;
+            for result in [
+                append_jsonl_audit_record(&sess.session_audit, &event),
+                sess.append_line(&sess.session_log, &event),
+                sess.append_line(&sess.verbose_log, &event),
+            ] {
+                if let Err(cause) = result
+                    && collected_error.is_none()
+                {
+                    collected_error = Some(cause);
+                }
+            }
             if stats.exit_code != 0 {
                 let error_event = format!(
                     "{}_PIPELINE_ERROR command failed with exit {}: {}",
@@ -733,9 +865,20 @@ impl LaunchCommand {
                     stats.exit_code,
                     self.display()
                 );
-                sess.append_line(&sess.session_log, &error_event)?;
-                sess.append_line(&sess.verbose_log, &error_event)?;
+                for result in [
+                    sess.append_line(&sess.session_log, &error_event),
+                    sess.append_line(&sess.verbose_log, &error_event),
+                ] {
+                    if let Err(cause) = result
+                        && collected_error.is_none()
+                    {
+                        collected_error = Some(cause);
+                    }
+                }
             }
+        }
+        if let Some(cause) = collected_error {
+            return Err(CollectedChildError { stats, cause }.into());
         }
         // The delegated child has finished its own file/checkpoint boundary.
         foundation::batch_control::checkpoint()?;
@@ -1181,11 +1324,24 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        args.cache.is_empty()
+            || matches!(
+                args.mode,
+                LaunchMode::Auto
+                    | LaunchMode::Images
+                    | LaunchMode::Videos
+                    | LaunchMode::FastImg
+                    | LaunchMode::FastVid
+            ),
+        "cache policy settings require media processing mode"
+    );
+    anyhow::ensure!(
         args.photos.cli_arguments().is_empty() || args.mode == LaunchMode::FastImg,
         "Photos import settings require --mode fast-img"
     );
     let image_options = args.img_config.is_some()
         || args.img_fallback_policy.is_some()
+        || args.img_tool_policy.is_some()
         || args.img_jpeg_effort.is_some()
         || args.img_quality_heuristic.is_some()
         || args.img_allow_database.is_some()
@@ -1202,6 +1358,10 @@ fn validate_media_options(args: &Args) -> Result<()> {
         (args.vid_error_mode.is_none() && args.vid_codec.is_none())
             || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
         "video settings require --mode auto or videos"
+    );
+    anyhow::ensure!(
+        args.vid_config.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
+        "video config requires --mode auto or videos"
     );
     anyhow::ensure!(
         args.img_error_mode.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
@@ -1272,6 +1432,49 @@ fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json:
 }
 
 fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
+    let active = [
+        (&summary.img, summary.has_image_stats()),
+        (&summary.vid, summary.has_video_stats()),
+    ];
+    let size_invalid = active
+        .iter()
+        .any(|(stats, enabled)| *enabled && stats.converted_bytes_invalid);
+    let size = (summary
+        .fast_img_session_converted
+        .is_some_and(|count| count > 0)
+        && (summary.fast_img_session_source_bytes.is_some()
+            || summary.fast_img_session_output_bytes.is_some()))
+    .then(|| {
+        serde_json::json!({
+            "scope": "fast_img_converted_this_run",
+            "input_bytes": summary.fast_img_session_source_bytes,
+            "output_bytes": summary.fast_img_session_output_bytes,
+        })
+    })
+    .or_else(|| {
+        if size_invalid
+            || !active
+                .iter()
+                .any(|(stats, enabled)| *enabled && stats.converted_bytes.is_some())
+        {
+            return None;
+        }
+        let bytes = active
+            .iter()
+            .filter(|(_, enabled)| *enabled)
+            .map(|(stats, _)| {
+                stats
+                    .converted_bytes
+                    .unwrap_or_else(ProcessorByteTotals::unknown)
+            })
+            .reduce(ProcessorByteTotals::merge)?;
+        let supported = |value: Option<u64>| value.filter(|bytes| i64::try_from(*bytes).is_ok());
+        Some(serde_json::json!({
+            "scope": "converted_this_run",
+            "input_bytes": supported(bytes.input_bytes),
+            "output_bytes": supported(bytes.output_bytes),
+        }))
+    });
     serde_json::json!({
         "schema_version": 1,
         "count_scope": "processor_outcomes",
@@ -1283,6 +1486,8 @@ fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
         },
         "failed_files": summary.failed_file_names,
         "skipped_files": summary.skipped_file_names,
+        "size": size,
+        "size_invalid": size_invalid,
     })
 }
 
@@ -1596,6 +1801,16 @@ fn run_fast_img_task(
     match &stats {
         Ok(stats) if stats.exit_code != 0 => print_batch_result(&command, stats, args.dry_run),
         Ok(_) => {}
+        Err(error) if error.downcast_ref::<CollectedChildError>().is_some() => {
+            print_batch_result(
+                &command,
+                &error
+                    .downcast_ref::<CollectedChildError>()
+                    .expect("checked")
+                    .stats,
+                args.dry_run,
+            );
+        }
         Err(_) => print_batch_launch_error(&command, args.dry_run),
     }
     let stats = stats?;
@@ -1629,6 +1844,7 @@ fn fast_img_launch_command(
 
 fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     command.extend(args.performance.cli_arguments());
+    command.extend(args.cache.cli_arguments());
     command.extend(args.photos.cli_arguments());
     if let Some(path) = &args.img_config {
         command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
@@ -1640,6 +1856,13 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
             FallbackPolicy::Repair => "repair",
         };
         command.extend(["--fallback-policy".to_owned(), value.to_owned()]);
+    }
+    if let Some(policy) = args.img_tool_policy {
+        let value = match policy {
+            ToolPolicy::Single => "single",
+            ToolPolicy::Fallback => "fallback",
+        };
+        command.extend(["--tool-policy".to_owned(), value.to_owned()]);
     }
     if let Some(effort) = args.img_jpeg_effort {
         command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
@@ -1690,19 +1913,25 @@ fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
     if args.verbose || DRAG_DROP_CHILD_VERBOSE {
         command.push("--verbose".to_string());
     }
-    command.push("--apple-compat".to_string());
 }
 
 fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -> LaunchCommand {
     let mut command = vec![cli_binary(project_root, bin).to_string_lossy().into_owned()];
     push_common_run_args(&mut command, args, input);
     match bin {
-        "img" => push_img_policy_args(&mut command, args),
+        "img" => {
+            command.push("--apple-compat".to_owned());
+            push_img_policy_args(&mut command, args);
+        }
         "vid" => {
             command.extend(args.performance.cli_arguments());
+            command.extend(args.cache.cli_arguments());
+            if let Some(path) = &args.vid_config {
+                command.extend(["--config".to_owned(), path.to_string_lossy().into_owned()]);
+            }
             if let Some(codec) = args.vid_codec {
                 command.extend(["--codec".to_owned(), codec.as_str().to_owned()]);
-                if codec == VideoCodecOption::Av1 {
+                if codec == VidCodec::Av1 {
                     command.push("--no-apple-compat".to_owned());
                 }
             }
@@ -1832,6 +2061,7 @@ fn plan_cli_invocations(
                     args.strategy.as_deref(),
                 ))?;
                 command.args.extend(args.performance.cli_arguments());
+                command.args.extend(args.cache.cli_arguments());
                 commands.push(command);
             }
             LaunchMode::Collect | LaunchMode::Compare => {
@@ -2224,6 +2454,16 @@ fn run_drag_drop_inner(
                         }
                     }
                 }
+                Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
+                    let stats = err
+                        .downcast_ref::<CollectedChildError>()
+                        .expect("checked")
+                        .stats
+                        .clone();
+                    print_batch_result(&command, &stats, false);
+                    summary.img = stats;
+                    first_error = Some(err);
+                }
                 Err(err) if drag_drop_error_should_abort(error_mode, &err) => {
                     print_batch_launch_error(&command, false);
                     return Err(err);
@@ -2278,6 +2518,7 @@ fn run_drag_drop_inner(
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
                             summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
+                            summary.fast_img_session_converted = metrics.files_converted;
                             // Collect per-file retained names for terminal + session log
                             for (name, disposition) in fast_img_retained_file_names(&text) {
                                 if disposition == "failed" {
@@ -2316,6 +2557,14 @@ fn run_drag_drop_inner(
                         println!("{}", batch_result_line("img", &summary.img));
                         verified?;
                     }
+                }
+                Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
+                    summary.img = err
+                        .downcast_ref::<CollectedChildError>()
+                        .expect("checked")
+                        .stats
+                        .clone();
+                    first_error = Some(err);
                 }
                 Err(err) if drag_drop_error_should_abort(error_mode, &err) => return Err(err),
                 Err(err) => first_error = Some(err),
@@ -2387,6 +2636,16 @@ fn run_drag_drop_inner(
                     }
                 }
                 Err(err) => {
+                    if let Some(collected) = err.downcast_ref::<CollectedChildError>() {
+                        print_batch_result(&command, &collected.stats, args.dry_run);
+                        match command.pipeline_label() {
+                            "IMG" => summary.add_image_stats(&collected.stats),
+                            "VID" => summary.add_video_stats(&collected.stats),
+                            _ => {}
+                        }
+                        first_error = Some(err);
+                        break;
+                    }
                     print_batch_launch_error(&command, args.dry_run);
                     let is_img = command
                         .program
@@ -2478,7 +2737,9 @@ fn run_drag_drop_inner(
             }
         }
         print_summary_report(&summary);
-        if let Some(ref scan) = scan {
+        if let Some(ref scan) = scan
+            && first_error.is_none()
+        {
             let (before, after) = if matches!(args.mode, LaunchMode::FastImg) {
                 let before = summary
                     .fast_img_session_source_bytes
@@ -2510,8 +2771,13 @@ fn run_drag_drop_inner(
             size_summary_block = Some(block);
         }
     }
-    if let Some(sess) = session {
-        sess.finish_log(&summary, size_summary_block.as_deref())?;
+    if let Some(sess) = session
+        && let Err(error) = sess.finish_log(&summary, size_summary_block.as_deref())
+    {
+        if first_error.is_none() {
+            return Err(error).context("write final processing summary");
+        }
+        eprintln!("[LOG] final processing summary write failed: {error:#}");
     }
     print_elapsed(started.elapsed());
     eprintln!(
@@ -2519,6 +2785,10 @@ fn run_drag_drop_inner(
         pick_symbol("✓", "[DONE]"),
         session.map_or("-", |s| s.stamp.as_str())
     );
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
 
     if let (Some(sess), Some(output_dir)) = (session, &args.output) {
         let output_size = if let Some(override_size) = summary.fast_img_size_after_override {
@@ -2555,10 +2825,6 @@ fn run_drag_drop_inner(
         if let Some(failed_files) = summary.total_count(3).filter(|count| *count > 0) {
             bail!("exiting with failures: {failed_files} file(s) did not complete successfully");
         }
-    }
-
-    if let Some(err) = first_error {
-        return Err(err);
     }
 
     Ok(())
@@ -2682,6 +2948,7 @@ fn execute_menu_quick_pick(
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     strategy: &str,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Result<()> {
     let (cat, sub) = match choice {
         1 => (0, 0),
@@ -2705,6 +2972,7 @@ fn execute_menu_quick_pick(
         target,
         ProcessingFilter::Both,
         strategy,
+        cache,
     )?;
     Ok(())
 }
@@ -2719,7 +2987,12 @@ fn execute_menu_selection(
     target: &Path,
     filter: ProcessingFilter,
     strategy: &str,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Result<bool> {
+    anyhow::ensure!(
+        selected == 0 || cache.is_empty(),
+        "cache policy settings require media processing mode"
+    );
     let root = resolve_runtime_root()?;
     match selected {
         0 => {
@@ -2746,6 +3019,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if actual == 1 {
@@ -2762,6 +3036,7 @@ fn execute_menu_selection(
                     false,
                     filter,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else if matches!(filter, ProcessingFilter::VideosOnly) {
@@ -2776,6 +3051,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             } else {
@@ -2799,6 +3075,7 @@ fn execute_menu_selection(
                     shortest,
                     filter,
                     Some(strategy.to_string()),
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -2819,6 +3096,7 @@ fn execute_menu_selection(
                 false,
                 ProcessingFilter::Both,
                 None,
+                cache,
             );
             if collecting_recovery_originals {
                 let Some(backup) = prompt_for_input()? else {
@@ -2839,6 +3117,7 @@ fn execute_menu_selection(
                     false,
                     ProcessingFilter::Both,
                     None,
+                    cache,
                 );
                 run_drag_drop(&args, Some(session), dir_lock.as_ref())?;
             }
@@ -2886,6 +3165,7 @@ fn build_run_args(
     shortest_path: bool,
     filter: ProcessingFilter,
     strategy: Option<String>,
+    cache: &foundation::runtime_config::cache_args::CacheArgs,
 ) -> Args {
     Args {
         inputs: vec![target.to_path_buf()],
@@ -2911,8 +3191,11 @@ fn build_run_args(
         photos_album_id: None,
         photos_folder_id: None,
         img_config: None,
+        vid_config: None,
         performance: Default::default(),
+        cache: cache.clone(),
         img_fallback_policy: None,
+        img_tool_policy: None,
         img_jpeg_effort: None,
         img_quality_heuristic: None,
         img_allow_database: None,
@@ -3058,7 +3341,14 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                     Some(v) => v as usize,
                     None => 0,
                 };
-                execute_menu_quick_pick(n, session, &mut dir_lock, &target, &strategy)?;
+                execute_menu_quick_pick(
+                    n,
+                    session,
+                    &mut dir_lock,
+                    &target,
+                    &strategy,
+                    &args.cache,
+                )?;
                 wait_enter();
             }
             NavKey::Enter => {
@@ -3072,6 +3362,7 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
                     &target,
                     filter,
                     &strategy,
+                    &args.cache,
                 )?;
                 wait_enter();
             }
@@ -3213,6 +3504,7 @@ fn main() -> Result<()> {
     let args = apply_mode_overrides(Args::parse());
     let mut runtime = foundation::runtime_config::load(None, false)?;
     args.performance.apply_to(&mut runtime);
+    args.cache.apply_to(&mut runtime);
     foundation::runtime_config::install(runtime.config)?;
     let mut session = DragDropSession::start()?;
     println!(
@@ -3311,6 +3603,50 @@ mod tests {
                     .map(|payload| serde_json::from_str(payload).unwrap())
             })
             .collect()
+    }
+
+    fn synthetic_config_marker(pipeline: &str) -> serde_json::Value {
+        let config = RuntimeConfig::default();
+        let mut paths = BTreeSet::new();
+        collect_config_leaf_paths(&serde_json::to_value(&config).unwrap(), "", &mut paths);
+        let sources = paths
+            .into_iter()
+            .map(|path| (path, "default"))
+            .collect::<BTreeMap<_, _>>();
+        serde_json::json!({
+            "schema_version": 1,
+            "pipeline": pipeline,
+            "package_version": "0.12.0",
+            "config": config,
+            "sources": sources,
+        })
+    }
+
+    #[test]
+    fn child_config_marker_requires_matching_valid_resolved_values() {
+        let valid = synthetic_config_marker("img");
+        assert!(ChildConfigMarker::parse(&valid.to_string(), "img").is_ok());
+        let mut invalid = valid.clone();
+        invalid["pipeline"] = serde_json::json!("vid");
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
+        invalid = valid.clone();
+        invalid["schema_version"] = serde_json::json!(2);
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
+        invalid = valid.clone();
+        invalid["package_version"] = serde_json::json!(" ");
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
+        invalid = valid.clone();
+        invalid["config"]["img"]["jpeg_effort"] = serde_json::json!(0);
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
+        invalid = valid.clone();
+        invalid["config"] = serde_json::json!({});
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
+        invalid = valid.clone();
+        invalid["sources"]
+            .as_object_mut()
+            .unwrap()
+            .remove("vid.codec");
+        assert!(ChildConfigMarker::parse(&invalid.to_string(), "img").is_err());
     }
 
     #[test]
@@ -3483,6 +3819,19 @@ mod tests {
         assert!(payload["vid"]["exit_code"].is_null());
         assert!(payload["integrity"]["state"].is_null());
         assert!(payload["integrity"]["issue_count"].is_null());
+        assert!(payload["size"].is_null());
+        summary.fast_img_session_source_bytes = Some(1_000);
+        assert!(history_summary_payload(&summary)["size"].is_null());
+        summary.fast_img_session_converted = Some(0);
+        assert!(history_summary_payload(&summary)["size"].is_null());
+        summary.fast_img_session_converted = Some(1);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["scope"], "fast_img_converted_this_run");
+        assert_eq!(payload["size"]["input_bytes"], 1_000);
+        assert!(payload["size"]["output_bytes"].is_null());
+        summary.fast_img_session_output_bytes = Some(1_200);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["output_bytes"], 1_200);
         summary.integrity_state = Some("WARNINGS");
         summary.integrity_issue_count = 4;
         let payload = history_summary_payload(&summary);
@@ -3526,6 +3875,43 @@ mod tests {
         assert!(!current.contains("prior"));
     }
 
+    #[test]
+    fn ordinary_history_bytes_cover_all_active_workers_without_inventing_totals() {
+        let measured = ProcessorStats {
+            succeeded: 1,
+            reported: [true; 4],
+            converted_bytes: Some(ProcessorByteTotals {
+                input_bytes: Some(1000),
+                output_bytes: Some(1200),
+            }),
+            ..ProcessorStats::default()
+        };
+        let mut summary = PipelineSummary::default();
+        summary.add_video_stats(&measured);
+        let payload = history_summary_payload(&summary);
+        assert_eq!(payload["size"]["scope"], "converted_this_run");
+        assert_eq!(payload["size"]["input_bytes"], 1000);
+        assert_eq!(payload["size"]["output_bytes"], 1200);
+        summary.add_image_stats(&measured);
+        assert_eq!(
+            history_summary_payload(&summary)["size"]["input_bytes"],
+            2000
+        );
+        summary.add_image_stats(&ProcessorStats::default());
+        let partial = history_summary_payload(&summary);
+        assert!(partial["size"]["input_bytes"].is_null());
+        assert!(partial["size"]["output_bytes"].is_null());
+        assert_eq!(partial["size_invalid"], false);
+        summary.add_video_stats(&ProcessorStats {
+            converted_bytes_invalid: true,
+            ..ProcessorStats::default()
+        });
+        let invalid = history_summary_payload(&summary);
+        assert_eq!(invalid["size_invalid"], true);
+        assert!(invalid["size"].is_null());
+        assert_eq!(invalid["vid"]["active"], true);
+    }
+
     #[cfg(unix)]
     #[test]
     fn launcher_output_is_sqlite_only_and_write_failure_does_not_interrupt_child() {
@@ -3533,13 +3919,21 @@ mod tests {
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let command = LaunchCommand::from_argv(vec![
             "/bin/sh".into(), "-c".into(),
-            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'".into(),
+            "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":1000,\"output_bytes\":1200}\\n'".into(),
         ]).unwrap();
         let stats = command
             .run_collecting(false, Some(&session), false)
             .unwrap();
         assert_eq!(stats.succeeded, 1);
         assert!(stats.counts_complete());
+        assert_eq!(
+            stats.converted_bytes,
+            Some(ProcessorByteTotals {
+                input_bytes: Some(1000),
+                output_bytes: Some(1200)
+            })
+        );
+        assert!(!stats.converted_bytes_invalid);
         let text = dev::infra::history_store::read_session_output_since(
             &session.log_dir,
             &session.stamp,
@@ -3547,6 +3941,7 @@ mod tests {
         )
         .unwrap();
         assert!(text.contains("synthetic worker output"));
+        assert!(text.contains("MFB_CONVERTED_BYTES="));
         for path in [&session.session_log, &session.verbose_log] {
             assert!(
                 !fs::read_to_string(path)
@@ -3565,14 +3960,141 @@ mod tests {
         let finished = temp.path().join("child_finished");
         let child = LaunchCommand::from_argv(vec![
             "/bin/sh".into(), "-c".into(),
-            "i=0; while [ $i -lt 140 ]; do printf 'synthetic failure test\\n'; i=$((i+1)); done; printf done > \"$1\"".into(),
+            "printf 'MFB_HISTORY_CONFIG={}\\n'; i=0; while [ $i -lt 140 ]; do printf 'synthetic failure test\\n'; i=$((i+1)); done; printf done > \"$1\"".into(),
             "test".into(), finished.to_str().unwrap().into(),
         ]).unwrap();
         let error = child
             .run_collecting(false, Some(&session), false)
             .unwrap_err();
         assert!(format!("{error:#}").contains("synthetic output failure"));
+        assert!(format!("{error:#}").contains("child configuration marker failed"));
+        let collected = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(collected.stats.exit_code, 0);
         assert_eq!(fs::read_to_string(finished).unwrap(), "done");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launcher_records_one_child_config_per_invocation_and_passes_session_id() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let program = temp.path().join("img");
+        symlink("/bin/sh", &program).unwrap();
+        let receipt = temp.path().join("session_id");
+        let marker = format!("MFB_HISTORY_CONFIG={}", synthetic_config_marker("img"));
+        let progress = "MFB_PROGRESS={\"schema_version\":1,\"stage_id\":\"synthetic-1\",\"stage\":\"image_processing\",\"processed\":1,\"total\":1,\"state\":\"finished\"}";
+        let command = LaunchCommand::from_argv(vec![
+            program.to_string_lossy().into_owned(),
+            "-c".into(),
+            "printf '%s\\n' \"$1\" \"$3\"; printf 'Succeeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'; printf '%s' \"$MFB_SESSION_ID\" > \"$2\"".into(),
+            "test".into(),
+            marker,
+            receipt.to_string_lossy().into_owned(),
+            progress.to_owned(),
+        ])
+        .unwrap();
+        for expected in 1..=2 {
+            let stats = command
+                .run_collecting(false, Some(&session), false)
+                .unwrap();
+            assert_eq!(stats.succeeded, 1);
+            assert_eq!(
+                history_payloads(&session, "MFB_HISTORY_CONFIG").len(),
+                expected
+            );
+        }
+        assert_eq!(fs::read_to_string(receipt).unwrap(), session.stamp);
+        let recorded = history_payloads(&session, "MFB_HISTORY_CONFIG");
+        assert_eq!(recorded[0]["pipeline"], "img");
+        assert_eq!(recorded[0]["config"]["vid"]["codec"], "hevc");
+        let worker_output = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            0,
+        )
+        .unwrap();
+        assert!(!worker_output.contains("MFB_HISTORY_CONFIG="));
+        assert_eq!(
+            worker_output
+                .lines()
+                .filter(|line| *line == progress)
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_child_config_fails_after_draining_child_output() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let program = temp.path().join("vid");
+        symlink("/bin/sh", &program).unwrap();
+        let finished = temp.path().join("child_finished");
+        let marker = format!("MFB_HISTORY_CONFIG={}", synthetic_config_marker("vid"));
+        let child = LaunchCommand::from_argv(vec![
+            program.to_string_lossy().into_owned(),
+            "-c".into(),
+            "printf '%s\\n' \"$1\" \"$1\"; printf 'Succeeded: 3\\nFailed: 1\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\ntail persisted\\n'; printf done > \"$2\"; exit 7".into(),
+            "test".into(),
+            marker,
+            finished.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let error = child
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("duplicate child config marker"));
+        let collected = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(collected.stats.succeeded, 3);
+        assert_eq!(collected.stats.failed, 1);
+        assert_eq!(collected.stats.exit_code, 7);
+        assert_eq!(fs::read_to_string(finished).unwrap(), "done");
+        assert_eq!(history_payloads(&session, "MFB_HISTORY_CONFIG").len(), 1);
+        let output = dev::infra::history_store::read_session_output_since(
+            &session.log_dir,
+            &session.stamp,
+            0,
+        )
+        .unwrap();
+        assert!(output.contains("tail persisted"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_child_config_preserves_collected_counts_and_tail() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let program = temp.path().join("img");
+        symlink("/bin/sh", &program).unwrap();
+        let child = LaunchCommand::from_argv(vec![
+            program.to_string_lossy().into_owned(),
+            "-c".into(),
+            "printf 'MFB_HISTORY_CONFIG={}\\nSucceeded: 2\\nFailed: 1\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\nlast child line\\n'; exit 9".into(),
+        ])
+        .unwrap();
+        let error = child
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        let collected = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(collected.stats.succeeded, 2);
+        assert_eq!(collected.stats.failed, 1);
+        assert_eq!(collected.stats.exit_code, 9);
+        assert!(
+            dev::infra::history_store::read_session_output_since(
+                &session.log_dir,
+                &session.stamp,
+                0,
+            )
+            .unwrap()
+            .contains("last child line")
+        );
     }
 
     #[test]
@@ -3585,6 +4107,8 @@ mod tests {
                 "/tmp/preferences.json",
                 "--img-fallback-policy",
                 "strict",
+                "--img-tool-policy",
+                "single",
                 "--img-jpeg-effort",
                 "11",
                 "--img-quality-heuristic=false",
@@ -3612,6 +4136,12 @@ mod tests {
         assert!(
             command
                 .args
+                .windows(2)
+                .any(|pair| pair == ["--tool-policy", "single"])
+        );
+        assert!(
+            command
+                .args
                 .contains(&"--quality-heuristic=false".to_owned())
         );
         assert!(command.args.contains(&"--allow-database=true".to_owned()));
@@ -3630,6 +4160,7 @@ mod tests {
         assert!(
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
+        assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
     }
 
     #[test]
@@ -3640,6 +4171,8 @@ mod tests {
                 "--videos-only",
                 "--vid-codec",
                 "av1",
+                "--vid-config",
+                "/tmp/vid.json",
                 "--vid-error-mode",
                 "fail-fast",
                 "/tmp/media",
@@ -3655,6 +4188,13 @@ mod tests {
                 .any(|pair| pair == ["--codec", "av1"])
         );
         assert!(command.args.contains(&"--no-apple-compat".to_owned()));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--config", "/tmp/vid.json"])
+        );
+        assert!(!command.args.contains(&"--apple-compat".to_owned()));
         assert_eq!(
             media_error_mode(&args, "VID", BatchErrorMode::LogAndContinue),
             BatchErrorMode::FailFast
@@ -3666,6 +4206,8 @@ mod tests {
         for argv in [
             vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
             vec!["mfb", "--images-only", "--vid-codec", "av1"],
+            vec!["mfb", "--images-only", "--vid-config", "/tmp/vid.json"],
+            vec!["mfb", "--videos-only", "--img-tool-policy", "single"],
             vec!["mfb", "--mode", "fast-vid", "--vid-codec", "av1"],
             vec![
                 "mfb",
@@ -3679,6 +4221,18 @@ mod tests {
             let args = apply_mode_overrides(Args::try_parse_from(argv).unwrap());
             assert!(validate_media_options(&args).is_err());
         }
+        let fast_vid = apply_mode_overrides(
+            Args::try_parse_from([
+                "mfb",
+                "--mode",
+                "fast-vid",
+                "--vid-config",
+                "/tmp/vid.json",
+                "/tmp/media",
+            ])
+            .unwrap(),
+        );
+        assert!(validate_media_options(&fast_vid).is_err());
     }
 
     #[test]
@@ -3700,6 +4254,60 @@ mod tests {
                 .cli_arguments(),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn cache_policy_is_forwarded_only_to_supported_processing_modes() {
+        for mode in ["images", "videos", "fast-img", "fast-vid"] {
+            let args = Args::try_parse_from([
+                "mfb",
+                "--mode",
+                mode,
+                "--cache-max-bytes",
+                "8192",
+                "--cache-ttl-seconds",
+                "60",
+                "synthetic-input",
+            ])
+            .unwrap();
+            let commands = plan_cli_invocations(&args, Path::new("/tmp"), None).unwrap();
+            assert!(!commands.is_empty());
+            for command in commands {
+                for expected in [["--cache-max-bytes", "8192"], ["--cache-ttl-seconds", "60"]] {
+                    assert_eq!(
+                        command
+                            .args
+                            .windows(2)
+                            .filter(|pair| *pair == expected)
+                            .count(),
+                        1
+                    );
+                }
+            }
+        }
+        let mut args = Args::try_parse_from(["mfb", "--cache-ttl-seconds", "60"]).unwrap();
+        args.mode = LaunchMode::RestoreJpeg;
+        assert!(validate_media_options(&args).is_err());
+        let interactive = build_run_args(
+            Path::new("input"),
+            LaunchMode::Auto,
+            None,
+            false,
+            false,
+            false,
+            ProcessingFilter::Both,
+            None,
+            &args.cache,
+        );
+        assert_eq!(
+            interactive.cache.cli_arguments(),
+            ["--cache-ttl-seconds", "60"]
+        );
+        let default = Args::try_parse_from(["mfb"]).unwrap();
+        for bin in ["img", "vid"] {
+            let command = rust_run_command(Path::new("/tmp"), bin, &default, Path::new("input"));
+            assert!(!command.args.iter().any(|arg| arg.starts_with("--cache-")));
+        }
     }
 
     #[test]
@@ -4136,8 +4744,11 @@ mod tests {
             photos_album_id: None,
             photos_folder_id: None,
             img_config: None,
+            vid_config: None,
             performance: Default::default(),
+            cache: Default::default(),
             img_fallback_policy: None,
+            img_tool_policy: None,
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -4238,8 +4849,11 @@ mod tests {
                 photos_album_id: None,
                 photos_folder_id: None,
                 img_config: None,
+                vid_config: None,
                 performance: Default::default(),
+                cache: Default::default(),
                 img_fallback_policy: None,
+                img_tool_policy: None,
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
@@ -4281,8 +4895,11 @@ mod tests {
             photos_album_id: None,
             photos_folder_id: None,
             img_config: None,
+            vid_config: None,
             performance: Default::default(),
+            cache: Default::default(),
             img_fallback_policy: None,
+            img_tool_policy: None,
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -4346,8 +4963,11 @@ mod tests {
                 photos_album_id: None,
                 photos_folder_id: None,
                 img_config: None,
+                vid_config: None,
                 performance: Default::default(),
+                cache: Default::default(),
                 img_fallback_policy: None,
+                img_tool_policy: None,
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,

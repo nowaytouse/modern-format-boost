@@ -680,6 +680,13 @@ fn main_inner() -> anyhow::Result<()> {
         } => *allow_expert_options = allow_recovery,
         _ => {}
     }
+    validate_command_strategy(&cli.command)?;
+    if matches!(
+        &cli.command,
+        Commands::Run { .. } | Commands::FastImg { .. } | Commands::RestoreJpeg { .. }
+    ) {
+        resolved.emit_history_marker_if_session("img")?;
+    }
     foundation::infra::runtime_config::install(resolved.config)?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
@@ -693,8 +700,6 @@ fn main_inner() -> anyhow::Result<()> {
     {
         tracing::warn!(target: "runtime_config", "Legacy environment preferences are active; inspect img config show --effective and migrate them to config/flags");
     }
-
-    validate_command_strategy(&cli.command)?;
 
     // Initialize Ctrl+C guard for long-running batch operations
     foundation::ctrlc_guard::init();
@@ -2244,8 +2249,7 @@ struct ImageBatchCounters {
     failed: AtomicUsize,
     ignored: AtomicUsize,
     processed: AtomicUsize,
-    input_bytes: core::sync::atomic::AtomicU64,
-    output_bytes: core::sync::atomic::AtomicU64,
+    converted_bytes: std::sync::Mutex<foundation::report::ConvertedByteTotals>,
 }
 
 struct ImageBatchWorker<'a> {
@@ -2369,14 +2373,11 @@ impl ImageBatchWorker<'_> {
                     );
                     self.counters.success.fetch_add(1, Ordering::Relaxed);
                     foundation::progress_mode::image_processed_success();
-                    self.counters
-                        .input_bytes
-                        .fetch_add(result.original_size, Ordering::Relaxed);
-                    if let Some(output_size) = result.output_size {
-                        self.counters
-                            .output_bytes
-                            .fetch_add(output_size, Ordering::Relaxed);
-                    }
+                    foundation::media_conversion_gate::mutex_guard_or_recover(
+                        "img_batch_converted_bytes",
+                        self.counters.converted_bytes.lock(),
+                    )
+                    .record(result.original_size, result.output_size);
                 }
             }
             Err(error) => {
@@ -2645,8 +2646,10 @@ impl ImageBatchFinalization<'_> {
         print_summary(
             &result,
             self.start_time.elapsed(),
-            self.counters.input_bytes.load(Ordering::Relaxed),
-            self.counters.output_bytes.load(Ordering::Relaxed),
+            *foundation::media_conversion_gate::mutex_guard_or_recover(
+                "img_batch_converted_bytes",
+                self.counters.converted_bytes.lock(),
+            ),
             "Image Conversion",
         );
 
@@ -2799,8 +2802,7 @@ fn auto_convert_directory(
         print_summary(
             &Summary::new(),
             start_time.elapsed(),
-            0,
-            0,
+            foundation::report::ConvertedByteTotals::default(),
             "Image Conversion",
         );
         return Ok(());
@@ -2860,9 +2862,10 @@ fn auto_convert_directory(
     let abort_reason = std::sync::Mutex::new(None::<String>);
 
     foundation::progress_mode::enable_quiet_mode();
-    let progress_bar = Arc::new(foundation::CoarseProgressBar::new(
+    let progress_bar = Arc::new(foundation::CoarseProgressBar::new_file_stage(
         foundation::numeric_cast::usize_to_u64(total),
         "Image Optimization",
+        foundation::progress::FileProgressStage::ImageProcessing,
     ));
 
     let max_threads = pool_size;
@@ -9400,6 +9403,11 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
         "source JPEG"
     };
     let pending = jobs.len();
+    let encode_progress = foundation::progress::FileStageProgress::new(
+        u64::try_from(pending).context("fast-img pending count exceeds u64")?,
+        foundation::progress::FileProgressStage::FastImgEncode,
+    );
+    let mut classified = 0u64;
     if pending > 0 {
         let thread_config = foundation::thread_manager::get_balanced_thread_config(
             foundation::thread_manager::WorkloadType::Image,
@@ -9480,6 +9488,19 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                 src_dir,
                 working_copy,
             )?;
+            let failed = u64::try_from(wave_summary.session_failed)
+                .context("fast-img failed count exceeds u64")?;
+            let skipped = u64::try_from(wave_summary.session_skipped)
+                .context("fast-img skipped count exceeds u64")?;
+            let wave_classified = wave_summary
+                .session_converted
+                .checked_add(failed)
+                .and_then(|count| count.checked_add(skipped))
+                .context("fast-img wave disposition count overflow")?;
+            classified = classified
+                .checked_add(wave_classified)
+                .context("fast-img processed count overflow")?;
+            encode_progress.set(classified);
             summary.encoded = wave_summary.encoded;
             summary.session_converted += wave_summary.session_converted;
             summary.session_source_bytes = summary
@@ -9494,6 +9515,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             summary.session_skipped += wave_summary.session_skipped;
         }
         foundation::batch_control::checkpoint()?;
+        encode_progress.finish();
         print_fast_img_session_size_summary(
             summary.session_converted,
             summary.session_source_bytes,
@@ -9543,6 +9565,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
             );
         }
     } else {
+        encode_progress.finish();
         marker.encoded_count = completed_from_resume;
         println!(
             "[{encode_label}] 0 pending · reused {completed_from_resume}/{total} verified outputs"

@@ -115,6 +115,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
         matches!(
             name,
             "MFB_HISTORY_CONTEXT"
+                | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_FINISHED"
@@ -331,6 +332,18 @@ mod tests {
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
 
     #[test]
+    fn config_history_marker_is_allowed_without_changing_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let event = "MFB_HISTORY_CONFIG={\"schema_version\":1,\"pipeline\":\"img\"}";
+        append_history_event(directory.path(), "session", event).unwrap();
+        let connection = Connection::open(directory.path().join(HISTORY_DATABASE)).unwrap();
+        let saved: String = connection
+            .query_row("SELECT event FROM history_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(saved, event);
+    }
+
+    #[test]
     fn history_is_ordered_transactional_and_rejects_unknown_databases() {
         let directory = tempfile::tempdir().unwrap();
         for session in ["first", "second", "first"] {
@@ -479,7 +492,14 @@ mod tests {
             first.push_line("img", &format!("line {index}")).unwrap();
         }
         assert!(first.pending.is_empty(), "line threshold flushes the batch");
-        first.push_line("vid", "你好\nsecond line").unwrap();
+        let phase_output = concat!(
+            "你好\n",
+            "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"processing\"}\n",
+            "[ERROR] source retained\n",
+            "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"verification\"}\n",
+            "second line"
+        );
+        first.push_line("vid", phase_output).unwrap();
         second.push_line("img", "other session").unwrap();
         first.flush().unwrap();
         second.flush().unwrap();
@@ -494,7 +514,7 @@ mod tests {
         );
         assert_eq!(
             read_session_output_since(directory.path(), "first", 127).unwrap(),
-            "line 127\n你好\nsecond line\n"
+            format!("line 127\n{phase_output}\n")
         );
         assert_eq!(
             read_session_output_since(directory.path(), "second", 0).unwrap(),

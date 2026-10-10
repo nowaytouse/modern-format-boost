@@ -55,6 +55,9 @@ static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static TEST_RESERVATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+#[cfg(test)]
+pub(crate) static TEST_PROCESSED_LOCK: Mutex<()> = Mutex::new(());
+
 const TOKEN_REDUCTION_PCT: &str = "{reduction_pct}";
 const TOKEN_SIZE_DIFF: &str = "{size_diff}";
 const TOKEN_CRF: &str = "{crf}";
@@ -362,6 +365,10 @@ fn validate_processed_session_key(session_key: &str) -> std::io::Result<()> {
 /// Propagates store I/O or JSON decode errors.
 pub fn load_processed_list(session_key: &str) -> std::io::Result<()> {
     validate_processed_session_key(session_key)?;
+    let mut processed = crate::media_conversion_gate::mutex_guard_or_recover(
+        "processed_files_lock",
+        PROCESSED_FILES.lock(),
+    );
     let Some(bytes) = crate::mfb_sqlite_store::blob_get(
         crate::mfb_sqlite_store::NS_PROCESSED,
         session_key,
@@ -383,11 +390,8 @@ pub fn load_processed_list(session_key: &str) -> std::io::Result<()> {
         )
     })?;
 
-    crate::media_conversion_gate::mutex_guard_or_recover(
-        "processed_files_lock",
-        PROCESSED_FILES.lock(),
-    )
-    .extend(blob.paths);
+    processed.extend(blob.paths);
+    drop(processed);
 
     Ok(())
 }
@@ -398,13 +402,11 @@ pub fn load_processed_list(session_key: &str) -> std::io::Result<()> {
 /// Propagates store I/O or serialization errors.
 pub fn save_processed_list(session_key: &str) -> std::io::Result<()> {
     validate_processed_session_key(session_key)?;
-    let paths: Vec<String> = crate::media_conversion_gate::mutex_guard_or_recover(
+    let processed = crate::media_conversion_gate::mutex_guard_or_recover(
         "processed_files_lock",
         PROCESSED_FILES.lock(),
-    )
-    .iter()
-    .cloned()
-    .collect();
+    );
+    let paths = processed.iter().cloned().collect();
 
     let bytes = serde_json::to_vec(&ProcessedListBlob { paths }).map_err(|err| {
         std::io::Error::new(
@@ -413,14 +415,16 @@ pub fn save_processed_list(session_key: &str) -> std::io::Result<()> {
         )
     })?;
 
-    crate::mfb_sqlite_store::blob_put(
+    let result = crate::mfb_sqlite_store::blob_put(
         crate::mfb_sqlite_store::NS_PROCESSED,
         session_key,
         PROCESSED_LIST_BLOB_SCHEMA,
         None,
         &bytes,
     )
-    .map_err(std::io::Error::other)
+    .map_err(std::io::Error::other);
+    drop(processed);
+    result
 }
 
 /// Clear in-memory state and delete the persisted processed blob for
@@ -430,9 +434,14 @@ pub fn save_processed_list(session_key: &str) -> std::io::Result<()> {
 /// Propagates store delete errors.
 pub fn clear_processed_list_for_session(session_key: &str) -> std::io::Result<()> {
     validate_processed_session_key(session_key)?;
-    clear_processed_list();
+    let mut processed = crate::media_conversion_gate::mutex_guard_or_recover(
+        "processed_files_lock",
+        PROCESSED_FILES.lock(),
+    );
     crate::mfb_sqlite_store::blob_delete(crate::mfb_sqlite_store::NS_PROCESSED, session_key)
         .map_err(std::io::Error::other)?;
+    processed.clear();
+    drop(processed);
     Ok(())
 }
 
@@ -4519,7 +4528,50 @@ mod tests {
     }
 
     #[test]
+    fn test_processed_state_integrity_and_delete_failure_preserve_memory() {
+        let _lock = TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+            dir.path().join("mfb_store.sqlite"),
+        );
+        let tracked = dir.path().join("saved.mp4");
+        mark_as_processed(&tracked);
+        let session = "processed-state-integrity";
+        save_processed_list(session).unwrap();
+        let conn = crate::mfb_sqlite_store::open_store_connection().unwrap();
+        conn.execute(
+            "UPDATE blob_store SET payload_blake3 = X'00' WHERE namespace = 'processed' AND cache_key = ?1",
+            [session],
+        ).unwrap();
+        assert!(load_processed_list(session).is_err());
+        assert!(is_already_processed(&tracked));
+        conn.execute_batch(
+            "CREATE TRIGGER reject_processed_delete BEFORE DELETE ON blob_store
+             WHEN OLD.namespace = 'processed' BEGIN SELECT RAISE(ABORT, 'fixture delete failure'); END;",
+        ).unwrap();
+        assert!(clear_processed_list_for_session(session).is_err());
+        assert!(is_already_processed(&tracked));
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM blob_store WHERE namespace = 'processed' AND cache_key = ?1",
+                [session],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        conn.execute_batch("DROP TRIGGER reject_processed_delete;")
+            .unwrap();
+        clear_processed_list_for_session(session).unwrap();
+        assert!(!is_already_processed(&tracked));
+    }
+
+    #[test]
     fn test_load_processed_list_rejects_invalid_blob_without_partial_load() {
+        let _lock = TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_processed_list();
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::mfb_sqlite_store::set_test_store_path_for_tests(

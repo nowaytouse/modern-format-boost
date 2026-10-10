@@ -5,6 +5,8 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -84,9 +86,12 @@ impl PerformanceArgs {
     pub fn apply_to(&self, loaded: &mut LoadedConfig) {
         if let Some(mode) = self.mode {
             loaded.config.performance.mode = mode;
-            loaded
-                .sources
-                .insert("performance.mode".into(), "CLI".into());
+            record_source(
+                &mut loaded.sources,
+                &mut loaded.source_chain,
+                "performance.mode",
+                "CLI",
+            );
         }
     }
 }
@@ -98,6 +103,30 @@ pub struct ImgPolicy {
     pub quality_heuristic: bool,
     pub jpeg_effort: u8,
     pub fallback_policy: FallbackPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum VidCodec {
+    #[default]
+    Hevc,
+    Av1,
+}
+
+impl VidCodec {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VidPolicy {
+    pub codec: VidCodec,
 }
 
 impl Default for ImgPolicy {
@@ -152,14 +181,53 @@ pub struct ToolsPolicy {
     pub paths: BTreeMap<String, PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CachePolicy {
+    /// Total serialized path-tree payload bytes, excluding SQLite overhead and durable state.
+    pub path_tree_max_bytes: u64,
+    /// Idle lifetime; successful cache reads refresh the timestamp.
+    pub path_tree_ttl_seconds: u64,
+}
+
+impl Default for CachePolicy {
+    fn default() -> Self {
+        Self {
+            path_tree_max_bytes: 256 * 1024 * 1024,
+            path_tree_ttl_seconds: 30 * 24 * 60 * 60,
+        }
+    }
+}
+
+impl CachePolicy {
+    /// Reject unusable limits before any cache mutation.
+    ///
+    /// # Errors
+    /// Returns an error for zero or values outside SQLite's signed integer range.
+    pub fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("path_tree_max_bytes", self.path_tree_max_bytes),
+            ("path_tree_ttl_seconds", self.path_tree_ttl_seconds),
+        ] {
+            ensure!(
+                value > 0 && i64::try_from(value).is_ok(),
+                "cache.{name} must be positive and fit a SQLite signed 64-bit integer"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub config_version: u32,
     pub img: ImgPolicy,
+    pub vid: VidPolicy,
     pub photos: PhotosPolicy,
     pub tools: ToolsPolicy,
     pub performance: PerformancePolicy,
+    pub cache: CachePolicy,
 }
 
 impl Default for RuntimeConfig {
@@ -167,15 +235,18 @@ impl Default for RuntimeConfig {
         Self {
             config_version: 1,
             img: ImgPolicy::default(),
+            vid: VidPolicy::default(),
             photos: PhotosPolicy::default(),
             tools: ToolsPolicy::default(),
             performance: PerformancePolicy::default(),
+            cache: CachePolicy::default(),
         }
     }
 }
 
 impl RuntimeConfig {
     pub fn validate(&self) -> Result<()> {
+        self.cache.validate()?;
         ensure!(
             self.config_version == 1,
             "unsupported config_version {}",
@@ -244,6 +315,19 @@ impl RuntimeConfig {
 pub struct LoadedConfig {
     pub config: RuntimeConfig,
     pub sources: BTreeMap<String, String>,
+    pub source_chain: BTreeMap<String, Vec<String>>,
+}
+
+pub fn record_source(
+    sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
+    key: impl Into<String>,
+    source: impl Into<String>,
+) {
+    let key = key.into();
+    let source = source.into();
+    sources.insert(key.clone(), source.clone());
+    source_chain.entry(key).or_default().push(source);
 }
 
 impl LoadedConfig {
@@ -253,6 +337,44 @@ impl LoadedConfig {
         } else {
             Ok(serde_json::to_string(self)?)
         }
+    }
+
+    fn write_history_marker(
+        &self,
+        pipeline: &str,
+        session_id: Option<&OsStr>,
+        output: &mut impl Write,
+    ) -> Result<()> {
+        if session_id.is_none_or(OsStr::is_empty) {
+            return Ok(());
+        }
+        ensure!(
+            matches!(pipeline, "img" | "vid"),
+            "unknown processing pipeline"
+        );
+        let marker = json!({
+            "schema_version": 1,
+            "pipeline": pipeline,
+            "package_version": env!("CARGO_PKG_VERSION"),
+            "config": &self.config,
+            "sources": &self.sources,
+        });
+        let line = format!("MFB_HISTORY_CONFIG={}\n", serde_json::to_string(&marker)?);
+        output
+            .write_all(line.as_bytes())
+            .context("write effective runtime configuration history marker")?;
+        output
+            .flush()
+            .context("flush effective runtime configuration history marker")
+    }
+
+    pub fn emit_history_marker_if_session(&self, pipeline: &str) -> Result<()> {
+        let session_id = std::env::var_os("MFB_SESSION_ID");
+        self.write_history_marker(
+            pipeline,
+            session_id.as_deref(),
+            &mut std::io::stdout().lock(),
+        )
     }
 }
 
@@ -276,6 +398,7 @@ fn merge(
     source: &str,
     prefix: &str,
     sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
 ) {
     if let (Some(dst), Value::Object(src)) = (into.as_object_mut(), overlay) {
         for (key, value) in src {
@@ -286,11 +409,11 @@ fn merge(
             };
             if value.is_object() && dst.get(&key).is_some_and(Value::is_object) {
                 if let Some(child) = dst.get_mut(&key) {
-                    merge(child, value, source, &path, sources);
+                    merge(child, value, source, &path, sources, source_chain);
                 }
             } else {
                 dst.insert(key, value);
-                sources.insert(path, source.to_owned());
+                record_source(sources, source_chain, path, source);
             }
         }
     }
@@ -300,6 +423,7 @@ fn apply_file(
     value: &mut Value,
     path: &Path,
     sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
 ) -> Result<()> {
     let raw = std::fs::read(path).with_context(|| format!("read config {}", path.display()))?;
     let layer: Value =
@@ -312,7 +436,14 @@ fn apply_file(
         "{}: config_version must be 1",
         path.display()
     );
-    merge(value, layer, &path.display().to_string(), "", sources);
+    merge(
+        value,
+        layer,
+        &path.display().to_string(),
+        "",
+        sources,
+        source_chain,
+    );
     let parsed: RuntimeConfig = serde_json::from_value(value.clone())
         .with_context(|| format!("invalid config {}", path.display()))?;
     parsed
@@ -349,7 +480,12 @@ fn legacy_tool_name(name: &str) -> String {
     }
 }
 
-fn default_sources(value: &Value, prefix: &str, sources: &mut BTreeMap<String, String>) {
+fn default_sources(
+    value: &Value,
+    prefix: &str,
+    sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
+) {
     if let Some(object) = value.as_object() {
         for (key, child) in object {
             let path = if prefix.is_empty() {
@@ -357,13 +493,14 @@ fn default_sources(value: &Value, prefix: &str, sources: &mut BTreeMap<String, S
             } else {
                 format!("{prefix}.{key}")
             };
-            default_sources(child, &path, sources);
+            default_sources(child, &path, sources, source_chain);
         }
     } else {
-        sources.insert(prefix.to_owned(), "default".to_owned());
+        record_source(sources, source_chain, prefix, "default");
     }
 }
 
+pub mod cache_args;
 pub mod photos_args;
 
 #[must_use]
@@ -389,7 +526,8 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     );
     let mut value = serde_json::to_value(RuntimeConfig::default())?;
     let mut sources = BTreeMap::new();
-    default_sources(&value, "", &mut sources);
+    let mut source_chain = BTreeMap::new();
+    default_sources(&value, "", &mut sources, &mut source_chain);
     if let Some(mode) = legacy_env(crate::constants::ENV_MFB_PERF_TIER)? {
         let mode = match mode.trim().to_ascii_lowercase().as_str() {
             "adaptive" => PerformanceMode::Adaptive,
@@ -404,6 +542,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PERF_TIER",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(backend) = legacy_env("MFB_PHOTOS_IMPORT_BACKEND")? {
@@ -413,6 +552,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PHOTOS_IMPORT_BACKEND",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_PHOTOS_NATIVE_BATCH_SIZE")? {
@@ -425,6 +565,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_PHOTOS_NATIVE_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE")? {
@@ -437,6 +578,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_FAST_IMG_PHOTOS_IMPORT_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if let Some(size) = legacy_env("MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE")? {
@@ -449,6 +591,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MFB_FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     let heuristic = legacy_bool(crate::constants::HEURISTIC_QUALITY_ENV_KEY)?;
@@ -459,6 +602,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "env:MODERN_FORMAT_ENABLE_IMAGE_QUALITY_HEURISTIC",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     let disable_feedback = legacy_bool(crate::constants::ENV_DISABLE_DB_FEEDBACK)?;
@@ -473,6 +617,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "legacy quality database gates",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     for (key, path) in std::env::vars_os() {
@@ -489,6 +634,7 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
             "legacy MFB_TOOL_ override",
             "",
             &mut sources,
+            &mut source_chain,
         );
     }
     if !no_config {
@@ -497,22 +643,26 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
                 .try_exists()
                 .with_context(|| format!("inspect config {}", path.display()))?
         {
-            apply_file(&mut value, &path, &mut sources)?;
+            apply_file(&mut value, &path, &mut sources, &mut source_chain)?;
         }
         let project = project_config_path()?;
         if project
             .try_exists()
             .with_context(|| format!("inspect config {}", project.display()))?
         {
-            apply_file(&mut value, &project, &mut sources)?;
+            apply_file(&mut value, &project, &mut sources, &mut source_chain)?;
         }
         if let Some(path) = explicit {
-            apply_file(&mut value, path, &mut sources)?;
+            apply_file(&mut value, path, &mut sources, &mut source_chain)?;
         }
     }
     let config: RuntimeConfig = serde_json::from_value(value)?;
     config.validate()?;
-    Ok(LoadedConfig { config, sources })
+    Ok(LoadedConfig {
+        config,
+        sources,
+        source_chain,
+    })
 }
 
 #[cfg(test)]
@@ -520,13 +670,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cache_policy_defaults_layers_and_integer_bounds() -> Result<()> {
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        assert_eq!(value["cache"]["path_tree_max_bytes"], 268_435_456_u64);
+        assert_eq!(value["cache"]["path_tree_ttl_seconds"], 2_592_000_u64);
+        assert_eq!(sources["cache.path_tree_max_bytes"], "default");
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("config.json");
+        std::fs::write(
+            &file,
+            r#"{"config_version":1,"cache":{"path_tree_max_bytes":16}}"#,
+        )?;
+        apply_file(&mut value, &file, &mut sources, &mut source_chain)?;
+        let config: RuntimeConfig = serde_json::from_value(value.clone())?;
+        assert_eq!(config.cache.path_tree_max_bytes, 16);
+        assert_eq!(config.cache.path_tree_ttl_seconds, 2_592_000);
+        assert_eq!(
+            source_chain["cache.path_tree_max_bytes"],
+            ["default", file.to_str().unwrap()]
+        );
+        assert_eq!(source_chain["cache.path_tree_ttl_seconds"], ["default"]);
+        let loaded = LoadedConfig {
+            config,
+            sources,
+            source_chain,
+        };
+        let effective: Value = serde_json::from_str(&loaded.to_json(false)?)?;
+        assert_eq!(effective["config"]["cache"]["path_tree_max_bytes"], 16);
+        for field in ["path_tree_max_bytes", "path_tree_ttl_seconds"] {
+            for invalid in [json!(0), json!(-1), json!(u64::MAX), json!(1.5)] {
+                let mut candidate = value.clone();
+                candidate["cache"][field] = invalid;
+                assert!(
+                    serde_json::from_value::<RuntimeConfig>(candidate)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|config| config.validate())
+                        .is_err()
+                );
+            }
+            let mut boundary = value.clone();
+            boundary["cache"][field] = json!(i64::MAX);
+            serde_json::from_value::<RuntimeConfig>(boundary)?.validate()?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn defaults_and_explicit_performance_keep_one_policy() {
         let config = RuntimeConfig::default();
         assert_eq!(config.photos.backend, PhotosBackend::Native);
         assert_eq!(config.performance.mode, PerformanceMode::Adaptive);
+        assert_eq!(config.vid.codec, VidCodec::Hevc);
         let mut loaded = LoadedConfig {
             config,
             sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
         };
         let args = PerformanceArgs {
             mode: Some(PerformanceMode::Tight),
@@ -534,6 +735,7 @@ mod tests {
         args.apply_to(&mut loaded);
         assert_eq!(loaded.config.performance.mode, PerformanceMode::Tight);
         assert_eq!(loaded.sources["performance.mode"], "CLI");
+        assert_eq!(loaded.source_chain["performance.mode"], ["CLI"]);
         assert_eq!(args.cli_arguments(), ["--performance", "tight"]);
         assert_eq!(
             PerformanceArgs::default().cli_arguments(),
@@ -552,13 +754,84 @@ mod tests {
     }
 
     #[test]
+    fn history_marker_uses_resolved_values_only_for_launcher_sessions() -> Result<()> {
+        let mut loaded = LoadedConfig {
+            config: RuntimeConfig::default(),
+            sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
+        };
+        loaded.config.performance.mode = PerformanceMode::Tight;
+        record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "performance.mode",
+            "CLI",
+        );
+        let mut output = Vec::new();
+        loaded.write_history_marker("img", None, &mut output)?;
+        loaded.write_history_marker("img", Some(OsStr::new("")), &mut output)?;
+        assert_eq!(output, [] as [u8; 0]);
+        loaded.write_history_marker("img", Some(OsStr::new("session")), &mut output)?;
+        let line = std::str::from_utf8(&output)?;
+        let marker: Value = serde_json::from_str(
+            line.strip_prefix("MFB_HISTORY_CONFIG=")
+                .context("missing history marker prefix")?
+                .trim_end_matches('\n'),
+        )?;
+        assert_eq!(marker["schema_version"], 1);
+        assert_eq!(marker["pipeline"], "img");
+        assert_eq!(marker["package_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(marker["config"]["performance"]["mode"], "tight");
+        assert_eq!(marker["sources"]["performance.mode"], "CLI");
+        assert_eq!(line.lines().count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn history_marker_propagates_stdout_write_failure() -> Result<()> {
+        struct BrokenOutput;
+        impl Write for BrokenOutput {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("broken output"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let loaded = LoadedConfig {
+            config: RuntimeConfig::default(),
+            sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
+        };
+        let error = loaded
+            .write_history_marker("vid", Some(OsStr::new("session")), &mut BrokenOutput)
+            .err()
+            .context("stdout error was not propagated")?;
+        assert!(
+            error
+                .to_string()
+                .contains("write effective runtime configuration")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn file_layers_inherit_and_reject_invalid_values() -> Result<()> {
         let file = tempfile::NamedTempFile::new()?;
         let mut value = serde_json::to_value(RuntimeConfig::default())?;
         let mut sources = BTreeMap::new();
-        default_sources(&value, "", &mut sources);
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        merge(
+            &mut value,
+            json!({"photos":{"native_batch_size":200}}),
+            "env:MFB_PHOTOS_NATIVE_BATCH_SIZE",
+            "",
+            &mut sources,
+            &mut source_chain,
+        );
         std::fs::write(file.path(), br#"{"config_version":1,"photos":{"native_batch_size":250},"img":{"fallback_policy":"same-semantics"}}"#)?;
-        apply_file(&mut value, file.path(), &mut sources)?;
+        apply_file(&mut value, file.path(), &mut sources, &mut source_chain)?;
         let parsed: RuntimeConfig = serde_json::from_value(value.clone())?;
         assert_eq!(parsed.photos.native_batch_size, 250);
         assert_eq!(parsed.photos.import_batch_size, 50);
@@ -568,13 +841,22 @@ mod tests {
             sources["photos.native_batch_size"],
             file.path().display().to_string()
         );
+        assert_eq!(
+            source_chain["photos.native_batch_size"],
+            vec![
+                "default".to_owned(),
+                "env:MFB_PHOTOS_NATIVE_BATCH_SIZE".to_owned(),
+                file.path().display().to_string()
+            ]
+        );
+        assert_eq!(source_chain["photos.import_batch_size"], ["default"]);
 
         let second = tempfile::NamedTempFile::new()?;
         std::fs::write(
             second.path(),
-            br#"{"config_version":1,"photos":{"import_batch_size":25}}"#,
+            br#"{"config_version":1,"photos":{"import_batch_size":25},"tools":{"paths":{"cjxl":"/bin/echo"}}}"#,
         )?;
-        apply_file(&mut value, second.path(), &mut sources)?;
+        apply_file(&mut value, second.path(), &mut sources, &mut source_chain)?;
         let parsed: RuntimeConfig = serde_json::from_value(value.clone())?;
         assert_eq!(parsed.photos.native_batch_size, 250);
         assert_eq!(parsed.photos.import_batch_size, 25);
@@ -586,10 +868,81 @@ mod tests {
             sources["photos.import_batch_size"],
             second.path().display().to_string()
         );
+        assert_eq!(
+            source_chain["photos.import_batch_size"],
+            vec!["default".to_owned(), second.path().display().to_string()]
+        );
+
+        let third = tempfile::NamedTempFile::new()?;
+        std::fs::write(
+            third.path(),
+            br#"{"config_version":1,"photos":{"native_batch_size":250},"tools":{"paths":{"cjxl":"/bin/echo"}}}"#,
+        )?;
+        apply_file(&mut value, third.path(), &mut sources, &mut source_chain)?;
+        assert_eq!(
+            source_chain["tools.paths.cjxl"],
+            vec![
+                second.path().display().to_string(),
+                third.path().display().to_string()
+            ]
+        );
+        assert_eq!(
+            sources["tools.paths.cjxl"],
+            third.path().display().to_string()
+        );
+        apply_file(&mut value, third.path(), &mut sources, &mut source_chain)?;
+        let mut loaded = LoadedConfig {
+            config: serde_json::from_value(value.clone())?,
+            sources: sources.clone(),
+            source_chain: source_chain.clone(),
+        };
+        loaded.config.photos.native_batch_size = 250;
+        record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "photos.native_batch_size",
+            "CLI",
+        );
+        assert_eq!(
+            loaded.source_chain["photos.native_batch_size"],
+            vec![
+                "default".to_owned(),
+                "env:MFB_PHOTOS_NATIVE_BATCH_SIZE".to_owned(),
+                file.path().display().to_string(),
+                third.path().display().to_string(),
+                third.path().display().to_string(),
+                "CLI".to_owned(),
+            ]
+        );
+        assert_eq!(loaded.config.photos.native_batch_size, 250);
+
+        record_source(
+            &mut sources,
+            &mut source_chain,
+            "photos.import_batch_size",
+            "CLI",
+        );
+        assert_eq!(
+            source_chain["photos.import_batch_size"],
+            vec![
+                "default".to_owned(),
+                second.path().display().to_string(),
+                "CLI".to_owned()
+            ]
+        );
+        assert_eq!(
+            sources["photos.import_batch_size"],
+            *source_chain["photos.import_batch_size"].last().unwrap()
+        );
+        assert_eq!(sources.len(), source_chain.len());
+        assert!(sources.iter().all(|(key, source)| {
+            source_chain.get(key).and_then(|chain| chain.last()) == Some(source)
+        }));
 
         for invalid in [
             r#"{"config_version":2}"#,
             r#"{"config_version":1,"photos":{"unknown":1}}"#,
+            r#"{"config_version":1,"vid":{"codec":"av2"}}"#,
             r#"{"config_version":1,"photos":{"native_batch_size":"large"}}"#,
             r#"{"config_version":1,"photos":{"verification_batch_size":0}}"#,
             r#"{"config_version":1,"photos":{"verification_batch_size":1001}}"#,
@@ -603,7 +956,13 @@ mod tests {
         ] {
             std::fs::write(file.path(), invalid)?;
             assert!(
-                apply_file(&mut value.clone(), file.path(), &mut sources.clone()).is_err(),
+                apply_file(
+                    &mut value.clone(),
+                    file.path(),
+                    &mut sources.clone(),
+                    &mut source_chain.clone()
+                )
+                .is_err(),
                 "accepted {invalid}"
             );
         }

@@ -38,6 +38,8 @@ pub(super) struct RuntimeArgs {
     photos: PhotosArgs,
     #[command(flatten)]
     performance: runtime_config::PerformanceArgs,
+    #[command(flatten)]
+    cache: runtime_config::cache_args::CacheArgs,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
     tools: Vec<(String, PathBuf)>,
@@ -120,11 +122,12 @@ fn apply<T: Copy>(
     value: Option<T>,
     target: &mut T,
     sources: &mut BTreeMap<String, String>,
+    source_chain: &mut BTreeMap<String, Vec<String>>,
     key: &str,
 ) {
     if let Some(value) = value {
         *target = value;
-        sources.insert(key.to_owned(), "CLI".into());
+        runtime_config::record_source(sources, source_chain, key, "CLI");
     }
 }
 
@@ -133,49 +136,63 @@ impl RuntimeArgs {
         let mut loaded = runtime_config::load(self.config.as_deref(), self.no_config)?;
         let config = &mut loaded.config;
         let sources = &mut loaded.sources;
+        let source_chain = &mut loaded.source_chain;
         if legacy_expert {
             config.img.fallback_policy = FallbackPolicy::Repair;
-            sources.insert(
-                "img.fallback_policy".into(),
-                "CLI --allow_expert_options".into(),
+            runtime_config::record_source(
+                sources,
+                source_chain,
+                "img.fallback_policy",
+                "CLI --allow_expert_options",
             );
         }
         apply(
             self.allow_database,
             &mut config.img.allow_database,
             sources,
+            source_chain,
             "img.allow_database",
         );
         apply(
             self.quality_heuristic,
             &mut config.img.quality_heuristic,
             sources,
+            source_chain,
             "img.quality_heuristic",
         );
         apply(
             self.fallback_policy,
             &mut config.img.fallback_policy,
             sources,
+            source_chain,
             "img.fallback_policy",
         );
         apply(
             self.tool_policy,
             &mut config.tools.policy,
             sources,
+            source_chain,
             "tools.policy",
         );
         apply(
             self.jpeg_effort,
             &mut config.img.jpeg_effort,
             sources,
+            source_chain,
             "img.jpeg_effort",
         );
         for (name, path) in &self.tools {
             config.tools.paths.insert(name.clone(), path.clone());
-            sources.insert(format!("tools.paths.{name}"), "CLI".into());
+            runtime_config::record_source(
+                sources,
+                source_chain,
+                format!("tools.paths.{name}"),
+                "CLI",
+            );
         }
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
+        self.cache.apply_to(&mut loaded);
         loaded.config.validate()?;
         Ok(loaded)
     }
@@ -185,6 +202,35 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn cache_flags_reach_image_and_fast_image_runtime() -> Result<()> {
+        for command in ["config", "fast-img"] {
+            let tail = if command == "config" {
+                "show"
+            } else {
+                "/unused"
+            };
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                command,
+                tail,
+                "--no-config",
+                "--cache-max-bytes",
+                "4096",
+                "--cache-ttl-seconds",
+                "60",
+            ])?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.cache.path_tree_max_bytes, 4096);
+            assert_eq!(loaded.config.cache.path_tree_ttl_seconds, 60);
+            assert_eq!(
+                loaded.source_chain["cache.path_tree_ttl_seconds"],
+                ["default", "CLI"]
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn runtime_flags_override_legacy_expert_without_global_mutation() -> Result<()> {
@@ -206,10 +252,16 @@ mod tests {
             "Archive",
             "--photos-album-name",
             "Family",
+            "--photos-import-batch-size",
+            "50",
             "--preserve-folder-structure=false",
             "--photos-verification-batch-size",
             "500",
             "--photos-adaptive-batching",
+            "--performance",
+            "adaptive",
+            "--tool",
+            "cjxl=/usr/bin/cjxl",
         ])?;
         let resolved = cli.policy.resolve(true)?;
         assert_eq!(resolved.config.img.fallback_policy, FallbackPolicy::Strict);
@@ -226,6 +278,31 @@ mod tests {
         assert!(resolved.config.photos.adaptive_batching);
         assert_eq!(resolved.sources["photos.verification_batch_size"], "CLI");
         assert_eq!(resolved.sources["img.fallback_policy"], "CLI");
+        assert_eq!(
+            resolved.source_chain["img.fallback_policy"],
+            ["default", "CLI --allow_expert_options", "CLI"]
+        );
+        assert_eq!(
+            resolved.source_chain["photos.import_batch_size"],
+            ["default", "CLI"]
+        );
+        assert_eq!(
+            resolved.source_chain["performance.mode"],
+            ["default", "CLI"]
+        );
+        assert_eq!(resolved.source_chain["tools.paths.cjxl"], ["CLI"]);
+        assert!(resolved.sources.iter().all(|(key, source)| {
+            resolved
+                .source_chain
+                .get(key)
+                .and_then(|chain| chain.last())
+                == Some(source)
+        }));
+        let shown: serde_json::Value = serde_json::from_str(&resolved.to_json(false)?)?;
+        assert_eq!(
+            shown["source_chain"]["photos.verification_batch_size"],
+            serde_json::json!(["default", "CLI"])
+        );
         Ok(())
     }
 

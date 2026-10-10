@@ -4,6 +4,268 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Standard batch size history (2026-10-10)
+
+- Carry exact current-run converted bytes from standard IMG/VID reports through
+  the launcher into SQLite history and the native Processing History window.
+  Versioned integer receipts exclude skipped, failed and reused files.
+- Preserve unknown measurements and checked-sum overflow across worker invocations;
+  reject malformed or conflicting receipts without losing valid outcome counts.
+  Display reductions, growth and unchanged sizes for IMG, VID and mixed batches.
+  Older and single-file invocations without receipts remain unrecorded.
+- Retain the workspace dependency lock refresh and pinned OSS-Fuzz base image
+  update. Rust regressions use the refreshed lock; the fuzz container itself was
+  not rebuilt in this batch.
+
+### Native cache settings and inherited values (2026-10-10)
+
+- Expose directory snapshot capacity and idle TTL in the existing Cache settings
+  tab, alongside statistics, cleanup and database inspection. Positive integer
+  inputs preserve the full supported range without a floating-point stepper.
+- Preserve per-pipeline inheritance, including different IMG/VID cache limits;
+  blank inputs remove explicit overrides and tab reset leaves other sections intact.
+  Developer source previews use each actual backend configuration.
+- Forward saved overrides through normal and fast processing modes, validate them
+  against IMG/VID effective configuration before saving, and keep maintenance and
+  restoration modes free of unrelated cache flags. Add native regression coverage
+  and English, Simplified Chinese and Japanese labels and help text.
+
+### Analysis-cache accounting and checkpoint identity (2026-10-10)
+
+- Complete launcher forwarding of explicit cache capacity/TTL overrides for IMG,
+  VID and fast processing modes, including launcher effective configuration.
+  Omitted values remain inherited; maintenance-only modes reject these flags.
+  GUI controls remain a separate pending step.
+- Replace the PostgreSQL analysis cache's hardcoded zero size with allocated
+  relation sizes, including indexes and TOAST. Keep the scope distinct from the
+  shared database and reclaimable space; collect counts and version distribution
+  in one repeatable-read snapshot and propagate invalid values instead of saturating.
+- Make age-based analysis/quality/video cache deletion and orphan-index cleanup
+  atomic. Reject negative retention, check count arithmetic, and report success only
+  after commit. Orphan indexes are also cleaned when no analysis records expire.
+- Preserve whole seconds as well as fractional nanoseconds in Unix status-change
+  timestamps used by checkpoints and analysis-cache signatures. Old fractional-only
+  signatures fail freshness checks and are revalidated; no source media is removed.
+
+### Shared cache overrides and selective maintenance (2026-10-09)
+
+- Expose `--cache-max-bytes` and `--cache-ttl-seconds` in IMG/Fast IMG and VID,
+  using one validated argument model and the existing effective-config source chain.
+  Omitted flags preserve inherited values; invalid integers fail before processing.
+- Add explicit `cache_cleaner --prune` with layered configuration and a JSON policy
+  receipt. Reuse automatic TTL/LRU rules in one transaction, report disjoint removal
+  counts, retain useful snapshots and protected state, and roll back on deletion failure.
+  No media processing, missing-store creation, migration, vacuum or legacy-file cleanup.
+- Keep prune distinct from full cleanup and read-only inspection, with confirmation
+  and conflicting-mode rejection. Confirmation uses stderr to preserve JSON stdout;
+  post-commit inspection failures explicitly retain the committed deletion counts.
+  Recheck store version under the write lock before pruning. GUI per-run cache
+  overrides remain pending.
+- Preserve the workspace's existing tokio-util and tracing dependency refresh;
+  no new dependency was added for cache maintenance.
+
+### Bounded directory cache and read-only database inspection (2026-10-09)
+
+- Add shared typed cache capacity and idle-lifetime settings, visible in effective
+  configuration provenance. Apply TTL and LRU only to reconstructable path-tree
+  records, with atomic admission/eviction and rollback on failure. Reject oversized
+  admission explicitly; preserve checkpoints, processed records and unknown state.
+- Add `cache_cleaner --stats --check-integrity --json` and a native Settings/Cache
+  action. Inspect structure, foreign keys and BLAKE3 payloads from one read snapshot,
+  including committed WAL records. Do not repair, delete or reset a damaged store.
+- Separate healthy, unhealthy, incomplete and absent results, keep cache/state
+  counts distinct, bound sanitized details, and preserve machine-readable JSON on
+  failure. The GUI invalidates incomplete statistics and prevents overlapping actions.
+- Preserve the workspace's existing dependency refresh for tracing, thiserror,
+  TOML, pinned Rust toolchain Actions and the OSS-Fuzz base image. No additional
+  runtime dependency is introduced for either feature.
+
+### Local directory-cache unification (2026-10-09)
+
+- Read, write and purge ordinary directory scan snapshots through shared local
+  SQLite only. Remove PostgreSQL-first reads, required PostgreSQL writes and dual
+  replica cleanup from this Core path; explicit advanced analysis/cleanup remains.
+- Hash native path bytes and each normalized option as separate fixed-width fields
+  under a versioned identity domain. Old ambiguous keys are not silently reused.
+- Require root-directory evidence and known full-resolution directory timestamps
+  for IMG/VID snapshot reuse. Same-second changes, deleted directories, replacement
+  files and missing evidence invalidate the snapshot; schema 3 excludes the old
+  seconds-only format. Media verification remains mandatory.
+- Preserve explicit cache read/write failures and retry behavior. Namespace-scoped
+  local cleanup reports actual deleted rows and retains checkpoints, processed
+  receipts and unknown state. No user database is reset or migrated by development
+  tests; cache capacity, TTL/LRU and complete run-state unification remain separate.
+
+### Durable SQLite state boundaries (2026-10-09)
+
+- Preserve checkpoint, processed-file and unknown-namespace rows on schema or
+  BLAKE3 failure and return an explicit error. Only reconstructable path-tree
+  cache may be evicted; conditional deletion preserves a concurrently repaired row.
+- Reject unknown, unversioned nonempty and incomplete stores before any schema or
+  journal changes. Initialize and migrate atomically under a write transaction,
+  rechecking the version after obtaining the lock. Current stores skip DDL.
+- Stream legacy payload migration one row at a time. A CRC32 failure in durable
+  state rolls back the complete migration, while invalid path-tree cache may be
+  discarded. Use WAL/FULL commits and remove advice to delete the shared database.
+- Retain the in-memory processed set if deleting its persisted record fails.
+  Isolate checkpoint regression databases in temporary directories and serialize
+  tests that reset shared processed state. History/audit/run-state unification
+  remains an ongoing task; no production databases are rewritten by this update's
+  development tests.
+- Serialize checkpoint mutations through their database commit, rolling back the
+  in-memory change on failure. Failed writes remain retryable, changed file
+  signatures can replace an old entry, and older snapshots cannot overwrite newer
+  commits from the same manager. Checkpoint cleanup now propagates deletion and
+  lock-release errors. Processed-set load/save/clear use the same lock discipline.
+
+### Accurate standard batch byte totals (2026-10-09)
+
+- Share checked, nullable converted-byte totals between standard IMG and VID.
+  Missing output sizes no longer count as zero in IMG or as input sizes in VID.
+  Overflow invalidates the affected total instead of wrapping to a smaller value.
+- Keep incomplete totals unknown across later successful files and suppress size
+  differences and percentages when either operand is unavailable. Outcome counts,
+  source retention, and verification policies are unchanged.
+- Remove the substituted-size helper and strengthen the existing M165 contract to
+  prevent its return. Standard IMG/VID history size integration remains separate.
+
+### Effective configuration provenance (2026-10-09)
+
+- Record ordered configuration source layers in the shared resolver, including
+  same-value file, environment and CLI overrides. Keep existing precedence and
+  final-source reporting; expose `source_chain` in IMG/VID effective-config JSON.
+- Add Developer-only setting information buttons with read-only previews of the
+  actual value and applied layers. Resolve IMG, Fast IMG/Photos and VID with their
+  own arguments; mixed IMG/VID performance settings remain separate.
+- Reject missing or inconsistent provenance instead of fabricating an override
+  chain. Discard late previews after edits, cancellation or application; keep
+  long paths selectable and scrollable. Current history snapshots are unchanged.
+
+### Phase-focused live logs (2026-10-09)
+
+- Emit shared, versioned presentation-phase events when file processing and
+  verification gates actually begin. Reuse the terminal marker writer and preserve
+  the full worker output in history; no verification or outcome policy changes.
+- Replace the live log only at coarse phase boundaries. Keep Gate 1-3 together,
+  combine short phases, preserve diagnostics and counts across replacements, and
+  hide previous file-progress percentages during verification. Malformed or unknown
+  events keep the existing view and produce a warning.
+- Keep concrete failure details visible when a later gate summary reports failure;
+  aggregate gate status must not overwrite the actionable cause.
+- Verify that phase transitions preserve complete stored output, and correct the
+  obsolete log-folder instruction in all three GUI languages.
+- Preserve the workspace dependency refresh for the tracing family and zerocopy
+  Git revisions; crate versions remain unchanged.
+
+### Visible diagnostics and navigable history output (2026-10-08)
+
+- Keep the latest error and warning visible below the native GUI log. Preserve a
+  concrete cause through aggregate summaries and completion boilerplate, reset
+  diagnostics for new batches and resumed attempts, and avoid repeating an exit
+  message beside an already confirmed file-failure status. Stored output remains
+  intact and diagnostic highlighting never changes authoritative outcome counts.
+- Share log severity classification between live presentation and history filters.
+  Strip ANSI decoration and distinguish the stderr transport prefix from actual
+  errors; routine encoder output and filenames containing `failed=1` are not failures.
+- Add Summary/Output controls, older/newer cursor navigation and a current-page
+  diagnostic filter. Each page is bounded to 1,000 records and 2 MiB, scoped to a
+  stable sequence snapshot within its session and batch. Show record ranges and
+  counts explicitly, never as failed-file totals.
+- Keep malformed or oversized output rows visible as navigable notices. Reject
+  stale asynchronous pages after selection, filter, mode or refresh changes;
+  selection changes clear the previous batch's range, and failed loads clear stale
+  navigation and allow retry. Add synthetic regression
+  coverage without reading or modifying production history or Photos libraries.
+- Preserve the workspace's zerocopy/zerocopy-derive 0.8.62 refresh and native
+  AppKit design-verification guidance. Confirm the preceding `fe06358d` revision
+  passed all 15 jobs in workflow run `37745986860`, including Nightly publishing;
+  the older `794ea8c5` failures were already corrected in that revision.
+
+### Stage-scoped live progress (2026-10-08)
+
+- Add shared, versioned file-progress snapshots for launcher-managed standard
+  IMG/VID batches and Fast IMG encoding. Native GUI shows the current stage,
+  processed/total files and a two-decimal percentage, independently of success
+  counts and final delivery results. Unknown or invalid progress is not shown as
+  zero or completion; unfinished work never rounds up to 100.00%.
+- Count Fast IMG encode dispositions only after wave results are persisted;
+  failures and skips advance the stage, while resume-reused outputs remain outside
+  its pending-job denominator. Early termination keeps the actual processed count.
+- Serialize parallel progress updates, prevent stale terminal updates from moving
+  counts backward, and frame structured records separately from PTY redraws.
+  Throttle emitted snapshots and coalesce GUI refreshes outside the diagnostic
+  reserve; launcher SQLite retains emitted records without replacing batch results.
+
+### Approved first logo and CI corrections (2026-10-08)
+
+- Adopt the approved first media-card logo in the macOS app icon, main-window
+  identity and both README pages. Package standard and Retina icon sizes without
+  redesigning the source artwork; native self-test verifies the bundled image.
+- Fix strict CI lint failures in session configuration and launcher error handling,
+  preserving output draining and the original error. Exact byte-count parsing now
+  reports numeric failures through the shared metric parser instead of discarding
+  the parse error; malformed or overflowing counts remain unknown, not zero.
+- Preserve the workspace dependency refresh for TOML, tracing and zerocopy,
+  plus the pinned OSS-Fuzz builder image update.
+
+### Searchable Settings and scoped size history (2026-10-08)
+
+- Search native Settings by localized names, sections and choices; Developer mode
+  also searches runtime keys and CLI flags. Navigate to the original control,
+  reveal applicable Photos advanced fields, retain unsaved edits, and support
+  keyboard selection without treating Return in search as Apply. Results respect
+  the active workflow, backend and Developer visibility.
+- Record exact Fast IMG input/output bytes for newly converted files and highlight
+  reduction, growth or unchanged size in batch history. Exclude resume-only totals
+  from new-run benefits, preserve partial evidence, and never imply physical disk
+  space was freed. Invalid or conflicting size data is reported independently of
+  valid media counts and terminal failure status.
+- Remove the obsolete GUI preference migration that copied standard IMG settings
+  into Fast IMG while reading. Current independent preferences remain supported;
+  regression coverage requires read-only loading and no cross-profile copying.
+- Reject malformed exact-byte metrics instead of stripping arbitrary characters
+  into a valid-looking count. File failures remain prominent even when auxiliary
+  size evidence is incomplete or invalid.
+
+### Worker configuration history and scoped Settings
+
+- Add independent VID `--config`/`--no-config`, `config show --effective` and
+  `config validate` through the shared resolver, without database or media startup.
+  Add typed `vid.codec` with a HEVC default and CLI precedence. Derive implicit
+  Apple delivery compatibility from the resolved codec; configured AV1 no longer
+  conflicts with a launcher-injected Apple flag. Explicit AV1/Apple contradictions
+  remain rejected, and Fast GIF retains its own strategy.
+- Move video codec selection into a compact native Settings video tab. Add
+  developer VID configuration and independent IMG/Fast IMG tool-policy controls.
+  Query actual worker values and sources; preserve different inherited IMG/VID
+  performance profiles unless a shared override is explicitly selected. Keep
+  Photos settings available and unchanged controls free of accidental overrides.
+- Capture the worker's already resolved runtime JSON, winning field sources and
+  package version as structured SQLite history events. Reject partial/default-filled
+  snapshots, incorrect pipeline/version, incomplete source maps and duplicate
+  markers per invocation. Drain the child before propagating history errors;
+  do not duplicate configuration JSON into realtime or worker-text output.
+- Preserve collected media counts and the original child exit on marker, worker
+  output or post-collection history write failure. Keep capturing later output
+  after a bad marker, report simultaneous failures, stop unsafe downstream steps,
+  and attempt the final structured summary before returning the original error.
+- Show distinct captured configs in batch history, counting worker invocations
+  separately from media outcomes. Keep older batches explicitly unrecorded;
+  malformed/future/bounded records preserve known counts and prior snapshots,
+  report incomplete evidence, and cannot hide a failed batch. Complete run
+  manifests, losing override chains and selected backend/tool-version evidence
+  remain separate follow-up work.
+- Prefix session archives with the sanitized processed-folder name, capped at
+  64 UTF-8 bytes, with exclusive directory creation and collision suffixes.
+  Preserve old archives and recognize both naming schemes in history; reject
+  unsafe session stamps. Align the existing Python archive helper with Rust.
+- Validation: 98 focused configuration, history, launcher and archive/path tests
+  pass, as does the complete native-host self-test. Compare resolved paths for
+  the named-archive regression on macOS's `/var` alias. Refresh all nine bundled
+  tools, the GUI, Photos helper and foundation library; packaged versions and
+  Mach-O UUIDs match their build outputs, and deep strict signing verification
+  passes. No production Photos library or source media was used in these tests.
+
 ### Version consistency and batch output history
 
 - Make the workspace package version the release source of truth. CLI packages,

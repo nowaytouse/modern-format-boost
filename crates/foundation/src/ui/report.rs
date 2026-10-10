@@ -42,6 +42,76 @@ fn is_recoverable_single_file_error(error: &anyhow::Error) -> bool {
         .is_some_and(|error| error.category() == crate::unified_error::ErrorCategory::Recoverable)
 }
 
+/// Current-run converted files only; a missing measurement invalidates its total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvertedByteTotals {
+    input: Option<u64>,
+    output: Option<u64>,
+}
+
+impl Default for ConvertedByteTotals {
+    fn default() -> Self {
+        Self {
+            input: Some(0),
+            output: Some(0),
+        }
+    }
+}
+
+impl ConvertedByteTotals {
+    pub fn record(&mut self, input: u64, output: Option<u64>) {
+        let next_input = self.input.and_then(|total| total.checked_add(input));
+        let next_output = self
+            .output
+            .zip(output)
+            .and_then(|(total, bytes)| total.checked_add(bytes));
+        if (self.input.is_some() && next_input.is_none())
+            || (self.output.is_some() && next_output.is_none())
+        {
+            tracing::warn!(
+                input_bytes = input,
+                output_bytes = ?output,
+                "Converted byte total unavailable: missing measurement or overflow; no size substituted"
+            );
+        }
+        self.input = next_input;
+        self.output = next_output;
+    }
+
+    fn comparison(self) -> Option<SizeComparison> {
+        self.input
+            .zip(self.output)
+            .map(|(input, output)| SizeComparison::new(input, output))
+    }
+
+    fn receipt_line(self) -> String {
+        format!(
+            "MFB_CONVERTED_BYTES={}",
+            serde_json::json!({
+                "schema_version": 1,
+                "scope": "converted_this_run",
+                "input_bytes": self.input,
+                "output_bytes": self.output,
+            })
+        )
+    }
+
+    fn log_fragment(self) -> String {
+        self.comparison().map_or_else(
+            || {
+                format!(
+                    "before={}, after={}, diff=unknown, change=N/A",
+                    self.input
+                        .map_or_else(|| "unknown".to_owned(), format_bytes),
+                    self.output
+                        .map_or_else(|| "unknown".to_owned(), format_bytes),
+                )
+            },
+            SizeComparison::log_fragment,
+        )
+    }
+}
+
 /// Shared before/after size comparison for batch, single-file, and wrapper
 /// summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,13 +305,12 @@ impl BoxStyle {
 pub fn print_summary(
     result: &Summary,
     duration: Duration,
-    input_bytes: u64,
-    output_bytes: u64,
+    bytes: ConvertedByteTotals,
     operation_name: &str,
 ) {
-    let comparison = SizeComparison::new(input_bytes, output_bytes);
-    let reduction_pct = summary_size_reduction_pct(input_bytes, output_bytes);
-    let reduction_str = comparison.reduction_label();
+    let comparison = bytes.comparison();
+    let reduction_str =
+        comparison.map_or_else(|| "N/A".to_owned(), SizeComparison::reduction_label);
     crate::log_info!(
         crate::infra::static_logs::messages::LABEL_REPORT,
         format!(
@@ -254,17 +323,39 @@ pub fn print_summary(
             skip = result.skipped,
             ignored = result.ignored,
             unprocessed = result.unprocessed,
-            comparison = comparison.log_fragment(),
+            comparison = bytes.log_fragment(),
             dur = format_duration(duration),
         )
     );
 
     print_report_header(operation_name);
     print_file_stats(result);
-    print_size_info(comparison, reduction_pct);
+    if let Some(comparison) = comparison {
+        print_size_info(
+            comparison,
+            summary_size_reduction_pct(comparison.before_bytes(), comparison.after_bytes()),
+        );
+    } else {
+        let style = BoxStyle::current();
+        style.emit_row(&format!(
+            "Converted Before: {}",
+            bytes
+                .input
+                .map_or_else(|| "unknown".to_owned(), format_bytes)
+        ));
+        style.emit_row(&format!(
+            "Converted After:  {}",
+            bytes
+                .output
+                .map_or_else(|| "unknown".to_owned(), format_bytes)
+        ));
+        style.emit_row("Size change: unavailable (missing measurement or byte total overflow)");
+        style.emit_border_mid();
+    }
     print_time_info(result, duration);
     print_error_summary(result);
     print_pause_info(result);
+    println!("{}", bytes.receipt_line());
 }
 
 /// Size reduction percent for summary reporting. Returns `None` when input size
@@ -607,6 +698,70 @@ mod tests {
     }
     use super::*;
 
+    fn receipt_payload(bytes: ConvertedByteTotals) -> serde_json::Value {
+        let line = bytes.receipt_line();
+        assert_eq!(line.lines().count(), 1);
+        serde_json::from_str(line.strip_prefix("MFB_CONVERTED_BYTES=").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn converted_byte_receipt_preserves_exact_integers_and_scope() {
+        for (input, output) in [(0, 0), (1_200, 1_250), (u64::MAX, u64::MAX - 1)] {
+            let mut bytes = ConvertedByteTotals::default();
+            bytes.record(input, Some(output));
+            let payload = receipt_payload(bytes);
+            assert_eq!(payload.as_object().unwrap().len(), 4);
+            assert_eq!(payload["schema_version"], 1);
+            assert_eq!(payload["scope"], "converted_this_run");
+            assert_eq!(payload["input_bytes"].as_u64(), Some(input));
+            assert_eq!(payload["output_bytes"].as_u64(), Some(output));
+        }
+    }
+
+    #[test]
+    fn converted_byte_totals_keep_missing_and_overflow_unknown() {
+        let mut bytes = ConvertedByteTotals::default();
+        bytes.record(1_000, Some(750));
+        bytes.record(200, Some(500));
+        assert_eq!(bytes.comparison(), Some(SizeComparison::new(1_200, 1_250)));
+
+        bytes.record(100, None);
+        bytes.record(100, Some(50));
+        assert_eq!(bytes.input, Some(1_400));
+        assert_eq!(bytes.output, None);
+        assert_eq!(bytes.comparison(), None);
+        let payload = receipt_payload(bytes);
+        assert_eq!(payload["input_bytes"], 1_400);
+        assert!(payload["output_bytes"].is_null());
+        assert_eq!(
+            bytes.log_fragment(),
+            format!(
+                "before={}, after=unknown, diff=unknown, change=N/A",
+                format_bytes(1_400)
+            )
+        );
+
+        for (first, second, expected_input, expected_output) in [
+            ((u64::MAX, Some(1)), (1, Some(2)), None, Some(3)),
+            ((1, Some(u64::MAX)), (2, Some(1)), Some(3), None),
+        ] {
+            let mut overflow = ConvertedByteTotals::default();
+            overflow.record(first.0, first.1);
+            overflow.record(second.0, second.1);
+            overflow.record(0, Some(0));
+            assert_eq!(overflow.input, expected_input);
+            assert_eq!(overflow.output, expected_output);
+            let payload = receipt_payload(overflow);
+            assert_eq!(payload["input_bytes"], serde_json::json!(expected_input));
+            assert_eq!(payload["output_bytes"], serde_json::json!(expected_output));
+            assert!(overflow.comparison().is_none());
+            assert!(overflow.log_fragment().contains("diff=unknown, change=N/A"));
+        }
+        let mut empty = ConvertedByteTotals::default();
+        empty.record(0, Some(0));
+        assert_eq!(empty.comparison(), Some(SizeComparison::new(0, 0)));
+    }
+
     #[test]
     fn test_print_simple_summary_no_panic() {
         let mut result = Summary::new();
@@ -628,7 +783,9 @@ mod tests {
         let result = Summary::new();
         let duration = Duration::from_secs(1);
 
-        print_summary(&result, duration, 1000, 500, "Test");
+        let mut bytes = ConvertedByteTotals::default();
+        bytes.record(1000, Some(500));
+        print_summary(&result, duration, bytes, "Test");
     }
 
     #[test]
@@ -682,20 +839,27 @@ mod tests {
             summary_size_reduction_pct(0, 0).is_none(),
             "zero input_bytes must not fabricate 0.0% reduction in summary"
         );
-        print_summary(&result, duration, 0, 0, "Test");
+        print_summary(&result, duration, ConvertedByteTotals::default(), "Test");
     }
 
     #[test]
     fn report_title_padding_handles_wide_operation_name() {
         let result = Summary::new();
-        print_summary(&result, Duration::from_secs(1), 0, 0, "日本語テスト");
+        print_summary(
+            &result,
+            Duration::from_secs(1),
+            ConvertedByteTotals::default(),
+            "日本語テスト",
+        );
     }
 
     #[test]
     fn report_plain_mode_uses_ascii_box() {
         crate::progress_mode::set_plain_mode(true);
         let result = Summary::new();
-        print_summary(&result, Duration::from_secs(1), 100, 50, "PlainTest");
+        let mut bytes = ConvertedByteTotals::default();
+        bytes.record(100, Some(50));
+        print_summary(&result, Duration::from_secs(1), bytes, "PlainTest");
         crate::progress_mode::set_plain_mode(false);
     }
 

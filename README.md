@@ -1,6 +1,8 @@
 # Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-0.11.3-0969DA?style=for-the-badge&logo=rust&logoColor=white)
+<img src="docs/assets/mfb-logo.png" alt="Modern Format Boost" width="160" height="160">
+
+![Version](https://img.shields.io/badge/version-0.12.0-0969DA?style=for-the-badge&logo=rust&logoColor=white)
 ![Rust](<https://img.shields.io/badge/rust-2024_edition_(nightly)-E57324?style=for-the-badge&logo=rust&logoColor=white>)
 ![Platform](https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge)
@@ -61,7 +63,101 @@ Matching output cardinalities do not replace identity or content verification.
 See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
 receipt uniqueness, error handling and regression boundaries.
 
+### Settings And Batch Configuration
+
+Settings now has a dedicated **Videos** tab. Standard VID supports independent
+`--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
+The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
+delivery, while an explicitly conflicting Apple-compatibility request is rejected.
+Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
+and does not relax codec fallback or mandatory verification. Photos settings remain
+available. Unchanged inherited values are not saved as GUI overrides; different
+IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
+Search Settings by a localized option name, section or choice, then jump directly
+to its existing control. Developer mode also accepts configuration keys and flags.
+Search preserves unsaved edits and reveals applicable advanced Photos fields.
+Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
+their own current overrides.
+
+New launcher-managed IMG/VID invocations record the worker's resolved runtime JSON,
+winning field sources and worker version in `history.sqlite3`. Processing History
+shows these captured snapshots, not a reconstruction using today's preferences.
+Multiple worker invocations remain distinct from media counts; identical snapshots
+share a display entry. Older records explicitly say configuration was not recorded.
+This captures fields in `RuntimeConfig`, not every command-specific flag, the full
+override chain, tool versions or the backend ultimately selected after a fallback.
+Session archives use a sanitized input-folder prefix, such as
+`Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
+See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
+
+Processing History highlights recorded Fast IMG and standard IMG/VID batch size
+changes, with exact input and output byte counts for files newly converted in that
+run. Skipped, failed and reused files are excluded; resume-only totals are not
+attributed to a new run. Standard workers emit structured integer receipts instead
+of parsing display units. Multiple active workers are combined with checked sums;
+missing measurements keep totals unknown. Single-file and older invocations without
+a receipt remain unrecorded.
+Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
+cannot erase valid processing counts or a failed result, and a smaller output is
+not presented as proof that disk space was freed.
+
+### Live file progress
+
+During launcher-managed standard IMG/VID batches and Fast IMG encoding, the native
+GUI shows stage-specific file progress with processed/total counts and two decimal
+places. This is not a time estimate or whole-run completion: failed and skipped
+files can advance a stage, and verification/delivery may still follow. Fast IMG
+counts newly pending jobs only after their wave results are persisted, excluding
+resume-reused outputs. Other phases remain indeterminate until reliable totals
+are available; final success still comes from the processing result.
+
 ### Cache management
+
+Directory scan snapshots now read and write only the shared local SQLite store;
+this cache path does not connect to PostgreSQL or maintain a second replica.
+Versioned cache identities preserve native path bytes and normalized scan options.
+Directory freshness uses full-resolution timestamps, requires root evidence, and
+rejects missing or unknown evidence. Older scan identities are rebuilt on demand;
+checkpoints and processed-file records are not invalidated. This does not replace
+media verification or establish content identity from directory timestamps.
+
+Shared configuration controls the directory cache with `cache.path_tree_max_bytes`
+(default 268435456, 256 MiB of serialized payload) and `cache.path_tree_ttl_seconds`
+(default 2592000, 30 idle days). Successful reads refresh its last-use time;
+expired entries are rejected and writes evict least-recently-used entries within
+the payload budget. Equal-second accesses use a deterministic key tie-break.
+An oversized snapshot is explicitly not saved, without evicting existing entries.
+Eviction and admission are atomic and never apply to durable or unknown namespaces.
+The budget does not include SQLite pages, WAL, or protected state.
+
+IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
+`--cache-ttl-seconds`. Explicit flags override configuration files; omitted flags
+retain inherited values, and `config show --effective` reports their source chain.
+Both accept positive integers up to 9223372036854775807. The launcher forwards
+explicit overrides to IMG/VID and fast modes without inserting defaults. Settings >
+Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
+inherit configuration; resetting this tab removes only cache overrides. If IMG and
+VID inherit different limits, the combined view keeps their separate values until
+an explicit shared override is entered. Developer mode shows each source chain.
+
+Use `cache_cleaner --prune --yes --json` to apply the configured TTL and capacity
+without processing media or clearing all useful cache. `--config PATH`,
+`--no-config`, and the same cache flags can select its policy. The JSON `pruning`
+receipt includes that policy plus distinct expired/time-invalid and LRU removal
+counts. Pruning is transactional, retains formal state and unknown namespaces,
+does not create/migrate a missing/unsupported store, and does not remove legacy
+cache files or vacuum the database. Without `--yes`, interactive confirmation is
+required; prompts go to stderr so JSON stdout remains machine-readable. If deletion
+committed but subsequent inspection fails, the error states the committed counts.
+Do not combine pruning with `--stats`, integrity inspection, a target
+path, PostgreSQL cleanup, or session-state cleanup.
+
+The optional PostgreSQL analysis cache reports record counts and algorithm-version
+counts from one read snapshot. Its allocated size covers the analysis, quality,
+video, path-index and metadata relations, including indexes/TOAST, not the whole
+shared database or immediately reclaimable space. Age-based maintenance deletes
+records and orphan path indexes atomically; invalid retention or count errors fail
+explicitly. This is separate from SQLite directory-cache TTL/LRU maintenance above.
 
 The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
@@ -69,6 +165,17 @@ confirmed cleanup removes only local path-tree snapshots and obsolete analysis
 cache files. History, checkpoints, processed-file receipts, verification state,
 models and unrecognized namespaces/files remain intact. SQLite reuses deleted
 pages, so database file size is not a promise of immediately reclaimable space.
+
+**Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
+checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read
+snapshot. It distinguishes healthy, damaged, incomplete and not-yet-created stores,
+with separate checked/damaged cache and protected-state counts. Failure exits
+nonzero while preserving valid JSON; details are bounded and do not expose stored
+payloads. Inspection does not repair, migrate, vacuum or delete data. It includes
+committed WAL data; SQLite may update shared-memory reader coordination, but not
+the database or WAL contents. This checks storage integrity, not media fidelity or
+the completeness of every historical run. A successful result applies to that
+snapshot only; no background monitoring is started.
 
 CLI: `cache_cleaner --stats --json` inspects local cache; `cache_cleaner --yes
 --json` clears the managed local cache; a positional path scopes snapshot deletion
@@ -78,6 +185,23 @@ caches and fails if that service is unavailable. `--purge-session-state` remains
 separate destructive maintenance command, never used by GUI Clear Cache; unattended
 cleanup requires `--yes`. Unknown/corrupt schemas and linked managed cache files
 are rejected without resetting the database.
+
+The shared `mfb_store.sqlite` also holds durable checkpoint and processed-file
+records; its location under the cache directory does not make the entire file
+disposable. Invalid record versions or BLAKE3 digests stop state recovery and leave
+the saved row intact. Only reconstructable path-tree cache may become a cache miss.
+Unknown namespaces receive the same preservation policy as durable state.
+
+Store initialization and CRC32-to-BLAKE3 migration use one transaction. A corrupt
+durable row aborts the entire migration; valid records are never partially promoted.
+Migration reads one payload at a time, and current stores skip schema creation on
+reopen. Connections use WAL with `synchronous=FULL` for durable commits, favoring
+saved-state reliability over minimum write latency. Unknown, unversioned nonempty,
+and incomplete stores are rejected before initialization, not silently repaired.
+This does not yet unify every history, audit and run-state database or file.
+Checkpoint updates are acknowledged only after persistence succeeds. Failed
+writes or deletions retain the previous in-memory state and can be retried;
+concurrent calls on one manager cannot commit snapshots out of order.
 
 ### What it guarantees—and what it does not
 
@@ -428,7 +552,27 @@ and uses **unknown** when a child did not report a count. A nonzero child exit
 or a reported file failure cannot become an all-success completion message.
 
 The GUI always enables detailed logs and starts each batch with a clean log
-view. **Processing History** opens a read-only recent-batch inspector with search,
+view. Compact latest-error and latest-warning lines retain the specific cause
+through completion; generic summaries and exit messages cannot replace an existing
+error. Ordinary stderr output is not treated as a failure. These presentation-only
+highlights reset for the next batch and do not alter processor outcome counts.
+The live log follows explicit backend phases: file processing, then verification
+and delivery. Gate 1-3 share one view; short phases are combined to avoid rapid
+clearing. Phase changes only replace displayed text, preserving errors, warnings
+and recorded counts. Full worker output remains in SQLite history. Unknown phase
+events retain the current view with a warning instead of guessing a new phase.
+In Developer settings, the information button beside a runtime setting previews
+its actual value and applied configuration layers. IMG and VID are resolved
+separately when their performance settings differ. Previews do not save settings
+or run media processing. CLI `config show --effective` exposes the same ordered
+`source_chain` alongside each field's final `sources` entry; explicit overrides
+remain visible even when they keep the same value. History configuration snapshots
+continue to retain final sources, not this new preview-only override chain.
+Standard IMG/VID batch reports aggregate only this run's successful conversions.
+Missing output measurements or overflowing byte totals remain unknown and suppress
+size-difference percentages; input size is never substituted for missing output.
+This CLI accounting does not yet add standard IMG/VID size totals to history.
+**Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a
 batch to inspect its details or open its corresponding log without browsing
@@ -447,9 +591,13 @@ over a session's legacy audit, so archiving cannot duplicate its counts. Unknown
 database versions and write failures are explicit errors, never automatic resets.
 The launcher's captured combined worker output is now buffered into the same
 database, not duplicated into session and verbose text logs. **View processing
-output** reads the selected batch's latest 1,000 records, bounded to 2 MB, and
-shows the displayed/total record count. Batch sequence boundaries keep watch-mode
-runs separate; output is not interpreted as authoritative failure/warning counts.
+output** opens its latest page, with older/newer navigation and a Summary/Output
+switch. Each page is bounded to 1,000 records and 2 MiB; record ranges and totals
+refer to the captured output snapshot, not files. A Diagnostics filter shows only
+warnings, errors and unreadable-row notices on the current page. Oversized or
+invalid records are explicitly marked without blocking navigation. Refresh to
+include output appended since the snapshot. Batch sequence boundaries keep
+watch-mode runs separate; output is not interpreted as authoritative failure counts.
 History schema v1 upgrades transactionally to v2 while retaining earlier events.
 Batch details also retain the running version and explicit retry/resume requests.
 Internal tracing, pipeline audit files and recovery checkpoints have not yet fully
@@ -853,7 +1001,7 @@ winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool \
 ### 🗄️ Database Setup
 
 Modern Format Boost uses PostgreSQL (with the `pgvector` extension) for Vid,
-training, cache-management commands and explicitly enabled quality heuristics.
+training, explicitly requested advanced cache cleanup and enabled quality heuristics.
 Normal `img run`, FastImg and JPEG restoration use exact local detection by
 default and do not connect to PostgreSQL. When a database-backed feature is
 selected, an unreachable database remains a fail-closed startup error.

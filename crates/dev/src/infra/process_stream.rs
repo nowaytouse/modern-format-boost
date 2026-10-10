@@ -22,6 +22,63 @@ pub struct ProcessorStats {
     pub unprocessed: Option<usize>,
     /// Distinguish a malformed pending count from a legacy report without it.
     pub unprocessed_invalid: bool,
+    /// Exact current-run measurements; absence is not a zero-byte result.
+    pub converted_bytes: Option<ProcessorByteTotals>,
+    pub converted_bytes_invalid: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessorByteTotals {
+    pub input_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
+}
+
+impl ProcessorByteTotals {
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            input_bytes: self
+                .input_bytes
+                .zip(other.input_bytes)
+                .and_then(|(a, b)| a.checked_add(b)),
+            output_bytes: self
+                .output_bytes
+                .zip(other.output_bytes)
+                .and_then(|(a, b)| a.checked_add(b)),
+        }
+    }
+
+    #[must_use]
+    pub const fn unknown() -> Self {
+        Self {
+            input_bytes: None,
+            output_bytes: None,
+        }
+    }
+}
+
+fn parse_converted_bytes(payload: &str) -> Option<ProcessorByteTotals> {
+    if payload.len() > 4096 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if value.get("schema_version")?.as_u64()? != 1
+        || value.get("scope")?.as_str()? != "converted_this_run"
+    {
+        return None;
+    }
+    let bytes = |key| {
+        let field = value.get(key)?;
+        if field.is_null() {
+            Some(None)
+        } else {
+            field.as_u64().map(Some)
+        }
+    };
+    Some(ProcessorByteTotals {
+        input_bytes: bytes("input_bytes")?,
+        output_bytes: bytes("output_bytes")?,
+    })
 }
 
 impl ProcessorStats {
@@ -150,6 +207,25 @@ fn is_video_progress_overlay(stats: &[&str]) -> bool {
 pub fn ingest_stats_line(stats: &mut ProcessorStats, line: &str) {
     let clean = strip_ansi_escapes(line);
     let mut text = clean.trim();
+    if let Some(payload) = text.strip_prefix("MFB_CONVERTED_BYTES=") {
+        if stats.converted_bytes_invalid {
+            return;
+        }
+        if let Some(bytes) = parse_converted_bytes(payload)
+            && stats
+                .converted_bytes
+                .is_none_or(|previous| previous == bytes)
+        {
+            stats.converted_bytes = Some(bytes);
+        } else {
+            stats.converted_bytes_invalid = true;
+            stats.converted_bytes = None;
+            eprintln!(
+                "[PROCESS] Invalid or conflicting converted-byte receipt; size totals unavailable"
+            );
+        }
+        return;
+    }
     if let Some(body) = text.strip_prefix('|').or_else(|| text.strip_prefix('│')) {
         text = body.trim();
     }
@@ -649,6 +725,47 @@ mod tests {
         let empty = parse_stats_from_output("[ENCODE] no summary available");
         assert_eq!(empty.reported, [false; 4]);
         assert_eq!(empty.unprocessed, None);
+    }
+
+    #[test]
+    fn converted_byte_receipts_are_exact_idempotent_and_fail_closed() {
+        let receipt = r#"MFB_CONVERTED_BYTES={"schema_version":1,"scope":"converted_this_run","input_bytes":9007199254740993,"output_bytes":null}"#;
+        let mut stats = parse_stats_from_output(receipt);
+        let expected = ProcessorByteTotals {
+            input_bytes: Some(9_007_199_254_740_993),
+            output_bytes: None,
+        };
+        assert_eq!(stats.converted_bytes, Some(expected));
+        ingest_stats_line(&mut stats, receipt);
+        assert_eq!(stats.converted_bytes, Some(expected));
+        assert!(!stats.converted_bytes_invalid);
+        assert!(
+            parse_stats_from_output(&format!("filename {receipt}"))
+                .converted_bytes
+                .is_none()
+        );
+        for invalid in [
+            r#"{"schema_version":2,"scope":"converted_this_run","input_bytes":1,"output_bytes":2}"#,
+            r#"{"schema_version":1,"scope":"all_files","input_bytes":1,"output_bytes":2}"#,
+            r#"{"schema_version":1,"scope":"converted_this_run","input_bytes":-1,"output_bytes":2}"#,
+            r#"{"schema_version":1,"scope":"converted_this_run","input_bytes":1.5,"output_bytes":2}"#,
+            r#"{"schema_version":1,"scope":"converted_this_run","input_bytes":1}"#,
+            r#"{"schema_version":1,"scope":"converted_this_run","input_bytes":1,"output_bytes":2}"#,
+        ] {
+            let mut bad = stats.clone();
+            ingest_stats_line(&mut bad, &format!("MFB_CONVERTED_BYTES={invalid}"));
+            ingest_stats_line(&mut bad, receipt);
+            assert!(bad.converted_bytes_invalid);
+            assert!(bad.converted_bytes.is_none());
+        }
+        let unknown = parse_stats_from_output(
+            r#"MFB_CONVERTED_BYTES={"schema_version":1,"scope":"converted_this_run","input_bytes":null,"output_bytes":null}"#,
+        );
+        assert_eq!(
+            unknown.converted_bytes,
+            Some(ProcessorByteTotals::unknown())
+        );
+        assert!(!unknown.converted_bytes_invalid);
     }
 
     #[test]

@@ -24,6 +24,8 @@ use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
 pub struct CacheStatistics {
+    /// Allocated bytes for analysis-cache relations, including indexes and TOAST.
+    /// This is not the size of the shared database or immediately reclaimable space.
     pub db_size_bytes: u64,
     pub analysis_records: usize,
     pub quality_records: usize,
@@ -101,7 +103,8 @@ impl FileSignature {
             .with_context(|| format!("mtime exceeds i64 nanoseconds for {}", path.display()))?;
 
         #[cfg(unix)]
-        let ctime = metadata.ctime_nsec();
+        let ctime =
+            crate::numeric_cast::unix_parts_to_nanos(metadata.ctime(), metadata.ctime_nsec())?;
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
@@ -515,7 +518,7 @@ where
     }
 }
 
-fn purge_orphan_path_index_entries(client: &mut Client) -> Result<()> {
+fn purge_orphan_path_index_entries(client: &mut impl postgres::GenericClient) -> Result<()> {
     client.execute(
         "DELETE FROM path_index WHERE content_hash NOT IN (
             SELECT content_hash FROM analysis_records 
@@ -1601,39 +1604,35 @@ impl AnalysisCache {
     /// Delete old records from the cache.
     ///
     /// # Errors
-    /// Returns an error if the database deletion fails.
-    /// # Panics
-    ///
-    /// Panics if the database schema is corrupted or columns are missing.
+    /// Returns an error for invalid retention, deletion failure, or count overflow.
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
+        anyhow::ensure!(max_age_secs >= 0, "cache retention must not be negative");
+        let threshold = crate::numeric_cast::unix_secs_i64_result()?
+            .checked_sub(max_age_secs)
+            .context("cache retention threshold overflow")?;
         let mut client = open_pg_client()?;
-        let now = crate::numeric_cast::unix_secs_i64_result()?;
-        let threshold = now - max_age_secs;
+        Self::cleanup_before(&mut client, threshold)
+    }
+
+    fn cleanup_before(client: &mut Client, threshold: i64) -> Result<usize> {
+        let mut tx = client.transaction()?;
 
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut removed: usize = 0;
         for table in &tables {
-            let count = match usize::try_from(client.execute(
+            let count = usize::try_from(tx.execute(
                 &format!("DELETE FROM {table} WHERE created_at < $1"),
                 &[&threshold],
-            )?) {
-                Ok(v) => v,
-                Err(e) => {
-                    crate::media_conversion_gate::delivery_api_batch_fallback_audit(
-                        "analysis_cache_prune_count_invalid",
-                        format!(
-                            "failed to parse cache pruning result for {table}: {e:?}; assuming 0 \
-                             removed"
-                        ),
-                    );
-                    0
-                }
-            };
-            removed = removed.saturating_add(count);
+            )?)
+            .with_context(|| format!("cache pruning count exceeds usize for {table}"))?;
+            removed = removed
+                .checked_add(count)
+                .context("cache pruning count overflow")?;
         }
 
+        purge_orphan_path_index_entries(&mut tx)?;
+        tx.commit()?;
         if removed > 0 {
-            purge_orphan_path_index_entries(&mut client)?;
             crate::log_info!(
                 crate::infra::static_logs::messages::LABEL_CACHE,
                 &format!("Pruned {removed} old records across analysis/quality/video cache tables")
@@ -1645,60 +1644,85 @@ impl AnalysisCache {
     /// Get cache usage statistics.
     ///
     /// # Errors
-    /// Returns an error if the database query fails.
-    /// # Panics
-    ///
-    /// Panics if the database schema is corrupted or mandatory metadata entries
-    /// are missing.
+    /// Returns an error if a query fails or stored statistics are invalid.
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
+        Self::statistics_with_client(&mut client)
+    }
 
-        let analysis_count: i64 = client
+    fn statistics_with_client(client: &mut Client) -> Result<CacheStatistics> {
+        let mut tx = client
+            .build_transaction()
+            .isolation_level(postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()?;
+
+        let analysis_count: i64 = tx
             .query_one("SELECT COUNT(*) FROM analysis_records", &[])?
-            .get(0);
-        let quality_count: i64 = client
+            .try_get(0)?;
+        let quality_count: i64 = tx
             .query_one("SELECT COUNT(*) FROM quality_records", &[])?
-            .get(0);
-        let video_count: i64 = client
+            .try_get(0)?;
+        let video_count: i64 = tx
             .query_one("SELECT COUNT(*) FROM video_records", &[])?
-            .get(0);
-        let path_index_count: i64 = client
+            .try_get(0)?;
+        let path_index_count: i64 = tx
             .query_one("SELECT COUNT(*) FROM path_index", &[])?
-            .get(0);
+            .try_get(0)?;
+        let total = analysis_count
+            .checked_add(quality_count)
+            .and_then(|n| n.checked_add(video_count))
+            .context("cache record total overflow")?;
+        usize::try_from(total).context("cache record total exceeds usize")?;
 
         let mut version_dist = std::collections::HashMap::new();
         for table in &["analysis_records", "quality_records", "video_records"] {
-            let rows = client.query(
+            let rows = tx.query(
                 &format!(
                     "SELECT algorithm_version, COUNT(*) FROM {table} GROUP BY algorithm_version"
                 ),
                 &[],
             )?;
             for row in rows {
-                let v: i32 = row.get(0);
-                let c: i64 = row.get(1);
+                let v: i32 = row.try_get(0)?;
+                let c: i64 = row.try_get(1)?;
                 let entry = version_dist.entry(v).or_insert(0i64);
-                *entry = entry.saturating_add(c);
+                *entry = entry
+                    .checked_add(c)
+                    .context("cache version count overflow")?;
             }
         }
 
-        let schema_version: i32 = client
+        let schema_version: i32 = tx
             .query_one(
                 "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
                 &[],
             )?
-            .get(0);
+            .try_get(0)?;
+        let size: i64 = tx
+            .query_one(
+                "SELECT (pg_total_relation_size('analysis_records') +
+                     pg_total_relation_size('quality_records') +
+                     pg_total_relation_size('video_records') +
+                     pg_total_relation_size('path_index') +
+                     pg_total_relation_size('cache_metadata'))::bigint",
+                &[],
+            )?
+            .try_get(0)?;
 
-        Ok(CacheStatistics {
-            db_size_bytes: 0, // In Postgres, tracking actual disk size is complex per-table
-            analysis_records: crate::numeric_cast::i64_to_usize_sat(analysis_count),
-            quality_records: crate::numeric_cast::i64_to_usize_sat(quality_count),
-            video_records: crate::numeric_cast::i64_to_usize_sat(video_count),
-            path_index_entries: crate::numeric_cast::i64_to_usize_sat(path_index_count),
+        let statistics = CacheStatistics {
+            db_size_bytes: u64::try_from(size).context("invalid cache allocated size")?,
+            analysis_records: usize::try_from(analysis_count).context("invalid analysis count")?,
+            quality_records: usize::try_from(quality_count).context("invalid quality count")?,
+            video_records: usize::try_from(video_count).context("invalid video count")?,
+            path_index_entries: usize::try_from(path_index_count)
+                .context("invalid path index count")?,
             schema_version,
             algorithm_version_distribution: version_dist,
             current_algorithm_version: cache_algorithm(),
-        })
+        };
+        tx.commit()?;
+        Ok(statistics)
     }
 
     /// Enforce the cache size limit by deleting old records.
@@ -1765,6 +1789,97 @@ mod tests {
     use crate::image_quality_detector::{ImageContentType, ImageQualityAnalysis};
     use crate::types::{ProcessHistory, Visual};
     use std::io::Write;
+
+    #[test]
+    fn negative_retention_is_rejected_before_connecting() {
+        let error = AnalysisCache {}.cleanup_old_records(-1).unwrap_err();
+        assert!(error.to_string().contains("retention must not be negative"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_signature_keeps_full_status_change_time() {
+        use std::os::unix::fs::MetadataExt;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let metadata = file.as_file().metadata().unwrap();
+        let signature = FileSignature::from_path(file.path()).unwrap();
+        assert_eq!(
+            i128::from(signature.ctime),
+            i128::from(metadata.ctime()) * 1_000_000_000 + i128::from(metadata.ctime_nsec())
+        );
+    }
+
+    #[test]
+    #[ignore = "requires MFB_TEST_PG_CONFIG pointing to an isolated PostgreSQL instance"]
+    fn postgres_statistics_and_cleanup_are_accurate_and_atomic() -> Result<()> {
+        let config = std::env::var("MFB_TEST_PG_CONFIG")?;
+        let mut client = Client::connect(&config, postgres::NoTls)?;
+        // Temporary relations shadow production names and disappear with this connection.
+        client.batch_execute(
+            "CREATE TEMP TABLE analysis_records (
+                content_hash BYTEA PRIMARY KEY, created_at BIGINT, algorithm_version INT);
+             CREATE TEMP TABLE quality_records (LIKE analysis_records INCLUDING ALL);
+             CREATE TEMP TABLE video_records (LIKE analysis_records INCLUDING ALL);
+             CREATE TEMP TABLE path_index (file_path TEXT PRIMARY KEY, content_hash BYTEA);
+             CREATE TEMP TABLE cache_metadata (key TEXT PRIMARY KEY, value INT);
+             INSERT INTO cache_metadata VALUES ('schema_version', 1);
+             INSERT INTO analysis_records VALUES ('old', 1, 1), ('new', 10, 2);
+             INSERT INTO quality_records SELECT * FROM analysis_records;
+             INSERT INTO video_records SELECT * FROM analysis_records;
+             INSERT INTO path_index VALUES ('old', 'old'), ('new', 'new'), ('orphan', 'orphan');",
+        )?;
+        let stats = AnalysisCache::statistics_with_client(&mut client)?;
+        assert_eq!(stats.total_records(), 6);
+        assert_eq!(
+            (
+                stats.analysis_records,
+                stats.quality_records,
+                stats.video_records
+            ),
+            (2, 2, 2)
+        );
+        assert_eq!(stats.path_index_entries, 3);
+        assert_eq!(stats.algorithm_version_distribution.get(&1), Some(&3));
+        assert_eq!(stats.algorithm_version_distribution.get(&2), Some(&3));
+        assert!(stats.db_size_bytes > 0);
+
+        client.batch_execute(
+            "CREATE FUNCTION pg_temp.reject_cache_delete() RETURNS trigger LANGUAGE plpgsql AS
+             $$ BEGIN RAISE EXCEPTION 'injected delete failure'; END $$;
+             CREATE TRIGGER reject_delete BEFORE DELETE ON video_records
+             FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_cache_delete();",
+        )?;
+        assert!(AnalysisCache::cleanup_before(&mut client, 10).is_err());
+        assert_eq!(
+            AnalysisCache::statistics_with_client(&mut client)?.total_records(),
+            6
+        );
+        client.batch_execute("DROP TRIGGER reject_delete ON video_records")?;
+        client.batch_execute(
+            "CREATE TRIGGER reject_delete BEFORE DELETE ON path_index
+             FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_cache_delete();",
+        )?;
+        assert!(AnalysisCache::cleanup_before(&mut client, 10).is_err());
+        let rolled_back = AnalysisCache::statistics_with_client(&mut client)?;
+        assert_eq!(rolled_back.total_records(), 6);
+        assert_eq!(rolled_back.path_index_entries, 3);
+        client.batch_execute("DROP TRIGGER reject_delete ON path_index")?;
+        assert_eq!(AnalysisCache::cleanup_before(&mut client, 10)?, 3);
+        let stats = AnalysisCache::statistics_with_client(&mut client)?;
+        assert_eq!(stats.total_records(), 3);
+        assert_eq!(stats.path_index_entries, 1);
+        assert_eq!(stats.algorithm_version_distribution.get(&2), Some(&3));
+
+        client.batch_execute("INSERT INTO path_index VALUES ('orphan', 'orphan')")?;
+        assert_eq!(AnalysisCache::cleanup_before(&mut client, 10)?, 0);
+        assert_eq!(
+            AnalysisCache::statistics_with_client(&mut client)?.path_index_entries,
+            1
+        );
+        client.batch_execute("UPDATE video_records SET algorithm_version = NULL")?;
+        assert!(AnalysisCache::statistics_with_client(&mut client).is_err());
+        Ok(())
+    }
 
     fn test_quality_analysis(
         format: &str,

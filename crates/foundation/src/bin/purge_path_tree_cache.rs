@@ -1,12 +1,11 @@
-//! Purge path-tree scan snapshots (`PostgreSQL` + `SQLite` replica) — SSOT for
-//! `cache_cleaner`.
+//! Purge local SQLite path-tree scan snapshots without deleting run state.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(about = "Purge path_tree_snapshots (PG) and path_tree blob namespace (SQLite)")]
+#[command(about = "Purge local SQLite path-tree cache; retain checkpoints and processed records")]
 struct Args {
     /// Remove snapshots whose `root_path` equals or is under this directory.
     #[arg(long, conflicts_with = "all")]
@@ -27,7 +26,7 @@ fn main() -> Result<()> {
     } else {
         anyhow::bail!("specify --under PATH or --all");
     }?;
-    // Last stdout line = deleted row count (parsed by cache_cleaner.rs).
+    // Machine-readable count of actual local rows removed.
     println!("{deleted}");
     Ok(())
 }
