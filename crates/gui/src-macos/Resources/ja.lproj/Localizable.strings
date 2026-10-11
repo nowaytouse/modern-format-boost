@@ -235,6 +235,8 @@
 "settings.imgJpegEffort.help" = "高い値ほど時間をかけてサイズを抑えます。元の JPEG を完全に復元できる点は変わりません。";
 "settings.imgHeuristic.help" = "元画像の品質を推定し、画質設定に役立てます。";
 "settings.imgDatabase.help" = "画像品質データベースへのアクセスを許可または禁止します。接続先の設定ではありません。";
+"settings.imgSizeTolerance" = "わずかな容量増加を許可";
+"settings.imgSizeTolerance.help" = "標準 IMG のみ。メディア本体の増加を最大 512 KiB（524288 バイト）まで許可します。メタデータは対象外です。厳格な容量方針では増加を許可せず、完全性の検証も省略しません。既定は無効で、Fast IMG と VID は変わりません。";
 "settings.imgErrorMode.help" = "画像の有効な設定を継承するか、明示指定します。回復可能な失敗は元ファイルを保持し、スキップと別に集計します。致命的なエラーでは常に停止します。";
 "settings.vidErrorMode.help" = "動画の有効な設定を継承するか、明示指定します。回復可能な失敗は元ファイルを保持し、スキップと別に集計します。致命的なエラーでは常に停止します。";
 "settings.vidCodec.help" = "AV1 は動画の Apple 互換モードを無効にします。HEVC は既存の Apple 互換経路を維持します。";

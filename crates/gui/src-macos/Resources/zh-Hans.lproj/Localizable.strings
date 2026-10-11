@@ -235,6 +235,8 @@
 "settings.imgJpegEffort.help" = "数值越高，通常压缩越慢、体积越小。始终保留无损还原原 JPEG 的能力。";
 "settings.imgHeuristic.help" = "估算原图质量，辅助选择合适的图片质量。";
 "settings.imgDatabase.help" = "明确允许或禁止图片质量数据库访问；此项不配置数据库连接。";
+"settings.imgSizeTolerance" = "允许体积小幅增加";
+"settings.imgSizeTolerance.help" = "仅用于标准 IMG。允许媒体本体最多增加 512 KiB（524288 字节），元数据不计入此额度。严格大小策略仍会禁止增加，所有完整性核验仍须通过。默认关闭，不改变 Fast IMG 或 VID 的处理规则。";
 "settings.imgErrorMode.help" = "继承图像的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
 "settings.vidErrorMode.help" = "继承视频的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
 "settings.vidCodec.help" = "AV1 编码会关闭视频的 Apple 兼容模式；HEVC 保留现有 Apple 兼容路径。";

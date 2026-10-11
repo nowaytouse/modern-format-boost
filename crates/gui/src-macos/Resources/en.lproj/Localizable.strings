@@ -235,6 +235,8 @@
 "settings.imgJpegEffort.help" = "Higher effort spends more encoding time to reduce size. JPEG reconstruction stays lossless.";
 "settings.imgHeuristic.help" = "Estimate source quality to guide image quality selection.";
 "settings.imgDatabase.help" = "Explicitly allow or deny image quality database access; this does not configure a connection.";
+"settings.imgSizeTolerance" = "Allow slight size growth";
+"settings.imgSizeTolerance.help" = "Standard IMG only. Permit up to 512 KiB (524288 bytes) of pure-media growth; metadata does not consume this budget. Strict-size policies still forbid growth and all integrity checks remain required. Disabled by default; Fast IMG and VID are unchanged.";
 "settings.imgErrorMode.help" = "Inherit the image configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
 "settings.vidErrorMode.help" = "Inherit the video configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
 "settings.vidCodec.help" = "AV1 disables Apple compatibility for video encoding; HEVC keeps the existing Apple-compatible route.";

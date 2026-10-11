@@ -274,7 +274,7 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgErrorMode, imgToolPolicy
+    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig
     case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
@@ -309,6 +309,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
+        case .imgSizeTolerance: "--img-allow-size-tolerance"
         case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
         case .imgErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
@@ -331,7 +332,7 @@ private enum MediaSetting: String, CaseIterable {
         switch self {
         case .performance: ["adaptive", "relaxed", "balanced", "tight"]
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
-        case .imgHeuristic, .imgDatabase, .fastHeuristic, .fastDatabase,
+        case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
         case .vidCodec: ["hevc", "av1"]
@@ -359,6 +360,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
+        case .imgSizeTolerance: "img.allow_size_tolerance"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
         case .imgErrorMode, .vidErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
@@ -429,6 +431,7 @@ private struct MediaSettings {
     var fastImage = ImageSettings()
     var photos = PhotosImportSettings()
     var imageFailure: FileFailurePolicy?
+    var imageSizeTolerance: Bool?
     var videoFailure: FileFailurePolicy?
     var videoCodec: VideoCodec?
     var videoConfigurationFile: String?
@@ -446,6 +449,7 @@ private struct MediaSettings {
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
+                .imgSizeTolerance: imageSizeTolerance.map(String.init),
                 .imgToolPolicy: image.toolPolicy?.rawValue,
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
@@ -481,6 +485,7 @@ private struct MediaSettings {
                 case .imgJpegEffort: image.jpegEffort = Int(value)
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
+                case .imgSizeTolerance: imageSizeTolerance = Bool(value)
                 case .imgToolPolicy: image.toolPolicy = ToolSelectionPolicy(rawValue: value)
                 case .imgErrorMode: imageFailure = FileFailurePolicy(rawValue: value)
                 case .fastConfig: fastImage.configurationFile = value
@@ -894,7 +899,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         self.developer = developer
         self.fast = fast
         self.videos = videos
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 300),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 300),
                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         panel.title = localized("settings.title")
@@ -935,7 +940,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             for field in fields {
                 let control: NSView
                 if field == .photosAdaptive || field == .photosPreserveTree {
-                    let toggle = NSButton(checkboxWithTitle: "", target: self, action: #selector(updateVisibility))
+                    let toggle = NSButton(checkboxWithTitle: field.title, target: self, action: #selector(updateVisibility))
                     toggle.allowsMixedState = false
                     toggles[field] = toggle
                     control = toggle
@@ -974,7 +979,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-                var cells = [NSTextField(labelWithString: field.title), control]
+                var cells: [NSView] = toggles[field] == nil
+                    ? [NSTextField(labelWithString: field.title), control] : [control, NSView()]
                 if developer && field.runtimeKey != nil {
                     let source = NSButton()
                     source.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
@@ -989,13 +995,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     cells.append(source)
                 } else if developer { cells.append(NSView()) }
                 let row = grid.addRow(with: cells)
+                if toggles[field] != nil { row.mergeCells(in: NSRange(location: 0, length: 2)) }
                 rows[field] = row
                 fieldSections[field] = section
                 row.yPlacement = .center
             }
             if section == "cache" { addCacheRows(to: grid) }
             grid.column(at: 0).xPlacement = .leading
-            grid.column(at: 0).width = 240
+            grid.column(at: 0).width = 220
             grid.column(at: 1).xPlacement = .fill
             if developer {
                 grid.column(at: 2).width = 22
@@ -1405,7 +1412,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let searchExtras: CGFloat = 36 + (searchResults.isHidden ? 0 : (searchHeight?.constant ?? 0) + 12)
             + (searchEmpty.isHidden ? 0 : 30)
         let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras
-        panel.setContentSize(NSSize(width: 720, height: tabHeight.constant + 76 + extras))
+        panel.setContentSize(NSSize(width: 660, height: tabHeight.constant + 76 + extras))
         panel.contentView?.layoutSubtreeIfNeeded()
     }
 
@@ -1480,7 +1487,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let value = displayed[field]
             toggle.state = value == "true" ? .on : .off
             toggle.isEnabled = value.flatMap(Bool.init) != nil
-            toggle.title = ""
+            toggle.title = field.title
             if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
         }
         for (field, popup) in popups {
@@ -1773,6 +1780,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             for rowIndex in 0..<grid.numberOfRows {
                 let row = grid.row(at: rowIndex)
                 if row.isHidden { continue }
+                if let toggle = row.cell(at: 0).contentView as? NSButton, toggles.values.contains(where: { $0 === toggle }) {
+                    guard toggle.frame.width + 1 >= toggle.intrinsicContentSize.width else {
+                        throw HostError(message: "Settings checkbox label clipped")
+                    }
+                    continue
+                }
                 guard let label = row.cell(at: 0).contentView, let control = row.cell(at: 1).contentView,
                       label.frame.width + 1 >= label.intrinsicContentSize.width,
                       !label.frame.intersects(control.frame) else {
@@ -1944,6 +1957,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "photos" }),
               MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
             throw HostError(message: "Photos import settings disappeared outside Fast IMG")
+        }
+        for field in [MediaSetting.photosAdaptive, .photosPreserveTree] {
+            guard toggles[field]?.title == field.title,
+                  rows[field]?.cell(at: 0).contentView === toggles[field] else {
+                throw HostError(message: "Photos checkbox lost its visible inline title")
+            }
         }
         if !fast {
             guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "vid" }),
@@ -5392,7 +5411,7 @@ private func runSelfTest() -> Int32 {
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
-                                           .imgDatabase: "false", .imgErrorMode: "log-and-continue",
+                                           .imgDatabase: "false", .imgSizeTolerance: "true", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         let configuredArguments = try ProcessorCommand.arguments(from: configured)
         guard configuredArguments.contains("--img-fallback-policy"),
@@ -5401,6 +5420,7 @@ private func runSelfTest() -> Int32 {
               configuredArguments.contains("--preserve-folder-structure=false"),
               configuredArguments.contains("--img-allow-database=false"),
               !configuredArguments.contains("--img-error-mode"),
+              !configuredArguments.contains("--img-allow-size-tolerance=true"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
                 == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"],
@@ -5429,6 +5449,10 @@ private func runSelfTest() -> Int32 {
         let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
         guard imageEffective["execution.error_mode"] == "log-and-continue",
+              imageEffective["img.allow_size_tolerance"] == "true",
+              imageEffective.sourceChain["img.allow_size_tolerance"]?.last == "CLI",
+              try configured.mediaSettings.arguments(operation: .adjacent, processing: .imagesOnly)
+                .contains("--img-allow-size-tolerance=true"),
               imageEffective.sourceChain["execution.error_mode"]?.last == "CLI",
               (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
               !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),

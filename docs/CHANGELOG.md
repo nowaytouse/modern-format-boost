@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Bounded IMG gate reuse, size-tolerance settings and native layout (2026-10-12)
+
+- Share exact JPEG reconstruction evidence between layered-XMP and JPEG-only
+  metadata checks within one audit. Rehash source/output before reuse, reject
+  changed or unreadable bytes, and retain native metadata, sidecar provenance and
+  contradictory-field checks. Ordinary one-consumer audits do not add a hash pass;
+  debug diagnostics report proof reuse and its duration. This does not replace
+  independent gates, create a persistent proof cache or establish batch speedup.
+- Add typed `img.allow_size_tolerance`, default false, to standard IMG configuration,
+  effective config, source tracking, history and the Images settings tab. Preserve
+  the existing 512 KiB pure-media growth budget and strict-layer veto. Support
+  explicit true/false and the negative override, forwarding through the launcher;
+  reject explicit flags in unsupported modes. Log requested and effective policy.
+  Fast IMG/VID defaults and gates remain unchanged; arbitrary byte budgets remain
+  outside this change. Synchronize three languages and the example config.
+- Narrow native Settings and place Photos checkbox labels beside their controls,
+  retaining titles on restore, accessibility/help, advanced-field visibility and
+  inherited-value behavior. Verify the real AppKit window as well as self-tests;
+  do not repeatedly rebuild the full app or replace the installed application.
+
 ### Linked-input preflight, file-sensitive cache and history config differences (2026-10-11)
 
 - Include legal linked directories in standard pre-scans, preserving virtual input

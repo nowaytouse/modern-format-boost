@@ -181,6 +181,9 @@ struct Args {
     /// Permit or deny optional image database access, not database credentials.
     #[arg(long, num_args = 1, require_equals = true)]
     img_allow_database: Option<bool>,
+    /// Standard IMG only: permit up to 512 KiB pure-media growth.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_allow_size_tolerance: Option<bool>,
 
     #[command(flatten)]
     photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
@@ -1291,6 +1294,11 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        args.img_allow_size_tolerance.is_none()
+            || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
+        "image size tolerance requires --mode auto or images; Fast IMG is unchanged"
+    );
+    anyhow::ensure!(
         args.cache.is_empty()
             || matches!(
                 args.mode,
@@ -2108,6 +2116,9 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     }
     if let Some(database) = args.img_allow_database {
         command.push(format!("--allow-database={database}"));
+    }
+    if let Some(tolerance) = args.img_allow_size_tolerance {
+        command.push(format!("--allow-size-tolerance={tolerance}"));
     }
 }
 
@@ -3496,6 +3507,7 @@ fn build_run_args(
         img_jpeg_effort: None,
         img_quality_heuristic: None,
         img_allow_database: None,
+        img_allow_size_tolerance: None,
         photos: Default::default(),
         img_error_mode: None,
         vid_error_mode: None,
@@ -4450,6 +4462,7 @@ mod tests {
                 "11",
                 "--img-quality-heuristic=false",
                 "--img-allow-database=true",
+                "--img-allow-size-tolerance=false",
                 "--img-error-mode",
                 "log-and-continue",
                 "/tmp/media",
@@ -4458,6 +4471,11 @@ mod tests {
         );
         validate_media_options(&args).unwrap();
         let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .contains(&"--allow-size-tolerance=false".to_owned())
+        );
         assert!(
             command
                 .args
@@ -4694,6 +4712,13 @@ mod tests {
             BatchErrorMode::LogAndContinue
         );
         for argv in [
+            vec!["mfb", "--videos-only", "--img-allow-size-tolerance=true"],
+            vec![
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--img-allow-size-tolerance=false",
+            ],
             vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
             vec!["mfb", "--images-only", "--vid-codec", "av1"],
             vec!["mfb", "--images-only", "--vid-config", "/tmp/vid.json"],
@@ -5652,6 +5677,7 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            img_allow_size_tolerance: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5757,6 +5783,7 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                img_allow_size_tolerance: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
@@ -5803,6 +5830,7 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            img_allow_size_tolerance: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5871,6 +5899,7 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                img_allow_size_tolerance: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,

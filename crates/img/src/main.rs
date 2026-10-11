@@ -110,12 +110,6 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         archive: bool,
 
-        #[arg(long, default_value_t = false)]
-        allow_size_tolerance: bool,
-
-        #[arg(long)]
-        no_allow_size_tolerance: bool,
-
         /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
@@ -447,8 +441,6 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         no_apple_compat,
         ultimate,
         archive,
-        allow_size_tolerance,
-        no_allow_size_tolerance,
         allow_expert_options,
         jxl_fixed_features,
         preserve_timestamps,
@@ -472,7 +464,10 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         no_resume,
     )?;
     let apple_compat = apple_compat && !no_apple_compat;
-    let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+    let allow_size_tolerance = foundation::infra::runtime_config::active()
+        .context("IMG runtime configuration must be installed before processing")?
+        .img
+        .allow_size_tolerance;
     let should_delete = delete_original || in_place;
 
     let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
@@ -574,7 +569,20 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
             "JXL Fixed Features Audit: frozen advanced policy enabled; progressive/responsive transforms and generated noise disabled"
         );
     }
-    if !allow_size_tolerance {
+    let effective_tolerance =
+        foundation::media_conversion_gate::effective_allow_size_tolerance(allow_size_tolerance);
+    log_stat!(
+        foundation::infra::static_logs::messages::LABEL_CONFIG,
+        format!(
+            "Pure-media size policy: requested_tolerance={allow_size_tolerance} effective_tolerance={effective_tolerance} max_extra_bytes={} (metadata excluded)",
+            if effective_tolerance {
+                foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+            } else {
+                0
+            }
+        )
+    );
+    if !effective_tolerance {
         log_stat!(
             foundation::infra::static_logs::messages::LABEL_CONFIG,
             format!(
@@ -651,6 +659,10 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    cli.policy.validate_size_tolerance_scope(matches!(
+        cli.command,
+        Commands::Run { .. } | Commands::Config { .. }
+    ))?;
     let legacy_expert = matches!(
         &cli.command,
         Commands::Run {

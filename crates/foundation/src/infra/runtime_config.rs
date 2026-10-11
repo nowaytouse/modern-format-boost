@@ -137,6 +137,8 @@ impl ExecutionArgs {
 pub struct ImgPolicy {
     pub allow_database: bool,
     pub quality_heuristic: bool,
+    /// Standard IMG only: permit the existing 512 KiB pure-media growth budget.
+    pub allow_size_tolerance: bool,
     pub jpeg_effort: u8,
     pub fallback_policy: FallbackPolicy,
 }
@@ -170,6 +172,7 @@ impl Default for ImgPolicy {
         Self {
             allow_database: false,
             quality_heuristic: false,
+            allow_size_tolerance: false,
             jpeg_effort: 11,
             fallback_policy: FallbackPolicy::Strict,
         }

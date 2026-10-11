@@ -79,6 +79,24 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
+Standard IMG exposes **Allow slight size growth** in the Images tab, backed by
+`img.allow_size_tolerance` (default `false`). `img run --allow-size-tolerance`
+enables the existing 512 KiB (524288-byte) pure-media budget; `=false` or
+`--no-allow-size-tolerance` overrides a saved permission. Metadata is excluded,
+strict-size policy may veto growth, and mandatory verification is unchanged.
+Effective config/history record the request and source; run logs also report
+the effective budget. This setting is not a custom byte limit and does not apply
+to Fast IMG or VID; inapplicable explicit launcher/worker flags are rejected.
+Photos checkboxes now keep their labels beside the control in a narrower settings
+panel, including after inherited settings load or tab reset.
+
+Within a single JPEG metadata audit, layered XMP and JPEG-only carrier checks reuse
+one exact reconstruction proof when both need it. Reuse rehashes both current files
+and fails if either changed; native metadata, sidecars and contradictions remain
+independently checked. This removes a duplicate decoder invocation on that path,
+not a mandatory safety gate or proof across separate audits. No broad throughput
+increase is claimed without a representative benchmark.
+
 Standard IMG/VID now share the typed `execution.error_mode` preference:
 `log-and-continue` records recoverable file failures and continues, while
 `fail-fast` stops at the first such failure. Failed files retain their sources
