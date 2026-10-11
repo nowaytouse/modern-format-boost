@@ -229,13 +229,14 @@
 "settings.imgErrorMode" = "Standard images: file failure";
 "settings.vidCodec" = "Video format";
 "settings.vidErrorMode" = "Standard video: file failure";
+"settings.failure.inherited" = "Inherited: %@";
 "settings.imgConfig.help" = "Optional image runtime JSON, including tool and Photos settings. GUI overrides take precedence; the file is not modified.";
 "settings.imgFallback.help" = "Controls permitted encoding attempts, not whether a failed file stops the batch. Strict does not mean fail-fast.";
 "settings.imgJpegEffort.help" = "Higher effort spends more encoding time to reduce size. JPEG reconstruction stays lossless.";
 "settings.imgHeuristic.help" = "Estimate source quality to guide image quality selection.";
 "settings.imgDatabase.help" = "Explicitly allow or deny image quality database access; this does not configure a connection.";
-"settings.imgErrorMode.help" = "Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
-"settings.vidErrorMode.help" = "Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
+"settings.imgErrorMode.help" = "Inherit the image configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
+"settings.vidErrorMode.help" = "Inherit the video configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
 "settings.vidCodec.help" = "AV1 disables Apple compatibility for video encoding; HEVC keeps the existing Apple-compatible route.";
 "settings.value.strict" = "Strict: requested route only";
 "settings.value.same-semantics" = "Allow same-semantics alternatives";
@@ -435,4 +436,6 @@
 "history.space.not_recorded" = "No comparable size data recorded";
 "history.space.invalid" = "The size record is invalid; the size change cannot be confirmed.";
 "history.detail.input_bytes" = "Input";
+"history.detail.restored_inventory" = "Restored JPEG inventory";
+"history.space.not_applicable_restore" = "JPEG restoration is not an optimization run; no space savings are claimed.";
 "history.detail.output_bytes" = "Output";

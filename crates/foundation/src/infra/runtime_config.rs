@@ -1,5 +1,6 @@
 //! Layered runtime preferences. Optional quality DB access is separate from
 //! mandatory Photos custody verification.
+use super::unified_error::BatchErrorMode;
 use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,41 @@ impl PerformanceArgs {
                 &mut loaded.sources,
                 &mut loaded.source_chain,
                 "performance.mode",
+                "CLI",
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExecutionPolicy {
+    pub error_mode: BatchErrorMode,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct ExecutionArgs {
+    /// Failure handling for standard IMG/VID conversion and shared Photos import.
+    /// Record and continue, or stop on the first recoverable failure. Fatal errors always stop.
+    /// Fast encoding loops keep their existing handling; intentional skips remain skips.
+    #[arg(long, global = true, value_enum)]
+    error_mode: Option<BatchErrorMode>,
+}
+
+impl ExecutionArgs {
+    pub fn cli_arguments(&self) -> Vec<String> {
+        self.error_mode.map_or_else(Vec::new, |mode| {
+            vec!["--error-mode".into(), mode.as_str().into()]
+        })
+    }
+
+    pub fn apply_to(&self, loaded: &mut LoadedConfig) {
+        if let Some(mode) = self.error_mode {
+            loaded.config.execution.error_mode = mode;
+            record_source(
+                &mut loaded.sources,
+                &mut loaded.source_chain,
+                "execution.error_mode",
                 "CLI",
             );
         }
@@ -228,6 +264,7 @@ pub struct RuntimeConfig {
     pub tools: ToolsPolicy,
     pub performance: PerformancePolicy,
     pub cache: CachePolicy,
+    pub execution: ExecutionPolicy,
 }
 
 impl Default for RuntimeConfig {
@@ -240,6 +277,7 @@ impl Default for RuntimeConfig {
             tools: ToolsPolicy::default(),
             performance: PerformancePolicy::default(),
             cache: CachePolicy::default(),
+            execution: ExecutionPolicy::default(),
         }
     }
 }
@@ -528,6 +566,16 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
     let mut sources = BTreeMap::new();
     let mut source_chain = BTreeMap::new();
     default_sources(&value, "", &mut sources, &mut source_chain);
+    for (mode, name) in BatchErrorMode::environment_overrides()? {
+        merge(
+            &mut value,
+            json!({"execution":{"error_mode":mode}}),
+            &format!("env:{name}"),
+            "",
+            &mut sources,
+            &mut source_chain,
+        );
+    }
     if let Some(mode) = legacy_env(crate::constants::ENV_MFB_PERF_TIER)? {
         let mode = match mode.trim().to_ascii_lowercase().as_str() {
             "adaptive" => PerformanceMode::Adaptive,
@@ -668,6 +716,187 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_policy_defaults_file_layers_and_cli_are_transparent() -> Result<()> {
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        assert_eq!(value["execution"]["error_mode"], "log-and-continue");
+        assert_eq!(sources["execution.error_mode"], "default");
+        merge(
+            &mut value,
+            json!({"execution":{"error_mode":"fail-fast"}}),
+            "env:MFB_ERROR_MODE",
+            "",
+            &mut sources,
+            &mut source_chain,
+        );
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(
+            file.path(),
+            br#"{"config_version":1,"execution":{"error_mode":"log-and-continue"}}"#,
+        )?;
+        apply_file(&mut value, file.path(), &mut sources, &mut source_chain)?;
+        let mut loaded = LoadedConfig {
+            config: serde_json::from_value(value)?,
+            sources,
+            source_chain,
+        };
+        assert_eq!(
+            loaded.config.execution.error_mode,
+            BatchErrorMode::LogAndContinue
+        );
+        ExecutionArgs::default().apply_to(&mut loaded);
+        assert_eq!(
+            loaded.sources["execution.error_mode"],
+            file.path().display().to_string()
+        );
+        let args = ExecutionArgs {
+            error_mode: Some(BatchErrorMode::FailFast),
+        };
+        args.apply_to(&mut loaded);
+        assert_eq!(args.cli_arguments(), ["--error-mode", "fail-fast"]);
+        assert_eq!(
+            ExecutionArgs::default().cli_arguments(),
+            Vec::<String>::new()
+        );
+        let shown: Value = serde_json::from_str(&loaded.to_json(false)?)?;
+        assert_eq!(shown["config"]["execution"]["error_mode"], "fail-fast");
+        assert_eq!(
+            loaded.source_chain["execution.error_mode"],
+            [
+                "default",
+                "env:MFB_ERROR_MODE",
+                file.path().to_str().context("config path")?,
+                "CLI"
+            ]
+        );
+        for invalid in ["", "unknown", "debug", "log_and_continue"] {
+            assert!(
+                serde_json::from_value::<RuntimeConfig>(
+                    json!({"execution":{"error_mode":invalid}})
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<RuntimeConfig>(json!({"execution":{"unknown":1}})).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execution_environment_precedence_and_installed_policy_are_checked() -> Result<()> {
+        const CHILD: &str = "MFB_TEST_EXECUTION_POLICY_CHILD";
+        if let Ok(case) = std::env::var(CHILD) {
+            let resolved = load(None, true);
+            if case.starts_with("invalid") || case == "empty" {
+                assert!(resolved.is_err());
+                return Ok(());
+            }
+            let mut loaded = resolved?;
+            if case == "default" {
+                assert_eq!(
+                    loaded.config.execution.error_mode,
+                    BatchErrorMode::LogAndContinue
+                );
+                assert_eq!(loaded.source_chain["execution.error_mode"], ["default"]);
+            } else {
+                assert_eq!(
+                    loaded.config.execution.error_mode,
+                    if case == "cli-continue" {
+                        BatchErrorMode::FailFast
+                    } else {
+                        BatchErrorMode::LogAndContinue
+                    }
+                );
+                assert_eq!(
+                    loaded.source_chain["execution.error_mode"],
+                    [
+                        "default",
+                        "env:MFB_DRAG_DROP_ERROR_MODE",
+                        "env:MFB_DRAG_DROP_FAIL_FAST",
+                        "env:MFB_ERROR_MODE"
+                    ]
+                );
+                let expected = if case == "cli-continue" {
+                    BatchErrorMode::LogAndContinue
+                } else {
+                    BatchErrorMode::FailFast
+                };
+                ExecutionArgs {
+                    error_mode: Some(expected),
+                }
+                .apply_to(&mut loaded);
+                assert_eq!(loaded.sources["execution.error_mode"], "CLI");
+                install(loaded.config)?;
+                assert_eq!(BatchErrorMode::current(), expected);
+            }
+            return Ok(());
+        }
+        let name = format!(
+            "{}::execution_environment_precedence_and_installed_policy_are_checked",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").context("test module path")?;
+        for case in [
+            "default",
+            "overrides",
+            "cli-continue",
+            "invalid",
+            "invalid-legacy",
+            "invalid-boolean",
+            "empty",
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe()?);
+            command.args(["--exact", name]).env(CHILD, case);
+            for name in [
+                crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
+                crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST,
+                crate::constants::ENV_MFB_ERROR_MODE,
+            ] {
+                command.env_remove(name);
+            }
+            if case != "default" {
+                command
+                    .env(
+                        crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
+                        if case == "invalid-legacy" {
+                            "unknown"
+                        } else {
+                            "debug"
+                        },
+                    )
+                    .env(
+                        crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST,
+                        if case == "invalid-boolean" {
+                            "unknown"
+                        } else {
+                            "true"
+                        },
+                    )
+                    .env(
+                        crate::constants::ENV_MFB_ERROR_MODE,
+                        match case {
+                            "invalid" => "unknown",
+                            "empty" => "",
+                            "cli-continue" => "fail-fast",
+                            _ => "log-and-continue",
+                        },
+                    );
+            }
+            let output = command.output()?;
+            assert!(
+                output.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+        }
+        Ok(())
+    }
 
     #[test]
     fn cache_policy_defaults_layers_and_integer_bounds() -> Result<()> {

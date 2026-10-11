@@ -79,6 +79,17 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
+Standard IMG/VID now share the typed `execution.error_mode` preference:
+`log-and-continue` records recoverable file failures and continues, while
+`fail-fast` stops at the first such failure. Failed files retain their sources
+and are not counted as skips; fatal errors always stop. Configuration files
+override environment preferences, and `--error-mode` overrides both. Developer
+settings show each pipeline's actual inherited policy and allow an explicit
+override or a return to inheritance. Fast IMG/Fast GIF encoding keeps its existing
+failure handling; this preference does not change those encoding loops.
+The launcher reads local environment settings before installing runtime policy;
+edits to `local_env.json` or `local_env.sh` take effect after restarting it.
+
 New launcher-managed IMG/VID invocations record the worker's resolved runtime JSON,
 winning field sources and worker version in `history.sqlite3`. Processing History
 shows these captured snapshots, not a reconstruction using today's preferences.
@@ -89,6 +100,14 @@ override chain, tool versions or the backend ultimately selected after a fallbac
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
+
+JPEG restoration history uses the restoration mode label, records the actual
+destination even on early failure, and identifies the restored JPEG inventory.
+It does not report optimization space savings or turn absent verification into
+a match. The launcher rejects multiple restoration inputs instead of silently
+restoring only the first input. A restoration directory receipt must match that
+batch's recorded source and output; relative CLI paths are recorded as absolute
+paths without reopening historical files.
 
 For a single-directory standard run using a default adjacent output, the launcher
 selects that destination once before recording history or launching workers.

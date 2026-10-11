@@ -240,6 +240,8 @@ private struct HistoryEntry {
     var outputUpperSequence: Int64?
 
     var hasStoredOutput: Bool { audit.lastPathComponent == "history.sqlite3" && context?.output_sequence != nil }
+    var isRestoreJpeg: Bool { context?.mode == "restore-jpeg" }
+    var modeLabel: String? { isRestoreJpeg ? localized("operation.restore_jpeg") : context?.mode }
 
     var outputPaths: String? {
         if let inputPlan {
@@ -346,7 +348,7 @@ private struct HistoryEntry {
         return needsAttention ? .systemOrange : .labelColor
     }
     var searchable: String {
-        ([stamp, timestamp, context?.mode ?? "", localized(statusKey)] + (context?.inputs ?? [])
+        ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", localized(statusKey)] + (context?.inputs ?? [])
             + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""])
             .joined(separator: " ")
     }
@@ -363,6 +365,7 @@ private struct HistoryEntry {
         return String(total)
     }
     var sizeOutcome: String {
+        guard !isRestoreJpeg else { return localized("history.space.not_applicable_restore") }
         guard let input = summary?.size?.input_bytes, let output = summary?.size?.output_bytes else {
             return localized("result.unknown")
         }
@@ -374,7 +377,8 @@ private struct HistoryEntry {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) + " (\(bytes) B)"
     }
     func sizeMeasurementsComparable(to other: HistoryEntry) -> Bool {
-        guard issues.isEmpty, other.issues.isEmpty, context?.dry_run == false, other.context?.dry_run == false,
+        guard !isRestoreJpeg, !other.isRestoreJpeg,
+               issues.isEmpty, other.issues.isEmpty, context?.dry_run == false, other.context?.dry_run == false,
               finished.map({ ["completed", "failed"].contains($0.outcome) }) == true,
               other.finished.map({ ["completed", "failed"].contains($0.outcome) }) == true,
               let left = summary, let right = other.summary, left.valid, right.valid,
@@ -533,8 +537,12 @@ private enum HistoryStore {
                     current.context = context
                     current.legacy = false
                 } else if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
-                    let summary = try decode(HistorySummary.self, from: event, prefix: "MFB_HISTORY_SUMMARY=")
+                    var summary = try decode(HistorySummary.self, from: event, prefix: "MFB_HISTORY_SUMMARY=")
                     guard summary.valid, !current.contradictoryFields.contains("summary") else { throw HistoryParseError.invalid }
+                    if current.isRestoreJpeg, summary.size != nil {
+                        summary.size = nil
+                        summary.sizeInvalid = true
+                    }
                     if let previous = current.summary {
                         guard previous.sameOutcomes(as: summary) else {
                             current.summary = nil
@@ -564,6 +572,11 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_VERIFICATION=") {
                     let verification = try decode(HistoryVerification.self, from: event, prefix: "MFB_HISTORY_VERIFICATION=")
                     guard verification.valid, !current.contradictoryFields.contains("verification") else { throw HistoryParseError.invalid }
+                    if current.isRestoreJpeg {
+                        guard let context = current.context, context.inputs.count == 1,
+                              let output = context.output, verification.source_path == context.inputs.first,
+                              verification.output_path == output else { throw HistoryParseError.invalid }
+                    }
                     if let plan = current.inputPlan {
                         guard let source = verification.source_path,
                               let input = plan.inputs.first(where: { $0.source == source }), input.requires_verification,
@@ -1536,7 +1549,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         for (index, entry) in entries.enumerated() {
             var lines = [localized("history.compare.batch", index + 1) + ": " + entry.stamp,
                          localized(entry.statusKey) + " · " + timestampLabel(entry.timestamp),
-                         row("mode", entry.context?.mode ?? unknown), row("version", entry.context?.version ?? unknown)]
+                         row("mode", entry.modeLabel ?? unknown), row("version", entry.context?.version ?? unknown)]
             for (key, media) in [("img", entry.summary?.img), ("vid", entry.summary?.vid)] {
                 let title = localized("history.media.\(key)") + ": "
                 if media?.active == false { lines.append(title + localized("history.not_run")); continue }
@@ -1548,10 +1561,13 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                       row("integrity", entry.summary?.integrity.state ?? unknown)
                         + " · " + row("issues", count(entry.summary?.integrity.issue_count))]
             if let verification = entry.verification {
-                lines.append(row("verification_state", verification.has_warnings ? "WARNINGS" : "CLEAN")
+                lines.append(row("verification_state", verification.has_warnings || verification.issue_count > 0 || verification.count_status?.hasPrefix("MISMATCH") == true ? "WARNINGS" : "CLEAN")
                     + " · " + row("issues", String(verification.issue_count)))
             } else { lines.append(row("verification_state", unknown)) }
-            if let size = entry.summary?.size {
+            if entry.isRestoreJpeg {
+                lines.append(entry.sizeOutcome)
+                if entry.summary?.sizeInvalid == true { lines.append(localized("history.space.invalid")) }
+            } else if let size = entry.summary?.size {
                 lines += [entry.sizeOutcome,
                           row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
                           row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown), localized(size.scopeKey)]
@@ -1579,26 +1595,31 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
              row("verified_source", verification.source_path ?? unknown),
              row("issues", String(verification.issue_count)),
              row("source_inventory", String(verification.source_count)),
-             row("optimized_inventory", String(verification.optimized_count)),
+             row(entry.isRestoreJpeg ? "restored_inventory" : "optimized_inventory", String(verification.optimized_count)),
              row("skipped_inventory", String(verification.skipped_count)),
              row("failed_inventory", String(verification.failed_count)),
              row("remaining_inventory", String(verification.source_remaining_count)),
              row("deleted_inventory", String(verification.verified_deleted_count))]
         }
-        var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), "",
-                     localized("history.space.title")]
-        if let size = entry.summary?.size {
+        var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), ""]
+        if entry.isRestoreJpeg {
+            lines.append(entry.sizeOutcome)
+            if entry.summary?.sizeInvalid == true { lines.append(localized("history.space.invalid")) }
+        } else if let size = entry.summary?.size {
+            lines.append(localized("history.space.title"))
             lines += [entry.sizeOutcome,
                       row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
                       row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
                       localized(size.scopeKey), localized("history.space.note")]
         } else if entry.summary?.sizeInvalid == true {
+            lines.append(localized("history.space.title"))
             lines.append(localized("history.space.invalid"))
         } else {
+            lines.append(localized("history.space.title"))
             lines.append(localized("history.space.not_recorded"))
         }
         lines += ["",
-                     row("mode", entry.context?.mode ?? unknown),
+                     row("mode", entry.modeLabel ?? unknown),
                      row("sources", entry.context?.inputs.isEmpty == false ? entry.context!.inputs.joined(separator: "\n") : unknown),
                      row("output", entry.outputPaths ?? unknown),
                      row("backup", entry.context?.backup ?? unknown)]
@@ -2405,6 +2426,86 @@ func runProcessingHistorySelfTests() throws {
     let verified = try parsed([context, verification, summary, completed])
     try require(verified.entries[0].verification?.count_status == "MATCH (1 expected handoff gap)",
                 "History reinterpreted the verifier's count status")
+    let restoreContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1,
+        "inputs": ["/synthetic/input"], "output": "/synthetic/restored_jpeg", "mode": "restore-jpeg",
+        "dry_run": false, "in_place": false, "shortest_path": false])
+    var restoreReceipt = verificationValue
+    restoreReceipt["output_path"] = "/synthetic/restored_jpeg"
+    let restored = try parsed([restoreContext, summary, try payload("MFB_HISTORY_VERIFICATION", restoreReceipt), completed]).entries[0]
+    let restoredDetails = ProcessingHistoryPanel.render(restored)
+    try require(restored.isRestoreJpeg && restored.modeLabel == localized("operation.restore_jpeg")
+                && restored.statusKey == "history.status.completed" && restored.succeededLabel == "2"
+                && restored.verification?.optimized_count == 2
+                && restored.sizeOutcome == localized("history.space.not_applicable_restore")
+                && restoredDetails.contains(localized("history.detail.restored_inventory") + ": 2")
+                && !restoredDetails.contains(localized("history.detail.optimized_inventory"))
+                && !restoredDetails.contains(localized("history.space.title"))
+                && !restored.sizeMeasurementsComparable(to: reduced),
+                "JPEG restoration used optimization labels, changed counters, or claimed comparable savings")
+    let restoreWithoutReceipt = try parsed([restoreContext, summary, completed]).entries[0]
+    try require(restoreWithoutReceipt.succeededLabel == "2" && restoreWithoutReceipt.verification == nil
+                && !ProcessingHistoryPanel.render(restoreWithoutReceipt).contains("MATCH"),
+                "Restoration without a directory receipt invented verified counts")
+    let photosRestoreContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1,
+        "inputs": ["/synthetic/debug.photoslibrary"], "mode": "restore-jpeg",
+        "dry_run": false, "in_place": false, "shortest_path": false])
+    let photosRestore = try parsed([photosRestoreContext, summary, completed]).entries[0]
+    try require(photosRestore.context?.output == nil && photosRestore.verification == nil
+                && photosRestore.issues.isEmpty && photosRestore.statusKey == "history.status.completed"
+                && photosRestore.succeededLabel == "2" && !ProcessingHistoryPanel.render(photosRestore).contains("MATCH"),
+                "A Photos restore audit without a directory receipt lost its counts or invented verification")
+    var wrongRestoreSource = restoreReceipt
+    wrongRestoreSource["source_path"] = "/synthetic/other_input"
+    var wrongRestoreOutput = restoreReceipt
+    wrongRestoreOutput["output_path"] = "/synthetic/other_output"
+    var photosDirectoryReceipt = restoreReceipt
+    photosDirectoryReceipt["source_path"] = "/synthetic/debug.photoslibrary"
+    for (contextMarker, receipt) in [(restoreContext, wrongRestoreSource), (restoreContext, wrongRestoreOutput),
+                                     (photosRestoreContext, photosDirectoryReceipt)] {
+        let receiptMarker = try payload("MFB_HISTORY_VERIFICATION", receipt)
+        let invalid = try parsed([contextMarker, summary, receiptMarker, completed]).entries[0]
+        try require(invalid.verification == nil && !invalid.issues.isEmpty
+                    && invalid.statusKey == "history.status.incomplete" && invalid.succeededLabel == "2"
+                    && invalid.outputPaths == invalid.context?.output
+                    && !ProcessingHistoryPanel.render(invalid).contains("MATCH"),
+                    "An unrelated restore receipt replaced the bound output, claimed MATCH, or erased processing counts")
+        let failedInvalid = try parsed([contextMarker, summary, receiptMarker, failed]).entries[0]
+        try require(failedInvalid.verification == nil && failedInvalid.statusKey == "history.status.failed"
+                    && failedInvalid.succeededLabel == "2",
+                    "Rejecting a restore receipt hid the terminal failure or discarded processing counts")
+    }
+    var noRestoredMedia = media
+    noRestoredMedia["succeeded"] = 0
+    noRestoredMedia["skipped"] = 3
+    var noRestoredSummary = summaryValue
+    noRestoredSummary["img"] = noRestoredMedia
+    let noRestored = try parsed([restoreContext, try payload("MFB_HISTORY_SUMMARY", noRestoredSummary), completed]).entries[0]
+    try require(noRestored.succeededLabel == "0" && noRestored.summary?.img.skipped == 3
+                && noRestored.verification == nil && noRestored.summary?.size == nil,
+                "Ineligible JPEG restoration invented outputs or verification evidence")
+    let restoreWithSize = try parsed([restoreContext, try payload("MFB_HISTORY_SUMMARY", otherSizeSummary), completed]).entries[0]
+    let restoreWithSizeDetails = ProcessingHistoryPanel.render(restoreWithSize)
+    try require(restoreWithSize.summary?.size == nil && restoreWithSize.summary?.sizeInvalid == true
+                && restoreWithSize.succeededLabel == "2" && restoreWithSize.statusKey == "history.status.incomplete"
+                && restoreWithSizeDetails.contains(localized("history.space.invalid"))
+                && !restoreWithSizeDetails.contains(localized("history.space.saved", HistoryEntry.sizeLabel(424)))
+                && !ProcessingHistoryPanel.renderComparison([restored, restoreWithSize]).contains(localized("history.space.title")),
+                "A conversion-size receipt became valid restoration savings or erased real counters")
+    let failedRestore = try parsed([restoreContext, summary, failed]).entries[0]
+    try require(failedRestore.statusKey == "history.status.failed" && failedRestore.succeededLabel == "2"
+                && failedRestore.verification == nil && failedRestore.sizeOutcome == localized("history.space.not_applicable_restore"),
+                "Restoration presentation hid a failed batch or fabricated final verification")
+    for (issueCount, countStatus) in [(1, "MATCH"), (0, "MISMATCH")] {
+        var warningReceipt = restoreReceipt
+        warningReceipt["issue_count"] = issueCount
+        warningReceipt["count_status"] = countStatus
+        let warningEntry = try parsed([restoreContext, summary, try payload("MFB_HISTORY_VERIFICATION", warningReceipt), completed]).entries[0]
+        let warningComparison = ProcessingHistoryPanel.renderComparison([warningEntry, warningEntry])
+        try require(warningEntry.statusKey == "history.status.verification_warnings"
+                    && warningComparison.contains(localized("history.detail.verification_state") + ": WARNINGS")
+                    && !warningComparison.contains(localized("history.detail.verification_state") + ": CLEAN"),
+                    "History comparison hid a verifier issue or count mismatch behind CLEAN")
+    }
     let sources = ["/synthetic/one", "/synthetic/two"]
     let outputs = ["/synthetic/one_optimized", "/synthetic/two_optimized"]
     let multiContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": sources,

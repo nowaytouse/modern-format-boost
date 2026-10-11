@@ -10,7 +10,7 @@ No dependency is required beyond the existing JSON parser.
 From lowest to highest priority:
 
 1. Built-in defaults.
-2. Recognized legacy environment preferences.
+2. Recognized environment preferences, including supported legacy preferences.
 3. `$XDG_CONFIG_HOME/modern-format-boost/config.json`, or
    `~/.config/modern-format-boost/config.json` when XDG is absent.
 4. `mfb.json` in the process working directory.
@@ -21,7 +21,7 @@ An example with all defaults is [mfb.example.json](mfb.example.json). Each file
 must contain `"config_version": 1`; other fields may be omitted and inherit
 lower-priority values. Unknown fields, invalid types, unsupported versions and
 out-of-range settings stop startup with an error. `--no-config` skips files,
-but legacy environment settings and explicit flags still apply.
+but environment settings and explicit flags still apply.
 
 ```sh
 img config show --effective
@@ -30,6 +30,8 @@ vid config show --effective
 vid config validate
 vid --config /path/to/video.json config show --effective
 vid run /path/to/videos --codec av1
+img run /path/to/images --error-mode log-and-continue
+vid --error-mode fail-fast config show --effective
 img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
@@ -88,8 +90,12 @@ an explicit error-mode override there rather than pretending it controls the
 FastImg encoding waves. Its fallback, effort and other image preferences still apply.
 
 Image, Video and Photos effective values are queried from the backend, not duplicated
-in Swift. The GUI displays the resolved value without an extra inherited choice;
-opening and applying unchanged controls does not create overrides. When standard
+in Swift. Ordinary settings display resolved values without an extra inherited choice;
+opening and applying unchanged controls does not create overrides. Developer failure
+policy menus instead show each pipeline's actual inherited value, with explicit
+choices to override it or return to inheritance. Explicitly selecting the same value
+still saves an override; inheritance and tab reset remove it. Failed effective queries
+show an unknown inherited value, never a fabricated continue policy. When standard
 IMG and VID inherit different performance modes, the mixed workflow offers
 "Use each pipeline's configuration" rather than fabricating one shared mode;
 only an explicit shared selection overrides both. Developer
@@ -110,8 +116,10 @@ The launcher accepts `--img-config`, `--img-fallback-policy`,
 `--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
 `--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
 `--vid-error-mode`. Error modes are `log-and-continue` and `fail-fast`; overrides
-apply only to the child process, including PTY launches, without mutating the
-launcher's global environment. Encoding options are not sent to verification,
+are forwarded as typed worker `--error-mode` flags, including PTY launches, without
+mutating the launcher's global environment. For standard runs the launcher resolves
+the relevant IMG/VID configuration files before routing, so parent continuation
+uses each pipeline's inherited or explicitly overridden policy. Encoding options are not sent to verification,
 restore or maintenance tools.
 The launcher also accepts the shared `--photos-*` options and
 `--preserve-folder-structure` for Fast IMG only. `img` and the launcher use the
@@ -125,6 +133,23 @@ still stop. Versioned `MFB_BATCH_RESULT` events report each completed media
 child's exit and known counts. Missing counts are JSON `null`, not fabricated
 zeroes; the GUI retains that uncertainty when aggregating results. Error logs
 and nonzero exits are preserved even when a count summary is unavailable.
+
+`execution.error_mode` accepts only `log-and-continue` or `fail-fast` in JSON and
+CLI. Its environment precedence, from lower to higher, is
+`MFB_DRAG_DROP_ERROR_MODE`, an enabled `MFB_DRAG_DROP_FAIL_FAST`, then `MFB_ERROR_MODE`.
+A false legacy boolean does not cancel another mode. Supported legacy aliases remain
+limited to environment parsing; invalid, empty or non-UTF-8 environment values stop
+configuration loading rather than silently choosing a policy. Files and explicit CLI
+flags retain higher priority. `config show --effective` includes the policy's winning
+source and ordered source chain; new captured history snapshots include its winning
+source. This is not a failure-count threshold or a change to Fast IMG/Fast GIF encoding
+loops; shared Photos import error handling continues to use the resolved policy.
+The launcher reads its local `local_env.json` or fallback `local_env.sh` once at
+startup, before temporary-root initialization, typed configuration installation
+and signal-handler threads. These values participate in the environment layer;
+configuration files and explicit flags still override them. Changes to local-env
+files require restarting the launcher, including interactive and watch sessions;
+active batches do not repeatedly mutate the process-wide environment.
 
 ### Captured Runtime Configuration
 
@@ -151,6 +176,7 @@ chosen after runtime fallback are not yet part of this record.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `execution.error_mode` | `log-and-continue` | Standard IMG/VID recoverable file-failure policy. `fail-fast` stops on the first recoverable failure; fatal errors always stop and intentional skips remain skips. `--error-mode` overrides files. Does not change Fast IMG/Fast GIF encoding loops. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11. Pixel encoding retains its normal/ultimate mode policy. |

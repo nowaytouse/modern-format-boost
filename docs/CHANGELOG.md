@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Canonical failure policies and JPEG restoration history (2026-10-11)
+
+- Resolve standard IMG/VID failure handling through typed `execution.error_mode`,
+  defaulting to `log-and-continue`. Validate environment preferences, retain their
+  lower priority than configuration files, and apply `--error-mode` last. Forward
+  launcher overrides as worker CLI arguments and capture the effective policy and
+  source in history. Read each standard pipeline's policy before routing; recoverable
+  failures, intentional skips and fatal errors keep distinct behavior. Fast encoding
+  loops and whole-batch post-processing failure gates are unchanged.
+  Load local environment settings before runtime installation, temporary-root setup
+  and signal-handler threads; restart the launcher to apply later local-env edits.
+- Show separate inherited IMG/VID failure policies in Developer settings. An explicit
+  selection remains an override even when equal to the inherited value; inheritance
+  and tab reset remove it. Include the policy in effective-value/source previews and
+  synchronize English, Simplified Chinese and Japanese text.
+- Give JPEG restoration history its own mode and inventory labels, bind the real
+  output path before processing, and reject silent first-input-only multi-input
+  restoration. Space savings are not applicable; contradictory conversion-size
+  receipts are reported without hiding valid counts or failures. Comparison views
+  now retain issue-count and MISMATCH warnings just as single-run details do.
+  Normalize recorded receipt paths to absolute paths and reject restoration receipts
+  that do not match the batch's source/output; no-receipt Photos audits stay unknown.
+
 ### Complete multi-input plans, checkpoint ownership and Python 3.15 (2026-10-11)
 
 - Plan all standard inputs, including previews, and scan every input before actual

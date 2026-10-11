@@ -229,13 +229,14 @@
 "settings.imgErrorMode" = "标准图像：单个文件失败时";
 "settings.vidCodec" = "视频输出格式";
 "settings.vidErrorMode" = "标准视频：单个文件失败时";
+"settings.failure.inherited" = "继承设置：%@";
 "settings.imgConfig.help" = "可选的图片运行时 JSON，包含工具和 Photos 配置。GUI 中明确指定的选项优先，配置文件本身不会被修改。";
 "settings.imgFallback.help" = "决定允许尝试哪些编码路径，不决定文件失败后是否终止整批。严格回退不等于遇错即停。";
 "settings.imgJpegEffort.help" = "数值越高，通常压缩越慢、体积越小。始终保留无损还原原 JPEG 的能力。";
 "settings.imgHeuristic.help" = "估算原图质量，辅助选择合适的图片质量。";
 "settings.imgDatabase.help" = "明确允许或禁止图片质量数据库访问；此项不配置数据库连接。";
-"settings.imgErrorMode.help" = "可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
-"settings.vidErrorMode.help" = "可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
+"settings.imgErrorMode.help" = "继承图像的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
+"settings.vidErrorMode.help" = "继承视频的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
 "settings.vidCodec.help" = "AV1 编码会关闭视频的 Apple 兼容模式；HEVC 保留现有 Apple 兼容路径。";
 "settings.value.strict" = "严格：仅请求的编码路径";
 "settings.value.same-semantics" = "允许相同语义的替代路径";
@@ -435,4 +436,6 @@
 "history.space.not_recorded" = "未记录可比的体积数据";
 "history.space.invalid" = "体积记录无效，无法确认体积变化。";
 "history.detail.input_bytes" = "输入";
+"history.detail.restored_inventory" = "已还原 JPEG 清单";
+"history.space.not_applicable_restore" = "此批次用于还原原始 JPEG，不属于优化处理，不计算节省空间。";
 "history.detail.output_bytes" = "输出";

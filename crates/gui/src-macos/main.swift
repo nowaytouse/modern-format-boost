@@ -287,6 +287,7 @@ private enum MediaSetting: String, CaseIterable {
     var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
+    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
     var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy].contains(self) }
@@ -359,6 +360,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
+        case .imgErrorMode, .vidErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
         case .photosBackend: "photos.backend"
         case .photosNativeBatch: "photos.native_batch_size"
@@ -570,7 +572,7 @@ private struct MediaSettings {
     func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
         MediaSetting.allCases.filter {
             ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
-                && $0 != .imgErrorMode && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
+                && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
             return field.arguments(value).map { argument in
@@ -586,6 +588,7 @@ private struct MediaSettings {
             if let cacheMaxBytes { arguments += ["--cache-max-bytes", String(cacheMaxBytes)] }
             if let cacheTtlSeconds { arguments += ["--cache-ttl-seconds", String(cacheTtlSeconds)] }
             if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
+            if let videoFailure { arguments += ["--error-mode", videoFailure.rawValue] }
         }
         return arguments
     }
@@ -1466,9 +1469,6 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private func restore(_ settings: MediaSettings) {
         restored = settings
         displayed = inherited.merging(settings.values) { _, explicit in explicit }
-        for field in [MediaSetting.imgErrorMode, .vidErrorMode] where displayed[field] == nil {
-            displayed[field] = "log-and-continue"
-        }
         for (field, text) in textFields {
             text.stringValue = displayed[field] ?? ""
             if field.isCache {
@@ -1489,6 +1489,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
+            if field.isFailurePolicy {
+                let inheritedValue = inherited[field].map {
+                    field.choices.contains($0) ? localized("settings.value.\($0)") : localized("settings.invalid", field.title, $0)
+                } ?? localized("result.unknown")
+                popup.insertItem(withTitle: localized("settings.failure.inherited", inheritedValue), at: 0)
+                if settings.values[field] == nil { popup.selectItem(at: 0); continue }
+            }
             if field == .performance && inheritedMixed.contains(field) {
                 popup.insertItem(withTitle: localized("settings.performance.per_pipeline"), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0) }
@@ -1525,6 +1532,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
+            if field.isFailurePolicy {
+                settings.values[field] = popup.selectedItem?.representedObject as? String
+                continue
+            }
             if field == .performance, inheritedMixed.contains(field), popup.indexOfSelectedItem == 0 {
                 settings.values[field] = nil
                 continue
@@ -1712,6 +1723,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try validateCachePolicyForSelfTest()
         try validatePhotosForSelfTest()
         try validateSearchForSelfTest()
+        try validateFailurePolicyForSelfTest()
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
         let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
@@ -1858,6 +1870,74 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         inheritedSources.removeAll()
         inheritedMixed.removeAll()
         restore(MediaSettings())
+    }
+
+    private func validateFailurePolicyForSelfTest() throws {
+        let key = "execution.error_mode"
+        guard MediaSetting.imgErrorMode.runtimeKey == key, MediaSetting.vidErrorMode.runtimeKey == key else {
+            throw HostError(message: "Failure policies are missing their effective configuration key")
+        }
+        if !developer || fast {
+            guard popups[.imgErrorMode] == nil, popups[.vidErrorMode] == nil else {
+                throw HostError(message: "Standard failure controls escaped Developer mode or entered Fast mode")
+            }
+            return
+        }
+        let previous = restored
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previous)
+        }
+        let image = EffectiveRuntimeSettings(values: [key: "fail-fast"], sources: [key: "MFB_ERROR_MODE"],
+                                             sourceChain: [key: ["default", "MFB_ERROR_MODE"]])
+        let video = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "/synthetic/vid.json"],
+                                             sourceChain: [key: ["default", "/synthetic/vid.json"]])
+        setInheritedValues(standard: image, fast: image, video: video)
+        restore(MediaSettings())
+        restore(MediaSettings())
+        let fields: [MediaSetting] = videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]
+        for field in fields {
+            guard let popup = popups[field], popup.indexOfSelectedItem == 0,
+                  popup.numberOfItems == field.choices.count + 1, sourceButtons[field] != nil,
+                  inherited[field] == (field.isImage ? "fail-fast" : "log-and-continue"),
+                  inheritedSources[field] == (field.isImage ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json"),
+                  draft().values[field] == nil else {
+                throw HostError(message: "Failure inheritance fabricated an override or used the wrong pipeline")
+            }
+            popup.selectItem(at: field.isImage ? 2 : 1)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Choosing the inherited failure value explicitly lost its override")
+            }
+            try draft().save(to: preferences)
+            guard MediaSettings(preferences: preferences).values[field] == inherited[field] else {
+                throw HostError(message: "Explicit failure override did not persist")
+            }
+            popup.selectItem(at: 0)
+            try draft().save(to: preferences)
+            guard draft().values[field] == nil, MediaSettings(preferences: preferences).values[field] == nil else {
+                throw HostError(message: "Returning to failure inheritance retained an override")
+            }
+        }
+        var explicit = MediaSettings()
+        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast"]
+        restore(explicit)
+        tabs.selectTabViewItem(withIdentifier: "developer")
+        resetTab()
+        guard fields.allSatisfy({ draft().values[$0] == nil && popups[$0]?.indexOfSelectedItem == 0 }) else {
+            throw HostError(message: "Developer reset forced a failure default instead of inheritance")
+        }
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        restore(MediaSettings())
+        guard fields.allSatisfy({ displayed[$0] == nil && popups[$0]?.indexOfSelectedItem == 0
+            && popups[$0]?.titleOfSelectedItem == localized("settings.failure.inherited", localized("result.unknown")) }) else {
+            throw HostError(message: "Unknown failure policy was presented as record-and-continue")
+        }
     }
 
     func validatePhotosForSelfTest() throws {
@@ -5340,8 +5420,21 @@ private func runSelfTest() -> Int32 {
         let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
         guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI",
-              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"] else {
+              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"],
+              videoEffective["execution.error_mode"] == "fail-fast",
+              videoEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try videoEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)") else {
             throw HostError(message: "Video settings do not match the effective backend configuration")
+        }
+        let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
+        guard imageEffective["execution.error_mode"] == "log-and-continue",
+              imageEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
+              !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),
+              !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
+              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
+            throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
         }
         configured.mediaSettings.values[.fastToolPolicy] = "single"
         let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]

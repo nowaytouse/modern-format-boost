@@ -79,28 +79,6 @@ enum LaunchMode {
     DatabaseManager,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum ErrorModeOption {
-    LogAndContinue,
-    FailFast,
-}
-
-impl ErrorModeOption {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::LogAndContinue => "log-and-continue",
-            Self::FailFast => "fail-fast",
-        }
-    }
-
-    const fn batch_mode(self) -> BatchErrorMode {
-        match self {
-            Self::LogAndContinue => BatchErrorMode::LogAndContinue,
-            Self::FailFast => BatchErrorMode::FailFast,
-        }
-    }
-}
-
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "drag_and_drop_processor",
@@ -209,11 +187,11 @@ struct Args {
 
     /// Standard image batch policy; FastImg retains its checkpointed handling.
     #[arg(long, value_enum)]
-    img_error_mode: Option<ErrorModeOption>,
+    img_error_mode: Option<BatchErrorMode>,
 
     /// Standard video batch policy; not applicable to Fast Video/GIF.
     #[arg(long, value_enum)]
-    vid_error_mode: Option<ErrorModeOption>,
+    vid_error_mode: Option<BatchErrorMode>,
 
     /// Standard video codec; AV1 explicitly disables Apple compatibility.
     #[arg(long, value_enum)]
@@ -408,6 +386,10 @@ impl DragDropSession {
             .integrity_summary
             .as_ref()
             .context("history verification requires the machine integrity summary")?;
+        let source =
+            std::path::absolute(source).context("resolve history verification source path")?;
+        let output =
+            std::path::absolute(output).context("resolve history verification output path")?;
         self.append_history_event(
             "MFB_HISTORY_VERIFICATION",
             serde_json::json!({
@@ -605,16 +587,10 @@ impl LaunchCommand {
         })
     }
 
-    fn with_error_mode(mut self, mode: Option<ErrorModeOption>) -> Self {
+    fn with_error_mode(mut self, mode: Option<BatchErrorMode>) -> Self {
         if let Some(mode) = mode {
-            self.env_overrides.push((
-                foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
-                Some(mode.as_str().to_owned()),
-            ));
-            self.env_overrides.push((
-                foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
-                None,
-            ));
+            self.args
+                .extend(["--error-mode".to_owned(), mode.as_str().to_owned()]);
         }
         self
     }
@@ -654,15 +630,6 @@ impl LaunchCommand {
         bail_on_failure: bool,
     ) -> Result<ProcessorStats> {
         println!("+ {}", self.display());
-        if self.args.first().is_some_and(|arg| arg == "run") {
-            for (name, value) in &self.env_overrides {
-                if name == foundation::constants::ENV_MFB_ERROR_MODE
-                    && let Some(value) = value
-                {
-                    println!("[POLICY] {} file_error_mode={value}", self.pipeline_label());
-                }
-            }
-        }
         if dry_run {
             return Ok(ProcessorStats::default());
         }
@@ -1097,13 +1064,12 @@ fn read_optional_text_file(path: &Path) -> Option<String> {
     }
 }
 
-/// Load `.modern_format_boost/local_env.json` (and `.sh` fallback) into
-/// `std::env`.  Mirrors `load_local_env()` in the Python implementation.
+/// Load the local environment once, before runtime resolution and worker threads.
 ///
 /// Uses `serde_json` for robust JSON parsing — the previous hand-rolled
 /// `split(',')` approach silently mishandled values containing commas (e.g.
 /// `PostgreSQL` multi-host connection strings).
-fn load_local_env(_project_root: &Path) {
+fn load_local_env() {
     let Ok(conf_dir) = foundation::process_lock::get_mfb_root() else {
         eprintln!(
             "{} MFB state root unavailable; skipping local environment",
@@ -1373,14 +1339,36 @@ fn validate_media_options(args: &Args) -> Result<()> {
 
 fn media_error_mode(args: &Args, pipeline: &str, inherited: BatchErrorMode) -> BatchErrorMode {
     match pipeline {
-        "IMG" => args
-            .img_error_mode
-            .map_or(inherited, ErrorModeOption::batch_mode),
-        "VID" => args
-            .vid_error_mode
-            .map_or(inherited, ErrorModeOption::batch_mode),
+        "IMG" => args.img_error_mode.unwrap_or(inherited),
+        "VID" => args.vid_error_mode.unwrap_or(inherited),
         _ => inherited,
     }
+}
+
+fn standard_error_modes(args: &Args) -> Result<(BatchErrorMode, BatchErrorMode)> {
+    let inherited = BatchErrorMode::current();
+    if !mode_uses_standard_pipeline(&args.mode) {
+        return Ok((inherited, inherited));
+    }
+    let resolve = |pipeline, path| -> Result<BatchErrorMode> {
+        let loaded = foundation::runtime_config::load(path, false)?;
+        Ok(media_error_mode(
+            args,
+            pipeline,
+            loaded.config.execution.error_mode,
+        ))
+    };
+    let image = if args.mode == LaunchMode::Videos {
+        inherited
+    } else {
+        resolve("IMG", args.img_config.as_deref()).context("resolve image failure policy")?
+    };
+    let video = if args.mode == LaunchMode::Images {
+        inherited
+    } else {
+        resolve("VID", args.vid_config.as_deref()).context("resolve video failure policy")?
+    };
+    Ok((image, video))
 }
 
 fn child_failure_should_abort(mode: BatchErrorMode, exit_code: i32, failed: usize) -> bool {
@@ -1398,17 +1386,11 @@ fn child_result_needs_error(
     exit_code != 0 || failed > 0 || (!dry_run && !counts_complete)
 }
 
-fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
+fn routing_fail_fast(args: &Args, image: BatchErrorMode, video: BatchErrorMode) -> bool {
     match args.mode {
-        LaunchMode::Images | LaunchMode::FastImg => {
-            media_error_mode(args, "IMG", inherited).is_fail_fast()
-        }
-        LaunchMode::Videos => media_error_mode(args, "VID", inherited).is_fail_fast(),
-        LaunchMode::Auto => {
-            media_error_mode(args, "IMG", inherited).is_fail_fast()
-                && media_error_mode(args, "VID", inherited).is_fail_fast()
-        }
-        _ => inherited.is_fail_fast(),
+        LaunchMode::Videos => video.is_fail_fast(),
+        LaunchMode::Auto => image.is_fail_fast() && video.is_fail_fast(),
+        _ => image.is_fail_fast(),
     }
 }
 
@@ -1535,8 +1517,16 @@ fn adjacent_output_dir(args: &Args) -> PathBuf {
     })
 }
 
-fn bind_standard_output(args: &Args) -> Result<Args> {
+fn bind_processing_output(args: &Args) -> Result<Args> {
     let mut bound = args.clone();
+    if args.mode == LaunchMode::RestoreJpeg {
+        anyhow::ensure!(
+            args.inputs.len() == 1,
+            "restore-jpeg requires exactly one input; multiple inputs are not supported"
+        );
+        bound.output =
+            resolve_restore_jpeg_launch_output(&args.inputs[0], args.output.as_deref())?.0;
+    }
     if mode_uses_standard_pipeline(&args.mode)
         && args.inputs.len() == 1
         && !args.in_place
@@ -1553,7 +1543,7 @@ fn bind_standard_output(args: &Args) -> Result<Args> {
 
 fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
     if !mode_uses_standard_pipeline(&args.mode) || args.inputs.len() < 2 {
-        return Ok(vec![bind_standard_output(args)?]);
+        return Ok(vec![bind_processing_output(args)?]);
     }
     anyhow::ensure!(!args.watch, "--watch requires exactly one input directory");
     anyhow::ensure!(
@@ -2614,7 +2604,7 @@ fn run_drag_drop_inner(
         print_runtime_panel(&build_runtime_dashboard(args));
     }
 
-    load_local_env(&root);
+    let (image_error_mode, video_error_mode) = standard_error_modes(args)?;
 
     for input in &args.inputs {
         safety_check(input)
@@ -2670,7 +2660,7 @@ fn run_drag_drop_inner(
     }
 
     let error_mode = BatchErrorMode::current();
-    let fail_fast = routing_fail_fast(args, error_mode);
+    let fail_fast = routing_fail_fast(args, image_error_mode, video_error_mode);
     let commands = if scan.is_some() {
         if mode_uses_standard_pipeline(&args.mode) {
             let mut commands = Vec::new();
@@ -2855,7 +2845,11 @@ fn run_drag_drop_inner(
         for command in commands {
             update_terminal_title(started.elapsed());
             draw_separator(&command_phase_label(&command.program));
-            let command_error_mode = media_error_mode(args, command.pipeline_label(), error_mode);
+            let command_error_mode = match command.pipeline_label() {
+                "IMG" => image_error_mode,
+                "VID" => video_error_mode,
+                _ => error_mode,
+            };
             match command.run_collecting(args.dry_run, session, false) {
                 Ok(stats) => {
                     print_batch_result(&command, &stats, args.dry_run);
@@ -3791,10 +3785,17 @@ fn run_watch_loop(args: &Args, session: &DragDropSession) -> Result<()> {
     })
 }
 
+fn initialize_launcher_runtime(args: &Args) -> Result<()> {
+    load_local_env();
+    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
+    let mut runtime = foundation::runtime_config::load(None, false)?;
+    args.performance.apply_to(&mut runtime);
+    args.cache.apply_to(&mut runtime);
+    foundation::runtime_config::install(runtime.config)
+}
+
 fn main() -> Result<()> {
     use std::io::IsTerminal;
-    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
-    install_signal_handlers()?;
     unsafe {
         std::env::set_var("MFB_GUI_LAUNCH", "1");
         std::env::set_var("FORCE_COLOR", "1");
@@ -3805,10 +3806,8 @@ fn main() -> Result<()> {
     }
     resize_terminal_for_gui(35, 110);
     let args = apply_mode_overrides(Args::parse());
-    let mut runtime = foundation::runtime_config::load(None, false)?;
-    args.performance.apply_to(&mut runtime);
-    args.cache.apply_to(&mut runtime);
-    foundation::runtime_config::install(runtime.config)?;
+    initialize_launcher_runtime(&args)?;
+    install_signal_handlers()?;
     let mut session = DragDropSession::start()?;
     println!(
         "MFB_LOG_DIRECTORY={}",
@@ -4005,6 +4004,29 @@ mod tests {
             )
             .unwrap()
         );
+        let verify = dev::infra::drag_drop::VerifyOutcome {
+            integrity_summary: Some(dev::infra::drag_drop::IntegritySummaryMachine {
+                has_warnings: false,
+                issue_count: 0,
+                source_count: 1,
+                optimized_count: 1,
+                skipped_count: 0,
+                failed_count: 0,
+                source_remaining_count: 1,
+                verified_deleted_count: 0,
+                count_status: Some("MATCH".to_owned()),
+            }),
+            ..Default::default()
+        };
+        session
+            .record_history_verification(&verify, &args.inputs[0], args.output.as_deref().unwrap())
+            .unwrap();
+        let receipt = history_payloads(&session, "MFB_HISTORY_VERIFICATION")
+            .pop()
+            .unwrap();
+        assert_eq!(receipt["source_path"], context["inputs"][0]);
+        assert_eq!(receipt["output_path"], context["output"]);
+        assert_eq!(receipt["optimized_count"], 1);
     }
 
     #[test]
@@ -4460,14 +4482,13 @@ mod tests {
                 .contains(&"--quality-heuristic=false".to_owned())
         );
         assert!(command.args.contains(&"--allow-database=true".to_owned()));
-        assert!(command.env_overrides.contains(&(
-            foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
-            Some("log-and-continue".to_owned())
-        )));
-        assert!(command.env_overrides.contains(&(
-            foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
-            None
-        )));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--error-mode", "log-and-continue"])
+        );
+        assert!(command.env_overrides.is_empty());
         let video = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video"));
         assert!(!video.args.contains(&"--config".to_owned()));
         assert!(video.env_overrides.is_empty());
@@ -4476,6 +4497,155 @@ mod tests {
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
         assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn launcher_startup_applies_local_environment_before_runtime() -> Result<()> {
+        const CHILD: &str = "MFB_TEST_LAUNCHER_STARTUP_CASE";
+        const ROOT: &str = "MFB_TEST_LAUNCHER_RESOLVED_ROOT";
+        if let Ok(case) = std::env::var(CHILD) {
+            let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
+            let result = initialize_launcher_runtime(&args);
+            if case == "invalid" {
+                assert!(result.is_err());
+                assert!(foundation::runtime_config::active().is_none());
+                return Ok(());
+            }
+            result?;
+            let expected = if case == "file" {
+                BatchErrorMode::LogAndContinue
+            } else {
+                BatchErrorMode::FailFast
+            };
+            assert_eq!(BatchErrorMode::current(), expected);
+            assert_eq!(standard_error_modes(&args)?.0, expected);
+            let resolved = foundation::runtime_config::load(None, false)?;
+            let sources = &resolved.source_chain["execution.error_mode"];
+            assert_eq!(sources[1], "env:MFB_ERROR_MODE");
+            if case == "file" {
+                assert_eq!(sources.len(), 3);
+                assert_eq!(
+                    sources[2],
+                    foundation::runtime_config::project_config_path()?
+                        .display()
+                        .to_string()
+                );
+            } else {
+                assert_eq!(sources.len(), 2);
+            }
+            let root = PathBuf::from(std::env::var_os(ROOT).context("test root")?);
+            assert_eq!(foundation::process_lock::get_mfb_root()?, root);
+            assert_eq!(
+                PathBuf::from(std::env::var_os("TMPDIR").context("test TMPDIR")?),
+                root.join("tmp")
+            );
+            // Later edits take effect on restart, not during an active launcher session.
+            fs::write(
+                root.join("local_env.json"),
+                r#"{"MFB_ERROR_MODE":"log-and-continue"}"#,
+            )?;
+            assert_eq!(std::env::var("MFB_ERROR_MODE")?, "fail-fast");
+            assert_eq!(BatchErrorMode::current(), expected);
+            return Ok(());
+        }
+        let before = ["MFB_ERROR_MODE", "MFB_HOME_ROOT", "TMPDIR"]
+            .map(|name| (name, std::env::var_os(name)));
+        let temp = tempfile::tempdir()?;
+        for case in ["environment", "file", "invalid"] {
+            let directory = temp.path().join(case);
+            let bootstrap = directory.join("bootstrap");
+            let root = directory.join("state");
+            fs::create_dir_all(&bootstrap)?;
+            fs::write(
+                bootstrap.join("local_env.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "MFB_ERROR_MODE": if case == "invalid" { "unknown" } else { "fail-fast" },
+                    "MFB_HOME_ROOT": root,
+                }))?,
+            )?;
+            if case == "file" {
+                fs::write(
+                    directory.join("mfb.json"),
+                    r#"{"config_version":1,"execution":{"error_mode":"log-and-continue"}}"#,
+                )?;
+            }
+            let output = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "tests::launcher_startup_applies_local_environment_before_runtime",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .env(CHILD, case)
+                .env(ROOT, &root)
+                .env("MFB_HOME_ROOT", &bootstrap)
+                .env("HOME", directory.join("home"))
+                .env("XDG_CONFIG_HOME", directory.join("config"))
+                .current_dir(&directory)
+                .output()?;
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "startup case {case}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for (name, value) in before {
+            assert_eq!(std::env::var_os(name), value);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn standard_failure_policy_uses_each_config_and_cli_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let image_config = temp.path().join("image.json");
+        let video_config = temp.path().join("video.json");
+        fs::write(
+            &image_config,
+            r#"{"config_version":1,"execution":{"error_mode":"fail-fast"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &video_config,
+            r#"{"config_version":1,"execution":{"error_mode":"log-and-continue"}}"#,
+        )
+        .unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
+        args.img_config = Some(image_config.clone());
+        args.vid_config = Some(video_config.clone());
+        let (image, video) = standard_error_modes(&args).unwrap();
+        assert_eq!(image, BatchErrorMode::FailFast);
+        assert_eq!(video, BatchErrorMode::LogAndContinue);
+        assert!(!routing_fail_fast(&args, image, video));
+        assert!(child_failure_should_abort(image, 1, 1));
+        assert!(!child_failure_should_abort(video, 1, 1));
+        args.img_error_mode = Some(BatchErrorMode::LogAndContinue);
+        args.vid_error_mode = Some(BatchErrorMode::FailFast);
+        assert_eq!(
+            standard_error_modes(&args).unwrap(),
+            (BatchErrorMode::LogAndContinue, BatchErrorMode::FailFast)
+        );
+        let command = rust_run_command(temp.path(), "vid", &args, Path::new("input"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--error-mode", "fail-fast"])
+        );
+        assert!(command.env_overrides.is_empty());
+        args.mode = LaunchMode::Images;
+        args.vid_config = Some(temp.path().join("absent-unused-video.json"));
+        assert!(standard_error_modes(&args).is_ok());
+        fs::write(
+            &image_config,
+            r#"{"config_version":1,"execution":{"error_mode":"silent"}}"#,
+        )
+        .unwrap();
+        assert!(standard_error_modes(&args).is_err());
     }
 
     #[test]
@@ -5031,6 +5201,48 @@ mod tests {
     }
 
     #[test]
+    fn restore_history_binds_output_before_failure_and_rejects_multiple_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "restore-jpeg"]).unwrap();
+        args.inputs = vec![input.clone()];
+        let plans = standard_input_plans(&args).unwrap();
+        let output = temp.path().join("Album_restored_jpeg");
+        assert_eq!(plans[0].output.as_ref(), Some(&output));
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        run_with_history(&plans[0], Some(&session), || {
+            bail!("synthetic restore failure")
+        })
+        .unwrap_err();
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_CONTEXT")[0]["output"],
+            serde_json::to_value(&output).unwrap()
+        );
+        assert!(!output.exists());
+        args.output = Some(temp.path().join("Selected"));
+        assert_eq!(standard_input_plans(&args).unwrap()[0].output, args.output);
+        args.inputs = vec![temp.path().join("Synthetic.photoslibrary")];
+        fs::create_dir(&args.inputs[0]).unwrap();
+        args.output = None;
+        assert!(standard_input_plans(&args).unwrap()[0].output.is_none());
+        args.inputs = vec![input.clone(), temp.path().join("second")];
+        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        assert!(error.to_string().contains("requires exactly one input"));
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_CONTEXT")[1]["inputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FINISHED")[1]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
     fn standard_multi_input_plans_scan_and_route_every_input() {
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("Album");
@@ -5268,7 +5480,7 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
         args.inputs = vec![input.clone()];
         fs::create_dir(temp.path().join("Album_optimized")).unwrap();
-        let args = bind_standard_output(&args).unwrap();
+        let args = bind_processing_output(&args).unwrap();
         assert_eq!(args.output, Some(temp.path().join("Album_optimized_2")));
         let scan = ContentScan {
             img_count: 1,
@@ -5314,13 +5526,13 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
         args.inputs = vec![first.clone()];
         args.output = Some(temp.path().join("Selected"));
-        assert_eq!(bind_standard_output(&args).unwrap().output, args.output);
+        assert_eq!(bind_processing_output(&args).unwrap().output, args.output);
         args.output = None;
         args.in_place = true;
-        assert!(bind_standard_output(&args).unwrap().output.is_none());
+        assert!(bind_processing_output(&args).unwrap().output.is_none());
         args.in_place = false;
         args.inputs = vec![first.clone(), second];
-        let bound = bind_standard_output(&args).unwrap();
+        let bound = bind_processing_output(&args).unwrap();
         assert!(bound.output.is_none());
         let commands = plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap();
         assert_eq!(commands.len(), 2);
@@ -5331,7 +5543,7 @@ mod tests {
         );
         args.inputs = vec![file];
         let original = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
-        let bound = bind_standard_output(&args).unwrap();
+        let bound = bind_processing_output(&args).unwrap();
         assert!(bound.output.is_none());
         assert_eq!(
             plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap()[0].args,
@@ -5339,7 +5551,7 @@ mod tests {
         );
         args.inputs = vec![first];
         args.mode = LaunchMode::FastImg;
-        assert!(bind_standard_output(&args).unwrap().output.is_none());
+        assert!(bind_processing_output(&args).unwrap().output.is_none());
     }
 
     #[test]
