@@ -4,7 +4,11 @@
 //! conversion tools:
 //! - Progress tracking: Record completed files for resume after interruption
 //! - Atomic delete: Verify output integrity before deleting original
-//! - Lock file: Prevent concurrent processing of same directory
+//! - Kernel file ownership: Prevent concurrent checkpoint access for the same directory
+//!
+//! Construction acquires exclusive ownership before loading or changing saved state.
+//! Release disables state access until reacquisition reloads the latest committed state.
+//! Lock files remain in the central directory; closing the owned handle releases the lock.
 //!
 //! # Usage
 //! ```no_run
@@ -39,13 +43,13 @@
 //! }
 //! ```
 
-use crate::{HostnameBuilder, ToolBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
 
 use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm};
@@ -82,25 +86,11 @@ fn get_central_progress_dir() -> io::Result<PathBuf> {
     })?;
     Ok(root.join("progress"))
 }
-/// Timeout in seconds for considering a lock file as stale.
-///
-/// After this duration, a lock file is considered abandoned and can be
-/// safely overridden. Default is 24 hours.
-const LOCK_STALE_TIMEOUT_SECS: u64 = crate::constants::LOCK_STALE_TIMEOUT_SECS;
-
 /// Current version of the checkpoint file format.
 ///
 /// Increment this when the checkpoint structure changes to invalidate
 /// old checkpoint files and force regeneration.
 const CHECKPOINT_FORMAT_VERSION: u32 = crate::constants::CHECKPOINT_FORMAT_VERSION;
-
-/// Wall-clock duration for checkpoint headers (M29 SSOT; never used to
-/// fabricate file mtimes).
-fn checkpoint_wall_clock_duration_since_epoch() -> io::Result<std::time::Duration> {
-    crate::media_conversion_gate::unix_duration_since_epoch_optional().ok_or_else(|| {
-        io::Error::other("checkpoint wall-clock SSOT unavailable (SystemTime before UNIX_EPOCH)")
-    })
-}
 
 /// Gets the current Unix timestamp in seconds (M29 epoch SSOT).
 fn current_unix_secs() -> io::Result<u64> {
@@ -303,266 +293,66 @@ fn save_progress_to_sqlite(
     .map_err(io::Error::other)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LockInfo {
-    pid: u32,
-    start_time: u64,
-    created_at: u64,
-    hostname: String,
-}
-
-impl LockInfo {
-    fn new() -> io::Result<Self> {
-        let now = current_unix_secs()?;
-        Ok(Self {
-            pid: std::process::id(),
-            start_time: crate::media_conversion_gate::delivery_checkpoint_lock_start_time_or_now(
-                get_process_start_time(),
-                now,
-            ),
-            created_at: now,
-            hostname: get_hostname(),
-        })
-    }
-
-    fn is_stale(&self) -> bool {
-        let Ok(now_secs) = checkpoint_wall_clock_duration_since_epoch().map(|d| d.as_secs()) else {
-            crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                "checkpoint_fallback",
-                "Checkpoint SSOT wall-clock missing; treating lock as stale to prevent deadlock",
-            );
-            return true;
-        };
-        now_secs.saturating_sub(self.created_at) > LOCK_STALE_TIMEOUT_SECS
-    }
-}
-
-/// Gets the start time of the current process.
-///
-/// # Returns
-/// Process start time in Unix seconds, or None if unavailable
-#[cfg(unix)]
-fn get_process_start_time() -> Option<u64> {
-    get_process_start_time_for_pid(std::process::id())
-}
-
-/// Gets the start time of the current process (non-Unix fallback).
-///
-/// On non-Unix systems, returns current time as approximation.
-///
-/// # Returns
-/// Process start time approximation in Unix seconds
-#[cfg(not(unix))]
-fn get_process_start_time() -> Option<u64> {
-    match current_unix_secs() {
-        Ok(now) => Some(now),
-        Err(e) => {
-            crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                "checkpoint_process",
-                format!("failed to read wall-clock for process start fallback: {e}"),
-            );
-            None
-        }
-    }
-}
-
-/// Gets the start time of a specific process by PID.
-///
-/// # Arguments
-/// * `pid` - Process ID to query
-///
-/// # Returns
-/// Process start time in Unix seconds, or None if unavailable
-#[cfg(unix)]
-fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
-    for field in ["etimes", "etime"] {
-        let output = match crate::tool_builders::PsBuilder::new()
-            .pid(pid)
-            .output_field(field)
-            .build()
-            .output()
-        {
-            Ok(o) => o,
-            Err(err) => {
-                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                    "checkpoint_process",
-                    format!("Failed to query process age for PID {pid} via ps {field}: {err}"),
-                );
-                return None;
-            }
-        };
-
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let elapsed_secs = match field {
-                "etimes" => crate::numeric_cast::parse_strict::<u64>(stdout.trim(), "ps_etimes"),
-                "etime" => parse_ps_etime_to_secs(&stdout),
-                _ => None,
-            };
-
-            if let Some(elapsed_secs) = elapsed_secs {
-                return match current_unix_secs() {
-                    Ok(now) => Some(now.saturating_sub(elapsed_secs)),
-                    Err(e) => {
-                        crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                            "checkpoint_process",
-                            format!(
-                                "failed to read wall-clock while computing process start for PID \
-                                 {pid}: {e}"
-                            ),
-                        );
-                        None
-                    }
-                };
-            }
-
-            crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                "checkpoint_process",
-                format!(
-                    "Failed to parse process age for PID {} from ps {} output: {}",
-                    pid,
-                    field,
-                    stdout.trim()
-                ),
-            );
-            continue;
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if ps_field_unsupported(stderr.trim()) {
-            continue;
-        }
-
-        crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-            "checkpoint_process",
-            format!(
-                "ps {} returned non-zero while querying PID {}: {}",
-                field,
-                pid,
-                stderr.trim()
-            ),
-        );
-    }
-
-    None
-}
-
-/// Checks if a ps field is unsupported based on stderr output.
-///
-/// # Arguments
-/// * `stderr` - The stderr output from ps command
-///
-/// # Returns
-/// `true` if the field is unsupported, `false` otherwise
-#[cfg(unix)]
-fn ps_field_unsupported(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    lower.contains("keyword not found")
-        || lower.contains("no valid keywords")
-        || lower.contains("invalid keyword")
-}
-
-/// Parses ps etime output to Unix seconds.
-///
-/// # Arguments
-/// * `raw` - The raw etime output from ps command
-///
-/// # Returns
-/// Unix seconds, or None if parsing fails
-#[cfg(unix)]
-fn parse_ps_etime_to_secs(raw: &str) -> Option<u64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let (days, clock) = match trimmed.split_once('-') {
-        Some((days_str, rest)) => (
-            crate::numeric_cast::parse_strict::<u64>(days_str.trim(), "ps_etime_days")?,
-            rest.trim(),
-        ),
-        None => (0, trimmed),
-    };
-
-    let parts: Vec<_> = clock.split(':').collect();
-    let clock_secs = match parts.as_slice() {
-        [minutes, seconds] => {
-            crate::numeric_cast::parse_strict::<u64>(minutes.trim(), "ps_etime_minutes")
-                .map(|m| m * 60)
-                .and_then(|m_scaled| {
-                    crate::numeric_cast::parse_strict::<u64>(seconds.trim(), "ps_etime_seconds")
-                        .map(|s| m_scaled + s)
-                })?
-        }
-        [hours, minutes, seconds] => {
-            let h = crate::numeric_cast::parse_strict::<u64>(hours.trim(), "ps_etime_hours")
-                .map(|h| h * 3600)?;
-            let m = crate::numeric_cast::parse_strict::<u64>(minutes.trim(), "ps_etime_minutes")
-                .map(|m| m * 60)?;
-            let s = crate::numeric_cast::parse_strict::<u64>(seconds.trim(), "ps_etime_seconds")?;
-            h + m + s
-        }
-        _ => return None,
-    };
-
-    Some(days * 24 * 3600 + clock_secs)
-}
-
-#[cfg(not(unix))]
-fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
-    None
-}
-
-/// Gets the hostname of the current machine.
-///
-/// Uses system commands to retrieve the hostname, with fallbacks for different
-/// platforms. Returns "unknown" if hostname cannot be determined or is not
-/// valid UTF-8.
-///
-/// # Returns
-/// Hostname string, or "unknown" if unavailable
-fn get_hostname() -> String {
+fn open_checkpoint_lock(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
-        match HostnameBuilder::new().build().output() {
-            Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-                Ok(s) => s.trim().to_string(),
-                Err(err) => {
-                    crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                        "checkpoint_process",
-                        format!("Non-UTF-8 hostname output: {err}"),
-                    );
-                    "unknown".to_string()
-                }
-            },
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                    "checkpoint_process",
-                    format!("hostname returned non-zero status: {}", stderr.trim()),
-                );
-                "unknown".to_string()
-            }
-            Err(err) => {
-                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                    "checkpoint_process",
-                    format!("Failed to query hostname: {err}"),
-                );
-                "unknown".to_string()
-            }
-        }
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        "unknown".to_string()
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        // Keep the path stable while its ownership handle remains open.
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
     }
+    let file = options.open(path)?;
+    validate_checkpoint_lock_path(&file, path)?;
+    Ok(file)
 }
 
-use std::sync::Mutex;
+fn validate_checkpoint_lock_path(file: &File, path: &Path) -> io::Result<()> {
+    let opened = file.metadata()?;
+    let current = fs::symlink_metadata(path)?;
+    if !opened.is_file() || !current.is_file() || current.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "checkpoint lock must be a regular file, not a symbolic link",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.dev() != current.dev() || opened.ino() != current.ino() || opened.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint lock path changed or has multiple hard links; state retained",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn acquire_checkpoint_lock(path: &Path) -> io::Result<File> {
+    let file = open_checkpoint_lock(path)?;
+    file.try_lock().map_err(|error| {
+        let error: io::Error = error.into();
+        io::Error::new(
+            error.kind(),
+            format!("acquire checkpoint lock {}: {error}", path.display()),
+        )
+    })?;
+    validate_checkpoint_lock_path(&file, path)?;
+    Ok(file)
+}
 
 pub struct Manager {
     progress_dir: PathBuf,
     lock_file: PathBuf,
+    owned_lock: Mutex<Option<File>>,
     checkpoint_key: String,
     header: CheckpointHeader,
     completed: Mutex<HashMap<String, CheckpointEntry>>,
@@ -620,6 +410,10 @@ impl Manager {
     pub fn discard_saved_progress(target_dir: &Path) -> io::Result<()> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let checkpoint_key = Self::hash_path(&canonical_target);
+        let progress = get_central_progress_dir()?;
+        fs::create_dir_all(&progress)?;
+        let _owned_lock =
+            acquire_checkpoint_lock(&progress.join(format!("{checkpoint_key}.lock")))?;
         Self::discard_progress_for_fresh_run(&checkpoint_key)?;
         let legacy_key = Self::legacy_hash_path(&canonical_target);
         if legacy_key != checkpoint_key {
@@ -648,6 +442,7 @@ impl Manager {
 
         let checkpoint_key = dir_hash;
         let lock_file = central_dir.join(format!("{checkpoint_key}.lock"));
+        let owned_lock = acquire_checkpoint_lock(&lock_file)?;
 
         let (completed_set, resume_mode, reset_reason, loaded_legacy_key) = if resume_enabled {
             let (loaded, loaded_legacy_key) =
@@ -685,7 +480,7 @@ impl Manager {
             }
         }
 
-        // Persist before constructing Manager: its Drop releases the checkpoint lock.
+        // Keep the owned handle alive across validation and every required commit.
         if resume_mode {
             if let Err(err) = save_progress_to_sqlite(&checkpoint_key, &header, &completed_set) {
                 let message = format!("Failed to compact validated checkpoint state: {err}");
@@ -714,6 +509,7 @@ impl Manager {
         Ok(Self {
             progress_dir: central_dir,
             lock_file,
+            owned_lock: Mutex::new(Some(owned_lock)),
             checkpoint_key,
             header,
             completed: Mutex::new(completed_set),
@@ -750,259 +546,99 @@ impl Manager {
         Ok(())
     }
 
-    // Rationale: This function handles complex, sequential initialization or
-    // business logic where further fragmentation would hinder readability and
-    // maintainability.
     /// # Errors
     ///
-    /// Returns an error if the lock file cannot be read.
-    pub fn check_lock(&self) -> io::Result<Option<u32>> {
-        if !self.lock_file.exists() {
-            return Ok(None);
+    /// Reports whether another handle owns the lock, without guessing its PID.
+    /// Returns an error if lock ownership or the lock path cannot be checked.
+    pub fn check_lock(&self) -> io::Result<bool> {
+        let owned = self
+            .owned_lock
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint ownership mutex poisoned; state retained"))?;
+        if let Some(file) = owned.as_ref() {
+            validate_checkpoint_lock_path(file, &self.lock_file)?;
+            return Ok(false);
         }
-
-        let content = fs::read_to_string(&self.lock_file)?;
-
-        match serde_json::from_str::<LockInfo>(&content) {
-            Ok(lock_info) => {
-                if lock_info.pid == std::process::id() {
-                    crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                        "checkpoint_lock",
-                        &self.lock_file,
-                        "Found existing lock file with own PID; assuming clean reuse",
-                    );
-                    return Ok(None);
-                }
-
-                if lock_info.is_stale() {
-                    crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                        "checkpoint_lock",
-                        &self.lock_file,
-                        "LOCK STALE: Lock file older than 24 hours, removing",
-                    );
-                    if let Err(e) = fs::remove_file(&self.lock_file) {
-                        crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                            "checkpoint_lock",
-                            &self.lock_file,
-                            format!("Failed to remove stale lock file: {e}"),
-                        );
-                    }
-                    return Ok(None);
-                }
-
-                #[cfg(unix)]
-                {
-                    let exists = match crate::tool_builders::KillBuilder::new()
-                        .signal("-0")
-                        .pid(lock_info.pid)
-                        .build()
-                        .status()
-                    {
-                        Ok(status) => status.success(),
-                        Err(err) => {
-                            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                "checkpoint_lock",
-                                &self.lock_file,
-                                format!(
-                                    "Failed to probe lock owner PID {} via kill -0: {}",
-                                    lock_info.pid, err
-                                ),
-                            );
-                            false
-                        }
-                    };
-
-                    if !exists {
-                        crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                            "checkpoint_lock",
-                            &self.lock_file,
-                            format!(
-                                "LOCK STALE: PID {} no longer exists, removing",
-                                lock_info.pid
-                            ),
-                        );
-                        if let Err(e) = fs::remove_file(&self.lock_file) {
-                            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                "checkpoint_lock",
-                                &self.lock_file,
-                                format!("Failed to remove stale lock file: {e}"),
-                            );
-                        }
-                        return Ok(None);
-                    }
-
-                    match get_process_start_time_for_pid(lock_info.pid) {
-                        Some(current_start) if current_start != lock_info.start_time => {
-                            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                "checkpoint_lock",
-                                &self.lock_file,
-                                format!(
-                                    "LOCK STALE: PID {} reused (start time mismatch), removing",
-                                    lock_info.pid
-                                ),
-                            );
-                            if let Err(e) = fs::remove_file(&self.lock_file) {
-                                crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                    "checkpoint_lock",
-                                    &self.lock_file,
-                                    format!("Failed to remove stale lock file: {e}"),
-                                );
-                            }
-                            return Ok(None);
-                        }
-                        Some(_) => {}
-                        None => {
-                            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                "checkpoint_lock",
-                                &self.lock_file,
-                                format!(
-                                    "Unable to verify process start time for PID {}; preserving \
-                                     active lock",
-                                    lock_info.pid
-                                ),
-                            );
-                        }
-                    }
-
-                    return Ok(Some(lock_info.pid));
-                }
-
-                #[cfg(not(unix))]
-                {
-                    return Ok(Some(lock_info.pid));
-                }
-            }
-            Err(e) => {
-                crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                    "checkpoint_lock",
-                    &self.lock_file,
-                    format!("Failed to parse structured lock JSON; trying legacy PID lock: {e}"),
-                );
-            }
-        }
-
-        match content.trim().parse::<u32>() {
-            Ok(pid) => {
-                if pid == std::process::id() {
-                    crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                        "checkpoint_lock",
-                        &self.lock_file,
-                        "Found existing lock file with own PID; assuming clean reuse",
-                    );
-                    return Ok(None);
-                }
-                match fs::metadata(&self.lock_file) {
-                    Ok(meta) => match meta.modified() {
-                        Ok(modified) => match modified.elapsed() {
-                            Ok(elapsed) if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS => {
-                                if let Err(e) = fs::remove_file(&self.lock_file) {
-                                    crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                                        "checkpoint_lock",
-                                        &self.lock_file,
-                                        format!("Failed to remove stale lock file: {e}"),
-                                    );
-                                }
-                                return Ok(None);
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Err(io::Error::other(format!(
-                                    "Failed to compute legacy lock age for {}: {e}",
-                                    self.lock_file.display()
-                                )));
-                            }
-                        },
-                        Err(e) => {
-                            return Err(io::Error::new(
-                                e.kind(),
-                                format!(
-                                    "Failed to read legacy lock modification time from {}: {e}",
-                                    self.lock_file.display()
-                                ),
-                            ));
-                        }
-                    },
-                    Err(e) => {
-                        return Err(io::Error::new(
-                            e.kind(),
-                            format!(
-                                "Failed to read legacy lock metadata from {}: {e}",
-                                self.lock_file.display()
-                            ),
-                        ));
-                    }
-                }
-                return Ok(Some(pid));
-            }
-            Err(e) => {
-                crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                    "checkpoint_lock",
-                    &self.lock_file,
-                    format!("LOCK INVALID: Cannot parse lock file as legacy PID: {e}"),
-                );
-            }
-        }
-
-        crate::media_conversion_gate::delivery_checkpoint_path_audit(
-            "checkpoint_lock",
-            &self.lock_file,
-            "LOCK INVALID: Cannot parse lock file, removing",
-        );
-        if let Err(e) = fs::remove_file(&self.lock_file) {
-            crate::media_conversion_gate::delivery_checkpoint_path_audit(
-                "checkpoint_lock",
-                &self.lock_file,
-                format!("Failed to remove invalid lock file: {e}"),
-            );
-        }
-        Ok(None)
+        let file = open_checkpoint_lock(&self.lock_file)?;
+        let result = match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(error)) => Err(error),
+        };
+        drop(owned);
+        result
     }
 
     /// # Errors
     ///
-    /// Returns an error if the lock cannot be acquired or if the lock file
-    /// exists and is not stale.
+    /// Reacquires a released lock and reloads current durable state. An already
+    /// owned lock is unchanged. Incompatible state is retained and rejected.
     pub fn acquire_lock(&self) -> io::Result<()> {
-        const MAX_LOCK_RETRIES: u32 = crate::constants::LOCK_MAX_RETRIES;
-        let lock_info = LockInfo::new()?;
-        let json = serde_json::to_string_pretty(&lock_info)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        for _attempt in 0..MAX_LOCK_RETRIES {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&self.lock_file)
-            {
-                Ok(mut file) => {
-                    file.write_all(json.as_bytes())?;
-                    return Ok(());
-                }
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                    if let Some(pid) = self.check_lock()? {
-                        return Err(io::Error::new(
-                            io::ErrorKind::AlreadyExists,
-                            format!("Checkpoint lock already held by PID {pid}"),
-                        ));
-                    }
-                    // Stale lock was cleared; retry create_new
-                }
-                Err(err) => return Err(err),
-            }
+        let mut owned = self
+            .owned_lock
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint ownership mutex poisoned; state retained"))?;
+        if let Some(file) = owned.as_ref() {
+            return validate_checkpoint_lock_path(file, &self.lock_file);
         }
-        Err(io::Error::other(
-            "Failed to acquire checkpoint lock after maximum retries",
-        ))
+        let file = acquire_checkpoint_lock(&self.lock_file)?;
+        let (loaded, _) =
+            Self::load_progress_for_path(Path::new(&self.header.target_dir), &self.checkpoint_key)?;
+        let (completed, resume_mode, reset_reason) = Self::validate_loaded_state(
+            &loaded,
+            &self.header,
+            self.header.output_root.as_deref().map(Path::new),
+        );
+        if let Some(reason) = reset_reason {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cannot reuse released checkpoint manager: {reason}"),
+            ));
+        }
+        if resume_mode {
+            save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)?;
+        }
+        *crate::media_conversion_gate::mutex_guard_or_recover(
+            "checkpoint_completed",
+            self.completed.lock(),
+        ) = completed;
+        self.resume_mode.store(resume_mode, Ordering::Relaxed);
+        *owned = Some(file);
+        drop(owned);
+        Ok(())
     }
 
     /// # Errors
     ///
-    /// Returns an error if the lock file cannot be removed.
+    /// Releases only this manager's ownership handle. The fixed lock file remains
+    /// so competing openers cannot acquire different inodes for the same key.
+    /// Returns an error if ownership cannot be released.
     pub fn release_lock(&self) -> io::Result<()> {
-        if self.lock_file.exists() {
-            fs::remove_file(&self.lock_file)?;
+        let mut owned = self
+            .owned_lock
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint ownership mutex poisoned; state retained"))?;
+        if let Some(file) = owned.as_ref() {
+            file.unlock()?;
         }
+        owned.take();
+        drop(owned);
         Ok(())
+    }
+
+    fn require_lock(&self) -> io::Result<MutexGuard<'_, Option<File>>> {
+        let owned = self
+            .owned_lock
+            .lock()
+            .map_err(|_| io::Error::other("checkpoint ownership mutex poisoned; state retained"))?;
+        let file = owned.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "checkpoint ownership was released; reacquire before accessing saved state",
+            )
+        })?;
+        validate_checkpoint_lock_path(file, &self.lock_file)?;
+        Ok(owned)
     }
 
     pub fn is_resume_mode(&self) -> bool {
@@ -1018,6 +654,17 @@ impl Manager {
     }
 
     pub fn is_completed(&self, path: &Path) -> bool {
+        let owned = match self.require_lock() {
+            Ok(owned) => owned,
+            Err(error) => {
+                crate::media_conversion_gate::delivery_checkpoint_path_audit(
+                    "checkpoint_lock",
+                    path,
+                    format!("Cannot reuse checkpoint without ownership: {error}"),
+                );
+                return false;
+            }
+        };
         let key = Self::normalize_path(path);
         let maybe_entry = {
             let completed = crate::media_conversion_gate::mutex_guard_or_recover(
@@ -1042,6 +689,8 @@ impl Manager {
                         path.display()
                     ),
                 );
+                // The helper rechecks ownership after releasing this mutex, not the file lock.
+                drop(owned);
                 if let Err(err) = self.drop_completed_entry(&key, &entry) {
                     crate::media_conversion_gate::delivery_checkpoint_path_audit(
                         "checkpoint_lock",
@@ -1076,6 +725,7 @@ impl Manager {
     /// Returns an error if the file metadata cannot be read or if the progress
     /// file cannot be written.
     pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
+        let _owned = self.require_lock()?;
         let entry = CheckpointEntry::from_path(path)?;
         let key = entry.path.clone();
         let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
@@ -1104,6 +754,17 @@ impl Manager {
     }
 
     pub fn sync_to_processed_list(&self) {
+        let _owned = match self.require_lock() {
+            Ok(owned) => owned,
+            Err(error) => {
+                crate::media_conversion_gate::delivery_checkpoint_path_audit(
+                    "checkpoint_lock",
+                    &self.lock_file,
+                    format!("Cannot sync checkpoint without ownership: {error}"),
+                );
+                return;
+            }
+        };
         let completed = crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
             self.completed.lock(),
@@ -1117,6 +778,12 @@ impl Manager {
     ///
     /// Returns an error if the progress file cannot be removed.
     pub fn clear_progress(&self) -> io::Result<()> {
+        let _owned = self.require_lock()?;
+        self.clear_progress_locked()
+    }
+
+    // Callers retain the ownership mutex until the committed state is applied.
+    fn clear_progress_locked(&self) -> io::Result<()> {
         let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
             self.completed.lock(),
@@ -1139,6 +806,7 @@ impl Manager {
         let Some(output_root) = output_root else {
             return Ok(false);
         };
+        let _owned = self.require_lock()?;
 
         if !self.is_resume_mode() || output_root.exists() {
             return Ok(false);
@@ -1155,17 +823,24 @@ impl Manager {
                 output_root.display()
             ),
         );
-        self.clear_progress()?;
+        self.clear_progress_locked()?;
         crate::conversion::clear_processed_list();
         Ok(true)
     }
 
     /// # Errors
     ///
-    /// Returns an error if the progress or lock files cannot be removed.
+    /// Clears progress and releases this manager's handle under one ownership guard.
+    /// Returns an error if clearing progress or releasing ownership fails.
     pub fn cleanup(&self) -> io::Result<()> {
-        self.clear_progress()?;
-        self.release_lock()
+        let mut owned = self.require_lock()?;
+        self.clear_progress_locked()?;
+        if let Some(file) = owned.as_ref() {
+            file.unlock()?;
+        }
+        owned.take();
+        drop(owned);
+        Ok(())
     }
 
     fn normalize_path_to_buf(path: &Path) -> PathBuf {
@@ -1311,6 +986,7 @@ impl Manager {
     }
 
     fn drop_completed_entry(&self, key: &str, expected: &CheckpointEntry) -> io::Result<()> {
+        let _owned = self.require_lock()?;
         let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
             self.completed.lock(),
@@ -2128,7 +1804,7 @@ mod tests {
         let temp_target = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let target = temp_target.path();
 
-        let (progress_temp, _, guard) = setup_test_env()?;
+        let (_unused_target, progress_temp, guard) = setup_test_env()?;
 
         {
             let checkpoint = Manager::new(target)?;
@@ -2137,9 +1813,191 @@ mod tests {
             checkpoint.mark_completed(&target.join("file1.mp4"))?;
 
             checkpoint.cleanup()?;
+            assert!(load_progress_from_sqlite(&checkpoint.checkpoint_key)?.is_none());
+            assert!(checkpoint.lock_file.exists());
         }
 
         assert!(!progress_temp.path().join("completed.txt").exists());
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_lock_excludes_other_managers_before_state_changes() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let first = Manager::new(target.path())?;
+        first.mark_completed(&input)?;
+        let saved = load_progress_from_sqlite(&first.checkpoint_key)?
+            .unwrap()
+            .entries;
+        for resume in [false, true] {
+            let error = Manager::new_with_context_inner(target.path(), None, resume)
+                .err()
+                .expect("another manager must not touch an owned checkpoint");
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(
+                load_progress_from_sqlite(&first.checkpoint_key)?
+                    .unwrap()
+                    .entries,
+                saved
+            );
+        }
+        assert!(Manager::discard_saved_progress(target.path()).is_err());
+        first.release_lock()?;
+        let second = Manager::new_resuming(target.path())?;
+        assert!(first.check_lock()?);
+        first.release_lock()?;
+        drop(first);
+        assert!(second.is_completed(&input));
+        assert_eq!(
+            Manager::new_resuming(target.path()).err().unwrap().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        second.cleanup()?;
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_lock_reacquire_reloads_state_and_rejects_released_writes() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let inputs: Vec<_> = (0..3)
+            .map(|i| target.path().join(format!("{i}.mp4")))
+            .collect();
+        for input in &inputs {
+            create_test_file(input)?;
+        }
+        let first = Manager::new(target.path())?;
+        first.mark_completed(&inputs[0])?;
+        first.release_lock()?;
+        let second = Manager::new_resuming(target.path())?;
+        second.mark_completed(&inputs[1])?;
+        let saved = load_progress_from_sqlite(&first.checkpoint_key)?
+            .unwrap()
+            .entries;
+        assert!(first.mark_completed(&inputs[2]).is_err());
+        assert!(first.clear_progress().is_err());
+        assert!(first.cleanup().is_err());
+        assert!(first.acquire_lock().is_err());
+        assert!(!first.is_completed(&inputs[0]));
+        assert_eq!(
+            load_progress_from_sqlite(&first.checkpoint_key)?
+                .unwrap()
+                .entries,
+            saved
+        );
+        second.release_lock()?;
+        first.acquire_lock()?;
+        assert_eq!(first.completed_count(), 2);
+        assert!(first.is_completed(&inputs[1]));
+        first.mark_completed(&inputs[2])?;
+        assert_eq!(
+            load_progress_from_sqlite(&first.checkpoint_key)?
+                .unwrap()
+                .entries
+                .len(),
+            3
+        );
+        drop(second);
+        assert!(Manager::new_resuming(target.path()).is_err());
+        first.cleanup()?;
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn checkpoint_lock_rejects_replaced_and_linked_paths() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let (target, progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let first = Manager::new(target.path())?;
+        first.mark_completed(&input)?;
+        let key = first.checkpoint_key.clone();
+        let lock = first.lock_file.clone();
+        fs::rename(&lock, progress.path().join("replaced.lock"))?;
+        fs::write(&lock, b"replacement lock")?;
+        assert!(first.mark_completed(&input).is_err());
+        assert!(first.clear_progress().is_err());
+        let second = Manager::new_resuming(target.path())?;
+        drop(first);
+        assert_eq!(fs::read(&lock)?, b"replacement lock");
+        assert!(Manager::new_resuming(target.path()).is_err());
+        second.release_lock()?;
+        let saved = load_progress_from_sqlite(&key)?.unwrap().entries;
+        fs::remove_file(&lock)?;
+        let linked = progress.path().join("linked.lock");
+        fs::write(&linked, b"linked lock")?;
+        symlink(&linked, &lock)?;
+        assert!(Manager::new(target.path()).is_err());
+        fs::remove_file(&lock)?;
+        fs::hard_link(&linked, &lock)?;
+        assert!(Manager::new(target.path()).is_err());
+        assert_eq!(load_progress_from_sqlite(&key)?.unwrap().entries, saved);
+        assert_eq!(fs::read(&input)?, b"checkpoint-test");
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_lock_blocks_other_processes_and_recovers_after_exit() -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_CHECKPOINT_LOCK_TEST_CHILD";
+        const TARGET: &str = "MFB_CHECKPOINT_LOCK_TEST_TARGET";
+        const STORE: &str = "MFB_CHECKPOINT_LOCK_TEST_STORE";
+        if let Ok(mode) = std::env::var(CHILD) {
+            let target = PathBuf::from(std::env::var_os(TARGET).unwrap());
+            let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(PathBuf::from(
+                std::env::var_os(STORE).unwrap(),
+            ));
+            if mode == "blocked" {
+                assert_eq!(
+                    Manager::new_resuming(&target).err().unwrap().kind(),
+                    io::ErrorKind::WouldBlock
+                );
+                return Ok(());
+            }
+            let manager = Manager::new_resuming(&target)?;
+            manager.mark_completed(&target.join("child.mp4"))?;
+            // Exit without Manager::drop: the kernel must release the owned handle.
+            std::process::exit(0);
+        }
+        let (target, progress, guard) = setup_test_env()?;
+        create_test_file(&target.path().join("parent.mp4"))?;
+        create_test_file(&target.path().join("child.mp4"))?;
+        let manager = Manager::new(target.path())?;
+        manager.mark_completed(&target.path().join("parent.mp4"))?;
+        let test_name = concat!(
+            module_path!(),
+            "::checkpoint_lock_blocks_other_processes_and_recovers_after_exit"
+        )
+        .split_once("::")
+        .unwrap()
+        .1;
+        for mode in ["blocked", "write-and-exit"] {
+            if mode == "write-and-exit" {
+                manager.release_lock()?;
+            }
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD, mode)
+                .env(TARGET, target.path())
+                .env(STORE, progress.path().join("mfb_store.sqlite"))
+                .env("MFB_PROGRESS_DIR", progress.path())
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+        }
+        manager.acquire_lock()?;
+        assert_eq!(manager.completed_count(), 2);
+        assert!(manager.is_completed(&target.path().join("child.mp4")));
+        manager.cleanup()?;
         teardown_test_env(guard);
         Ok(())
     }
@@ -2151,13 +2009,17 @@ mod tests {
 
         let checkpoint = Manager::new(target)?;
 
-        assert!(checkpoint.check_lock()?.is_none());
+        assert!(!checkpoint.check_lock()?);
 
         checkpoint.acquire_lock()?;
         assert!(checkpoint.lock_file.exists());
 
         checkpoint.release_lock()?;
-        assert!(!checkpoint.lock_file.exists());
+        assert!(checkpoint.lock_file.exists());
+        assert!(!checkpoint.check_lock()?);
+        checkpoint.acquire_lock()?;
+        checkpoint.acquire_lock()?;
+        assert!(Manager::new(target).is_err());
         teardown_test_env(guard);
         Ok(())
     }
@@ -2368,19 +2230,5 @@ mod tests {
         }
         teardown_test_env(guard);
         Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_parse_ps_etime_to_secs_short_format() {
-        assert_eq!(parse_ps_etime_to_secs("03:15"), Some(195));
-        assert_eq!(parse_ps_etime_to_secs("01:02:03"), Some(3723));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_parse_ps_etime_to_secs_day_format() {
-        assert_eq!(parse_ps_etime_to_secs("2-03:04:05"), Some(183_845));
-        assert_eq!(parse_ps_etime_to_secs(""), None);
     }
 }

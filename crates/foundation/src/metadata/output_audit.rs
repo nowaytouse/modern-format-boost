@@ -1579,7 +1579,10 @@ mod tests {
         ));
         let expected = BTreeMap::from([("IFD1:ThumbnailImage".into(), "base64:QUJD".into())]);
         let changed = BTreeMap::from([("IFD1:ThumbnailImage".into(), "base64:QUJE".into())]);
-        assert!(!preserve_source_mismatches(&expected, &changed).is_empty());
+        assert_ne!(
+            preserve_source_mismatches(&expected, &changed),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

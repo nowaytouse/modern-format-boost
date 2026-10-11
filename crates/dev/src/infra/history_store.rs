@@ -114,6 +114,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
         matches!(
             name,
             "MFB_HISTORY_CONTEXT"
+                | "MFB_HISTORY_INPUT_PLAN"
                 | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
@@ -349,6 +350,24 @@ mod tests {
             .query_row("SELECT event FROM history_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(saved, event);
+        let input_plan = "MFB_HISTORY_INPUT_PLAN={\"schema_version\":1,\"inputs\":[]}";
+        append_history_event(directory.path(), "session", input_plan).unwrap();
+        let saved: String = connection
+            .query_row(
+                "SELECT event FROM history_events ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, input_plan);
+        assert!(
+            append_history_event(
+                directory.path(),
+                "session",
+                "MFB_HISTORY_INPUT_PLAN={\"schema_version\":2}"
+            )
+            .is_err()
+        );
     }
 
     #[test]

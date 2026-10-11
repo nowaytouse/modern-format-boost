@@ -171,6 +171,32 @@ private struct HistoryVerification: Decodable, Equatable {
     }
 }
 
+private struct HistoryInputPlan: Decodable, Equatable {
+    struct Input: Decodable, Equatable {
+        let source: String
+        let output: String?
+        let in_place: Bool
+        let requires_verification: Bool
+    }
+    let schema_version: Int
+    let inputs: [Input]
+
+    func valid(for context: HistoryContext) -> Bool {
+        func absolute(_ path: String) -> Bool { path.hasPrefix("/") && !path.contains("\0") }
+        return schema_version == 1 && context.inputs.count > 1
+            && inputs.map(\.source) == context.inputs
+            && Set(context.inputs).count == context.inputs.count
+            && Set(inputs.compactMap(\.output)).count == inputs.compactMap(\.output).count
+            && inputs.allSatisfy {
+                absolute($0.source) && ($0.output.map(absolute) ?? true)
+                    && $0.in_place == context.in_place
+                    && (!$0.in_place || $0.output == nil)
+                    && ($0.in_place || $0.output != nil)
+                    && (!$0.requires_verification || (!$0.in_place && $0.output != nil))
+            }
+    }
+}
+
 private struct HistoryConfigSnapshot: Hashable {
     let pipeline: String
     let packageVersion: String
@@ -198,6 +224,8 @@ private struct HistoryEntry {
     var context: HistoryContext?
     var summary: HistorySummary?
     var verification: HistoryVerification?
+    var inputPlan: HistoryInputPlan?
+    var inputVerifications: [String: HistoryVerification] = [:]
     var configSnapshots: [HistoryConfigSnapshot] = []
     var configSet: Set<HistoryConfigSnapshot> = []
     var configInvocationCount = 0
@@ -213,6 +241,64 @@ private struct HistoryEntry {
 
     var hasStoredOutput: Bool { audit.lastPathComponent == "history.sqlite3" && context?.output_sequence != nil }
 
+    var outputPaths: String? {
+        if let inputPlan {
+            let outputs = inputPlan.inputs.compactMap(\.output)
+            return outputs.isEmpty ? nil : outputs.joined(separator: "\n")
+        }
+        return verification?.output_path ?? context?.output
+    }
+
+    mutating func aggregateInputVerification() {
+        guard let inputPlan else { return }
+        verification = nil
+        guard context?.dry_run == false, issues.isEmpty, !contradictoryFields.contains("verification"),
+              !contradictoryFields.contains("input_plan") else { return }
+        let required = inputPlan.inputs.filter(\.requires_verification)
+        guard !required.isEmpty else { return }
+        let receipts = required.compactMap { inputVerifications[$0.source] }
+        guard receipts.count == required.count else {
+            issues.append(localized("history.status.incomplete")); return
+        }
+        // Single-file inputs have worker gates, not directory-inventory receipts.
+        guard required.count == inputPlan.inputs.count else { return }
+        var totals = Array(repeating: 0, count: 7)
+        var warnings = false
+        var mismatch = false
+        var explained = false
+        for receipt in receipts {
+            let status = receipt.count_status ?? ""
+            let matches = status == "MATCH" || (status.hasPrefix("MATCH (") && status.hasSuffix(")"))
+            let mismatches = status == "MISMATCH" || (status.hasPrefix("MISMATCH (") && status.hasSuffix(")"))
+            let explains = status == "EXPLAINED" || (status.hasPrefix("EXPLAINED (") && status.hasSuffix(")"))
+            guard matches || mismatches || explains else {
+                issues.append(localized("history.status.incomplete")); return
+            }
+            warnings = warnings || receipt.has_warnings || receipt.issue_count > 0 || mismatches
+            mismatch = mismatch || mismatches
+            explained = explained || explains
+            for (index, value) in [receipt.issue_count, receipt.source_count, receipt.optimized_count,
+                                   receipt.skipped_count, receipt.failed_count, receipt.source_remaining_count,
+                                   receipt.verified_deleted_count].enumerated() {
+                let sum = totals[index].addingReportingOverflow(value)
+                guard !sum.overflow else {
+                    contradictoryFields.insert("verification")
+                    issues.append(localized("history.status.incomplete")); return
+                }
+                totals[index] = sum.partialValue
+            }
+        }
+        if receipts.count == 1 {
+            verification = receipts[0]
+        } else {
+            verification = HistoryVerification(schema_version: 1, has_warnings: warnings,
+                issue_count: totals[0], source_count: totals[1], optimized_count: totals[2],
+                skipped_count: totals[3], failed_count: totals[4], source_remaining_count: totals[5],
+                verified_deleted_count: totals[6], count_status: mismatch ? "MISMATCH" : explained ? "EXPLAINED" : "MATCH",
+                source_path: nil, output_path: nil)
+        }
+    }
+
     var hasProcessorError: Bool {
         [summary?.img, summary?.vid].compactMap { $0 }.contains { $0.active && ($0.exit_code ?? 0) != 0 }
     }
@@ -222,6 +308,8 @@ private struct HistoryEntry {
     }
     var hasVerificationWarnings: Bool {
         verification?.has_warnings == true || verification?.count_status?.hasPrefix("MISMATCH") == true
+            || (verification?.issue_count ?? 0) > 0
+            || inputVerifications.values.contains { $0.has_warnings || $0.issue_count > 0 || $0.count_status?.hasPrefix("MISMATCH") == true }
             || (summary?.integrity.issue_count ?? 0) > 0 || summary?.integrity.state == "WARNINGS"
     }
     var hasPending: Bool { (summary?.img.unprocessed ?? 0) > 0 || (summary?.vid.unprocessed ?? 0) > 0 }
@@ -307,6 +395,7 @@ private struct HistoryAudit {
         entries.reduce(0) { total, entry in
             total + (entry.context == nil ? 0 : 1) + (entry.summary == nil ? 0 : 1)
                 + (entry.verification == nil ? 0 : 1) + (entry.configSnapshots.isEmpty ? 0 : 1)
+                + (entry.inputPlan == nil ? 0 : 1) + entry.inputVerifications.count
                 + (entry.finished == nil ? 0 : 1)
         }
     }
@@ -465,15 +554,29 @@ private enum HistoryStore {
                        !current.issues.contains(localized("history.space.invalid")) {
                         current.issues.append(localized("history.space.invalid"))
                     }
+                } else if event.hasPrefix("MFB_HISTORY_INPUT_PLAN=") {
+                    let plan = try decode(HistoryInputPlan.self, from: event, prefix: "MFB_HISTORY_INPUT_PLAN=")
+                    guard let context = current.context, plan.valid(for: context),
+                          !current.contradictoryFields.contains("input_plan"),
+                          current.inputPlan.map({ $0 == plan }) ?? true
+                    else { throw HistoryParseError.invalid }
+                    current.inputPlan = plan
                 } else if event.hasPrefix("MFB_HISTORY_VERIFICATION=") {
                     let verification = try decode(HistoryVerification.self, from: event, prefix: "MFB_HISTORY_VERIFICATION=")
                     guard verification.valid, !current.contradictoryFields.contains("verification") else { throw HistoryParseError.invalid }
-                    if let previous = current.verification, previous != verification {
-                        current.verification = nil
-                        current.contradictoryFields.insert("verification")
-                        throw HistoryParseError.invalid
+                    if let plan = current.inputPlan {
+                        guard let source = verification.source_path,
+                              let input = plan.inputs.first(where: { $0.source == source }), input.requires_verification,
+                              input.output == verification.output_path,
+                              current.inputVerifications[source].map({ $0 == verification }) ?? true
+                        else { throw HistoryParseError.invalid }
+                        current.inputVerifications[source] = verification
+                    } else {
+                        guard current.context.map({ $0.inputs.count <= 1 }) ?? true,
+                              current.verification.map({ $0 == verification }) ?? true
+                        else { throw HistoryParseError.invalid }
+                        current.verification = verification
                     }
-                    current.verification = verification
                 } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
                     current.configMarkerSeen = true
                     let snapshot = try decodeConfig(event)
@@ -515,6 +618,10 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_VERIFICATION=") {
                     current.verification = nil
                     current.contradictoryFields.insert("verification")
+                } else if event.hasPrefix("MFB_HISTORY_INPUT_PLAN=") {
+                    current.inputPlan = nil
+                    current.verification = nil
+                    current.contradictoryFields.insert("input_plan")
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     current.finished = nil
                     current.contradictoryFields.insert("finished")
@@ -524,6 +631,7 @@ private enum HistoryStore {
         }
         if !sawRecord { current.issues.append(localized("history.issue.empty")) }
         entries.append(current)
+        for index in entries.indices { entries[index].aggregateInputVerification() }
         let hasEnd = entries.allSatisfy {
             $0.issues.isEmpty && ($0.context != nil && $0.finished != nil || $0.legacy && $0.legacyEnded)
         }
@@ -890,6 +998,10 @@ private enum HistoryStore {
                         if let a = left.context, let b = right.context, a != b { conflictingCopies = true }
                         if let a = left.summary, let b = right.summary, a != b { conflictingCopies = true }
                         if let a = left.verification, let b = right.verification, a != b { conflictingCopies = true }
+                        if let a = left.inputPlan, let b = right.inputPlan, a != b { conflictingCopies = true }
+                        for (source, receipt) in left.inputVerifications {
+                            if let other = right.inputVerifications[source], receipt != other { conflictingCopies = true }
+                        }
                         if !left.configSet.isEmpty && !right.configSet.isEmpty,
                            !left.configSet.isSubset(of: right.configSet), !right.configSet.isSubset(of: left.configSet) {
                             conflictingCopies = true
@@ -934,6 +1046,8 @@ private enum HistoryStore {
                         entry.context = nil
                         entry.summary = nil
                         entry.verification = nil
+                        entry.inputPlan = nil
+                        entry.inputVerifications = [:]
                         entry.configSnapshots = []
                         entry.configSet = []
                         entry.configInvocationCount = 0
@@ -1444,7 +1558,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             } else { lines.append(localized(entry.summary?.sizeInvalid == true ? "history.space.invalid" : "history.space.not_recorded")) }
             let sources = entry.context?.inputs ?? []
             lines += [row("sources", sources.isEmpty ? unknown : sources.joined(separator: "\n")),
-                      row("output", entry.verification?.output_path ?? entry.context?.output ?? unknown)]
+                      row("output", entry.outputPaths ?? unknown)]
             for version in Set(entry.configSnapshots.map { $0.pipeline + ": " + $0.packageVersion }).sorted() {
                 lines.append(row("config_package_version", version))
             }
@@ -1455,10 +1569,22 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         return sections.joined(separator: "\n\n")
     }
 
-    private static func render(_ entry: HistoryEntry) -> String {
+    fileprivate static func render(_ entry: HistoryEntry) -> String {
         let unknown = localized("result.unknown")
         func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
         func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
+        func verificationRows(_ verification: HistoryVerification) -> [String] {
+            [row("verification_state", verification.has_warnings || verification.issue_count > 0 || verification.count_status?.hasPrefix("MISMATCH") == true ? "WARNINGS" : "CLEAN"),
+             row("count_status", verification.count_status ?? unknown),
+             row("verified_source", verification.source_path ?? unknown),
+             row("issues", String(verification.issue_count)),
+             row("source_inventory", String(verification.source_count)),
+             row("optimized_inventory", String(verification.optimized_count)),
+             row("skipped_inventory", String(verification.skipped_count)),
+             row("failed_inventory", String(verification.failed_count)),
+             row("remaining_inventory", String(verification.source_remaining_count)),
+             row("deleted_inventory", String(verification.verified_deleted_count))]
+        }
         var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), "",
                      localized("history.space.title")]
         if let size = entry.summary?.size {
@@ -1474,7 +1600,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         lines += ["",
                      row("mode", entry.context?.mode ?? unknown),
                      row("sources", entry.context?.inputs.isEmpty == false ? entry.context!.inputs.joined(separator: "\n") : unknown),
-                     row("output", entry.verification?.output_path ?? entry.context?.output ?? unknown),
+                     row("output", entry.outputPaths ?? unknown),
                      row("backup", entry.context?.backup ?? unknown)]
         if let context = entry.context {
             lines += [row("dry_run", localized(context.dry_run ? "settings.value.true" : "settings.value.false")),
@@ -1510,17 +1636,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         lines += ["", localized("history.verification"), row("integrity", entry.summary?.integrity.state ?? unknown),
                   row("issues", count(entry.summary?.integrity.issue_count))]
         if let verification = entry.verification {
-            lines += [row("verification_state", verification.has_warnings ? "WARNINGS" : "CLEAN"),
-                      row("count_status", verification.count_status ?? unknown),
-                      row("verified_source", verification.source_path ?? unknown),
-                      row("issues", String(verification.issue_count)),
-                      row("source_inventory", String(verification.source_count)),
-                      row("optimized_inventory", String(verification.optimized_count)),
-                      row("skipped_inventory", String(verification.skipped_count)),
-                      row("failed_inventory", String(verification.failed_count)),
-                      row("remaining_inventory", String(verification.source_remaining_count)),
-                      row("deleted_inventory", String(verification.verified_deleted_count))]
+            lines += verificationRows(verification)
         } else { lines += [row("verification_state", unknown), row("count_status", unknown)] }
+        if let inputPlan = entry.inputPlan {
+            for input in inputPlan.inputs {
+                lines += ["", row("output", input.output ?? unknown)]
+                if let receipt = entry.inputVerifications[input.source] {
+                    lines += verificationRows(receipt)
+                } else {
+                    lines += [row("verified_source", input.source), row("count_status", unknown)]
+                }
+            }
+        }
         if let error = entry.finished?.error { lines += ["", row("error", error)] }
         if !entry.issues.isEmpty { lines += ["", localized("history.read_issues")] + entry.issues }
         if entry.legacy { lines += ["", localized("history.legacy_note")] }
@@ -2278,6 +2405,83 @@ func runProcessingHistorySelfTests() throws {
     let verified = try parsed([context, verification, summary, completed])
     try require(verified.entries[0].verification?.count_status == "MATCH (1 expected handoff gap)",
                 "History reinterpreted the verifier's count status")
+    let sources = ["/synthetic/one", "/synthetic/two"]
+    let outputs = ["/synthetic/one_optimized", "/synthetic/two_optimized"]
+    let multiContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": sources,
+        "mode": "standard", "dry_run": false, "in_place": false, "shortest_path": false])
+    let planRows: [[String: Any]] = sources.indices.map {
+        ["source": sources[$0], "output": outputs[$0], "in_place": false, "requires_verification": true]
+    }
+    let plan = try payload("MFB_HISTORY_INPUT_PLAN", ["schema_version": 1, "inputs": planRows])
+    var firstReceipt = verificationValue
+    firstReceipt["source_path"] = sources[0]
+    firstReceipt["output_path"] = outputs[0]
+    firstReceipt["count_status"] = "MATCH"
+    var secondReceipt = firstReceipt
+    secondReceipt["source_path"] = sources[1]
+    secondReceipt["output_path"] = outputs[1]
+    let firstEvent = try payload("MFB_HISTORY_VERIFICATION", firstReceipt)
+    let secondEvent = try payload("MFB_HISTORY_VERIFICATION", secondReceipt)
+    let multiVerified = try parsed([multiContext, plan, firstEvent, secondEvent, firstEvent, summary, completed]).entries[0]
+    try require(multiVerified.issues.isEmpty && multiVerified.inputVerifications.count == 2
+                && multiVerified.verification?.source_count == 6 && multiVerified.verification?.optimized_count == 4
+                && multiVerified.verification?.count_status == "MATCH" && multiVerified.statusKey == "history.status.completed",
+                "Multi-input history lost receipts, double-counted duplicates or rejected independent paths")
+    let renderedMulti = ProcessingHistoryPanel.render(multiVerified)
+    try require(sources.allSatisfy { renderedMulti.contains($0) } && outputs.allSatisfy { renderedMulti.contains($0) },
+                "History hid a planned input or its actual output")
+    var explainedReceipt = secondReceipt
+    explainedReceipt["count_status"] = "EXPLAINED (1 fewer; all 1 listed below)"
+    let multiExplained = try parsed([multiContext, plan, firstEvent,
+        try payload("MFB_HISTORY_VERIFICATION", explainedReceipt), summary, completed]).entries[0]
+    try require(multiExplained.issues.isEmpty && multiExplained.verification?.count_status == "EXPLAINED",
+                "Explained count differences became a MATCH or were rejected")
+    let missingReceipt = try parsed([multiContext, plan, firstEvent, summary, completed]).entries[0]
+    try require(missingReceipt.verification == nil && missingReceipt.statusKey == "history.status.incomplete",
+                "One directory receipt became a whole-batch MATCH")
+    var changedReceipt = firstReceipt
+    changedReceipt["optimized_count"] = 1
+    let conflictingReceipt = try payload("MFB_HISTORY_VERIFICATION", changedReceipt)
+    for extra in [conflictingReceipt, verification, "MFB_HISTORY_VERIFICATION={}"] {
+        let invalid = try parsed([multiContext, plan, firstEvent, secondEvent, extra, summary, completed]).entries[0]
+        try require(invalid.verification == nil && invalid.statusKey == "history.status.incomplete",
+                    "Conflicting, unknown or malformed per-input evidence was accepted")
+    }
+    changedReceipt = firstReceipt
+    changedReceipt["output_path"] = outputs[1]
+    let wrongOutput = try parsed([multiContext, plan, try payload("MFB_HISTORY_VERIFICATION", changedReceipt), secondEvent, summary, completed]).entries[0]
+    try require(wrongOutput.verification == nil && !wrongOutput.issues.isEmpty,
+                "A receipt for the wrong planned output was accepted")
+    changedReceipt = secondReceipt
+    changedReceipt["source_count"] = Int.max
+    let overflowing = try parsed([multiContext, plan, firstEvent, try payload("MFB_HISTORY_VERIFICATION", changedReceipt), summary, completed]).entries[0]
+    try require(overflowing.verification == nil && overflowing.statusKey == "history.status.incomplete",
+                "Overflowing multi-input inventory became MATCH")
+    var invalidPlanRows = planRows
+    invalidPlanRows[1]["source"] = sources[0]
+    let invalidPlan = try payload("MFB_HISTORY_INPUT_PLAN", ["schema_version": 1, "inputs": invalidPlanRows])
+    let duplicateInput = try parsed([multiContext, invalidPlan, summary, completed]).entries[0]
+    try require(duplicateInput.inputPlan == nil && !duplicateInput.issues.isEmpty,
+                "Duplicate or out-of-order input plans were accepted")
+    var mixedPlanRows = planRows
+    mixedPlanRows[1]["requires_verification"] = false
+    let mixedPlan = try payload("MFB_HISTORY_INPUT_PLAN", ["schema_version": 1, "inputs": mixedPlanRows])
+    let mixedInputs = try parsed([multiContext, mixedPlan, firstEvent, summary, completed]).entries[0]
+    try require(mixedInputs.issues.isEmpty && mixedInputs.verification == nil
+                && mixedInputs.inputVerifications.count == 1 && mixedInputs.statusKey == "history.status.completed",
+                "Directory inventory was incorrectly attributed to an unmeasured single-file input")
+    changedReceipt = firstReceipt
+    changedReceipt["has_warnings"] = true
+    changedReceipt["issue_count"] = 1
+    let mixedWarning = try parsed([multiContext, mixedPlan, try payload("MFB_HISTORY_VERIFICATION", changedReceipt), summary, completed]).entries[0]
+    try require(mixedWarning.verification == nil && mixedWarning.hasVerificationWarnings
+                && mixedWarning.statusKey == "history.status.verification_warnings",
+                "A per-input warning disappeared when the batch inventory was unavailable")
+    let multiPreview = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": sources,
+        "mode": "standard", "dry_run": true, "in_place": false, "shortest_path": false])
+    let previewPlan = try parsed([multiPreview, plan, completed]).entries[0]
+    try require(previewPlan.verification == nil && previewPlan.statusKey == "history.status.preview",
+                "Preview required processing receipts or fabricated verification")
     try require(reduced.sizeMeasurementsComparable(to: expanded)
                 && !reduced.sizeMeasurementsComparable(to: partialSize)
                 && !reduced.sizeMeasurementsComparable(to: cancelledMixed),

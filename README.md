@@ -97,6 +97,18 @@ after the output folder is created. Disk-space checks use the nearest existing
 directory without creating the destination. Explicit outputs and in-place modes
 keep their existing behavior; this is not the complete unified preflight plan.
 
+Actual standard multi-input runs now plan and scan every input before launching any worker.
+Duplicate/nested sources and source/output overlaps are rejected, and in-place runs
+hold all input locks for the batch. Each input keeps its own adjacent destination;
+an explicit common output root instead uses numbered input-name subdirectories,
+such as `001_Album` and `002_Album`. History records those exact source/output mappings
+and keeps per-directory verification separate. Missing/conflicting receipts and
+overflow never become a batch MATCH; mixed directory/file runs retain per-directory
+proof without claiming a unified inventory for the single files. A worker failure
+still stops all post-processing delivery for the batch, even when other workers
+succeeded. Multi-input watch mode is rejected rather than silently watching one path.
+Previews record plans without scanning media or inventing processing/verification counts.
+
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
 run. Skipped, failed and reused files are excluded; resume-only totals are not
@@ -480,6 +492,22 @@ creative assets remain entirely within your control.
     failures stop initialization, retaining the source, saved state and pre-existing
     lock. Cleanup of an older key remains an audited non-critical operation only
     after the canonical checkpoint has been saved successfully.
+    The shared checkpoint manager acquires a kernel file lock before inspecting or
+    changing saved state. Release closes only its owned handle, never removes the
+    lock path or another process's ownership. Released managers cannot save/clear
+    stale state; reacquisition reloads the latest committed checkpoint. Process exit
+    releases ownership without relying on PID age or stale-file deletion. This does
+    not replace the existing media proofs or complete the full run-state architecture.
+
+### Python Development Scripts
+
+The development interpreter selector is `.python-version` (`3.15`), and `make test-py`
+explicitly uses `python3.15`. An intentional `PYTHON=...` override remains available;
+there is no automatic fallback to an older interpreter. `.envrc` watches the selector
+and recommends Python 3.15 for a fresh virtual environment, but does not replace an
+existing environment. Rust media processing does not acquire a Python dependency.
+Native/ML Python packages may still need source builds or newer upstream wheels;
+the interpreter update alone is not full training-stack compatibility evidence.
 
 ## 🛠️ Deep Technical: How It Works — The Pipeline
 

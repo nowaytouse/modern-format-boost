@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Complete multi-input plans, checkpoint ownership and Python 3.15 (2026-10-11)
+
+- Plan all standard inputs, including previews, and scan every input before actual
+  worker execution under either failure policy. Reject duplicate/nested inputs and overlapping outputs;
+  retain all in-place locks. Default destinations are per input; an explicit common
+  output root uses numbered input-name directories. Multi-input watch is rejected.
+- Capture exact per-input source/output plans in SQLite history. Route every input,
+  check aggregate arithmetic and preserve warnings across later clean receipts.
+  Bind native history receipts to each plan, deduplicate identical evidence and
+  reject missing/conflicting/overflowing evidence. Keep directory/file inventory
+  scopes distinct and preserve EXPLAINED instead of inventing MATCH. Archive only
+  the current session's per-input routing audits. Whole-batch worker failure still
+  blocks post-processing delivery; this is not the complete Unified Preflight.
+- Acquire kernel checkpoint ownership before initialization reads or writes.
+  Retain the fixed lock file, release only the owned handle and refuse released
+  manager writes/clears. Reload committed state on reacquisition and reject
+  incompatible contexts. Remove PID/age-based lock guesses; add isolated concurrent,
+  replaced/link-path and subprocess exit recovery tests without a schema change.
+- Select Python 3.15 for development scripts through `.python-version` and
+  `make test-py`, retaining explicit interpreter overrides. Update fresh-venv guidance
+  without replacing an existing environment or adding a Python dependency to Rust
+  media processing. Native/ML wheel compatibility remains a separate concern.
+- Fix the prior CI run's metadata nonempty assertion and launcher test formatting.
+  No lint suppression or gate relaxation is introduced.
+
 ### Stable output plans and durable-state startup (2026-10-11)
 
 - Bind the default adjacent destination once for single-directory standard runs.
