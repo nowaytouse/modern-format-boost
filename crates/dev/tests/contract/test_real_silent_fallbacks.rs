@@ -6564,8 +6564,7 @@ fn media_conversion_resume_gpu_cli_unwrap_or_strict_defaults() {
     ))
     .expect("checkpoint.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        checkpoint.contains("unix_epoch_secs_optional")
-            && checkpoint.contains("unix_duration_since_epoch_optional")
+        checkpoint.contains("unix_epoch_secs_optional().ok_or_else")
             && !checkpoint.contains("unix_epoch_secs_or_zero")
             && !checkpoint.contains("unix_duration_since_epoch_or_zero")
             && !checkpoint
@@ -13899,12 +13898,10 @@ fn media_conversion_runtime_checkpoint_fields_m181() {
         "crates/foundation/src/media_conversion_gate.rs",
     ))
     .expect("media_conversion_gate.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
-    for sym in [
-        "delivery_exiftool_field_or_empty",
-        "delivery_checkpoint_lock_start_time_or_now",
-    ] {
-        assert!(gate.contains(sym), "gate must export {sym} (M181)");
-    }
+    assert!(
+        gate.contains("delivery_exiftool_field_or_empty"),
+        "gate must export delivery_exiftool_field_or_empty (M181)"
+    );
 
     let checkpoint_hits = delivery_checkpoint_start_unwrap_offenders(&root);
     assert!(
@@ -13925,10 +13922,7 @@ fn media_conversion_runtime_checkpoint_fields_m181() {
             "crates/foundation/src/date_analysis.rs",
             "delivery_exiftool_field_or_empty",
         ),
-        (
-            "crates/foundation/src/checkpoint.rs",
-            "delivery_checkpoint_lock_start_time_or_now",
-        ),
+        ("crates/foundation/src/checkpoint.rs", "file.try_lock()"),
     ] {
         let src =
             fs::read_to_string(join_legacy_aware(&root, path)).expect("source must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
@@ -13937,6 +13931,15 @@ fn media_conversion_runtime_checkpoint_fields_m181() {
             prod.contains(needle),
             "{path} production must use {needle} (M181)"
         );
+        if path.ends_with("/checkpoint.rs") {
+            assert!(
+                prod.contains("validate_checkpoint_lock_path")
+                    && prod.contains("self.require_lock()")
+                    && !prod.contains("get_process_start_time")
+                    && !prod.contains("delivery_checkpoint_lock_start_time_or_now"),
+                "checkpoint ownership must use validated kernel locks, not inferred PID timestamps"
+            );
+        }
     }
 }
 

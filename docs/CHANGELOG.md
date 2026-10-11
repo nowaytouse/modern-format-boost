@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Linked-input preflight, file-sensitive cache and history config differences (2026-10-11)
+
+- Include legal linked directories in standard pre-scans, preserving virtual input
+  paths and existing routing/count semantics. Validate link targets before descent;
+  loops, broken links and unsafe targets report incomplete inventory before worker
+  launch. Fast link policy and scan-to-execution identity binding are unchanged.
+- Validate directory cache freshness against all observed regular-file metadata,
+  including non-admitted files whose content can change media routing in place.
+  Bind size/full-resolution modification time and Unix file/directory device,
+  inode and nanosecond change time; reject unreadable or changed evidence, including
+  additions to empty/populated directories with restored modification times and
+  changes during media probing. Non-Unix timestamp evidence remains weaker.
+  Bump reconstructable snapshot identity, retaining formal state, and remove the
+  redundant image cache-miss scan. This is not a verification proof or content hash.
+- Compare the two selected history runs' recorded IMG/VID config values and winning
+  sources separately. Preserve type differences, escaped values and deterministic
+  field order; show missing fields as unrecorded. Missing/damaged/multiple snapshots
+  or incomplete history do not become identical settings; original results, counts,
+  versions and paths remain unchanged. Synchronize English, Simplified Chinese and
+  Japanese text without adding a separate window or duplicating stored configuration.
+- Repair the previous CI's eager-default Clippy failure and stale checkpoint time/
+  PID-ownership contracts. Keep current fail-closed timestamps and validated kernel
+  locks; test child-environment reads distinguish absence from invalid encoding.
+  No lint suppression, gate relaxation or reintroduction of retired lock behavior.
+
 ### Canonical failure policies and JPEG restoration history (2026-10-11)
 
 - Resolve standard IMG/VID failure handling through typed `execution.error_mode`,

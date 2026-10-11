@@ -1947,7 +1947,12 @@ mod tests {
         const CHILD: &str = "MFB_CHECKPOINT_LOCK_TEST_CHILD";
         const TARGET: &str = "MFB_CHECKPOINT_LOCK_TEST_TARGET";
         const STORE: &str = "MFB_CHECKPOINT_LOCK_TEST_STORE";
-        if let Ok(mode) = std::env::var(CHILD) {
+        let mode = match std::env::var(CHILD) {
+            Ok(mode) => Some(mode),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => anyhow::bail!("read {CHILD}: {error}"),
+        };
+        if let Some(mode) = mode {
             let target = PathBuf::from(std::env::var_os(TARGET).unwrap());
             let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(PathBuf::from(
                 std::env::var_os(STORE).unwrap(),

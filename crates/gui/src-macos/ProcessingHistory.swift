@@ -202,6 +202,30 @@ private struct HistoryConfigSnapshot: Hashable {
     let packageVersion: String
     let values: String
     let sources: String
+
+    func comparisonFields() throws -> (values: [String: String], sources: [String: String]) {
+        guard let object = try JSONSerialization.jsonObject(with: Data(values.utf8)) as? [String: Any],
+              let origins = try JSONSerialization.jsonObject(with: Data(sources.utf8)) as? [String: String]
+        else { throw HostError(message: localized("history.config.invalid")) }
+        var fields: [String: String] = [:]
+        func flatten(_ object: [String: Any], prefix: String = "") throws {
+            for (key, value) in object {
+                let path = prefix.isEmpty ? key : prefix + "." + key
+                if let nested = value as? [String: Any], !nested.isEmpty {
+                    try flatten(nested, prefix: path)
+                } else {
+                    guard fields[path] == nil else { throw HostError(message: localized("history.config.invalid")) }
+                    let data = try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
+                    fields[path] = String(decoding: data, as: UTF8.self)
+                }
+            }
+        }
+        try flatten(object)
+        let sourceFields = try origins.mapValues { value in
+            String(decoding: try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed), as: UTF8.self)
+        }
+        return (fields, sourceFields)
+    }
 }
 
 private struct HistoryConfigMetadata: Decodable {
@@ -1582,7 +1606,45 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             if !entry.issues.isEmpty { lines += entry.issues }
             sections.append(lines.joined(separator: "\n"))
         }
+        sections.append(renderConfigurationComparison(entries))
         return sections.joined(separator: "\n\n")
+    }
+
+    private static func renderConfigurationComparison(_ entries: [HistoryEntry]) -> String {
+        var lines = [localized("history.compare.config")]
+        let pipelines = ["img", "vid"].filter { pipeline in
+            entries.contains { entry in
+                entry.configSnapshots.contains { $0.pipeline == pipeline }
+                    || (pipeline == "img" ? entry.summary?.img.active : entry.summary?.vid.active) == true
+            }
+        }
+        if pipelines.isEmpty { return (lines + [localized("history.config.not_recorded")]).joined(separator: "\n") }
+        let missing = localized("history.compare.config.missing")
+        for pipeline in pipelines {
+            let snapshots = entries.map { $0.configSnapshots.filter { $0.pipeline == pipeline } }
+            lines += ["", localized("history.media.\(pipeline)")]
+            guard entries.allSatisfy({ !$0.configEvidenceInvalid && $0.issues.isEmpty }),
+                  snapshots.allSatisfy({ $0.count == 1 }),
+                  let left = try? snapshots[0][0].comparisonFields(),
+                  let right = try? snapshots[1][0].comparisonFields()
+            else {
+                lines += [localized("history.compare.config.unavailable"),
+                          localized("history.compare.config.snapshots", snapshots[0].count, snapshots[1].count)]
+                continue
+            }
+            for (key, first, second) in [("values", left.values, right.values), ("sources", left.sources, right.sources)] {
+                let changed = Set(first.keys).union(second.keys).filter { first[$0] != second[$0] }.sorted()
+                if changed.isEmpty {
+                    lines.append(localized("history.compare.config.\(key).same"))
+                } else {
+                    lines.append(localized("history.compare.config.\(key)"))
+                    for field in changed {
+                        lines.append("  " + localized("history.compare.config.field", field, first[field] ?? missing, second[field] ?? missing))
+                    }
+                }
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     fileprivate static func render(_ entry: HistoryEntry) -> String {
@@ -2608,6 +2670,75 @@ func runProcessingHistorySelfTests() throws {
                 && configuredComparison.contains("synthetic final failure")
                 && !configuredComparison.contains(configEntry.configSnapshots[0].values),
                 "History comparison lost worker versions or buried outcomes in configuration JSON")
+    func configured(_ marker: [String: Any]) throws -> HistoryEntry {
+        try parsed([context, try payload("MFB_HISTORY_CONFIG", marker), summary, completed]).entries[0]
+    }
+    let oneConfig = try configured(imgConfigValue)
+    let repeatedConfig = try parsed([context, imgConfig, imgConfig, summary, completed]).entries[0]
+    let sameConfigComparison = ProcessingHistoryPanel.renderComparison([oneConfig, repeatedConfig])
+    try require(sameConfigComparison.contains(localized("history.compare.config"))
+                && sameConfigComparison.contains(localized("history.compare.config.values.same"))
+                && sameConfigComparison.contains(localized("history.compare.config.sources.same"))
+                && !sameConfigComparison.contains(localized("history.compare.config.unavailable"))
+                && repeatedConfig.configInvocationCount == 2 && repeatedConfig.succeededLabel == "2",
+                "Repeated identical snapshots became ambiguous or changed processor counts")
+    var changedConfigValue = vidConfigValue
+    changedConfigValue["pipeline"] = "img"
+    let changedConfig = try configured(changedConfigValue)
+    let valuesComparison = ProcessingHistoryPanel.renderComparison([oneConfig, changedConfig])
+    try require(valuesComparison.contains(localized("history.compare.config.field", "performance.mode", "\"tight\"", "\"relaxed\""))
+                && valuesComparison.contains(localized("history.compare.config.sources.same"))
+                && !valuesComparison.contains(oneConfig.configSnapshots[0].values),
+                "Recorded value changes were missing or replaced by full JSON")
+    changedConfigValue = imgConfigValue
+    changedConfigValue["sources"] = ["config_version": "default", "performance.mode": "project:synthetic"]
+    let changedSource = try configured(changedConfigValue)
+    let sourceComparison = ProcessingHistoryPanel.renderComparison([oneConfig, changedSource])
+    try require(sourceComparison.contains(localized("history.compare.config.values.same"))
+                && sourceComparison.contains(localized("history.compare.config.field", "performance.mode", "\"CLI\"", "\"project:synthetic\"")),
+                "Source-only changes became configuration value changes")
+    changedConfigValue["config"] = ["config_version": 1]
+    changedConfigValue["sources"] = ["config_version": "default"]
+    let missingField = try configured(changedConfigValue)
+    for (first, second, oldValue, newValue) in [
+        (oneConfig, missingField, "\"tight\"", localized("history.compare.config.missing")),
+        (missingField, oneConfig, localized("history.compare.config.missing"), "\"tight\"")
+    ] {
+        let shown = ProcessingHistoryPanel.renderComparison([first, second])
+        try require(shown.contains(localized("history.compare.config.field", "performance.mode", oldValue, newValue)),
+                    "Missing configuration fields became defaults or disappeared from the comparison")
+    }
+    changedConfigValue["config"] = ["config_version": 1, "performance": ["flag": true]]
+    changedConfigValue["sources"] = ["config_version": "default", "performance.flag": "CLI"]
+    let booleanField = try configured(changedConfigValue)
+    changedConfigValue["config"] = ["config_version": 1, "performance": ["flag": 1]]
+    let numberField = try configured(changedConfigValue)
+    try require(ProcessingHistoryPanel.renderComparison([booleanField, numberField])
+                .contains(localized("history.compare.config.field", "performance.flag", "true", "1")),
+                "Boolean and numeric configuration values were treated as equal")
+    let collidingFields = HistoryConfigSnapshot(pipeline: "img", packageVersion: "0.12.0",
+        values: "{\"a.b\":1,\"a\":{\"b\":2}}", sources: "{\"a.b\":\"CLI\"}")
+    var rejectedCollidingFields = false
+    do {
+        _ = try collidingFields.comparisonFields()
+    } catch { rejectedCollidingFields = true }
+    try require(rejectedCollidingFields, "Configuration field paths silently overwrote each other")
+    let ambiguousConfig = try parsed([context, imgConfig, try payload("MFB_HISTORY_CONFIG", [
+        "schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
+        "config": ["config_version": 1, "performance": ["mode": "relaxed"]],
+        "sources": ["config_version": "default", "performance.mode": "CLI"]]), summary, completed]).entries[0]
+    var incompleteConfig = oneConfig
+    incompleteConfig.issues.append(localized("history.issue.too_large"))
+    for unavailable in [success.entries[0], malformedConfig.entries[0], ambiguousConfig, incompleteConfig] {
+        let shown = ProcessingHistoryPanel.renderComparison([oneConfig, unavailable])
+        try require(shown.contains(localized("history.compare.config.unavailable"))
+                    && !shown.contains(localized("history.compare.config.values.same"))
+                    && unavailable.succeededLabel == "2",
+                    "Missing, invalid, ambiguous or incomplete configuration evidence appeared unchanged")
+    }
+    try require(ProcessingHistoryPanel.renderComparison([oneConfig, ambiguousConfig])
+                .contains(localized("history.compare.config.snapshots", 1, 2)),
+                "Ambiguous snapshot counts were hidden or worker invocations were guessed")
     var mismatchValue = verificationValue
     mismatchValue["count_status"] = "MISMATCH (1 invariant issue)"
     let mismatched = try parsed([context, try payload("MFB_HISTORY_VERIFICATION", mismatchValue), summary, completed])

@@ -327,6 +327,15 @@
 "history.compare.batch" = "批次 %d";
 "history.compare.select_two" = "请选择两个批次进行对比。";
 "history.compare.not_comparable" = "统计范围不同或记录不完整，大小结果不能直接对比。";
+"history.compare.config" = "已记录配置差异（批次 1 到批次 2）";
+"history.compare.config.unavailable" = "无法唯一对比：记录缺失、不完整、无效，或同一批次包含多个不同配置快照。";
+"history.compare.config.snapshots" = "已记录的不同快照数：批次 1 = %d；批次 2 = %d";
+"history.compare.config.values" = "已记录值的变化";
+"history.compare.config.sources" = "已记录来源的变化";
+"history.compare.config.values.same" = "已记录的配置值相同。";
+"history.compare.config.sources.same" = "已记录的配置来源相同。";
+"history.compare.config.missing" = "未记录";
+"history.compare.config.field" = "%@: %@ -> %@";
 "history.refresh" = "刷新记录";
 "history.open_log" = "查看处理输出";
 "history.output.loading" = "正在读取处理输出...";

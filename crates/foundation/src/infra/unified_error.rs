@@ -49,7 +49,9 @@ impl BatchErrorMode {
             return config.execution.error_mode;
         }
         match Self::environment_overrides() {
-            Ok(overrides) => overrides.last().map_or(Self::default(), |(mode, _)| *mode),
+            Ok(overrides) => overrides
+                .last()
+                .map_or_else(Self::default, |(mode, _)| *mode),
             Err(error) => {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
                     "batch_error_mode_env",

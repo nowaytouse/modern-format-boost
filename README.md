@@ -127,6 +127,10 @@ proof without claiming a unified inventory for the single files. A worker failur
 still stops all post-processing delivery for the batch, even when other workers
 succeeded. Multi-input watch mode is rejected rather than silently watching one path.
 Previews record plans without scanning media or inventing processing/verification counts.
+Standard pre-scans include legal linked directories before routing workers. Linked
+targets are checked before descent; loops, broken links and unsafe targets fail
+with an incomplete-inventory error. Fast mode link policy is unchanged; this is
+not the complete Unified Preflight or a scan-to-execution identity guarantee.
 
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
@@ -148,7 +152,11 @@ live summary uses checked receipt totals, preserving unknown counts instead of z
 Select two runs in Processing History to compare recorded outcomes, versions,
 paths, count checks and current-run size measurements in the existing detail pane.
 Different measurement scopes or incomplete evidence are called out explicitly;
-the comparison does not guess throughput, tool versions or configuration differences.
+recorded IMG/VID configuration values and winning sources are compared separately.
+Only one distinct valid snapshot on each side permits comparison; missing,
+damaged or ambiguous evidence remains unavailable, and absent fields are not
+filled with defaults. This does not establish equal tools, inputs or environments,
+guess throughput, or explain causality from configuration changes.
 Select one run to return to its captured effective configuration and paged output.
 
 The single-run **Failed files** view filters recorded paths without opening logs.
@@ -174,7 +182,15 @@ Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
 Versioned cache identities preserve native path bytes and normalized scan options.
 Directory freshness uses full-resolution timestamps, requires root evidence, and
-rejects missing or unknown evidence. Older scan identities are rebuilt on demand;
+rejects missing or unknown evidence. File metadata is also checked, including
+regular files not admitted as media: in-place content changes can alter routing
+without changing a directory timestamp. Size and modification time are captured;
+Unix also binds file and directory device, inode and nanosecond change time,
+including additions to previously empty directories when modification times are
+restored. Other platforms retain the weaker size/modification-time evidence;
+same-size changes with restored timestamps are not fully detected there.
+Changed, missing or unreadable evidence triggers a new scan, and changes during
+probing prevent a reusable snapshot. Older scan identities are rebuilt on demand;
 checkpoints and processed-file records are not invalidated. This does not replace
 media verification or establish content identity from directory timestamps.
 

@@ -790,7 +790,12 @@ mod tests {
     #[test]
     fn execution_environment_precedence_and_installed_policy_are_checked() -> Result<()> {
         const CHILD: &str = "MFB_TEST_EXECUTION_POLICY_CHILD";
-        if let Ok(case) = std::env::var(CHILD) {
+        let case = match std::env::var(CHILD) {
+            Ok(case) => Some(case),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error).context("Invalid execution policy test case"),
+        };
+        if let Some(case) = case {
             let resolved = load(None, true);
             if case.starts_with("invalid") || case == "empty" {
                 assert!(resolved.is_err());

@@ -327,6 +327,15 @@
 "history.compare.batch" = "バッチ %d";
 "history.compare.select_two" = "比較するバッチを二つ選択してください。";
 "history.compare.not_comparable" = "集計範囲が異なるか記録が不完全なため、容量の結果は直接比較できません。";
+"history.compare.config" = "記録された設定の差分（バッチ 1 からバッチ 2）";
+"history.compare.config.unavailable" = "一意に比較できません。記録が欠落、不完全、無効、または同じバッチに複数の異なる設定スナップショットがあります。";
+"history.compare.config.snapshots" = "記録された異なるスナップショット数：バッチ 1 = %d；バッチ 2 = %d";
+"history.compare.config.values" = "記録された値の変更";
+"history.compare.config.sources" = "記録された出典の変更";
+"history.compare.config.values.same" = "記録された設定値は同じです。";
+"history.compare.config.sources.same" = "記録された設定の出典は同じです。";
+"history.compare.config.missing" = "未記録";
+"history.compare.config.field" = "%@: %@ -> %@";
 "history.refresh" = "履歴を更新";
 "history.open_log" = "処理出力を表示";
 "history.output.loading" = "処理出力を読み込み中...";

@@ -13,7 +13,50 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
+
+// Advisory discovery freshness, not a content hash or delivery proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CachedFileIdentity {
+    size: u64,
+    modified_time: SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_time: (i64, i64),
+}
+
+impl CachedFileIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> io::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
+        if !metadata.is_file() {
+            return Err(io::Error::other(
+                "path-tree candidate is not a regular file",
+            ));
+        }
+        Ok(Self {
+            size: metadata.len(),
+            modified_time: metadata.modified()?,
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(unix)]
+            changed_time: (metadata.ctime(), metadata.ctime_nsec()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedFileState {
+    path: PathBuf,
+    identity: CachedFileIdentity,
+}
 
 /// Cached state information for a directory in the path tree.
 ///
@@ -25,6 +68,9 @@ struct CachedDirectoryState {
     path: PathBuf,
     /// Native modification time (seconds, nanoseconds); `None` is not valid evidence.
     modified_time: Option<(i64, u32)>,
+    /// Device, inode and ctime retain changes even when mtime is restored.
+    #[cfg(unix)]
+    native_identity: Option<(u64, u64, (i64, i64))>,
 }
 
 /// Cached entry for an image file in the sorted path tree.
@@ -38,6 +84,7 @@ struct CachedImageSortEntry {
     path: PathBuf,
     /// File size in bytes.
     size: u64,
+    identity: CachedFileIdentity,
     /// Depth relative to the root directory (`None` when path is outside root).
     relative_depth: Option<usize>,
     /// Priority value for format-based sorting (lower = higher priority).
@@ -64,6 +111,8 @@ struct CachedImageTreeSnapshot {
     extensions: Vec<String>,
     /// Cached state information for all directories.
     directories: Vec<CachedDirectoryState>,
+    /// All regular candidates, including non-media and other codec families.
+    observed_files: Vec<CachedFileState>,
     /// Cached metadata for all image files.
     files: Vec<CachedImageSortEntry>,
 }
@@ -79,6 +128,7 @@ struct CachedVideoSortEntry {
     path: PathBuf,
     /// File size in bytes.
     size: u64,
+    identity: CachedFileIdentity,
     /// Depth relative to the root directory (`None` when path is outside root).
     relative_depth: Option<usize>,
     /// Total number of pixels (width × height) if available.
@@ -109,6 +159,7 @@ struct CachedVideoTreeSnapshot {
     extensions: Vec<String>,
     /// Cached state information for all directories.
     directories: Vec<CachedDirectoryState>,
+    observed_files: Vec<CachedFileState>,
     /// Cached metadata for all video files.
     files: Vec<CachedVideoSortEntry>,
 }
@@ -261,8 +312,7 @@ pub fn collect_image_files_for_perceived_speed(
     let snapshot = if let Some(snapshot) = cached {
         snapshot
     } else {
-        let files = scan_image_files(dir, extensions, recursive)?; // [SB] pure scan first
-        let snapshot = scan_image_tree_snapshot_from_files(dir, extensions, recursive, files)?;
+        let snapshot = scan_image_tree_snapshot(dir, extensions, recursive)?;
         if let Err(err) = save_cached_image_tree(&snapshot) {
             crate::media_conversion_gate::delivery_pipeline_path_audit(
                 "probe_heic",
@@ -600,14 +650,118 @@ fn codec_matches_requested_extensions(
             .any(|extension| codec.is_extension_compatible(extension.trim_start_matches('.')))
 }
 
+#[cfg(unix)]
+fn directory_native_identity(path: &Path) -> Option<(u64, u64, (i64, i64))> {
+    use std::os::unix::fs::MetadataExt;
+
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Some((
+            metadata.dev(),
+            metadata.ino(),
+            (metadata.ctime(), metadata.ctime_nsec()),
+        )),
+        result => {
+            let reason = match result {
+                Ok(_) => "path is not a directory".to_string(),
+                Err(error) => error.to_string(),
+            };
+            crate::media_conversion_gate::delivery_pipeline_path_audit(
+                "delivery_pipeline_batch",
+                path,
+                format!("Path-tree cache cannot read directory identity: {reason}"),
+            );
+            None
+        }
+    }
+}
+
 fn cached_directories_are_current(directories: &[CachedDirectoryState], root: &Path) -> bool {
     directories.iter().any(|directory| directory.path == root)
         && directories.iter().all(|directory| {
-            directory.modified_time.is_some_and(|expected| {
+            if !directory.modified_time.is_some_and(|expected| {
                 crate::media_conversion_gate::delivery_directory_modified_time_optional(
                     &directory.path,
                 ) == Some(expected)
-            })
+            }) {
+                return false;
+            }
+            #[cfg(unix)]
+            {
+                directory.native_identity.is_some_and(|expected| {
+                    directory_native_identity(&directory.path) == Some(expected)
+                })
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        })
+}
+
+fn cache_file_metadata(path: &Path) -> crate::unified_error::Result<fs::Metadata> {
+    fs::metadata(path).map_err(|source| {
+        crate::media_conversion_gate::delivery_pipeline_path_audit(
+            "delivery_pipeline_batch",
+            path,
+            format!(
+                "Path-tree scan cannot read file identity for {}: {source}",
+                path.display()
+            ),
+        );
+        crate::unified_error::UnifiedError::FileReadError {
+            path: path.to_path_buf(),
+            source,
+            operation: Some("path-tree file identity scan".to_string()),
+        }
+    })
+}
+
+fn ensure_cache_file_unchanged(
+    path: &Path,
+    expected: &CachedFileIdentity,
+) -> crate::unified_error::Result<()> {
+    let observed = CachedFileIdentity::from_metadata(&cache_file_metadata(path)?)?;
+    if &observed != expected {
+        let message = format!(
+            "Path-tree file changed during content/probe scan {}; inventory is incomplete",
+            path.display()
+        );
+        crate::media_conversion_gate::delivery_pipeline_path_audit(
+            "delivery_pipeline_batch",
+            path,
+            &message,
+        );
+        return Err(crate::unified_error::UnifiedError::Other(anyhow::anyhow!(
+            message
+        )));
+    }
+    Ok(())
+}
+
+fn cached_files_are_current<'a>(
+    observed_files: &[CachedFileState],
+    mut admitted: impl Iterator<Item = (&'a Path, &'a CachedFileIdentity)>,
+) -> bool {
+    let identities = observed_files
+        .iter()
+        .map(|file| (file.path.as_path(), &file.identity))
+        .collect::<std::collections::HashMap<_, _>>();
+    identities.len() == observed_files.len()
+        && admitted.all(|(path, identity)| identities.get(path) == Some(&identity))
+        && observed_files.iter().all(|file| {
+            match fs::metadata(&file.path)
+                .and_then(|metadata| CachedFileIdentity::from_metadata(&metadata))
+            {
+                Ok(identity) => identity == file.identity,
+                Err(error) => {
+                    crate::media_conversion_gate::delivery_pipeline_path_audit(
+                        "delivery_pipeline_batch",
+                        &file.path,
+                        format!("Path-tree cache cannot read file identity: {error}"),
+                    );
+                    false
+                }
+            }
         })
 }
 
@@ -776,19 +930,23 @@ fn sort_cached_image_entries(entries: &mut [CachedImageSortEntry]) {
 /// * `path` - The image file path
 ///
 /// # Returns
-/// Cached image entry, or None if metadata cannot be read
+/// Cached image entry; missing or changed metadata aborts incomplete scans.
 fn build_cached_image_entry(
     root: &Path,
     path: &Path,
     metadata: &fs::Metadata,
-) -> CachedImageSortEntry {
-    CachedImageSortEntry {
+) -> crate::unified_error::Result<CachedImageSortEntry> {
+    let identity = CachedFileIdentity::from_metadata(metadata)?;
+    let entry = CachedImageSortEntry {
         path: path.to_path_buf(),
         size: metadata.len(),
+        identity: identity.clone(),
         relative_depth: relative_depth_from_root(root, path),
         format_priority: format_priority_for_image(path),
         pixel_count: image_pixel_count(path),
-    }
+    };
+    ensure_cache_file_unchanged(path, &identity)?;
+    Ok(entry)
 }
 
 /// Loads a cached image tree snapshot from the path-tree store.
@@ -946,6 +1104,13 @@ fn validate_cached_image_tree(
     }
 
     cached_directories_are_current(&snapshot.directories, &expected_root)
+        && cached_files_are_current(
+            &snapshot.observed_files,
+            snapshot
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        )
 }
 
 /// Validates that a cached video tree snapshot matches the expected
@@ -981,6 +1146,13 @@ fn validate_cached_video_tree(
     }
 
     cached_directories_are_current(&snapshot.directories, &expected_root)
+        && cached_files_are_current(
+            &snapshot.observed_files,
+            snapshot
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        )
 }
 
 /// Scans the filesystem to create a fresh image tree snapshot.
@@ -1008,6 +1180,7 @@ fn scan_image_tree_snapshot(
     };
 
     let mut directories = Vec::new();
+    let mut observed_files = Vec::new();
     let mut files = Vec::new();
 
     for entry in walker.into_iter().filter_entry(is_safe_entry) {
@@ -1018,6 +1191,8 @@ fn scan_image_tree_snapshot(
                         directories.push(CachedDirectoryState {
                             path: entry.path().to_path_buf(),
                             modified_time: crate::media_conversion_gate::delivery_directory_modified_time_optional(entry.path()),
+                            #[cfg(unix)]
+                            native_identity: directory_native_identity(entry.path()),
                         });
                     }
                     continue;
@@ -1025,35 +1200,22 @@ fn scan_image_tree_snapshot(
 
                 if entry.file_type().is_file() {
                     let path = entry.path();
+                    let metadata = cache_file_metadata(path)?;
+                    let identity = CachedFileIdentity::from_metadata(&metadata)?;
                     if let Some(codec) =
                         identify_source_codec_for_batch(path, "scan_image_tree_snapshot")
                         && codec.is_image()
                         && codec_matches_requested_extensions(codec, extensions)
                     {
-                        let metadata = match fs::metadata(path) {
-                            Ok(m) => m,
-                            Err(e) => {
-                                crate::media_conversion_gate::delivery_pipeline_path_audit(
-                                    "delivery_pipeline_batch",
-                                    path,
-                                    format!(
-                                        "METADATA AUDIT: Failed to read metadata for image entry \
-                                         '{}' during batch scan | Forensic: Error '{}'; \
-                                         aborting incomplete path-tree cache scan",
-                                        path.display(),
-                                        e
-                                    ),
-                                );
-                                return Err(crate::unified_error::UnifiedError::FileReadError {
-                                    path: path.to_path_buf(),
-                                    source: e,
-                                    operation: Some("image path-tree cache scan".to_string()),
-                                });
-                            }
-                        };
-                        let file_entry = build_cached_image_entry(&root, path, &metadata);
+                        let file_entry = build_cached_image_entry(&root, path, &metadata)?;
                         files.push(file_entry);
+                    } else {
+                        ensure_cache_file_unchanged(path, &identity)?;
                     }
+                    observed_files.push(CachedFileState {
+                        path: path.to_path_buf(),
+                        identity,
+                    });
                 }
             }
             Err(err) => {
@@ -1098,81 +1260,8 @@ fn scan_image_tree_snapshot(
         recursive,
         extensions: normalized_extensions(extensions),
         directories,
+        observed_files,
         files,
-    })
-}
-
-fn scan_image_tree_snapshot_from_files(
-    dir: &Path,
-    extensions: &[&str],
-    recursive: bool,
-    files: Vec<PathBuf>,
-) -> crate::unified_error::Result<CachedImageTreeSnapshot> {
-    let root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
-    let walker = if recursive {
-        WalkDir::new(&root).follow_links(true)
-    } else {
-        WalkDir::new(&root).max_depth(1)
-    };
-    let mut directories = Vec::new();
-
-    for entry in walker.into_iter().filter_entry(is_safe_entry) {
-        match entry {
-            Ok(entry) if entry.file_type().is_dir() && (recursive || entry.depth() == 0) => {
-                directories.push(CachedDirectoryState {
-                    path: entry.path().to_path_buf(),
-                    modified_time:
-                        crate::media_conversion_gate::delivery_directory_modified_time_optional(
-                            entry.path(),
-                        ),
-                });
-            }
-            Ok(_) => {}
-            Err(err) => {
-                crate::media_conversion_gate::delivery_pipeline_path_audit(
-                    "delivery_pipeline_batch",
-                    &root,
-                    format!(
-                        "COLLECTION AUDIT: Failed to inspect directory entry in '{}' while \
-                         building path-tree cache | Forensic: Error '{err}'; aborting incomplete scan",
-                        root.display(),
-                    ),
-                );
-                return Err(crate::unified_error::UnifiedError::Other(
-                    anyhow::Error::new(err),
-                ));
-            }
-        }
-    }
-
-    let mut file_entries = Vec::with_capacity(files.len());
-    for path in files {
-        let metadata = fs::metadata(&path).map_err(|err| {
-            crate::media_conversion_gate::delivery_pipeline_path_audit(
-                "delivery_pipeline_batch",
-                &path,
-                format!(
-                    "METADATA AUDIT: Failed to read metadata for image entry '{}' during \
-                     batch scan: {err}",
-                    path.display()
-                ),
-            );
-            crate::unified_error::UnifiedError::FileReadError {
-                path: path.clone(),
-                source: err,
-                operation: Some("image path-tree cache scan".to_string()),
-            }
-        })?;
-        file_entries.push(build_cached_image_entry(&root, &path, &metadata));
-    }
-
-    Ok(CachedImageTreeSnapshot {
-        schema_version: crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
-        root,
-        recursive,
-        extensions: normalized_extensions(extensions),
-        directories,
-        files: file_entries,
     })
 }
 
@@ -1273,27 +1362,15 @@ fn sort_cached_video_entries(entries: &mut [CachedVideoSortEntry]) {
 fn build_cached_video_entry(
     root: &Path,
     path: &Path,
+    metadata: &fs::Metadata,
 ) -> crate::unified_error::Result<CachedVideoSortEntry> {
-    let metadata = fs::metadata(path).map_err(|err| {
-        crate::media_conversion_gate::delivery_pipeline_path_audit(
-            "delivery_pipeline_batch",
-            path,
-            format!(
-                "METADATA AUDIT: Failed to read metadata for video entry '{}' during \
-                 batch scan: {err}",
-                path.display()
-            ),
-        );
-        crate::unified_error::UnifiedError::FileReadError {
-            path: path.to_path_buf(),
-            source: err,
-            operation: Some("video path-tree cache scan".to_string()),
-        }
-    })?;
+    let identity = CachedFileIdentity::from_metadata(metadata)?;
     let (pixel_count, duration_secs, frame_rate, estimated_work) = video_probe_priority_data(path);
+    ensure_cache_file_unchanged(path, &identity)?;
     Ok(CachedVideoSortEntry {
         path: path.to_path_buf(),
         size: metadata.len(),
+        identity,
         relative_depth: relative_depth_from_root(root, path),
         pixel_count,
         duration_secs,
@@ -1327,6 +1404,7 @@ fn scan_video_tree_snapshot(
     };
 
     let mut directories = Vec::new();
+    let mut observed_files = Vec::new();
     let mut files = Vec::new();
 
     for entry in walker.into_iter().filter_entry(is_safe_entry) {
@@ -1337,6 +1415,8 @@ fn scan_video_tree_snapshot(
                         directories.push(CachedDirectoryState {
                             path: entry.path().to_path_buf(),
                             modified_time: crate::media_conversion_gate::delivery_directory_modified_time_optional(entry.path()),
+                            #[cfg(unix)]
+                            native_identity: directory_native_identity(entry.path()),
                         });
                     }
                     continue;
@@ -1344,6 +1424,8 @@ fn scan_video_tree_snapshot(
 
                 if entry.file_type().is_file() {
                     let path = entry.path();
+                    let metadata = cache_file_metadata(path)?;
+                    let identity = CachedFileIdentity::from_metadata(&metadata)?;
                     if let Some(codec) =
                         identify_source_codec_for_batch(path, "scan_video_tree_snapshot")
                         && codec_matches_requested_extensions(codec, extensions)
@@ -1351,10 +1433,18 @@ fn scan_video_tree_snapshot(
                         // Admission: it's a video OR it's an animated image candidate for the 'vid'
                         // tool
                         if codec.is_video() || codec.can_be_animated() {
-                            let file_entry = build_cached_video_entry(&root, path)?;
+                            let file_entry = build_cached_video_entry(&root, path, &metadata)?;
                             files.push(file_entry);
+                        } else {
+                            ensure_cache_file_unchanged(path, &identity)?;
                         }
+                    } else {
+                        ensure_cache_file_unchanged(path, &identity)?;
                     }
+                    observed_files.push(CachedFileState {
+                        path: path.to_path_buf(),
+                        identity,
+                    });
                 }
             }
             Err(err) => {
@@ -1399,6 +1489,7 @@ fn scan_video_tree_snapshot(
         recursive,
         extensions: normalized_extensions(extensions),
         directories,
+        observed_files,
         files,
     })
 }
@@ -1442,6 +1533,221 @@ mod tests {
             .collect::<anyhow::Result<Vec<_>>>()?;
         rels.sort();
         Ok(rels)
+    }
+
+    fn file_freshness_for_both(image: &CachedImageTreeSnapshot) -> (bool, bool) {
+        let video = CachedVideoTreeSnapshot {
+            schema_version: image.schema_version,
+            root: image.root.clone(),
+            recursive: image.recursive,
+            extensions: image.extensions.clone(),
+            directories: image.directories.clone(),
+            observed_files: image.observed_files.clone(),
+            files: image
+                .files
+                .iter()
+                .map(|file| CachedVideoSortEntry {
+                    path: file.path.clone(),
+                    size: file.size,
+                    identity: file.identity.clone(),
+                    relative_depth: file.relative_depth,
+                    pixel_count: None,
+                    duration_secs: None,
+                    frame_rate: None,
+                    estimated_work: None,
+                })
+                .collect(),
+        };
+        let extensions = image.extensions_as_refs();
+        (
+            validate_cached_image_tree(image, &image.root, &extensions, image.recursive),
+            validate_cached_video_tree(&video, &video.root, &extensions, video.recursive),
+        )
+    }
+
+    #[test]
+    fn cached_tree_file_freshness_tracks_size_and_unadmitted_changes() -> anyhow::Result<()> {
+        let temporary = TempDir::new()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let image = root.join("sample.png");
+        let notes = root.join("notes.txt");
+        write_test_image(&image, 8, 8, ImageFormat::Png);
+        fs::write(&notes, b"synthetic notes")?;
+        let original = scan_image_tree_snapshot(&root, &["png"], true)?;
+        assert_eq!(original.files.len(), 1);
+        assert_eq!(original.observed_files.len(), 2);
+        assert_eq!(file_freshness_for_both(&original), (true, true));
+
+        fs::write(&notes, b"changed synthetic notes with another length")?;
+        assert!(cached_directories_are_current(&original.directories, &root));
+        assert_eq!(file_freshness_for_both(&original), (false, false));
+
+        let refreshed = scan_image_tree_snapshot(&root, &["png"], true)?;
+        assert_eq!(file_freshness_for_both(&refreshed), (true, true));
+        let original_mtime = FileTime::from_last_modification_time(&fs::metadata(&image)?);
+        let mut bytes = fs::read(&image)?;
+        bytes.push(0);
+        fs::write(&image, bytes)?;
+        filetime::set_file_mtime(&image, original_mtime)?;
+        assert!(cached_directories_are_current(
+            &refreshed.directories,
+            &root
+        ));
+        assert!(!cached_files_are_current(
+            &refreshed.observed_files,
+            refreshed
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        ));
+        assert_eq!(file_freshness_for_both(&refreshed), (false, false));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_tree_file_freshness_rejects_restored_mtime_and_replaced_inode() -> anyhow::Result<()>
+    {
+        let temporary = TempDir::new()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let replacement_root = TempDir::new()?;
+        let image = root.join("sample.png");
+        write_test_image(&image, 8, 8, ImageFormat::Png);
+        let bytes = fs::read(&image)?;
+        let original_mtime = FileTime::from_unix_time(1_700_000_000, 123_456_789);
+        filetime::set_file_mtime(&image, original_mtime)?;
+        let original = scan_image_tree_snapshot(&root, &["png"], true)?;
+        assert_eq!(file_freshness_for_both(&original), (true, true));
+
+        let mut changed = bytes.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(&image, changed)?;
+        filetime::set_file_mtime(&image, original_mtime)?;
+        let after = CachedFileIdentity::from_metadata(&fs::metadata(&image)?)?;
+        assert_eq!(after.size, original.files[0].identity.size);
+        assert_eq!(
+            after.modified_time,
+            original.files[0].identity.modified_time
+        );
+        assert_ne!(after.changed_time, original.files[0].identity.changed_time);
+        assert!(cached_directories_are_current(&original.directories, &root));
+        assert_eq!(file_freshness_for_both(&original), (false, false));
+
+        fs::write(&image, &bytes)?;
+        filetime::set_file_mtime(&image, original_mtime)?;
+        let refreshed = scan_image_tree_snapshot(&root, &["png"], true)?;
+        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        let replacement = replacement_root.path().join("replacement.png");
+        fs::write(&replacement, &bytes)?;
+        filetime::set_file_mtime(&replacement, original_mtime)?;
+        fs::rename(&replacement, &image)?;
+        filetime::set_file_mtime(&root, directory_mtime)?;
+        let replaced = CachedFileIdentity::from_metadata(&fs::metadata(&image)?)?;
+        assert_eq!(replaced.size, refreshed.files[0].identity.size);
+        assert_eq!(
+            replaced.modified_time,
+            refreshed.files[0].identity.modified_time
+        );
+        assert_ne!(replaced.inode, refreshed.files[0].identity.inode);
+        assert_eq!(
+            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            directory_mtime
+        );
+        assert!(!cached_files_are_current(
+            &refreshed.observed_files,
+            refreshed
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        ));
+        assert_eq!(file_freshness_for_both(&refreshed), (false, false));
+        Ok(())
+    }
+
+    #[test]
+    fn cached_tree_file_freshness_requires_complete_readable_identity() -> anyhow::Result<()> {
+        let temporary = TempDir::new()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let image = root.join("sample.png");
+        write_test_image(&image, 8, 8, ImageFormat::Png);
+        let original = scan_image_tree_snapshot(&root, &["png"], true)?;
+        let mut incomplete = original.clone();
+        incomplete.observed_files.clear();
+        assert_eq!(file_freshness_for_both(&incomplete), (false, false));
+        let mut serialized = serde_json::to_value(&original)?;
+        serialized["observed_files"][0]["identity"]
+            .as_object_mut()
+            .unwrap()
+            .remove("modified_time");
+        assert!(serde_json::from_value::<CachedImageTreeSnapshot>(serialized).is_err());
+
+        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        fs::remove_file(&image)?;
+        filetime::set_file_mtime(&root, directory_mtime)?;
+        assert_eq!(
+            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            directory_mtime
+        );
+        assert!(!cached_files_are_current(
+            &original.observed_files,
+            original
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        ));
+        assert_eq!(file_freshness_for_both(&original), (false, false));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_tree_directory_identity_rejects_new_files_with_restored_mtime() -> anyhow::Result<()>
+    {
+        let temporary = TempDir::new()?;
+        let root = fs::canonicalize(temporary.path())?;
+        let empty = scan_image_tree_snapshot(&root, &["png"], true)?;
+        assert!(empty.observed_files.is_empty());
+        assert!(empty.files.is_empty());
+        assert_eq!(file_freshness_for_both(&empty), (true, true));
+
+        let directory_mtime = FileTime::from_last_modification_time(&fs::metadata(&root)?);
+        write_test_image(&root.join("first.png"), 8, 8, ImageFormat::Png);
+        filetime::set_file_mtime(&root, directory_mtime)?;
+        assert_eq!(
+            FileTime::from_last_modification_time(&fs::metadata(&root)?),
+            directory_mtime
+        );
+        assert_eq!(file_freshness_for_both(&empty), (false, false));
+
+        let populated = scan_image_tree_snapshot(&root, &["png"], true)?;
+        assert_eq!(populated.files.len(), 1);
+        assert_eq!(file_freshness_for_both(&populated), (true, true));
+        write_test_image(&root.join("second.png"), 8, 8, ImageFormat::Png);
+        filetime::set_file_mtime(&root, directory_mtime)?;
+        assert!(cached_files_are_current(
+            &populated.observed_files,
+            populated
+                .files
+                .iter()
+                .map(|entry| (entry.path.as_path(), &entry.identity)),
+        ));
+        assert_eq!(file_freshness_for_both(&populated), (false, false));
+        Ok(())
+    }
+
+    #[test]
+    fn cached_file_identity_rejects_probe_time_drift() -> anyhow::Result<()> {
+        let temporary = TempDir::new()?;
+        let path = temporary.path().join("sample.png");
+        write_test_image(&path, 8, 8, ImageFormat::Png);
+        let metadata = fs::metadata(&path)?;
+        let identity = CachedFileIdentity::from_metadata(&metadata)?;
+        filetime::set_file_mtime(&path, FileTime::from_unix_time(1_600_000_000, 9))?;
+        assert!(ensure_cache_file_unchanged(&path, &identity).is_err());
+        assert!(build_cached_image_entry(temporary.path(), &path, &metadata).is_err());
+        fs::remove_file(&path)?;
+        assert!(ensure_cache_file_unchanged(&path, &identity).is_err());
+        Ok(())
     }
 
     #[test]
@@ -1828,16 +2134,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let missing_file = temp_dir.path().join("disappeared.jpg");
 
-        assert!(build_cached_video_entry(temp_dir.path(), &missing_file).is_err());
-        assert!(
-            scan_image_tree_snapshot_from_files(
-                temp_dir.path(),
-                &["jpg"],
-                true,
-                vec![missing_file]
-            )
-            .is_err()
-        );
+        assert!(cache_file_metadata(&missing_file).is_err());
     }
 
     #[cfg(unix)]
@@ -1916,6 +2213,7 @@ mod tests {
                 recursive: image.recursive,
                 extensions: image.extensions.clone(),
                 directories: image.directories.clone(),
+                observed_files: image.observed_files.clone(),
                 files: Vec::new(),
             };
             (
@@ -1934,6 +2232,11 @@ mod tests {
             "same-second directory changes must invalidate both caches"
         );
         filetime::set_file_mtime(&nested, original_time)?;
+        #[cfg(unix)]
+        assert_eq!(valid(&original), (false, false));
+        #[cfg(not(unix))]
+        assert_eq!(valid(&original), (true, true));
+        let original = scan_image_tree_snapshot(&root, &["jpg"], true)?;
         assert_eq!(valid(&original), (true, true));
 
         let mut invalid = original.clone();
@@ -1957,12 +2260,24 @@ mod tests {
             (false, false),
             "unknown timestamps are not proof of freshness"
         );
+        #[cfg(unix)]
+        {
+            invalid = original.clone();
+            for directory in &mut invalid.directories {
+                directory.native_identity = None;
+            }
+            assert_eq!(
+                valid(&invalid),
+                (false, false),
+                "unknown directory identities are not freshness evidence"
+            );
+        }
         invalid = original.clone();
         invalid.schema_version -= 1;
         assert_eq!(
             valid(&invalid),
             (false, false),
-            "old seconds-only snapshots cannot be reused"
+            "old path-tree schemas cannot be reused"
         );
 
         let root_time = FileTime::from_last_modification_time(&fs::metadata(&root)?);
@@ -1986,9 +2301,20 @@ mod tests {
 
     #[test]
     fn test_video_sort_entries_prioritize_depth_then_size_then_resolution() {
+        let identity = |size| CachedFileIdentity {
+            size,
+            modified_time: std::time::UNIX_EPOCH,
+            #[cfg(unix)]
+            device: 0,
+            #[cfg(unix)]
+            inode: 0,
+            #[cfg(unix)]
+            changed_time: (0, 0),
+        };
         let fast_finish = CachedVideoSortEntry {
             path: PathBuf::from("a/deeper-fast.mov"),
             size: 160,
+            identity: identity(160),
             relative_depth: Some(2),
             pixel_count: Some(640 * 360),
             duration_secs: Some(4.0_f64),
@@ -1998,6 +2324,7 @@ mod tests {
         let shallower = CachedVideoSortEntry {
             path: PathBuf::from("b/shallower-large.mov"),
             size: 500,
+            identity: identity(500),
             relative_depth: Some(1),
             pixel_count: Some(320 * 240),
             duration_secs: Some(2.0_f64),
@@ -2007,6 +2334,7 @@ mod tests {
         let same_depth_shorter = CachedVideoSortEntry {
             path: PathBuf::from("c/tie-depth-shorter.mov"),
             size: 220,
+            identity: identity(220),
             relative_depth: Some(2),
             pixel_count: Some(1280 * 720),
             duration_secs: Some(2.0_f64),
@@ -2016,6 +2344,7 @@ mod tests {
         let same_depth_heavier = CachedVideoSortEntry {
             path: PathBuf::from("d/tie-depth-heavier.mov"),
             size: 80,
+            identity: identity(80),
             relative_depth: Some(2),
             pixel_count: Some(1920 * 1080),
             duration_secs: Some(6.0_f64),

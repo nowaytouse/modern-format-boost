@@ -327,6 +327,15 @@
 "history.compare.batch" = "Run %d";
 "history.compare.select_two" = "Select exactly two runs to compare.";
 "history.compare.not_comparable" = "Different scopes or incomplete evidence: size results are not directly comparable.";
+"history.compare.config" = "Recorded configuration differences (Run 1 to Run 2)";
+"history.compare.config.unavailable" = "Cannot compare uniquely: records are missing, incomplete, invalid, or contain multiple different configuration snapshots within a run.";
+"history.compare.config.snapshots" = "Distinct recorded snapshots: Run 1 = %d; Run 2 = %d";
+"history.compare.config.values" = "Changed recorded values";
+"history.compare.config.sources" = "Changed recorded sources";
+"history.compare.config.values.same" = "Recorded values are unchanged.";
+"history.compare.config.sources.same" = "Recorded sources are unchanged.";
+"history.compare.config.missing" = "Not recorded";
+"history.compare.config.field" = "%@: %@ -> %@";
 "history.refresh" = "Refresh history";
 "history.open_log" = "View processing output";
 "history.output.loading" = "Loading processing output...";

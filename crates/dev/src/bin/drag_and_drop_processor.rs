@@ -4504,7 +4504,12 @@ mod tests {
     fn launcher_startup_applies_local_environment_before_runtime() -> Result<()> {
         const CHILD: &str = "MFB_TEST_LAUNCHER_STARTUP_CASE";
         const ROOT: &str = "MFB_TEST_LAUNCHER_RESOLVED_ROOT";
-        if let Ok(case) = std::env::var(CHILD) {
+        let case = match std::env::var(CHILD) {
+            Ok(case) => Some(case),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error).context("Invalid launcher startup test case"),
+        };
+        if let Some(case) = case {
             let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
             let result = initialize_launcher_runtime(&args);
             if case == "invalid" {

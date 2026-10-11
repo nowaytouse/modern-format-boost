@@ -241,6 +241,18 @@ pub fn scan_content(
     filter: ProcessingFilter,
     session_audit: Option<&Path>,
 ) -> Result<ContentScan> {
+    scan_content_with_link_check(target, filter, session_audit, |resolved| {
+        safety_check(resolved)?;
+        foundation::safety::check_dangerous_directory(resolved).map_err(anyhow::Error::msg)
+    })
+}
+
+fn scan_content_with_link_check(
+    target: &Path,
+    filter: ProcessingFilter,
+    session_audit: Option<&Path>,
+    check_link: impl Fn(&Path) -> Result<()>,
+) -> Result<ContentScan> {
     draw_separator("Scanning Content");
     let dim = if colors_enabled() { "\x1b[2m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
@@ -250,17 +262,86 @@ pub fn scan_content(
     let mut routed_images = std::collections::HashSet::new();
     let mut routed_videos = std::collections::HashSet::new();
 
-    for entry in WalkDir::new(target) {
-        let entry = entry.with_context(|| {
+    let mut root = Some(target.to_path_buf());
+    let mut directories = Vec::<(PathBuf, PathBuf, fs::ReadDir)>::new();
+    loop {
+        let path = if let Some(path) = root.take() {
+            path
+        } else {
+            let Some((directory, _, entries)) = directories.last_mut() else {
+                break;
+            };
+            match entries.next() {
+                Some(entry) => entry
+                    .with_context(|| {
+                        format!(
+                            "Cannot read content scan directory {}; inventory is incomplete",
+                            directory.display()
+                        )
+                    })?
+                    .path(),
+                None => {
+                    directories.pop();
+                    continue;
+                }
+            }
+        };
+        let link_metadata = fs::symlink_metadata(&path).with_context(|| {
             format!(
-                "Cannot complete content scan for {}; inventory is incomplete",
-                target.display()
+                "Cannot inspect content scan path {}; inventory is incomplete",
+                path.display()
             )
         })?;
-        let path = entry.path();
-        if entry.file_type().is_dir() {
+        let metadata = if link_metadata.file_type().is_symlink() {
+            let resolved = fs::canonicalize(&path).with_context(|| {
+                format!(
+                    "Cannot resolve content scan link {}; inventory is incomplete",
+                    path.display()
+                )
+            })?;
+            check_link(&resolved).map_err(|error| {
+                anyhow::anyhow!(
+                    "Unsafe content scan link {} -> {}: {error}; inventory is incomplete",
+                    path.display(),
+                    resolved.display()
+                )
+            })?;
+            fs::metadata(&path).with_context(|| {
+                format!(
+                    "Cannot stat content scan path {}; inventory is incomplete",
+                    path.display()
+                )
+            })?
+        } else {
+            link_metadata
+        };
+        if metadata.is_dir() {
+            let resolved = fs::canonicalize(&path).with_context(|| {
+                format!(
+                    "Cannot resolve content scan directory {}; inventory is incomplete",
+                    path.display()
+                )
+            })?;
+            if directories
+                .iter()
+                .any(|(_, ancestor, _)| ancestor == &resolved)
+            {
+                bail!(
+                    "Cannot complete content scan at {}; link loop; inventory is incomplete",
+                    path.display()
+                );
+            }
+            // Validate links before opening their target directories.
+            let entries = fs::read_dir(&path).with_context(|| {
+                format!(
+                    "Cannot open content scan directory {}; inventory is incomplete",
+                    path.display()
+                )
+            })?;
+            directories.push((path, resolved, entries));
             continue;
         }
+        let path = path.as_path();
         let name = path.file_name().and_then(|n| n.to_str()).with_context(|| {
             format!(
                 "Cannot represent content scan path {}; inventory is incomplete",
@@ -276,12 +357,6 @@ pub fn scan_content(
                 path.display()
             );
         }
-        let metadata = path.metadata().with_context(|| {
-            format!(
-                "Cannot stat content scan path {}; inventory is incomplete",
-                path.display()
-            )
-        })?;
         if !metadata.is_file() {
             continue;
         }
@@ -1229,7 +1304,7 @@ mod tests {
         let diagnostic = format!("{error:#}");
         assert!(diagnostic.contains("inventory is incomplete"));
         assert!(diagnostic.contains(&missing.display().to_string()));
-        assert!(error.downcast_ref::<walkdir::Error>().is_some());
+        assert!(error.downcast_ref::<io::Error>().is_some());
     }
 
     #[test]
@@ -1266,6 +1341,113 @@ mod tests {
         let diagnostic = format!("{error:#}");
         assert!(diagnostic.contains("inventory is incomplete"));
         assert!(diagnostic.contains(&dangling.display().to_string()));
+        let error = scan_content(&dangling, ProcessingFilter::Both, None).unwrap_err();
+        assert!(format!("{error:#}").contains("Cannot resolve content scan link"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_content_includes_legal_linked_directory_media() {
+        let selected = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let jpeg = b"\xff\xd8\xff\xe0jpeg";
+        fs::write(external.path().join("still.bin"), jpeg).unwrap();
+        fs::write(external.path().join("sidecar.xmp"), "synthetic sidecar").unwrap();
+        std::os::unix::fs::symlink(external.path(), selected.path().join("linked")).unwrap();
+
+        let scan = scan_content(selected.path(), ProcessingFilter::Both, None).unwrap();
+        assert_eq!(scan.total_files, 2);
+        assert_eq!(scan.img_count, 1);
+        assert_eq!(scan.vid_count, 0);
+        assert_eq!(scan.xmp_count, 1);
+        assert_eq!(scan.other_count, 0);
+        assert_eq!(scan.media_total_size, u64::try_from(jpeg.len()).unwrap());
+        assert_eq!(scan.routed_images, ["linked/still.bin"]);
+        assert!(scan.routed_videos.is_empty());
+
+        let images = foundation::batch::scan_image_files(selected.path(), &["jpg"], true).unwrap();
+        assert_eq!(
+            images,
+            [fs::canonicalize(selected.path())
+                .unwrap()
+                .join("linked/still.bin")]
+        );
+
+        let root_scan = scan_content(
+            &selected.path().join("linked"),
+            ProcessingFilter::Both,
+            None,
+        )
+        .unwrap();
+        assert_eq!(root_scan.total_files, 2);
+        assert_eq!(root_scan.routed_images, ["still.bin"]);
+
+        let image = external.path().join("still.bin");
+        let linked_file = selected.path().join("single.bin");
+        std::os::unix::fs::symlink(&image, &linked_file).unwrap();
+        for input in [&image, &linked_file] {
+            let scan = scan_content(input, ProcessingFilter::Both, None).unwrap();
+            assert_eq!(scan.total_files, 1);
+            assert_eq!(scan.img_count, 1);
+            assert_eq!(scan.media_total_size, u64::try_from(jpeg.len()).unwrap());
+            assert_eq!(scan.routed_images, [""]);
+        }
+        fs::remove_file(linked_file).unwrap();
+
+        std::os::unix::fs::symlink(external.path(), selected.path().join("alias")).unwrap();
+        let aliases = scan_content(selected.path(), ProcessingFilter::Both, None).unwrap();
+        assert_eq!(aliases.total_files, 4);
+        assert_eq!(aliases.img_count, 2);
+        assert_eq!(aliases.xmp_count, 2);
+        assert_eq!(
+            aliases.routed_images,
+            ["alias/still.bin", "linked/still.bin"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_content_rejects_linked_directory_loops_and_dangerous_targets() {
+        let selected = tempfile::tempdir().unwrap();
+        let looping = selected.path().join("loop");
+        std::os::unix::fs::symlink(selected.path(), &looping).unwrap();
+        let error = scan_content(selected.path(), ProcessingFilter::Both, None).unwrap_err();
+        assert!(format!("{error:#}").contains("inventory is incomplete"));
+        assert!(format!("{error:#}").contains(&looping.display().to_string()));
+        assert!(format!("{error:#}").contains("link loop"));
+
+        fs::remove_file(&looping).unwrap();
+        let rejected = tempfile::tempdir().unwrap();
+        fs::write(
+            rejected.path().join("must-not-probe.gif"),
+            b"GIF89a\x01\x00",
+        )
+        .unwrap();
+        let rejected_path = fs::canonicalize(rejected.path()).unwrap();
+        let dangerous = selected.path().join("rejected-target");
+        std::os::unix::fs::symlink(rejected.path(), &dangerous).unwrap();
+        let reject_target = |resolved: &Path| {
+            if resolved == rejected_path {
+                bail!("synthetic target rejected");
+            }
+            Ok(())
+        };
+        let error = scan_content_with_link_check(
+            selected.path(),
+            ProcessingFilter::Both,
+            None,
+            reject_target,
+        )
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("Unsafe content scan link"));
+        assert!(diagnostic.contains("inventory is incomplete"));
+        assert!(diagnostic.contains(&dangerous.display().to_string()));
+        assert!(diagnostic.contains("synthetic target rejected"));
+        let error =
+            scan_content_with_link_check(&dangerous, ProcessingFilter::Both, None, reject_target)
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("synthetic target rejected"));
     }
 
     #[cfg(target_os = "linux")]
