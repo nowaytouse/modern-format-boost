@@ -79,6 +79,17 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
+Standard IMG/VID now share the typed `execution.error_mode` preference:
+`log-and-continue` records recoverable file failures and continues, while
+`fail-fast` stops at the first such failure. Failed files retain their sources
+and are not counted as skips; fatal errors always stop. Configuration files
+override environment preferences, and `--error-mode` overrides both. Developer
+settings show each pipeline's actual inherited policy and allow an explicit
+override or a return to inheritance. Fast IMG/Fast GIF encoding keeps its existing
+failure handling; this preference does not change those encoding loops.
+The launcher reads local environment settings before installing runtime policy;
+edits to `local_env.json` or `local_env.sh` take effect after restarting it.
+
 New launcher-managed IMG/VID invocations record the worker's resolved runtime JSON,
 winning field sources and worker version in `history.sqlite3`. Processing History
 shows these captured snapshots, not a reconstruction using today's preferences.
@@ -90,6 +101,37 @@ Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
 
+JPEG restoration history uses the restoration mode label, records the actual
+destination even on early failure, and identifies the restored JPEG inventory.
+It does not report optimization space savings or turn absent verification into
+a match. The launcher rejects multiple restoration inputs instead of silently
+restoring only the first input. A restoration directory receipt must match that
+batch's recorded source and output; relative CLI paths are recorded as absolute
+paths without reopening historical files.
+
+For a single-directory standard run using a default adjacent output, the launcher
+selects that destination once before recording history or launching workers.
+Processing, handoff, verification and size reporting reuse the same path even
+after the output folder is created. Disk-space checks use the nearest existing
+directory without creating the destination. Explicit outputs and in-place modes
+keep their existing behavior; this is not the complete unified preflight plan.
+
+Actual standard multi-input runs now plan and scan every input before launching any worker.
+Duplicate/nested sources and source/output overlaps are rejected, and in-place runs
+hold all input locks for the batch. Each input keeps its own adjacent destination;
+an explicit common output root instead uses numbered input-name subdirectories,
+such as `001_Album` and `002_Album`. History records those exact source/output mappings
+and keeps per-directory verification separate. Missing/conflicting receipts and
+overflow never become a batch MATCH; mixed directory/file runs retain per-directory
+proof without claiming a unified inventory for the single files. A worker failure
+still stops all post-processing delivery for the batch, even when other workers
+succeeded. Multi-input watch mode is rejected rather than silently watching one path.
+Previews record plans without scanning media or inventing processing/verification counts.
+Standard pre-scans include legal linked directories before routing workers. Linked
+targets are checked before descent; loops, broken links and unsafe targets fail
+with an incomplete-inventory error. Fast mode link policy is unchanged; this is
+not the complete Unified Preflight or a scan-to-execution identity guarantee.
+
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
 run. Skipped, failed and reused files are excluded; resume-only totals are not
@@ -100,6 +142,29 @@ a receipt remain unrecorded.
 Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.
+
+The live result and Processing History distinguish partial completion from an
+all-file failure when complete recorded counts contain both successes and failures.
+Failures remain actionable, with their original exit codes and reasons; cancellation,
+unfinished work and incomplete evidence do not become partial success. The final
+live summary uses checked receipt totals, preserving unknown counts instead of zero.
+
+Select two runs in Processing History to compare recorded outcomes, versions,
+paths, count checks and current-run size measurements in the existing detail pane.
+Different measurement scopes or incomplete evidence are called out explicitly;
+recorded IMG/VID configuration values and winning sources are compared separately.
+Only one distinct valid snapshot on each side permits comparison; missing,
+damaged or ambiguous evidence remains unavailable, and absent fields are not
+filled with defaults. This does not establish equal tools, inputs or environments,
+guess throughput, or explain causality from configuration changes.
+Select one run to return to its captured effective configuration and paged output.
+
+The single-run **Failed files** view filters recorded paths without opening logs.
+It displays at most 1,000 rows and 2 MiB of path text, with separate shown, matched
+and recorded totals. Select a row to copy its exact path or locate an existing
+regular file in Finder. Missing paths remain copyable but cannot be located;
+relative paths and leaf symlinks are not opened. Recorded paths are not proof that
+every failure was captured and never replace the independent processing counts.
 
 ### Live file progress
 
@@ -117,7 +182,15 @@ Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
 Versioned cache identities preserve native path bytes and normalized scan options.
 Directory freshness uses full-resolution timestamps, requires root evidence, and
-rejects missing or unknown evidence. Older scan identities are rebuilt on demand;
+rejects missing or unknown evidence. File metadata is also checked, including
+regular files not admitted as media: in-place content changes can alter routing
+without changing a directory timestamp. Size and modification time are captured;
+Unix also binds file and directory device, inode and nanosecond change time,
+including additions to previously empty directories when modification times are
+restored. Other platforms retain the weaker size/modification-time evidence;
+same-size changes with restored timestamps are not fully detected there.
+Changed, missing or unreadable evidence triggers a new scan, and changes during
+probing prevent a reusable snapshot. Older scan identities are rebuilt on demand;
 checkpoints and processed-file records are not invalidated. This does not replace
 media verification or establish content identity from directory timestamps.
 
@@ -151,6 +224,14 @@ required; prompts go to stderr so JSON stdout remains machine-readable. If delet
 committed but subsequent inspection fails, the error states the committed counts.
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
+
+**Settings → Cache → Prune Cache** runs the same operation using the current
+draft's effective cache limits. It resolves relevant image/video configuration
+before any deletion and pins the resulting limits for the maintenance command.
+Different inherited limits must be reconciled with explicit shared overrides;
+the GUI does not choose one pipeline silently. Confirmation, category counts and
+the applied byte/idle limits remain visible. **Clear Cache** remains a separate
+action that removes all managed rebuildable cache, rather than only excess cache.
 
 The optional PostgreSQL analysis cache reports record counts and algorithm-version
 counts from one read snapshot. Its allocated size covers the analysis, quality,
@@ -239,7 +320,11 @@ concurrent calls on one manager cannot commit snapshots out of order.
   XMP is carried into the JXL container and the output is checked for pixels,
   dimensions, auxiliary/HDR/provenance indicators, and metadata consistency.
   FastImg JXL Tier 2 uses a staged, format-native XMP writer for an already-modern
-  source and commits only when the same proof passes. AVIF Meme Mode is the
+  source and commits only when the same proof passes. Native XMP packets are
+  copied intact to avoid sidecar GPS rational/coordinate rewriting; unrelated
+  embedded fields are first added only where a staged sidecar has no value.
+  Full post-write metadata proof still applies. Relocated IFD1 thumbnail offsets
+  are not treated as changed content: thumbnail bytes still have to match. AVIF Meme Mode is the
   deliberate clean-output exception: it does not merge XMP into the output,
   clears removable metadata, and removes a validated source sidecar only after
   delivery proof. Existing AVIF keeps its encoded image items and is never
@@ -438,6 +523,26 @@ creative assets remain entirely within your control.
   - **Intelligent Checkpoint Reset**: Automatically detects when a user
     manually deletes the output directory to "start over", triggering a full
     state reset even in resume mode.
+    Required startup checkpoint saves and invalidation deletes must succeed;
+    failures stop initialization, retaining the source, saved state and pre-existing
+    lock. Cleanup of an older key remains an audited non-critical operation only
+    after the canonical checkpoint has been saved successfully.
+    The shared checkpoint manager acquires a kernel file lock before inspecting or
+    changing saved state. Release closes only its owned handle, never removes the
+    lock path or another process's ownership. Released managers cannot save/clear
+    stale state; reacquisition reloads the latest committed checkpoint. Process exit
+    releases ownership without relying on PID age or stale-file deletion. This does
+    not replace the existing media proofs or complete the full run-state architecture.
+
+### Python Development Scripts
+
+The development interpreter selector is `.python-version` (`3.15`), and `make test-py`
+explicitly uses `python3.15`. An intentional `PYTHON=...` override remains available;
+there is no automatic fallback to an older interpreter. `.envrc` watches the selector
+and recommends Python 3.15 for a fresh virtual environment, but does not replace an
+existing environment. Rust media processing does not acquire a Python dependency.
+Native/ML Python packages may still need source builds or newer upstream wheels;
+the interpreter update alone is not full training-stack compatibility evidence.
 
 ## 🛠️ Deep Technical: How It Works — The Pipeline
 
@@ -571,7 +676,7 @@ continue to retain final sources, not this new preview-only override chain.
 Standard IMG/VID batch reports aggregate only this run's successful conversions.
 Missing output measurements or overflowing byte totals remain unknown and suppress
 size-difference percentages; input size is never substituted for missing output.
-This CLI accounting does not yet add standard IMG/VID size totals to history.
+Launcher-managed standard IMG/VID runs also record these structured size receipts in history.
 **Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a
@@ -599,6 +704,14 @@ invalid records are explicitly marked without blocking navigation. Refresh to
 include output appended since the snapshot. Batch sequence boundaries keep
 watch-mode runs separate; output is not interpreted as authoritative failure counts.
 History schema v1 upgrades transactionally to v2 while retaining earlier events.
+Validated history databases use WAL with full synchronous writes, allowing an
+existing read snapshot to coexist with new event and worker-output commits.
+Current-schema validation uses a short read transaction; initialization and
+migration still recheck the version under a write transaction. Unknown or
+malformed databases and failed migrations are rejected without resetting them.
+The first WAL transition can wait for existing locks for a bounded five seconds;
+if it fails after a successful schema migration, the schema remains committed
+and the history write reports an error instead of appending an event.
 Batch details also retain the running version and explicit retry/resume requests.
 Internal tracing, pipeline audit files and recovery checkpoints have not yet fully
 migrated; this phase is not the entire core logging/state migration.
@@ -1303,6 +1416,7 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 | Algorithm / inference gates                                         | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
 | Terminal + native macOS UI                                          | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
 | JXL/XMP archive + JPEG restoration                                  | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
+| Current policies and generalization readiness                       | [`POLICY_READINESS.md`](docs/hardening/POLICY_READINESS.md) |
 | Logging / session                                                   | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
 | Database                                                            | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
 

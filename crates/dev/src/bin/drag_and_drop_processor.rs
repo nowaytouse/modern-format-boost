@@ -79,28 +79,6 @@ enum LaunchMode {
     DatabaseManager,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum ErrorModeOption {
-    LogAndContinue,
-    FailFast,
-}
-
-impl ErrorModeOption {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::LogAndContinue => "log-and-continue",
-            Self::FailFast => "fail-fast",
-        }
-    }
-
-    const fn batch_mode(self) -> BatchErrorMode {
-        match self {
-            Self::LogAndContinue => BatchErrorMode::LogAndContinue,
-            Self::FailFast => BatchErrorMode::FailFast,
-        }
-    }
-}
-
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "drag_and_drop_processor",
@@ -209,11 +187,11 @@ struct Args {
 
     /// Standard image batch policy; FastImg retains its checkpointed handling.
     #[arg(long, value_enum)]
-    img_error_mode: Option<ErrorModeOption>,
+    img_error_mode: Option<BatchErrorMode>,
 
     /// Standard video batch policy; not applicable to Fast Video/GIF.
     #[arg(long, value_enum)]
-    vid_error_mode: Option<ErrorModeOption>,
+    vid_error_mode: Option<BatchErrorMode>,
 
     /// Standard video codec; AV1 explicitly disables Apple compatibility.
     #[arg(long, value_enum)]
@@ -317,6 +295,7 @@ fn collect_config_leaf_paths(
     }
 }
 
+#[derive(Clone)]
 struct DragDropSession {
     started_at: DateTime<Local>,
     stamp: String,
@@ -407,6 +386,10 @@ impl DragDropSession {
             .integrity_summary
             .as_ref()
             .context("history verification requires the machine integrity summary")?;
+        let source =
+            std::path::absolute(source).context("resolve history verification source path")?;
+        let output =
+            std::path::absolute(output).context("resolve history verification output path")?;
         self.append_history_event(
             "MFB_HISTORY_VERIFICATION",
             serde_json::json!({
@@ -604,16 +587,10 @@ impl LaunchCommand {
         })
     }
 
-    fn with_error_mode(mut self, mode: Option<ErrorModeOption>) -> Self {
+    fn with_error_mode(mut self, mode: Option<BatchErrorMode>) -> Self {
         if let Some(mode) = mode {
-            self.env_overrides.push((
-                foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
-                Some(mode.as_str().to_owned()),
-            ));
-            self.env_overrides.push((
-                foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
-                None,
-            ));
+            self.args
+                .extend(["--error-mode".to_owned(), mode.as_str().to_owned()]);
         }
         self
     }
@@ -653,15 +630,6 @@ impl LaunchCommand {
         bail_on_failure: bool,
     ) -> Result<ProcessorStats> {
         println!("+ {}", self.display());
-        if self.args.first().is_some_and(|arg| arg == "run") {
-            for (name, value) in &self.env_overrides {
-                if name == foundation::constants::ENV_MFB_ERROR_MODE
-                    && let Some(value) = value
-                {
-                    println!("[POLICY] {} file_error_mode={value}", self.pipeline_label());
-                }
-            }
-        }
         if dry_run {
             return Ok(ProcessorStats::default());
         }
@@ -1096,13 +1064,12 @@ fn read_optional_text_file(path: &Path) -> Option<String> {
     }
 }
 
-/// Load `.modern_format_boost/local_env.json` (and `.sh` fallback) into
-/// `std::env`.  Mirrors `load_local_env()` in the Python implementation.
+/// Load the local environment once, before runtime resolution and worker threads.
 ///
 /// Uses `serde_json` for robust JSON parsing — the previous hand-rolled
 /// `split(',')` approach silently mishandled values containing commas (e.g.
 /// `PostgreSQL` multi-host connection strings).
-fn load_local_env(_project_root: &Path) {
+fn load_local_env() {
     let Ok(conf_dir) = foundation::process_lock::get_mfb_root() else {
         eprintln!(
             "{} MFB state root unavailable; skipping local environment",
@@ -1372,14 +1339,36 @@ fn validate_media_options(args: &Args) -> Result<()> {
 
 fn media_error_mode(args: &Args, pipeline: &str, inherited: BatchErrorMode) -> BatchErrorMode {
     match pipeline {
-        "IMG" => args
-            .img_error_mode
-            .map_or(inherited, ErrorModeOption::batch_mode),
-        "VID" => args
-            .vid_error_mode
-            .map_or(inherited, ErrorModeOption::batch_mode),
+        "IMG" => args.img_error_mode.unwrap_or(inherited),
+        "VID" => args.vid_error_mode.unwrap_or(inherited),
         _ => inherited,
     }
+}
+
+fn standard_error_modes(args: &Args) -> Result<(BatchErrorMode, BatchErrorMode)> {
+    let inherited = BatchErrorMode::current();
+    if !mode_uses_standard_pipeline(&args.mode) {
+        return Ok((inherited, inherited));
+    }
+    let resolve = |pipeline, path| -> Result<BatchErrorMode> {
+        let loaded = foundation::runtime_config::load(path, false)?;
+        Ok(media_error_mode(
+            args,
+            pipeline,
+            loaded.config.execution.error_mode,
+        ))
+    };
+    let image = if args.mode == LaunchMode::Videos {
+        inherited
+    } else {
+        resolve("IMG", args.img_config.as_deref()).context("resolve image failure policy")?
+    };
+    let video = if args.mode == LaunchMode::Images {
+        inherited
+    } else {
+        resolve("VID", args.vid_config.as_deref()).context("resolve video failure policy")?
+    };
+    Ok((image, video))
 }
 
 fn child_failure_should_abort(mode: BatchErrorMode, exit_code: i32, failed: usize) -> bool {
@@ -1397,17 +1386,11 @@ fn child_result_needs_error(
     exit_code != 0 || failed > 0 || (!dry_run && !counts_complete)
 }
 
-fn routing_fail_fast(args: &Args, inherited: BatchErrorMode) -> bool {
+fn routing_fail_fast(args: &Args, image: BatchErrorMode, video: BatchErrorMode) -> bool {
     match args.mode {
-        LaunchMode::Images | LaunchMode::FastImg => {
-            media_error_mode(args, "IMG", inherited).is_fail_fast()
-        }
-        LaunchMode::Videos => media_error_mode(args, "VID", inherited).is_fail_fast(),
-        LaunchMode::Auto => {
-            media_error_mode(args, "IMG", inherited).is_fail_fast()
-                && media_error_mode(args, "VID", inherited).is_fail_fast()
-        }
-        _ => inherited.is_fail_fast(),
+        LaunchMode::Videos => video.is_fail_fast(),
+        LaunchMode::Auto => image.is_fail_fast() && video.is_fail_fast(),
+        _ => image.is_fail_fast(),
     }
 }
 
@@ -1534,6 +1517,259 @@ fn adjacent_output_dir(args: &Args) -> PathBuf {
     })
 }
 
+fn bind_processing_output(args: &Args) -> Result<Args> {
+    let mut bound = args.clone();
+    if args.mode == LaunchMode::RestoreJpeg {
+        anyhow::ensure!(
+            args.inputs.len() == 1,
+            "restore-jpeg requires exactly one input; multiple inputs are not supported"
+        );
+        bound.output =
+            resolve_restore_jpeg_launch_output(&args.inputs[0], args.output.as_deref())?.0;
+    }
+    if mode_uses_standard_pipeline(&args.mode)
+        && args.inputs.len() == 1
+        && !args.in_place
+        && args.output.is_none()
+        && fs::metadata(&args.inputs[0])
+            .with_context(|| format!("inspect input {}", args.inputs[0].display()))?
+            .is_dir()
+    {
+        // All workers, verification and history must share the same chosen directory.
+        bound.output = Some(adjacent_output_dir(args));
+    }
+    Ok(bound)
+}
+
+fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
+    if !mode_uses_standard_pipeline(&args.mode) || args.inputs.len() < 2 {
+        return Ok(vec![bind_processing_output(args)?]);
+    }
+    anyhow::ensure!(!args.watch, "--watch requires exactly one input directory");
+    anyhow::ensure!(
+        !args.in_place || args.output.is_none(),
+        "--in-place cannot be combined with --output for multiple inputs"
+    );
+    let inputs = args
+        .inputs
+        .iter()
+        .map(|input| {
+            anyhow::ensure!(
+                input.to_str().is_some(),
+                "input path is not UTF-8: {}",
+                input.display()
+            );
+            safety_check(input)?;
+            fs::canonicalize(input).with_context(|| format!("inspect input {}", input.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (index, input) in inputs.iter().enumerate() {
+        anyhow::ensure!(
+            input.to_str().is_some(),
+            "input path is not UTF-8: {}",
+            input.display()
+        );
+        for other in &inputs[..index] {
+            anyhow::ensure!(
+                !input.starts_with(other) && !other.starts_with(input),
+                "duplicate or overlapping inputs: {} and {}",
+                other.display(),
+                input.display()
+            );
+        }
+    }
+    let mut plans: Vec<Args> = Vec::new();
+    let mut outputs: BTreeSet<PathBuf> = BTreeSet::new();
+    for (index, input) in args.inputs.iter().enumerate() {
+        let mut planned = args.clone();
+        planned.inputs = vec![std::path::absolute(input)?];
+        if !args.in_place {
+            let output = if let Some(root) = &args.output {
+                let name = input
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .context("multi-input output requires a UTF-8 input name")?;
+                root.join(format!(
+                    "{:03}_{name}",
+                    index.checked_add(1).context("input index overflow")?
+                ))
+            } else {
+                unique_adjacent_output(input, "optimized")
+            };
+            let output = std::path::absolute(output)?;
+            let existing = output_resource_check_dir(&output)?;
+            let mut resolved = fs::canonicalize(&existing)?.join(output.strip_prefix(&existing)?);
+            // Normalize only the nonexistent suffix; existing symlinks were resolved above.
+            let mut normalized = PathBuf::new();
+            for component in resolved.components() {
+                if component == std::path::Component::ParentDir {
+                    anyhow::ensure!(normalized.pop(), "output path escapes filesystem root");
+                } else if component != std::path::Component::CurDir {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            resolved = normalized;
+            for source in &inputs {
+                anyhow::ensure!(
+                    !resolved.starts_with(source) && !source.starts_with(&resolved),
+                    "output overlaps an input: {} and {}",
+                    output.display(),
+                    source.display()
+                );
+            }
+            for previous in &outputs {
+                anyhow::ensure!(
+                    !resolved.starts_with(previous) && !previous.starts_with(&resolved),
+                    "overlapping outputs: {} and {}",
+                    previous.display(),
+                    resolved.display()
+                );
+            }
+            outputs.insert(resolved.clone());
+            planned.output = Some(resolved);
+        }
+        let metadata = fs::metadata(&inputs[index])?;
+        anyhow::ensure!(
+            metadata.is_dir() || metadata.is_file(),
+            "input is not a regular file or directory: {}",
+            input.display()
+        );
+        plans.push(planned);
+    }
+    Ok(plans)
+}
+
+fn scan_standard_inputs(
+    plans: &[Args],
+    session: Option<&DragDropSession>,
+) -> Result<Vec<ContentScan>> {
+    plans
+        .iter()
+        .enumerate()
+        .map(|(index, args)| {
+            let scoped = input_audit_session(session, index, plans.len());
+            scan_content(
+                args.inputs.first().context("input required")?,
+                processing_filter(args),
+                scoped.as_ref().map(|s| s.session_audit.as_path()),
+            )
+        })
+        .collect()
+}
+
+fn input_audit_session(
+    session: Option<&DragDropSession>,
+    index: usize,
+    count: usize,
+) -> Option<DragDropSession> {
+    session.map(|session| {
+        let mut scoped = session.clone();
+        if count > 1 {
+            scoped.session_audit = session.log_dir.join(format!(
+                "session_audit_{}_input_{index}.jsonl",
+                session.stamp
+            ));
+        }
+        scoped
+    })
+}
+
+fn aggregate_content_scans(scans: &[ContentScan]) -> Result<ContentScan> {
+    let mut total = ContentScan::default();
+    for scan in scans {
+        total.total_files = total
+            .total_files
+            .checked_add(scan.total_files)
+            .context("batch inventory count overflow")?;
+        total.img_count = total
+            .img_count
+            .checked_add(scan.img_count)
+            .context("batch image count overflow")?;
+        total.vid_count = total
+            .vid_count
+            .checked_add(scan.vid_count)
+            .context("batch video count overflow")?;
+        total.xmp_count = total
+            .xmp_count
+            .checked_add(scan.xmp_count)
+            .context("batch sidecar count overflow")?;
+        total.other_count = total
+            .other_count
+            .checked_add(scan.other_count)
+            .context("batch other count overflow")?;
+        total.media_total_size = total
+            .media_total_size
+            .checked_add(scan.media_total_size)
+            .context("batch media byte count overflow")?;
+    }
+    Ok(total)
+}
+
+fn acquire_standard_input_locks(args: &Args, first_lock: Option<&DirLock>) -> Result<Vec<DirLock>> {
+    let mut locks = Vec::new();
+    if args.in_place && mode_uses_standard_pipeline(&args.mode) && !args.dry_run {
+        for (index, input) in args.inputs.iter().enumerate() {
+            if index == 0 && first_lock.is_some() {
+                continue;
+            }
+            locks.push(acquire_global_lock(input)?);
+        }
+    }
+    Ok(locks)
+}
+
+fn merge_verification_outcome(
+    summary: &mut PipelineSummary,
+    verify: &dev::infra::drag_drop::VerifyOutcome,
+) -> Result<()> {
+    let warnings = verify
+        .warnings
+        .context("verification outcome is incomplete")?;
+    let issues = summary
+        .integrity_issue_count
+        .checked_add(verify.issue_count)
+        .context("batch integrity issue count overflow")?;
+    summary.integrity_state = Some(if warnings || summary.integrity_state == Some("WARNINGS") {
+        "WARNINGS"
+    } else {
+        "CLEAN"
+    });
+    summary.integrity_issue_count = issues;
+    Ok(())
+}
+
+fn output_resource_check_dir(output: &Path) -> Result<PathBuf> {
+    let mut candidate = output;
+    loop {
+        if candidate.as_os_str().is_empty() {
+            candidate = Path::new(".");
+        }
+        match fs::symlink_metadata(candidate) {
+            Ok(_) => {
+                let metadata = fs::metadata(candidate).with_context(|| {
+                    format!("resolve output resource directory {}", candidate.display())
+                })?;
+                anyhow::ensure!(
+                    metadata.is_dir(),
+                    "output resource path is not a directory: {}",
+                    candidate.display()
+                );
+                return Ok(candidate.to_path_buf());
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                candidate = candidate.parent().with_context(|| {
+                    format!("no existing directory for output {}", output.display())
+                })?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("inspect output resource path {}", candidate.display())
+                });
+            }
+        }
+    }
+}
+
 fn plan_routed_pipeline_commands(
     args: &Args,
     project_root: &Path,
@@ -1544,6 +1780,9 @@ fn plan_routed_pipeline_commands(
         return plan_cli_invocations(args, project_root, None);
     }
     let target = args.inputs.first().context("input required")?;
+    if fs::metadata(target)?.is_file() {
+        return plan_cli_invocations(args, project_root, None);
+    }
     let output = args
         .output
         .clone()
@@ -1629,10 +1868,7 @@ fn run_post_adjacent_steps(
             strategy: args.strategy.clone(),
         },
     )?;
-    summary.integrity_state = verify
-        .warnings
-        .map(|w| if w { "WARNINGS" } else { "CLEAN" });
-    summary.integrity_issue_count = verify.issue_count;
+    merge_verification_outcome(summary, &verify)?;
     session.record_history_verification(&verify, target, &output)?;
     Ok(())
 }
@@ -2228,8 +2464,35 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    let plans = match standard_input_plans(args) {
+        Ok(plans) => plans,
+        Err(error) => return run_with_history(args, session, || Err(error)),
+    };
+    let args = if plans.len() == 1 { &plans[0] } else { args };
     run_with_history(args, session, || {
-        run_drag_drop_inner(args, session, dir_lock)
+        if plans.len() > 1
+            && let Some(session) = session
+        {
+            let inputs = plans
+                .iter()
+                .map(|plan| -> Result<serde_json::Value> {
+                    Ok(serde_json::json!({
+                        "source": plan.inputs[0],
+                        "output": plan.output,
+                        "in_place": plan.in_place,
+                        "requires_verification": !plan.in_place && fs::metadata(&plan.inputs[0])?.is_dir(),
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            session.append_history_event(
+                "MFB_HISTORY_INPUT_PLAN",
+                serde_json::json!({
+                    "schema_version": 1,
+                    "inputs": inputs,
+                }),
+            )?;
+        }
+        run_drag_drop_inner(args, session, dir_lock, &plans)
     })
 }
 
@@ -2239,13 +2502,7 @@ fn run_with_history(
     run: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let absolute = |path: &Path| -> Result<PathBuf> {
-        if path.is_absolute() {
-            Ok(path.to_path_buf())
-        } else {
-            Ok(std::env::current_dir()
-                .context("resolve history working directory")?
-                .join(path))
-        }
+        std::path::absolute(path).context("resolve history absolute path")
     };
     let context_result = match session {
         Some(session) => (|| {
@@ -2316,6 +2573,7 @@ fn run_drag_drop_inner(
     args: &Args,
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
+    plans: &[Args],
 ) -> Result<()> {
     let output_cursor = session
         .map(|session| {
@@ -2346,23 +2604,25 @@ fn run_drag_drop_inner(
         print_runtime_panel(&build_runtime_dashboard(args));
     }
 
-    load_local_env(&root);
+    let (image_error_mode, video_error_mode) = standard_error_modes(args)?;
 
-    if !args.inputs.is_empty() {
-        safety_check(&args.inputs[0])
-            .with_context(|| format!("safety check failed for {}", args.inputs[0].display()))?;
+    for input in &args.inputs {
+        safety_check(input)
+            .with_context(|| format!("safety check failed for {}", input.display()))?;
     }
 
-    let scan =
+    let _input_locks = acquire_standard_input_locks(args, dir_lock)?;
+    let scans =
         if !args.dry_run && !args.inputs.is_empty() && mode_uses_standard_pipeline(&args.mode) {
-            Some(scan_content(
-                &args.inputs[0],
-                processing_filter(args),
-                session.map(|s| s.session_audit.as_path()),
-            )?)
+            scan_standard_inputs(plans, session)?
         } else {
-            None
+            Vec::new()
         };
+    let scan = if scans.is_empty() {
+        None
+    } else {
+        Some(aggregate_content_scans(&scans)?)
+    };
 
     // Defer binary check until after scan (matches Python: ensure_tools_ready after
     // count_files)
@@ -2378,34 +2638,45 @@ fn run_drag_drop_inner(
 
     if let (Some(scan), false) = (&scan, args.dry_run) {
         if scan.img_count > 0 || scan.vid_count > 0 {
-            let check_path = if args.in_place {
-                &args.inputs[0]
-            } else {
-                args.output.as_deref().unwrap_or_else(|| {
-                    args.inputs
-                        .first()
-                        .map_or_else(|| Path::new("."), std::path::PathBuf::as_path)
-                })
-            };
-            check_system_resources(
-                check_path,
-                scan.media_total_size.saturating_add(1024 * 1024 * 1024),
-            )?;
+            let required = scan
+                .media_total_size
+                .checked_add(1024 * 1024 * 1024)
+                .context("batch resource byte requirement overflow")?;
+            for plan in plans {
+                let output_check_dir = if plan.in_place {
+                    None
+                } else {
+                    plan.output
+                        .as_deref()
+                        .map(output_resource_check_dir)
+                        .transpose()?
+                };
+                let check_path = output_check_dir.as_deref().unwrap_or(&plan.inputs[0]);
+                check_system_resources(check_path, required)?;
+            }
         }
     } else if !args.dry_run && !args.inputs.is_empty() {
         check_system_resources(&args.inputs[0], 1024u64 * 1024 * 1024)?;
     }
 
     let error_mode = BatchErrorMode::current();
-    let fail_fast = routing_fail_fast(args, error_mode);
-    let commands = if let Some(ref scan) = scan {
+    let fail_fast = routing_fail_fast(args, image_error_mode, video_error_mode);
+    let commands = if scan.is_some() {
         if mode_uses_standard_pipeline(&args.mode) {
-            plan_routed_pipeline_commands(args, &root, scan, fail_fast)?
+            let mut commands = Vec::new();
+            for (plan, scan) in plans.iter().zip(&scans) {
+                commands.extend(plan_routed_pipeline_commands(plan, &root, scan, fail_fast)?);
+            }
+            commands
         } else {
             plan_cli_invocations(args, &root, session)?
         }
     } else {
-        plan_cli_invocations(args, &root, session)?
+        let mut commands = Vec::new();
+        for plan in plans {
+            commands.extend(plan_cli_invocations(plan, &root, session)?);
+        }
+        commands
     };
 
     let mut first_error: Option<anyhow::Error> = None;
@@ -2574,7 +2845,11 @@ fn run_drag_drop_inner(
         for command in commands {
             update_terminal_title(started.elapsed());
             draw_separator(&command_phase_label(&command.program));
-            let command_error_mode = media_error_mode(args, command.pipeline_label(), error_mode);
+            let command_error_mode = match command.pipeline_label() {
+                "IMG" => image_error_mode,
+                "VID" => video_error_mode,
+                _ => error_mode,
+            };
             match command.run_collecting(args.dry_run, session, false) {
                 Ok(stats) => {
                     print_batch_result(&command, &stats, args.dry_run);
@@ -2689,21 +2964,30 @@ fn run_drag_drop_inner(
         if mode_uses_standard_pipeline(&args.mode) {
             if args.in_place {
                 let _ = dir_lock;
-            } else if img_vid_pipeline_completed && let (Some(scan), Some(sess)) = (&scan, session)
-            {
-                let output = adjacent_output_dir(args);
-                if output.is_dir()
-                    && let Err(err) = run_post_adjacent_steps(args, &root, sess, scan, &mut summary)
-                {
-                    if drag_drop_error_should_abort(error_mode, &err) {
-                        return Err(err);
+            } else if img_vid_pipeline_completed {
+                for (index, (plan, scan)) in plans.iter().zip(&scans).enumerate() {
+                    let scoped = input_audit_session(session, index, plans.len());
+                    let Some(sess) = scoped.as_ref() else {
+                        continue;
+                    };
+                    if !fs::metadata(&plan.inputs[0])?.is_dir() {
+                        continue;
                     }
-                    eprintln!(
-                        "{} post-pipeline step error: {err:#}",
-                        pick_symbol("⚠️", "[WARN]")
-                    );
-                    if first_error.is_none() {
-                        first_error = Some(err);
+                    let output = adjacent_output_dir(plan);
+                    if output.is_dir()
+                        && let Err(err) =
+                            run_post_adjacent_steps(plan, &root, sess, scan, &mut summary)
+                    {
+                        if drag_drop_error_should_abort(error_mode, &err) {
+                            return Err(err);
+                        }
+                        eprintln!(
+                            "{} post-pipeline step error: {err:#}",
+                            pick_symbol("⚠️", "[WARN]")
+                        );
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
                     }
                 }
             }
@@ -2755,6 +3039,17 @@ fn run_drag_drop_inner(
                 (before, after)
             } else if args.in_place {
                 (scan.media_total_size, scan.media_total_size)
+            } else if plans.len() > 1 {
+                let after = plans.iter().try_fold(0u64, |total, plan| {
+                    let output = plan
+                        .output
+                        .as_ref()
+                        .context("multi-input output is not bound")?;
+                    total
+                        .checked_add(du_size_recursive(output)?)
+                        .context("batch output byte count overflow")
+                })?;
+                (scan.media_total_size, after)
             } else {
                 (
                     scan.media_total_size,
@@ -2790,7 +3085,9 @@ fn run_drag_drop_inner(
         return Err(err);
     }
 
-    if let (Some(sess), Some(output_dir)) = (session, &args.output) {
+    if plans.len() == 1
+        && let (Some(sess), Some(output_dir)) = (session, &args.output)
+    {
         let output_size = if let Some(override_size) = summary.fast_img_size_after_override {
             override_size
         } else {
@@ -3488,10 +3785,17 @@ fn run_watch_loop(args: &Args, session: &DragDropSession) -> Result<()> {
     })
 }
 
+fn initialize_launcher_runtime(args: &Args) -> Result<()> {
+    load_local_env();
+    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
+    let mut runtime = foundation::runtime_config::load(None, false)?;
+    args.performance.apply_to(&mut runtime);
+    args.cache.apply_to(&mut runtime);
+    foundation::runtime_config::install(runtime.config)
+}
+
 fn main() -> Result<()> {
     use std::io::IsTerminal;
-    foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
-    install_signal_handlers()?;
     unsafe {
         std::env::set_var("MFB_GUI_LAUNCH", "1");
         std::env::set_var("FORCE_COLOR", "1");
@@ -3502,10 +3806,8 @@ fn main() -> Result<()> {
     }
     resize_terminal_for_gui(35, 110);
     let args = apply_mode_overrides(Args::parse());
-    let mut runtime = foundation::runtime_config::load(None, false)?;
-    args.performance.apply_to(&mut runtime);
-    args.cache.apply_to(&mut runtime);
-    foundation::runtime_config::install(runtime.config)?;
+    initialize_launcher_runtime(&args)?;
+    install_signal_handlers()?;
     let mut session = DragDropSession::start()?;
     println!(
         "MFB_LOG_DIRECTORY={}",
@@ -3702,6 +4004,29 @@ mod tests {
             )
             .unwrap()
         );
+        let verify = dev::infra::drag_drop::VerifyOutcome {
+            integrity_summary: Some(dev::infra::drag_drop::IntegritySummaryMachine {
+                has_warnings: false,
+                issue_count: 0,
+                source_count: 1,
+                optimized_count: 1,
+                skipped_count: 0,
+                failed_count: 0,
+                source_remaining_count: 1,
+                verified_deleted_count: 0,
+                count_status: Some("MATCH".to_owned()),
+            }),
+            ..Default::default()
+        };
+        session
+            .record_history_verification(&verify, &args.inputs[0], args.output.as_deref().unwrap())
+            .unwrap();
+        let receipt = history_payloads(&session, "MFB_HISTORY_VERIFICATION")
+            .pop()
+            .unwrap();
+        assert_eq!(receipt["source_path"], context["inputs"][0]);
+        assert_eq!(receipt["output_path"], context["output"]);
+        assert_eq!(receipt["optimized_count"], 1);
     }
 
     #[test]
@@ -3861,6 +4186,12 @@ mod tests {
                 "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]",
             )
             .unwrap();
+        output
+            .push_line(
+                "IMG",
+                "[FAIL    ]   nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained",
+            )
+            .unwrap();
         output.flush().unwrap();
         let current = dev::infra::history_store::read_session_output_since(
             &session.log_dir,
@@ -3870,7 +4201,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             fast_img_retained_file_names(&current),
-            vec![("current.jpg: no gain".to_owned(), "skipped".to_owned())]
+            vec![
+                ("current.jpg: no gain".to_owned(), "skipped".to_owned()),
+                (
+                    "nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained".to_owned(),
+                    "failed".to_owned(),
+                ),
+            ]
         );
         assert!(!current.contains("prior"));
     }
@@ -4145,14 +4482,13 @@ mod tests {
                 .contains(&"--quality-heuristic=false".to_owned())
         );
         assert!(command.args.contains(&"--allow-database=true".to_owned()));
-        assert!(command.env_overrides.contains(&(
-            foundation::constants::ENV_MFB_ERROR_MODE.to_owned(),
-            Some("log-and-continue".to_owned())
-        )));
-        assert!(command.env_overrides.contains(&(
-            foundation::constants::ENV_MFB_DRAG_DROP_FAIL_FAST.to_owned(),
-            None
-        )));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--error-mode", "log-and-continue"])
+        );
+        assert!(command.env_overrides.is_empty());
         let video = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video"));
         assert!(!video.args.contains(&"--config".to_owned()));
         assert!(video.env_overrides.is_empty());
@@ -4161,6 +4497,160 @@ mod tests {
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
         assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn launcher_startup_applies_local_environment_before_runtime() -> Result<()> {
+        const CHILD: &str = "MFB_TEST_LAUNCHER_STARTUP_CASE";
+        const ROOT: &str = "MFB_TEST_LAUNCHER_RESOLVED_ROOT";
+        let case = match std::env::var(CHILD) {
+            Ok(case) => Some(case),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error).context("Invalid launcher startup test case"),
+        };
+        if let Some(case) = case {
+            let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
+            let result = initialize_launcher_runtime(&args);
+            if case == "invalid" {
+                assert!(result.is_err());
+                assert!(foundation::runtime_config::active().is_none());
+                return Ok(());
+            }
+            result?;
+            let expected = if case == "file" {
+                BatchErrorMode::LogAndContinue
+            } else {
+                BatchErrorMode::FailFast
+            };
+            assert_eq!(BatchErrorMode::current(), expected);
+            assert_eq!(standard_error_modes(&args)?.0, expected);
+            let resolved = foundation::runtime_config::load(None, false)?;
+            let sources = &resolved.source_chain["execution.error_mode"];
+            assert_eq!(sources[1], "env:MFB_ERROR_MODE");
+            if case == "file" {
+                assert_eq!(sources.len(), 3);
+                assert_eq!(
+                    sources[2],
+                    foundation::runtime_config::project_config_path()?
+                        .display()
+                        .to_string()
+                );
+            } else {
+                assert_eq!(sources.len(), 2);
+            }
+            let root = PathBuf::from(std::env::var_os(ROOT).context("test root")?);
+            assert_eq!(foundation::process_lock::get_mfb_root()?, root);
+            assert_eq!(
+                PathBuf::from(std::env::var_os("TMPDIR").context("test TMPDIR")?),
+                root.join("tmp")
+            );
+            // Later edits take effect on restart, not during an active launcher session.
+            fs::write(
+                root.join("local_env.json"),
+                r#"{"MFB_ERROR_MODE":"log-and-continue"}"#,
+            )?;
+            assert_eq!(std::env::var("MFB_ERROR_MODE")?, "fail-fast");
+            assert_eq!(BatchErrorMode::current(), expected);
+            return Ok(());
+        }
+        let before = ["MFB_ERROR_MODE", "MFB_HOME_ROOT", "TMPDIR"]
+            .map(|name| (name, std::env::var_os(name)));
+        let temp = tempfile::tempdir()?;
+        for case in ["environment", "file", "invalid"] {
+            let directory = temp.path().join(case);
+            let bootstrap = directory.join("bootstrap");
+            let root = directory.join("state");
+            fs::create_dir_all(&bootstrap)?;
+            fs::write(
+                bootstrap.join("local_env.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "MFB_ERROR_MODE": if case == "invalid" { "unknown" } else { "fail-fast" },
+                    "MFB_HOME_ROOT": root,
+                }))?,
+            )?;
+            if case == "file" {
+                fs::write(
+                    directory.join("mfb.json"),
+                    r#"{"config_version":1,"execution":{"error_mode":"log-and-continue"}}"#,
+                )?;
+            }
+            let output = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "tests::launcher_startup_applies_local_environment_before_runtime",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .env(CHILD, case)
+                .env(ROOT, &root)
+                .env("MFB_HOME_ROOT", &bootstrap)
+                .env("HOME", directory.join("home"))
+                .env("XDG_CONFIG_HOME", directory.join("config"))
+                .current_dir(&directory)
+                .output()?;
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "startup case {case}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        for (name, value) in before {
+            assert_eq!(std::env::var_os(name), value);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn standard_failure_policy_uses_each_config_and_cli_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let image_config = temp.path().join("image.json");
+        let video_config = temp.path().join("video.json");
+        fs::write(
+            &image_config,
+            r#"{"config_version":1,"execution":{"error_mode":"fail-fast"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &video_config,
+            r#"{"config_version":1,"execution":{"error_mode":"log-and-continue"}}"#,
+        )
+        .unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
+        args.img_config = Some(image_config.clone());
+        args.vid_config = Some(video_config.clone());
+        let (image, video) = standard_error_modes(&args).unwrap();
+        assert_eq!(image, BatchErrorMode::FailFast);
+        assert_eq!(video, BatchErrorMode::LogAndContinue);
+        assert!(!routing_fail_fast(&args, image, video));
+        assert!(child_failure_should_abort(image, 1, 1));
+        assert!(!child_failure_should_abort(video, 1, 1));
+        args.img_error_mode = Some(BatchErrorMode::LogAndContinue);
+        args.vid_error_mode = Some(BatchErrorMode::FailFast);
+        assert_eq!(
+            standard_error_modes(&args).unwrap(),
+            (BatchErrorMode::LogAndContinue, BatchErrorMode::FailFast)
+        );
+        let command = rust_run_command(temp.path(), "vid", &args, Path::new("input"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--error-mode", "fail-fast"])
+        );
+        assert!(command.env_overrides.is_empty());
+        args.mode = LaunchMode::Images;
+        args.vid_config = Some(temp.path().join("absent-unused-video.json"));
+        assert!(standard_error_modes(&args).is_ok());
+        fs::write(
+            &image_config,
+            r#"{"config_version":1,"execution":{"error_mode":"silent"}}"#,
+        )
+        .unwrap();
+        assert!(standard_error_modes(&args).is_err());
     }
 
     #[test]
@@ -4712,6 +5202,416 @@ mod tests {
             let (output, is_photos) = resolve_restore_jpeg_launch_output(input, None).unwrap();
             assert!(is_photos);
             assert_eq!(output, None);
+        }
+    }
+
+    #[test]
+    fn restore_history_binds_output_before_failure_and_rejects_multiple_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "restore-jpeg"]).unwrap();
+        args.inputs = vec![input.clone()];
+        let plans = standard_input_plans(&args).unwrap();
+        let output = temp.path().join("Album_restored_jpeg");
+        assert_eq!(plans[0].output.as_ref(), Some(&output));
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        run_with_history(&plans[0], Some(&session), || {
+            bail!("synthetic restore failure")
+        })
+        .unwrap_err();
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_CONTEXT")[0]["output"],
+            serde_json::to_value(&output).unwrap()
+        );
+        assert!(!output.exists());
+        args.output = Some(temp.path().join("Selected"));
+        assert_eq!(standard_input_plans(&args).unwrap()[0].output, args.output);
+        args.inputs = vec![temp.path().join("Synthetic.photoslibrary")];
+        fs::create_dir(&args.inputs[0]).unwrap();
+        args.output = None;
+        assert!(standard_input_plans(&args).unwrap()[0].output.is_none());
+        args.inputs = vec![input.clone(), temp.path().join("second")];
+        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        assert!(error.to_string().contains("requires exactly one input"));
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_CONTEXT")[1]["inputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FINISHED")[1]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn standard_multi_input_plans_scan_and_route_every_input() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        let file = temp.path().join("standalone.bin");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        for path in [first.join("one.bin"), second.join("two.bin"), file.clone()] {
+            fs::write(path, b"\xff\xd8\xff\xe0synthetic").unwrap();
+        }
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        args.inputs = vec![first.clone(), second.clone(), file.clone()];
+        let plans = standard_input_plans(&args).unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let scans = scan_standard_inputs(&plans, Some(&session)).unwrap();
+        assert_eq!(aggregate_content_scans(&scans).unwrap().img_count, 3);
+        for fail_fast in [false, true] {
+            let commands = plans
+                .iter()
+                .zip(&scans)
+                .flat_map(|(plan, scan)| {
+                    plan_routed_pipeline_commands(plan, Path::new("/repo"), scan, fail_fast)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(commands.len(), 3);
+            for (index, command) in commands.iter().enumerate() {
+                let input = if fail_fast || index == 2 {
+                    plans[index].inputs[0].clone()
+                } else {
+                    plans[index].inputs[0].join(["one.bin", "two.bin"][index])
+                };
+                assert_eq!(PathBuf::from(&command.args[1]), input);
+                let output = command
+                    .args
+                    .windows(2)
+                    .find(|pair| pair[0] == "--output")
+                    .unwrap();
+                assert_eq!(
+                    PathBuf::from(&output[1]),
+                    *plans[index].output.as_ref().unwrap()
+                );
+            }
+        }
+        let first_audit = input_audit_session(Some(&session), 0, plans.len()).unwrap();
+        let second_audit = input_audit_session(Some(&session), 1, plans.len()).unwrap();
+        assert_ne!(first_audit.session_audit, second_audit.session_audit);
+        assert_eq!(first_audit.stamp, second_audit.stamp);
+        assert!(
+            fs::read_to_string(first_audit.session_audit)
+                .unwrap()
+                .contains("one.bin")
+        );
+        assert!(
+            !fs::read_to_string(second_audit.session_audit)
+                .unwrap()
+                .contains("one.bin")
+        );
+        for plan in &plans {
+            assert!(!plan.output.as_ref().unwrap().exists());
+        }
+        args.output = Some(temp.path().join("Selected"));
+        let plans = standard_input_plans(&args).unwrap();
+        let resolved_root = temp.path().canonicalize().unwrap();
+        assert_eq!(
+            plans[0].output,
+            Some(resolved_root.join("Selected/001_Album"))
+        );
+        assert_eq!(
+            plans[1].output,
+            Some(resolved_root.join("Selected/002_Other"))
+        );
+        assert!(!temp.path().join("Selected").exists());
+    }
+
+    #[test]
+    fn standard_multi_input_rejects_overlaps_and_late_scan_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
+        args.inputs = vec![first.clone(), second.clone()];
+        let plans = standard_input_plans(&args).unwrap();
+        fs::remove_dir(&second).unwrap();
+        assert!(scan_standard_inputs(&plans, None).is_err());
+        assert!(!plans[0].output.as_ref().unwrap().exists());
+        fs::create_dir(&second).unwrap();
+        args.inputs = vec![first.clone(), first.clone()];
+        assert!(standard_input_plans(&args).is_err());
+        let nested = first.join("nested");
+        fs::create_dir(&nested).unwrap();
+        args.inputs = vec![first.clone(), nested];
+        assert!(standard_input_plans(&args).is_err());
+        args.inputs = vec![first.clone(), second.clone()];
+        args.output = Some(first.join("outputs"));
+        assert!(standard_input_plans(&args).is_err());
+        args.in_place = true;
+        args.output = Some(temp.path().join("selected"));
+        assert!(standard_input_plans(&args).is_err());
+        args.in_place = false;
+        args.output = None;
+        args.watch = true;
+        assert!(standard_input_plans(&args).is_err());
+        args.watch = false;
+        args.in_place = true;
+        assert!(
+            standard_input_plans(&args)
+                .unwrap()
+                .iter()
+                .all(|plan| plan.output.is_none())
+        );
+        #[cfg(unix)]
+        {
+            let alias = temp.path().join("alias");
+            std::os::unix::fs::symlink(&first, &alias).unwrap();
+            args.inputs = vec![first, alias];
+            assert!(standard_input_plans(&args).is_err());
+        }
+    }
+
+    #[test]
+    fn standard_multi_input_aggregates_counts_and_verification_without_masking() {
+        let mut first = ContentScan {
+            img_count: 2,
+            media_total_size: 10,
+            ..ContentScan::default()
+        };
+        let second = ContentScan {
+            vid_count: 3,
+            media_total_size: 20,
+            ..ContentScan::default()
+        };
+        let total = aggregate_content_scans(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(
+            (total.img_count, total.vid_count, total.media_total_size),
+            (2, 3, 30)
+        );
+        first.media_total_size = u64::MAX;
+        assert!(aggregate_content_scans(&[first, second]).is_err());
+        let mut summary = PipelineSummary::default();
+        let warned = dev::infra::drag_drop::VerifyOutcome {
+            warnings: Some(true),
+            issue_count: 2,
+            ..Default::default()
+        };
+        let clean = dev::infra::drag_drop::VerifyOutcome {
+            warnings: Some(false),
+            ..Default::default()
+        };
+        merge_verification_outcome(&mut summary, &warned).unwrap();
+        merge_verification_outcome(&mut summary, &clean).unwrap();
+        assert_eq!(summary.integrity_state, Some("WARNINGS"));
+        assert_eq!(summary.integrity_issue_count, 2);
+        assert!(merge_verification_outcome(&mut summary, &Default::default()).is_err());
+        summary.integrity_issue_count = usize::MAX;
+        assert!(merge_verification_outcome(&mut summary, &warned).is_err());
+        assert_eq!(summary.integrity_issue_count, usize::MAX);
+    }
+
+    #[test]
+    fn standard_multi_input_records_resolved_plan_before_early_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut args =
+            Args::try_parse_from(["mfb", "--mode", "images", "--photos-backend", "native"])
+                .unwrap();
+        args.inputs = vec![first.join("."), second.clone()];
+        assert!(run_drag_drop(&args, Some(&session), None).is_err());
+        let plans = history_payloads(&session, "MFB_HISTORY_INPUT_PLAN");
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(plans[0]["inputs"][0]["source"], contexts[0]["inputs"][0]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0]["inputs"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            plans[0]["inputs"][1]["source"],
+            serde_json::to_value(second).unwrap()
+        );
+        assert_eq!(
+            plans[0]["inputs"][0]["output"],
+            serde_json::to_value(temp.path().canonicalize().unwrap().join("Album_optimized"))
+                .unwrap()
+        );
+        assert_eq!(plans[0]["inputs"][0]["requires_verification"], true);
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "failed"
+        );
+        assert!(!temp.path().join("Album_optimized").exists());
+    }
+
+    #[test]
+    #[serial]
+    fn standard_multi_input_locks_cover_every_in_place_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            temp.path().join("state").to_str().unwrap(),
+        );
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images", "--in-place"]).unwrap();
+        args.inputs = vec![first.clone(), second.clone()];
+        let first_lock = acquire_global_lock(&first).unwrap();
+        let other_locks = acquire_standard_input_locks(&args, Some(&first_lock)).unwrap();
+        assert_eq!(other_locks.len(), 1);
+        assert!(acquire_global_lock(&first).is_err());
+        assert!(acquire_global_lock(&second).is_err());
+        drop(other_locks);
+        let second_lock = acquire_global_lock(&second).unwrap();
+        assert!(acquire_standard_input_locks(&args, Some(&first_lock)).is_err());
+        drop(second_lock);
+        drop(first_lock);
+        assert_eq!(acquire_standard_input_locks(&args, None).unwrap().len(), 2);
+        args.dry_run = true;
+        assert!(
+            acquire_standard_input_locks(&args, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn standard_adjacent_output_is_bound_for_entire_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
+        args.inputs = vec![input.clone()];
+        fs::create_dir(temp.path().join("Album_optimized")).unwrap();
+        let args = bind_processing_output(&args).unwrap();
+        assert_eq!(args.output, Some(temp.path().join("Album_optimized_2")));
+        let scan = ContentScan {
+            img_count: 1,
+            vid_count: 1,
+            routed_images: vec!["synthetic.jpg".into()],
+            routed_videos: vec!["synthetic.mp4".into()],
+            ..ContentScan::default()
+        };
+        let commands =
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, false).unwrap();
+        assert_eq!(commands.len(), 2);
+        let output = args.output.as_ref().unwrap();
+        assert!(!output.exists());
+        assert_eq!(output_resource_check_dir(output).unwrap(), temp.path());
+        fs::create_dir(output).unwrap();
+        assert_eq!(adjacent_output_dir(&args), *output);
+        for command in commands
+            .into_iter()
+            .chain(plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, true).unwrap())
+        {
+            let output_arg = command
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--output")
+                .unwrap();
+            assert_eq!(PathBuf::from(&output_arg[1]), *output);
+        }
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(contexts[0]["output"], serde_json::to_value(output).unwrap());
+    }
+
+    #[test]
+    fn standard_output_binding_preserves_explicit_in_place_multi_and_file_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        let file = temp.path().join("synthetic.png");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(&file, b"\x89PNG\r\n\x1a\n").unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        args.inputs = vec![first.clone()];
+        args.output = Some(temp.path().join("Selected"));
+        assert_eq!(bind_processing_output(&args).unwrap().output, args.output);
+        args.output = None;
+        args.in_place = true;
+        assert!(bind_processing_output(&args).unwrap().output.is_none());
+        args.in_place = false;
+        args.inputs = vec![first.clone(), second];
+        let bound = bind_processing_output(&args).unwrap();
+        assert!(bound.output.is_none());
+        let commands = plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands
+                .iter()
+                .all(|command| !command.args.iter().any(|arg| arg == "--output"))
+        );
+        args.inputs = vec![file];
+        let original = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+        let bound = bind_processing_output(&args).unwrap();
+        assert!(bound.output.is_none());
+        assert_eq!(
+            plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap()[0].args,
+            original[0].args
+        );
+        args.inputs = vec![first];
+        args.mode = LaunchMode::FastImg;
+        assert!(bind_processing_output(&args).unwrap().output.is_none());
+    }
+
+    #[test]
+    fn standard_output_binding_records_selected_path_before_processing_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args =
+            Args::try_parse_from(["mfb", "--mode", "images", "--photos-backend", "native"])
+                .unwrap();
+        args.inputs = vec![input];
+        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Photos import settings require --mode fast-img")
+        );
+        let output = temp.path().join("Album_optimized");
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(
+            contexts[0]["output"],
+            serde_json::to_value(&output).unwrap()
+        );
+        assert!(!output.exists());
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn output_resource_directory_is_read_only_and_rejects_invalid_ancestors() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("new/nested/output");
+        assert_eq!(output_resource_check_dir(&output).unwrap(), temp.path());
+        assert!(!temp.path().join("new").exists());
+        assert_eq!(output_resource_check_dir(temp.path()).unwrap(), temp.path());
+        let file = temp.path().join("file");
+        fs::write(&file, b"synthetic").unwrap();
+        assert!(output_resource_check_dir(&file).is_err());
+        assert!(output_resource_check_dir(&file.join("output")).is_err());
+        assert!(output_resource_check_dir(Path::new("invalid\0output")).is_err());
+        #[cfg(unix)]
+        {
+            let dangling = temp.path().join("dangling");
+            std::os::unix::fs::symlink(temp.path().join("missing"), &dangling).unwrap();
+            assert!(output_resource_check_dir(&dangling).is_err());
+            assert!(output_resource_check_dir(&dangling.join("output")).is_err());
+            let link = temp.path().join("directory-link");
+            std::os::unix::fs::symlink(temp.path(), &link).unwrap();
+            assert_eq!(
+                output_resource_check_dir(&link.join("output")).unwrap(),
+                link
+            );
         }
     }
 

@@ -1555,6 +1555,8 @@ mod tests {
             "Keys:Title",
             "UserData:Description",
             "MakerNotes:ThumbnailOffset",
+            "IFD1:ThumbnailImage",
+            "IFD1:ThumbnailLength",
             "XMP-photoshop:DateCreated",
             "XMP-xmp:CreateDate",
             "IFD0:WhitePoint",
@@ -1575,6 +1577,12 @@ mod tests {
             "0.3127 0.3290",
             "0.3000 0.3200"
         ));
+        let expected = BTreeMap::from([("IFD1:ThumbnailImage".into(), "base64:QUJD".into())]);
+        let changed = BTreeMap::from([("IFD1:ThumbnailImage".into(), "base64:QUJE".into())]);
+        assert_ne!(
+            preserve_source_mismatches(&expected, &changed),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

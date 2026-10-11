@@ -29,6 +29,8 @@ struct Cli {
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
     #[command(flatten)]
+    execution: foundation::runtime_config::ExecutionArgs,
+    #[command(flatten)]
     cache: foundation::runtime_config::cache_args::CacheArgs,
     #[command(subcommand)]
     command: Commands,
@@ -153,6 +155,7 @@ enum ConfigCommand {
 fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::LoadedConfig> {
     let mut loaded = foundation::runtime_config::load(cli.config.as_deref(), cli.no_config)?;
     cli.performance.apply_to(&mut loaded);
+    cli.execution.apply_to(&mut loaded);
     cli.cache.apply_to(&mut loaded);
     if let Some(codec) = cli.codec {
         loaded.config.vid.codec = codec;
@@ -1685,6 +1688,40 @@ mod fast_gif_tests {
             Cli::try_parse_from(["vid", "config", "show", "--config", &path, "--no-config",])
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn execution_flags_reach_video_inspection_and_processing() -> anyhow::Result<()> {
+        for (command, tail) in [
+            ("config", "show"),
+            ("run", "/unused"),
+            ("fast-gif", "/unused"),
+        ] {
+            for mode in [
+                foundation::BatchErrorMode::LogAndContinue,
+                foundation::BatchErrorMode::FailFast,
+            ] {
+                let cli = Cli::try_parse_from([
+                    "vid",
+                    command,
+                    tail,
+                    "--no-config",
+                    "--error-mode",
+                    mode.as_str(),
+                ])?;
+                let loaded = resolve_runtime(&cli)?;
+                assert_eq!(loaded.config.execution.error_mode, mode);
+                assert_eq!(loaded.sources["execution.error_mode"], "CLI");
+                assert_eq!(
+                    loaded.source_chain["execution.error_mode"]
+                        .last()
+                        .map(String::as_str),
+                    Some("CLI")
+                );
+            }
+        }
+        assert!(Cli::try_parse_from(["vid", "config", "show", "--error-mode", "debug"]).is_err());
         Ok(())
     }
 

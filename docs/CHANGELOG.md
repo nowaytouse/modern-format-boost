@@ -4,6 +4,155 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Linked-input preflight, file-sensitive cache and history config differences (2026-10-11)
+
+- Include legal linked directories in standard pre-scans, preserving virtual input
+  paths and existing routing/count semantics. Validate link targets before descent;
+  loops, broken links and unsafe targets report incomplete inventory before worker
+  launch. Fast link policy and scan-to-execution identity binding are unchanged.
+- Validate directory cache freshness against all observed regular-file metadata,
+  including non-admitted files whose content can change media routing in place.
+  Bind size/full-resolution modification time and Unix file/directory device,
+  inode and nanosecond change time; reject unreadable or changed evidence, including
+  additions to empty/populated directories with restored modification times and
+  changes during media probing. Non-Unix timestamp evidence remains weaker.
+  Bump reconstructable snapshot identity, retaining formal state, and remove the
+  redundant image cache-miss scan. This is not a verification proof or content hash.
+- Compare the two selected history runs' recorded IMG/VID config values and winning
+  sources separately. Preserve type differences, escaped values and deterministic
+  field order; show missing fields as unrecorded. Missing/damaged/multiple snapshots
+  or incomplete history do not become identical settings; original results, counts,
+  versions and paths remain unchanged. Synchronize English, Simplified Chinese and
+  Japanese text without adding a separate window or duplicating stored configuration.
+- Repair the previous CI's eager-default Clippy failure and stale checkpoint time/
+  PID-ownership contracts. Keep current fail-closed timestamps and validated kernel
+  locks; test child-environment reads distinguish absence from invalid encoding.
+  No lint suppression, gate relaxation or reintroduction of retired lock behavior.
+
+### Canonical failure policies and JPEG restoration history (2026-10-11)
+
+- Resolve standard IMG/VID failure handling through typed `execution.error_mode`,
+  defaulting to `log-and-continue`. Validate environment preferences, retain their
+  lower priority than configuration files, and apply `--error-mode` last. Forward
+  launcher overrides as worker CLI arguments and capture the effective policy and
+  source in history. Read each standard pipeline's policy before routing; recoverable
+  failures, intentional skips and fatal errors keep distinct behavior. Fast encoding
+  loops and whole-batch post-processing failure gates are unchanged.
+  Load local environment settings before runtime installation, temporary-root setup
+  and signal-handler threads; restart the launcher to apply later local-env edits.
+- Show separate inherited IMG/VID failure policies in Developer settings. An explicit
+  selection remains an override even when equal to the inherited value; inheritance
+  and tab reset remove it. Include the policy in effective-value/source previews and
+  synchronize English, Simplified Chinese and Japanese text.
+- Give JPEG restoration history its own mode and inventory labels, bind the real
+  output path before processing, and reject silent first-input-only multi-input
+  restoration. Space savings are not applicable; contradictory conversion-size
+  receipts are reported without hiding valid counts or failures. Comparison views
+  now retain issue-count and MISMATCH warnings just as single-run details do.
+  Normalize recorded receipt paths to absolute paths and reject restoration receipts
+  that do not match the batch's source/output; no-receipt Photos audits stay unknown.
+
+### Complete multi-input plans, checkpoint ownership and Python 3.15 (2026-10-11)
+
+- Plan all standard inputs, including previews, and scan every input before actual
+  worker execution under either failure policy. Reject duplicate/nested inputs and overlapping outputs;
+  retain all in-place locks. Default destinations are per input; an explicit common
+  output root uses numbered input-name directories. Multi-input watch is rejected.
+- Capture exact per-input source/output plans in SQLite history. Route every input,
+  check aggregate arithmetic and preserve warnings across later clean receipts.
+  Bind native history receipts to each plan, deduplicate identical evidence and
+  reject missing/conflicting/overflowing evidence. Keep directory/file inventory
+  scopes distinct and preserve EXPLAINED instead of inventing MATCH. Archive only
+  the current session's per-input routing audits. Whole-batch worker failure still
+  blocks post-processing delivery; this is not the complete Unified Preflight.
+- Acquire kernel checkpoint ownership before initialization reads or writes.
+  Retain the fixed lock file, release only the owned handle and refuse released
+  manager writes/clears. Reload committed state on reacquisition and reject
+  incompatible contexts. Remove PID/age-based lock guesses; add isolated concurrent,
+  replaced/link-path and subprocess exit recovery tests without a schema change.
+- Select Python 3.15 for development scripts through `.python-version` and
+  `make test-py`, retaining explicit interpreter overrides. Update fresh-venv guidance
+  without replacing an existing environment or adding a Python dependency to Rust
+  media processing. Native/ML wheel compatibility remains a separate concern.
+- Fix the prior CI run's metadata nonempty assertion and launcher test formatting.
+  No lint suppression or gate relaxation is introduced.
+
+### Stable output plans and durable-state startup (2026-10-11)
+
+- Bind the default adjacent destination once for single-directory standard runs.
+  History, workers, handoff, verification and size reporting share that path;
+  creating it no longer makes subsequent steps select a different suffix.
+  Disk-space checks inspect the nearest existing directory without creating
+  output folders. Explicit outputs, in-place and multi-input behavior are retained.
+- Enable WAL for validated history databases using the existing bounded SQLite
+  retry implementation and full synchronous writes. Validate current schemas in
+  a short read transaction, retaining serialized initialization and migration.
+  Read snapshots no longer block new history events or captured-output commits
+  in steady WAL mode. Unknown/malformed schemas and failed migrations remain
+  rejected; a WAL failure after migration reports the retained schema explicitly.
+- Stop resume initialization when required checkpoint compaction or invalidation
+  cannot be committed. Perform those operations before constructing the lock-
+  releasing manager, preserving an existing lock on failure. Keep audited legacy-
+  key cleanup optional only after the canonical state is durable. Add isolated
+  fault injection, recovery retry, concurrent history and stable-path regressions.
+
+### Reliable inventory, failure paths and selective cache maintenance (2026-10-11)
+
+- Refuse launcher inventories with failed format probes, file metadata reads or
+  routing audit writes. Check count and media-byte additions for overflow instead
+  of silently producing an incomplete scan. Legitimate unknown content and XMP
+  copy routing remain distinct from evidence failures.
+- Add a native single-run Failed files view with path filtering, bounded rows and
+  text, independent recorded/matched/shown totals, exact-path copy and existing-file
+  Finder navigation. Missing evidence does not imply zero failures; multi-selection
+  and filter changes invalidate prior per-file actions.
+- Connect Settings cache pruning to the existing transactional TTL/LRU command.
+  Resolve current draft policies before mutation, reject conflicting image/video
+  inheritance and pin both effective limits. Validate category counts and the
+  applied policy receipt; retain useful cache and all formal/unknown state. Keep
+  full clearing and database inspection separate, with three-language native UI.
+
+### Partial completion and native history comparison (2026-10-11)
+
+- Share the live GUI and history partial-success count predicate. Complete mixed
+  outcomes show partial completion without changing failed items, nonzero exits,
+  terminal errors or attention filtering. Cancelled, unfinished, contradictory,
+  missing and overflowing evidence never becomes partial success.
+- Append a final live outcome summary from checked structured receipt counts.
+  Retain existing concrete diagnostics; malformed receipts cannot make a partial
+  aggregate appear complete, and unknown counts are not replaced with zero.
+- Compare exactly two selected historical runs in the existing native detail pane:
+  recorded counts, paths, versions, inventory checks, errors and byte measurements.
+  Call out different scopes or incomplete size evidence without inferring speed or
+  configuration differences. Single-run configuration and paged output stay intact.
+- Preserve selected run identities through search and refresh, invalidate stale
+  asynchronous output on selection changes and disable single-run actions for
+  multi-selection. Add English, Simplified Chinese and Japanese copy and native
+  model, selection, refresh and live-result regression coverage.
+
+### Native XMP custody and failure visibility (2026-10-11)
+
+- Copy native XMP as a complete packet instead of rationalizing GPS fields.
+  Preserve sidecar coordinate precision, rational values, reference tags and
+  unknown namespaces. Existing embedded fields are added only where the staged
+  sidecar has no value; full post-write metadata proof remains mandatory.
+  No metadata tolerance is widened.
+- Align modern-container proof with the shared metadata audit for relocated IFD1
+  thumbnail offsets. Thumbnail bytes, length, MakerNotes, primary payload and
+  codec features remain checked. Add synthetic positive and corrupted-thumbnail
+  coverage, existing-field preservation and repeat-application idempotence.
+- Include original-media XMP delivery failures in the launcher's per-file history
+  list, with line-safe paths. Clarify original-delivery versus whole-batch error
+  counts without changing authoritative delivered/failed/retained accounting.
+- Reject incomplete directory inventories when traversal fails, retaining the
+  failing root/path context instead of silently dropping unreadable entries.
+- Document current product choices, safety constraints and capability boundaries
+  in the policy-readiness inventory. No default routing, profile system or new
+  Preflight runtime is introduced.
+- Repair the completed CI run's environment-isolation audit, empty-vector Clippy
+  assertion, pinned toolchain-action contract and receipt-parser diagnostic path.
+  Preserve the workspace dependency lock refresh; no new dependency is added.
+
 ### Standard batch size history (2026-10-10)
 
 - Carry exact current-run converted bytes from standard IMG/VID reports through

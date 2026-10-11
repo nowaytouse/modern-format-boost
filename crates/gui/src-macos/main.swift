@@ -287,6 +287,7 @@ private enum MediaSetting: String, CaseIterable {
     var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
+    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
     var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy].contains(self) }
@@ -359,6 +360,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
+        case .imgErrorMode, .vidErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
         case .photosBackend: "photos.backend"
         case .photosNativeBatch: "photos.native_batch_size"
@@ -570,7 +572,7 @@ private struct MediaSettings {
     func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
         MediaSetting.allCases.filter {
             ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
-                && $0 != .imgErrorMode && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
+                && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
             return field.arguments(value).map { argument in
@@ -586,6 +588,7 @@ private struct MediaSettings {
             if let cacheMaxBytes { arguments += ["--cache-max-bytes", String(cacheMaxBytes)] }
             if let cacheTtlSeconds { arguments += ["--cache-ttl-seconds", String(cacheTtlSeconds)] }
             if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
+            if let videoFailure { arguments += ["--error-mode", videoFailure.rawValue] }
         }
         return arguments
     }
@@ -668,6 +671,15 @@ private func queryRuntimeSettings(arguments: [String], tool: String = "img") thr
 }
 
 private struct LocalCacheStatus: Decodable {
+    struct Pruning: Decodable {
+        struct Policy: Decodable {
+            let pathTreeMaxBytes: UInt64
+            let pathTreeTtlSeconds: UInt64
+        }
+        let policy: Policy
+        let expiredRows: UInt64
+        let evictedRows: UInt64
+    }
     struct Integrity: Decodable {
         struct Issue: Decodable { let code: String; let message: String }
         enum Status: String, Decodable { case healthy, unhealthy, error, absent }
@@ -723,6 +735,7 @@ private struct LocalCacheStatus: Decodable {
     let removedRows: UInt64
     let removedFiles: UInt64
     let integrity: Integrity?
+    let pruning: Pruning?
 
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
         var rows: UInt64 = 0, bytes: UInt64 = 0
@@ -750,6 +763,14 @@ private struct LocalCacheStatus: Decodable {
         }
         _ = try status.totals(rebuildable: true)
         _ = try status.totals(rebuildable: false)
+        if let pruning = status.pruning {
+            let removed = pruning.expiredRows.addingReportingOverflow(pruning.evictedRows)
+            guard pruning.policy.pathTreeMaxBytes > 0, pruning.policy.pathTreeMaxBytes <= UInt64(Int64.max),
+                  pruning.policy.pathTreeTtlSeconds > 0, pruning.policy.pathTreeTtlSeconds <= UInt64(Int64.max),
+                  !removed.overflow, removed.partialValue == status.removedRows, status.removedFiles == 0 else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
         try status.integrity?.validate()
         if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
             guard integrity.blobScanComplete,
@@ -762,16 +783,51 @@ private struct LocalCacheStatus: Decodable {
     }
 }
 
-private func queryLocalCache(clear: Bool, checkIntegrity: Bool = false) throws -> LocalCacheStatus {
+private enum LocalCacheAction: Equatable { case refresh, clear, check, prune }
+
+private func cachePruningArguments(_ policies: [EffectiveRuntimeSettings]) throws -> [String] {
+    let keys = ["cache.path_tree_max_bytes", "cache.path_tree_ttl_seconds"]
+    guard !policies.isEmpty else { throw HostError(message: localized("settings.config_invalid")) }
+    var arguments = ["--no-config"]
+    for (key, flag) in zip(keys, ["--cache-max-bytes", "--cache-ttl-seconds"]) {
+        let values = try policies.map { policy -> UInt64 in
+            guard let raw = policy[key], let value = UInt64(raw), value > 0, value <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.config_invalid"))
+            }
+            return value
+        }
+        guard Set(values).count == 1, let value = values.first else {
+            throw HostError(message: localized("settings.cache.prune_mixed"))
+        }
+        arguments += [flag, String(value)]
+    }
+    return arguments
+}
+
+private func queryLocalCache(action: LocalCacheAction, policyArguments: [String] = []) throws -> LocalCacheStatus {
     guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
         throw HostError(message: localized("settings.cache.backend_missing"))
     }
-    var arguments = clear ? ["--yes", "--json"] : ["--stats", "--json"]
-    if checkIntegrity { arguments.append("--check-integrity") }
+    let arguments: [String]
+    switch action {
+    case .refresh: arguments = ["--stats", "--json"]
+    case .clear: arguments = ["--yes", "--json"]
+    case .check: arguments = ["--stats", "--check-integrity", "--json"]
+    case .prune:
+        guard policyArguments.count == 5 else { throw HostError(message: localized("settings.config_invalid")) }
+        arguments = ["--prune", "--yes", "--json"] + policyArguments
+    }
     let status = try LocalCacheStatus.decode(settingsToolOutput(binary, arguments: arguments,
-        timeout: checkIntegrity ? 120 : 30, acceptedExitCodes: checkIntegrity ? [0, 1] : [0]))
-    guard !checkIntegrity || status.integrity != nil else {
+        timeout: action == .check ? 120 : 30, acceptedExitCodes: action == .check ? [0, 1] : [0]))
+    guard action != .check || status.integrity != nil else {
         throw HostError(message: localized("settings.cache.invalid"))
+    }
+    if action == .prune {
+        guard let pruning = status.pruning,
+              String(pruning.policy.pathTreeMaxBytes) == policyArguments[2],
+              String(pruning.policy.pathTreeTtlSeconds) == policyArguments[4] else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
     }
     return status
 }
@@ -823,6 +879,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let applyButton = NSButton()
     private let cacheRefresh = NSButton()
     private let cacheClear = NSButton()
+    private let cachePrune = NSButton()
     private let cacheCheck = NSButton()
     private var cacheLabels: [String: NSTextField] = [:]
     private let cacheMessage = NSTextField(wrappingLabelWithString: "")
@@ -1054,7 +1111,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
-                          "settings.cache.clear", "settings.cache.check"].map { localized($0) }.joined(separator: " ")
+                          "settings.cache.clear", "settings.cache.check", "settings.cache.prune"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1149,6 +1206,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheClear.target = self
         cacheClear.action = #selector(clearCache)
         cacheClear.isEnabled = false
+        cachePrune.title = localized("settings.cache.prune")
+        cachePrune.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: nil)
+        cachePrune.imagePosition = .imageLeading
+        cachePrune.toolTip = localized("settings.cache.prune_detail")
+        cachePrune.setAccessibilityLabel(localized("settings.cache.prune"))
+        cachePrune.bezelStyle = .rounded
+        cachePrune.target = self
+        cachePrune.action = #selector(pruneCache)
+        cachePrune.isEnabled = false
         cacheCheck.title = localized("settings.cache.check")
         cacheCheck.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
         cacheCheck.imagePosition = .imageLeading
@@ -1157,7 +1223,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheCheck.bezelStyle = .rounded
         cacheCheck.target = self
         cacheCheck.action = #selector(checkCacheIntegrity)
-        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheClear, cacheCheck])]).yPlacement = .center
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cachePrune, cacheClear, cacheCheck])]).yPlacement = .center
         cacheMessage.font = .systemFont(ofSize: 11)
         cacheMessage.maximumNumberOfLines = 4
         cacheMessage.isSelectable = true
@@ -1178,12 +1244,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
         cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
+        cachePrune.isEnabled = !cacheBusy && cache.rows > 0
         cacheCheck.isEnabled = !cacheBusy
         cacheLoaded = true
     }
 
-    @objc private func refreshCache() { updateCache(clear: false) }
-    @objc private func checkCacheIntegrity() { updateCache(clear: false, checkIntegrity: true) }
+    @objc private func refreshCache() { updateCache(action: .refresh) }
+    @objc private func checkCacheIntegrity() { updateCache(action: .check) }
+
+    @objc private func pruneCache() {
+        guard !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("settings.cache.prune_confirm")
+        alert.informativeText = localized("settings.cache.prune_detail")
+        alert.addButton(withTitle: localized("settings.cache.prune"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.updateCache(action: .prune) }
+        }
+    }
 
     @objc private func clearCache() {
         guard !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
@@ -1194,24 +1274,53 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         alert.addButton(withTitle: localized("settings.cache.clear"))
         alert.addButton(withTitle: localized("alert.cancel"))
         alert.beginSheetModal(for: panel) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.updateCache(clear: true) }
+            if response == .alertFirstButtonReturn { self?.updateCache(action: .clear) }
         }
     }
 
-    private func updateCache(clear: Bool, checkIntegrity: Bool = false) {
+    private func updateCache(action: LocalCacheAction) {
         guard !cacheBusy else { return }
+        let settings = draft()
+        let fast = self.fast, videos = self.videos
         cacheBusy = true
         cacheRefresh.isEnabled = false
         cacheClear.isEnabled = false
+        cachePrune.isEnabled = false
         cacheCheck.isEnabled = false
         cacheMessage.toolTip = nil
         cacheMessage.maximumNumberOfLines = 4
-        cacheMessage.stringValue = localized(checkIntegrity ? "settings.cache.checking" : (clear ? "settings.cache.clearing" : "settings.cache.loading"))
+        let message: String
+        switch action {
+        case .refresh: message = "settings.cache.loading"
+        case .check: message = "settings.cache.checking"
+        case .clear: message = "settings.cache.clearing"
+        case .prune: message = "settings.cache.pruning"
+        }
+        cacheMessage.stringValue = localized(message)
         cacheMessage.textColor = .secondaryLabelColor
         cacheMessageRow?.isHidden = false
         updatePanelSize()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Result { try queryLocalCache(clear: clear, checkIntegrity: checkIntegrity) }
+            let result = Result {
+                var arguments: [String] = []
+                if action == .prune {
+                    let fields: [MediaSetting] = [.cacheMaxBytes, .cacheTtlSeconds]
+                        + (fast ? [.fastConfig] : (videos ? [.vidConfig] : [.imgConfig, .vidConfig]))
+                    try settings.validate(fields)
+                    var policies: [EffectiveRuntimeSettings] = []
+                    if !videos {
+                        policies.append(try queryRuntimeSettings(arguments: settings.runtimeArguments(fast: fast, inheritedOnly: true)
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }))
+                    }
+                    if !fast {
+                        let configuration = settings.videoConfigurationFile.map { ["--config", $0] } ?? []
+                        policies.append(try queryRuntimeSettings(arguments: configuration
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }, tool: "vid"))
+                    }
+                    arguments = try cachePruningArguments(policies)
+                }
+                return try queryLocalCache(action: action, policyArguments: arguments)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.cacheBusy = false
@@ -1220,9 +1329,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 do {
                     let snapshot = try result.get()
                     try self.displayCache(snapshot)
-                    self.cacheMessage.stringValue = clear
+                    self.cacheMessage.stringValue = action == .clear
                         ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
-                    self.cacheMessageRow?.isHidden = !clear
+                    if let pruning = snapshot.pruning {
+                        self.cacheMessage.stringValue = localized("settings.cache.pruned", String(pruning.expiredRows),
+                            String(pruning.evictedRows), String(pruning.policy.pathTreeMaxBytes), String(pruning.policy.pathTreeTtlSeconds))
+                    }
+                    self.cacheMessageRow?.isHidden = self.cacheMessage.stringValue.isEmpty
                     if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
                 } catch {
                     self.cacheLoaded = false
@@ -1241,6 +1354,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if report.status == .error {
             cacheLoaded = false
             cacheClear.isEnabled = false
+            cachePrune.isEnabled = false
             for (key, label) in cacheLabels where key != "path" {
                 label.stringValue = localized("settings.cache.unavailable")
                 label.toolTip = nil
@@ -1355,9 +1469,6 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private func restore(_ settings: MediaSettings) {
         restored = settings
         displayed = inherited.merging(settings.values) { _, explicit in explicit }
-        for field in [MediaSetting.imgErrorMode, .vidErrorMode] where displayed[field] == nil {
-            displayed[field] = "log-and-continue"
-        }
         for (field, text) in textFields {
             text.stringValue = displayed[field] ?? ""
             if field.isCache {
@@ -1378,6 +1489,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
+            if field.isFailurePolicy {
+                let inheritedValue = inherited[field].map {
+                    field.choices.contains($0) ? localized("settings.value.\($0)") : localized("settings.invalid", field.title, $0)
+                } ?? localized("result.unknown")
+                popup.insertItem(withTitle: localized("settings.failure.inherited", inheritedValue), at: 0)
+                if settings.values[field] == nil { popup.selectItem(at: 0); continue }
+            }
             if field == .performance && inheritedMixed.contains(field) {
                 popup.insertItem(withTitle: localized("settings.performance.per_pipeline"), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0) }
@@ -1414,6 +1532,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
+            if field.isFailurePolicy {
+                settings.values[field] = popup.selectedItem?.representedObject as? String
+                continue
+            }
             if field == .performance, inheritedMixed.contains(field), popup.indexOfSelectedItem == 0 {
                 settings.values[field] = nil
                 continue
@@ -1601,6 +1723,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try validateCachePolicyForSelfTest()
         try validatePhotosForSelfTest()
         try validateSearchForSelfTest()
+        try validateFailurePolicyForSelfTest()
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
         let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
@@ -1747,6 +1870,74 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         inheritedSources.removeAll()
         inheritedMixed.removeAll()
         restore(MediaSettings())
+    }
+
+    private func validateFailurePolicyForSelfTest() throws {
+        let key = "execution.error_mode"
+        guard MediaSetting.imgErrorMode.runtimeKey == key, MediaSetting.vidErrorMode.runtimeKey == key else {
+            throw HostError(message: "Failure policies are missing their effective configuration key")
+        }
+        if !developer || fast {
+            guard popups[.imgErrorMode] == nil, popups[.vidErrorMode] == nil else {
+                throw HostError(message: "Standard failure controls escaped Developer mode or entered Fast mode")
+            }
+            return
+        }
+        let previous = restored
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previous)
+        }
+        let image = EffectiveRuntimeSettings(values: [key: "fail-fast"], sources: [key: "MFB_ERROR_MODE"],
+                                             sourceChain: [key: ["default", "MFB_ERROR_MODE"]])
+        let video = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "/synthetic/vid.json"],
+                                             sourceChain: [key: ["default", "/synthetic/vid.json"]])
+        setInheritedValues(standard: image, fast: image, video: video)
+        restore(MediaSettings())
+        restore(MediaSettings())
+        let fields: [MediaSetting] = videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]
+        for field in fields {
+            guard let popup = popups[field], popup.indexOfSelectedItem == 0,
+                  popup.numberOfItems == field.choices.count + 1, sourceButtons[field] != nil,
+                  inherited[field] == (field.isImage ? "fail-fast" : "log-and-continue"),
+                  inheritedSources[field] == (field.isImage ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json"),
+                  draft().values[field] == nil else {
+                throw HostError(message: "Failure inheritance fabricated an override or used the wrong pipeline")
+            }
+            popup.selectItem(at: field.isImage ? 2 : 1)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Choosing the inherited failure value explicitly lost its override")
+            }
+            try draft().save(to: preferences)
+            guard MediaSettings(preferences: preferences).values[field] == inherited[field] else {
+                throw HostError(message: "Explicit failure override did not persist")
+            }
+            popup.selectItem(at: 0)
+            try draft().save(to: preferences)
+            guard draft().values[field] == nil, MediaSettings(preferences: preferences).values[field] == nil else {
+                throw HostError(message: "Returning to failure inheritance retained an override")
+            }
+        }
+        var explicit = MediaSettings()
+        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast"]
+        restore(explicit)
+        tabs.selectTabViewItem(withIdentifier: "developer")
+        resetTab()
+        guard fields.allSatisfy({ draft().values[$0] == nil && popups[$0]?.indexOfSelectedItem == 0 }) else {
+            throw HostError(message: "Developer reset forced a failure default instead of inheritance")
+        }
+        inherited.removeAll()
+        inheritedSources.removeAll()
+        restore(MediaSettings())
+        guard fields.allSatisfy({ displayed[$0] == nil && popups[$0]?.indexOfSelectedItem == 0
+            && popups[$0]?.titleOfSelectedItem == localized("settings.failure.inherited", localized("result.unknown")) }) else {
+            throw HostError(message: "Unknown failure policy was presented as record-and-continue")
+        }
     }
 
     func validatePhotosForSelfTest() throws {
@@ -1903,18 +2094,46 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         try displayCache(snapshot)
         tabs.selectTabViewItem(withIdentifier: "cache")
-        guard cacheClear.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
+        guard cacheClear.isEnabled, cachePrune.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
               cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
         }
         cacheBusy = true
         try displayCache(snapshot)
         updatePanelSize()
-        guard !cacheClear.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
+        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false
         try displayCache(snapshot)
+        let policy = EffectiveRuntimeSettings(values: ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "60"],
+            sources: [:], sourceChain: [:])
+        guard try cachePruningArguments([policy, policy]) == ["--no-config", "--cache-max-bytes", "4096", "--cache-ttl-seconds", "60"] else {
+            throw HostError(message: "Cache pruning did not pin the resolved policy")
+        }
+        for values in [[String: String](), ["cache.path_tree_max_bytes": "0", "cache.path_tree_ttl_seconds": "60"],
+                       ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "61"],
+                       ["cache.path_tree_max_bytes": "18446744073709551615", "cache.path_tree_ttl_seconds": "60"]] {
+            let other = EffectiveRuntimeSettings(values: values, sources: [:], sourceChain: [:])
+            do { _ = try cachePruningArguments([policy, other]) }
+            catch { continue }
+            throw HostError(message: "Missing, mixed or invalid pruning policy was accepted")
+        }
+        var pruned = document
+        pruned["removed_rows"] = 3
+        let pruning: [String: Any] = ["policy": ["path_tree_max_bytes": 4096, "path_tree_ttl_seconds": 60],
+            "expired_rows": 1, "evicted_rows": 2]
+        pruned["pruning"] = pruning
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: pruned)).pruning?.expiredRows == 1 else {
+            throw HostError(message: "Pruning receipt lost category counts")
+        }
+        for key in ["removed_rows", "removed_files"] {
+            var invalid = pruned
+            invalid[key] = 1
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Contradictory pruning receipt was accepted")
+        }
         cacheLabels["path"]?.stringValue = "/synthetic/" + String(repeating: "long-directory/", count: 30)
         cacheMessage.stringValue = String(repeating: "Synthetic cache error. ", count: 30)
         cacheMessageRow?.isHidden = false
@@ -1958,7 +2177,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             guard let integrity = decoded.integrity, integrity.status.rawValue == state else { throw HostError(message: "Integrity failure was lost") }
             displayCacheIntegrity(integrity)
             guard cacheMessage.textColor == .systemRed, cacheMessageRow?.isHidden == false,
-                  state != "error" || (!cacheClear.isEnabled && !cacheLoaded) else {
+                  state != "error" || (!cacheClear.isEnabled && !cachePrune.isEnabled && !cacheLoaded) else {
                 throw HostError(message: "Incomplete integrity check was shown as available or successful")
             }
         }
@@ -2261,6 +2480,25 @@ private struct PhaseLogPresentation {
     }
 }
 
+func processingCountTotal(_ values: [Int?]) -> Int? {
+    guard !values.isEmpty else { return nil }
+    var total = 0
+    for value in values {
+        guard let value, value >= 0 else { return nil }
+        let sum = total.addingReportingOverflow(value)
+        guard !sum.overflow else { return nil }
+        total = sum.partialValue
+    }
+    return total
+}
+
+func hasPartialProcessingSuccess(succeeded: [Int?], failed: [Int?], countsComplete: Bool) -> Bool {
+    guard countsComplete, succeeded.count == failed.count,
+          let successes = processingCountTotal(succeeded), let failures = processingCountTotal(failed),
+          !successes.addingReportingOverflow(failures).overflow else { return false }
+    return successes > 0 && failures > 0
+}
+
 private struct BatchResults {
     struct Event: Decodable {
         let schemaVersion: Int
@@ -2304,6 +2542,25 @@ private struct BatchResults {
             total = sum.partialValue
         }
         return false
+    }
+
+    var hasPartialSuccess: Bool {
+        hasPartialProcessingSuccess(succeeded: totals.values.map { $0[0] },
+                                    failed: totals.values.map { $0[2] },
+                                    countsComplete: !isIncomplete && !hasUnprocessed
+                                        && pendingTotals.count == totals.count
+                                        && pendingTotals.values.allSatisfy { $0 == 0 })
+    }
+
+    var summary: String? {
+        guard !totals.isEmpty else { return nil }
+        let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
+        let counts = (0..<4).map { field in
+            count(invalid ? nil : processingCountTotal(totals.values.map { $0[field] }))
+        }
+        return localized("result.counts", counts[0], counts[1], counts[2], counts[3])
+            + " · " + localized("result.unprocessed", count(invalid ? nil
+                : processingCountTotal(Array(pendingTotals.values))))
     }
 
     mutating func ingest(_ line: String) -> String? {
@@ -4345,6 +4602,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
             photosDiagnostics.markFailed()
             refreshDiagnostics()
@@ -4354,7 +4612,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
             }
             statusLabel.stringValue = localized("status.stopped")
-            appendLog(localized("status.stopped"))
+            appendLog(localized("status.stopped") + countSummary)
             if closeWhenFinished { NSApp.terminate(nil) }
             return
         }
@@ -4362,24 +4620,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .success(message):
             setProcessing(false)
             if batchResults.hasFailure {
-                statusLabel.stringValue = localized(batchResults.hasFileFailures
-                    ? "result.finished_with_failures" : "result.stopped_with_error")
-                appendLog("[FAIL] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.failure == nil)
+                statusLabel.stringValue = localized(batchResults.hasPartialSuccess ? "result.partially_completed"
+                    : (batchResults.hasFileFailures ? "result.finished_with_failures" : "result.stopped_with_error"))
+                appendLog("[FAIL] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.failure == nil)
             } else if batchResults.isIncomplete
                 || (batchResults.hasUnprocessed && host.controlState != "paused")
                 || (batchResults.totals.isEmpty
                 && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
                 statusLabel.stringValue = localized(batchResults.isIncomplete || batchResults.totals.isEmpty
                     ? "result.incomplete" : "result.unfinished")
-                appendLog("[WARN] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.warning == nil)
+                appendLog("[WARN] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.warning == nil)
             } else {
                 statusLabel.stringValue = message
-                appendLog("✓ \(message)")
+                appendLog("[DONE] \(message)" + countSummary)
             }
         case let .failure(error):
             photosDiagnostics.markFailed()
             refreshDiagnostics()
-            appendLog("✗ \(error.localizedDescription)", captureDiagnostics: latestDiagnostics.failure == nil)
+            let failureMessage = batchResults.hasPartialSuccess
+                ? localized("result.partially_completed") + " · " + error.localizedDescription
+                : error.localizedDescription
+            appendLog("[FAIL] \(failureMessage)" + countSummary,
+                      captureDiagnostics: latestDiagnostics.failure == nil)
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
@@ -4411,9 +4675,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 host.startProcessing(retry)
             } else {
                 setProcessing(false)
-                statusLabel.stringValue = batchResults.hasFileFailures
-                    ? localized("result.finished_with_failures")
-                    : error.localizedDescription
+                statusLabel.stringValue = batchResults.hasPartialSuccess ? localized("result.partially_completed")
+                    : (batchResults.hasFileFailures ? localized("result.finished_with_failures") : error.localizedDescription)
             }
         }
     }
@@ -4756,6 +5019,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard statusLabel.stringValue == localized("result.finished_with_failures"),
               logView.string.contains("[FAIL] IMG:"), batchResults.hasFailure else {
             throw HostError(message: "GUI treated reported file failures as success")
+        }
+        clearBatchLog()
+        appendLog("[ERROR] synthetic encoder failure\n"
+            + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        guard statusLabel.stringValue == localized("result.partially_completed"), batchResults.hasFailure,
+              latestDiagnostics.failure == "[ERROR] synthetic encoder failure",
+              logView.string.contains("synthetic exit=1"),
+              logView.string.contains("[RESULT] " + localized("result.counts", "3", "1", "1", "0")) else {
+            throw HostError(message: "Partial completion hid the failure, exit status or final counts")
         }
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
@@ -5147,8 +5420,21 @@ private func runSelfTest() -> Int32 {
         let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
         guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI",
-              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"] else {
+              videoEffective.sourceChain["vid.codec"] == ["default", "CLI"],
+              videoEffective["execution.error_mode"] == "fail-fast",
+              videoEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try videoEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)") else {
             throw HostError(message: "Video settings do not match the effective backend configuration")
+        }
+        let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
+        guard imageEffective["execution.error_mode"] == "log-and-continue",
+              imageEffective.sourceChain["execution.error_mode"]?.last == "CLI",
+              (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
+              !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),
+              !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
+              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
+            throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
         }
         configured.mediaSettings.values[.fastToolPolicy] = "single"
         let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]
@@ -5192,6 +5478,41 @@ private func runSelfTest() -> Int32 {
         } catch let error as HostError where error.message.hasPrefix("Out-of-range") { throw error }
         catch {}
         var results = BatchResults()
+        let mixedResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#
+        var mixed = BatchResults()
+        _ = mixed.ingest(mixedResult)
+        guard mixed.hasPartialSuccess, mixed.hasFailure, !mixed.isIncomplete,
+              mixed.summary == localized("result.counts", "3", "2", "1", "0")
+                + " · " + localized("result.unprocessed", "0"),
+              !hasPartialProcessingSuccess(succeeded: [nil], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [Int.max], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [1], failed: [1], countsComplete: false),
+              !hasPartialProcessingSuccess(succeeded: [], failed: [], countsComplete: true) else {
+            throw HostError(message: "Partial success or checked final counts were incorrectly classified")
+        }
+        for event in [
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":null,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":1,"exit_code":1}"#,
+        ] {
+            var notPartial = BatchResults()
+            _ = notPartial.ingest(event)
+            guard !notPartial.hasPartialSuccess, notPartial.hasFailure else {
+                throw HostError(message: "Skipped, unknown or unfinished items became partial success")
+            }
+        }
+        _ = mixed.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"vid","succeeded":1,"skipped":0,"failed":0,"ignored":1,"unprocessed":0,"exit_code":0}"#)
+        guard mixed.hasPartialSuccess, mixed.summary == localized("result.counts", "4", "2", "1", "1")
+            + " · " + localized("result.unprocessed", "0") else {
+            throw HostError(message: "Combined media final counts lost their receipt scope")
+        }
+        _ = mixed.ingest("MFB_BATCH_RESULT={}")
+        guard !mixed.hasPartialSuccess, mixed.isIncomplete,
+              mixed.summary == localized("result.counts", localized("result.unknown"), localized("result.unknown"),
+                                         localized("result.unknown"), localized("result.unknown"))
+                + " · " + localized("result.unprocessed", localized("result.unknown")) else {
+            throw HostError(message: "Malformed receipt left partial counts appearing complete")
+        }
         let skipped = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":0,"ignored":1,"exit_code":0}"#
         let legacyLine = results.ingest(skipped)
         guard legacyLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,

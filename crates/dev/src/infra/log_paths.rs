@@ -532,6 +532,7 @@ pub fn archive_drag_drop_session_bundle(
         format!("MFB_*_{}.log", stamp),
         format!("verbose_{}.log", stamp),
         format!("session_audit_{}.jsonl", stamp),
+        format!("session_audit_{stamp}_input_*.jsonl"),
         "diagnostic_report_*.txt".to_string(),
     ];
 
@@ -720,6 +721,51 @@ mod tests {
         assert_eq!(
             fs::read_to_string(archived.join(session_log.file_name().unwrap()))?,
             "new session"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn per_input_audit_archive_preserves_other_sessions() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let stamp = "20261011_120000";
+        let first = format!("session_audit_{stamp}_input_0.jsonl");
+        let second = format!("session_audit_{stamp}_input_1.jsonl");
+        let other = "session_audit_20261011_120001_input_0.jsonl";
+        let backup = format!("{first}.bak");
+        for name in [&first, &second, other, &backup] {
+            fs::write(temp.path().join(name), name)?;
+        }
+        let archive = archive_drag_drop_session_bundle(
+            temp.path(),
+            stamp,
+            None,
+            None,
+            None,
+            Some(Local::now()),
+        )?
+        .context("per-input audit archive missing")?;
+        for name in [&first, &second] {
+            assert_eq!(fs::read_to_string(archive.join(name))?, *name);
+            assert!(!temp.path().join(name).exists());
+        }
+        for name in [other, &backup] {
+            assert_eq!(fs::read_to_string(temp.path().join(name))?, name);
+            assert!(!archive.join(name).exists());
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(archive.join("manifest.json"))?)?;
+        assert_eq!(manifest["files"], serde_json::json!([first, second]));
+        assert!(
+            archive_drag_drop_session_bundle(
+                temp.path(),
+                stamp,
+                None,
+                None,
+                None,
+                Some(Local::now()),
+            )?
+            .is_none()
         );
         Ok(())
     }

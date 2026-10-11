@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::mfb_sqlite_store::{self, NS_PATH_TREE};
 
 /// Path-tree snapshot schema version (bump when snapshot semantics change).
-pub const PATH_TREE_SCHEMA_VERSION: u32 = 3;
+pub const PATH_TREE_SCHEMA_VERSION: u32 = 4;
 
 fn schema_i32(schema_version: u32) -> Result<i32> {
     i32::try_from(schema_version)
@@ -64,7 +64,7 @@ pub fn path_tree_cache_key(
     media_kind: &str,
 ) -> String {
     let canonical_dir = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
-    let mut identity = blake3::Hasher::new_derive_key("MFB path-tree cache identity v3");
+    let mut identity = blake3::Hasher::new_derive_key("MFB path-tree cache identity v4");
     // Fixed-width field digests avoid delimiter ambiguity and preserve native path bytes.
     identity.update(blake3::hash(canonical_dir.as_os_str().as_encoded_bytes()).as_bytes());
     identity.update(blake3::hash(media_kind.as_bytes()).as_bytes());
@@ -107,6 +107,23 @@ mod tests {
         assert_eq!(a, b);
         let c = path_tree_cache_key(Path::new("/tmp/a"), &["png"], false, "image");
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn file_identity_schema_retires_directory_only_cache_keys() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temporary.path()).unwrap();
+        let mut retired = blake3::Hasher::new_derive_key("MFB path-tree cache identity v3");
+        retired.update(blake3::hash(root.as_os_str().as_encoded_bytes()).as_bytes());
+        retired.update(blake3::hash(b"image").as_bytes());
+        retired.update(&[1]);
+        retired.update(&3_u32.to_le_bytes());
+        retired.update(blake3::hash(b"png").as_bytes());
+        assert_eq!(PATH_TREE_SCHEMA_VERSION, 4);
+        assert_ne!(
+            path_tree_cache_key(&root, &["png"], true, "image"),
+            retired.finalize().to_hex().to_string(),
+        );
     }
 
     #[test]

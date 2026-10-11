@@ -31,7 +31,6 @@ impl HistoryOutputWriter {
     pub fn open(log_dir: &Path, session_id: &str) -> Result<Self> {
         ensure!(!session_id.is_empty(), "history session identity is empty");
         let mut connection = open_history_write(log_dir)?;
-        ensure_schema(&mut connection)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let timestamp = now_timestamp();
         transaction.execute(
@@ -115,6 +114,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
         matches!(
             name,
             "MFB_HISTORY_CONTEXT"
+                | "MFB_HISTORY_INPUT_PLAN"
                 | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
@@ -129,7 +129,6 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
     );
 
     let mut connection = open_history_write(log_dir)?;
-    ensure_schema(&mut connection)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let timestamp = now_timestamp();
     transaction.execute(
@@ -216,7 +215,7 @@ fn history_path(log_dir: &Path) -> Result<PathBuf> {
 
 fn open_history_write(log_dir: &Path) -> Result<Connection> {
     let path = history_path(log_dir)?;
-    let connection = Connection::open_with_flags(
+    let mut connection = Connection::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
@@ -225,6 +224,9 @@ fn open_history_write(log_dir: &Path) -> Result<Connection> {
     .with_context(|| format!("open processing history {}", path.display()))?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")?;
+    ensure_schema(&mut connection)?;
+    foundation::mfb_sqlite_store::enable_wal(&connection)
+        .context("processing history schema retained; failed to enable WAL")?;
     Ok(connection)
 }
 
@@ -259,6 +261,13 @@ fn schema_version(transaction: &Transaction<'_>) -> Result<i64> {
 }
 
 fn ensure_schema(connection: &mut Connection) -> Result<()> {
+    {
+        let snapshot = connection.transaction()?;
+        let version: i64 = snapshot.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version == SCHEMA_VERSION {
+            return validate_schema(&snapshot, version);
+        }
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match version {
@@ -341,6 +350,24 @@ mod tests {
             .query_row("SELECT event FROM history_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(saved, event);
+        let input_plan = "MFB_HISTORY_INPUT_PLAN={\"schema_version\":1,\"inputs\":[]}";
+        append_history_event(directory.path(), "session", input_plan).unwrap();
+        let saved: String = connection
+            .query_row(
+                "SELECT event FROM history_events ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, input_plan);
+        assert!(
+            append_history_event(
+                directory.path(),
+                "session",
+                "MFB_HISTORY_INPUT_PLAN={\"schema_version\":2}"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -555,6 +582,111 @@ mod tests {
     }
 
     #[test]
+    fn history_read_snapshot_does_not_block_events_or_captured_output() {
+        let directory = tempfile::tempdir().unwrap();
+        append_history_event(directory.path(), "original", EVENT).unwrap();
+        let mut writer = HistoryOutputWriter::open(directory.path(), "worker").unwrap();
+        writer
+            .connection
+            .busy_timeout(Duration::from_millis(20))
+            .unwrap();
+        let mut reader = open_history_read(directory.path()).unwrap().unwrap();
+        let snapshot = reader.transaction().unwrap();
+        assert_eq!(
+            snapshot
+                .query_row("SELECT COUNT(*) FROM history_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+
+        writer.push_line("img", "committed while reading").unwrap();
+        writer.flush().unwrap();
+        append_history_event(directory.path(), "second", EVENT).unwrap();
+        assert_eq!(
+            snapshot
+                .query_row("SELECT COUNT(*) FROM history_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1,
+            "the reader retains its original consistent snapshot"
+        );
+        snapshot.commit().unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT COUNT(*) FROM history_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            read_session_output_since(directory.path(), "worker", 0).unwrap(),
+            "committed while reading\n"
+        );
+    }
+
+    #[test]
+    fn concurrent_history_openers_preserve_all_sessions_and_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|index| {
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    let path = directory.path();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let session = format!("session-{index}");
+                        append_history_event(path, &session, EVENT)?;
+                        let mut writer = HistoryOutputWriter::open(path, &session)?;
+                        writer.push_line("img", &session)?;
+                        writer.flush()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap().unwrap();
+            }
+        });
+        let reader = open_history_read(directory.path()).unwrap().unwrap();
+        for table in ["history_sessions", "history_events", "history_output"] {
+            assert_eq!(
+                reader
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                6
+            );
+        }
+        assert_eq!(
+            reader
+                .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "wal"
+        );
+        assert_eq!(
+            reader
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert!(
+            reader
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn output_reads_support_schema_one_and_reject_malformed_current_schema() {
         let directory = tempfile::tempdir().unwrap();
         assert_eq!(
@@ -583,6 +715,15 @@ mod tests {
         );
         connection.execute_batch("PRAGMA user_version=2;").unwrap();
         assert!(session_output_cursor(directory.path(), "legacy").is_err());
+        let original = std::fs::read(&path).unwrap();
+        assert!(HistoryOutputWriter::open(directory.path(), "malformed").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "delete"
+        );
         connection.execute_batch("PRAGMA user_version=99;").unwrap();
         assert!(session_output_cursor(directory.path(), "legacy").is_err());
     }

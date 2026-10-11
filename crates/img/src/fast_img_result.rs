@@ -35,7 +35,12 @@ impl std::fmt::Display for FileFailures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "fast-img recorded {} failed source(s); failed sources retained",
+            "fast-img {} recorded {} failed source(s); failed sources retained",
+            if self.originals != 0 {
+                "original-media delivery"
+            } else {
+                "batch"
+            },
             self.total
         )
     }
@@ -341,6 +346,35 @@ mod tests {
         assert_eq!(
             (failed.succeeded, failed.failed, failed.unprocessed),
             (3, 2, 0)
+        );
+        assert!(
+            FileFailures::originals(1)
+                .to_string()
+                .contains("original-media delivery recorded 1")
+        );
+        assert!(
+            FileFailures::primary(2)
+                .to_string()
+                .contains("batch recorded 2")
+        );
+        let originals = (0..19)
+            .map(|index| ModernLossyStaticCandidate {
+                path: marker.src_dir.join(format!("original-{index}.jxl")),
+                rel_path: format!("original-{index}.jxl"),
+                format: foundation::image::format_detect::FormatKind::Jxl,
+                blake3: format!("original-hash-{index}"),
+            })
+            .collect::<Vec<_>>();
+        let failed = Report::from_marker(
+            &marker,
+            true,
+            &originals,
+            0,
+            Some(&FileFailures::originals(19)),
+        )?;
+        assert_eq!(
+            (failed.succeeded, failed.failed, failed.unprocessed),
+            (3, 20, 0)
         );
         Ok(())
     }

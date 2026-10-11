@@ -16,7 +16,18 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 /// Batch error handling shared by drag/drop, image, video, and Photos import.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum BatchErrorMode {
     #[default]
     LogAndContinue,
@@ -25,62 +36,73 @@ pub enum BatchErrorMode {
 
 impl BatchErrorMode {
     #[must_use]
-    pub fn current() -> Self {
-        let legacy_fail_fast = match std::env::var(crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST) {
-            Ok(value) => matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ),
-            Err(std::env::VarError::NotPresent) => false,
-            Err(error) => {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "batch_error_mode_env",
-                    format!(
-                        "failed to read {}: {error}; using fail-fast",
-                        crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST
-                    ),
-                );
-                true
-            }
-        };
-        if legacy_fail_fast {
-            return Self::FailFast;
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LogAndContinue => "log-and-continue",
+            Self::FailFast => "fail-fast",
         }
-
-        for name in [
-            crate::constants::ENV_MFB_ERROR_MODE,
-            crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
-        ] {
-            match std::env::var(name) {
-                Ok(value) => return Self::parse(&value),
-                Err(std::env::VarError::NotPresent) => {}
-                Err(error) => {
-                    crate::media_conversion_gate::delivery_runtime_batch_audit(
-                        "batch_error_mode_env",
-                        format!("failed to read {name}: {error}; using fail-fast"),
-                    );
-                    return Self::FailFast;
-                }
-            }
-        }
-        Self::LogAndContinue
     }
 
     #[must_use]
-    pub fn parse(value: &str) -> Self {
-        let normalized = value.trim().to_ascii_lowercase().replace(['_', ' '], "-");
-        match normalized.as_str() {
-            "debug" | "fail-fast" | "failfast" | "abort" | "strict" => Self::FailFast,
-            "" | "continue" | "log-and-continue" | "batch-report" | "report" | "normal" => {
-                Self::LogAndContinue
-            }
-            _ => {
+    pub fn current() -> Self {
+        if let Some(config) = crate::runtime_config::active() {
+            return config.execution.error_mode;
+        }
+        match Self::environment_overrides() {
+            Ok(overrides) => overrides
+                .last()
+                .map_or_else(Self::default, |(mode, _)| *mode),
+            Err(error) => {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "batch_error_mode_invalid",
-                    format!("unknown batch error mode {value:?}; using fail-fast"),
+                    "batch_error_mode_env",
+                    format!("{error:#}; using fail-fast without an installed runtime config"),
                 );
                 Self::FailFast
             }
+        }
+    }
+
+    pub(crate) fn environment_overrides() -> anyhow::Result<Vec<(Self, &'static str)>> {
+        let mut overrides = Vec::new();
+        for name in [
+            crate::constants::ENV_MFB_DRAG_DROP_ERROR_MODE,
+            crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST,
+            crate::constants::ENV_MFB_ERROR_MODE,
+        ] {
+            match std::env::var(name) {
+                Ok(value) => {
+                    let mode = if name == crate::constants::ENV_MFB_DRAG_DROP_FAIL_FAST {
+                        match value.trim().to_ascii_lowercase().as_str() {
+                            "1" | "true" | "yes" | "on" => Self::FailFast,
+                            "0" | "false" | "no" | "off" => continue,
+                            _ => anyhow::bail!(
+                                "{name} must be a boolean (true/false, yes/no, on/off, 1/0)"
+                            ),
+                        }
+                    } else {
+                        Self::parse(&value).map_err(|error| anyhow::anyhow!("{name}: {error}"))?
+                    };
+                    overrides.push((mode, name));
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(error) => {
+                    return Err(anyhow::anyhow!("read {name}: {error}"));
+                }
+            }
+        }
+        Ok(overrides)
+    }
+
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+        match normalized.as_str() {
+            "debug" | "fail-fast" | "failfast" | "abort" | "strict" => Ok(Self::FailFast),
+            "continue" | "log-and-continue" | "batch-report" | "report" | "normal" => {
+                Ok(Self::LogAndContinue)
+            }
+            _ => anyhow::bail!(
+                "unknown batch error mode {value:?}; expected log-and-continue or fail-fast"
+            ),
         }
     }
 
@@ -971,20 +993,24 @@ mod tests {
     }
 
     #[test]
-    fn batch_error_mode_preserves_normal_batches_and_fails_fast_when_requested() {
+    fn batch_error_mode_preserves_normal_batches_and_fails_fast_when_requested()
+    -> anyhow::Result<()> {
         assert_eq!(
-            BatchErrorMode::parse("log_and_continue"),
+            BatchErrorMode::parse("log_and_continue")?,
             BatchErrorMode::LogAndContinue
         );
-        assert_eq!(BatchErrorMode::parse("debug"), BatchErrorMode::FailFast);
-        assert_eq!(
-            BatchErrorMode::parse("unknown-mode"),
-            BatchErrorMode::FailFast
-        );
+        assert_eq!(BatchErrorMode::parse("debug")?, BatchErrorMode::FailFast);
+        for invalid in ["", "unknown-mode"] {
+            assert!(BatchErrorMode::parse(invalid).is_err());
+        }
 
         let recoverable: anyhow::Error = UnifiedError::analysis_error("bad media").into();
         assert!(!BatchErrorMode::LogAndContinue.should_abort_error(&recoverable));
         assert!(BatchErrorMode::FailFast.should_abort_error(&recoverable));
+
+        let skipped: anyhow::Error = UnifiedError::skip_file("intentional skip").into();
+        assert!(!BatchErrorMode::LogAndContinue.should_abort_error(&skipped));
+        assert!(!BatchErrorMode::FailFast.should_abort_error(&skipped));
 
         let fatal: anyhow::Error = UnifiedError::tool_not_found("ffmpeg").into();
         assert!(BatchErrorMode::LogAndContinue.should_abort_error(&fatal));
@@ -1001,6 +1027,7 @@ mod tests {
             ErrorCategory::Fatal
         );
         assert!(BatchErrorMode::LogAndContinue.should_abort_error(&other));
+        Ok(())
     }
 
     #[test]

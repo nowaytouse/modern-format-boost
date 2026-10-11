@@ -39,6 +39,8 @@ pub(super) struct RuntimeArgs {
     #[command(flatten)]
     performance: runtime_config::PerformanceArgs,
     #[command(flatten)]
+    execution: runtime_config::ExecutionArgs,
+    #[command(flatten)]
     cache: runtime_config::cache_args::CacheArgs,
     /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
     #[arg(long = "tool", global = true, value_parser = parse_tool)]
@@ -192,6 +194,7 @@ impl RuntimeArgs {
         }
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
+        self.execution.apply_to(&mut loaded);
         self.cache.apply_to(&mut loaded);
         loaded.config.validate()?;
         Ok(loaded)
@@ -202,6 +205,42 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn execution_flags_reach_image_inspection_and_fast_image() -> Result<()> {
+        for (command, tail) in [
+            ("config", "show"),
+            ("run", "/unused"),
+            ("fast-img", "/unused"),
+        ] {
+            for mode in [
+                foundation::BatchErrorMode::LogAndContinue,
+                foundation::BatchErrorMode::FailFast,
+            ] {
+                let cli = crate::Cli::try_parse_from([
+                    "img",
+                    command,
+                    tail,
+                    "--no-config",
+                    "--error-mode",
+                    mode.as_str(),
+                ])?;
+                let loaded = cli.policy.resolve(false)?;
+                assert_eq!(loaded.config.execution.error_mode, mode);
+                assert_eq!(loaded.sources["execution.error_mode"], "CLI");
+                assert_eq!(
+                    loaded.source_chain["execution.error_mode"]
+                        .last()
+                        .map(String::as_str),
+                    Some("CLI")
+                );
+            }
+        }
+        assert!(
+            crate::Cli::try_parse_from(["img", "config", "show", "--error-mode", "debug"]).is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn cache_flags_reach_image_and_fast_image_runtime() -> Result<()> {

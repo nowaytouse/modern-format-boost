@@ -1,5 +1,8 @@
 {
   "config_version": 1,
+  "execution": {
+    "error_mode": "log-and-continue"
+  },
   "img": {
     "allow_database": false,
     "quality_heuristic": false,
