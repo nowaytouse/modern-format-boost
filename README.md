@@ -90,6 +90,13 @@ Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
 
+For a single-directory standard run using a default adjacent output, the launcher
+selects that destination once before recording history or launching workers.
+Processing, handoff, verification and size reporting reuse the same path even
+after the output folder is created. Disk-space checks use the nearest existing
+directory without creating the destination. Explicit outputs and in-place modes
+keep their existing behavior; this is not the complete unified preflight plan.
+
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
 run. Skipped, failed and reused files are excluded; resume-only totals are not
@@ -469,6 +476,10 @@ creative assets remain entirely within your control.
   - **Intelligent Checkpoint Reset**: Automatically detects when a user
     manually deletes the output directory to "start over", triggering a full
     state reset even in resume mode.
+    Required startup checkpoint saves and invalidation deletes must succeed;
+    failures stop initialization, retaining the source, saved state and pre-existing
+    lock. Cleanup of an older key remains an audited non-critical operation only
+    after the canonical checkpoint has been saved successfully.
 
 ## 🛠️ Deep Technical: How It Works — The Pipeline
 
@@ -630,6 +641,14 @@ invalid records are explicitly marked without blocking navigation. Refresh to
 include output appended since the snapshot. Batch sequence boundaries keep
 watch-mode runs separate; output is not interpreted as authoritative failure counts.
 History schema v1 upgrades transactionally to v2 while retaining earlier events.
+Validated history databases use WAL with full synchronous writes, allowing an
+existing read snapshot to coexist with new event and worker-output commits.
+Current-schema validation uses a short read transaction; initialization and
+migration still recheck the version under a write transaction. Unknown or
+malformed databases and failed migrations are rejected without resetting them.
+The first WAL transition can wait for existing locks for a bounded five seconds;
+if it fails after a successful schema migration, the schema remains committed
+and the history write reports an error instead of appending an event.
 Batch details also retain the running version and explicit retry/resume requests.
 Internal tracing, pipeline audit files and recovery checkpoints have not yet fully
 migrated; this phase is not the entire core logging/state migration.

@@ -1534,6 +1534,54 @@ fn adjacent_output_dir(args: &Args) -> PathBuf {
     })
 }
 
+fn bind_standard_output(args: &Args) -> Result<Args> {
+    let mut bound = args.clone();
+    if mode_uses_standard_pipeline(&args.mode)
+        && args.inputs.len() == 1
+        && !args.in_place
+        && args.output.is_none()
+        && fs::metadata(&args.inputs[0])
+            .with_context(|| format!("inspect input {}", args.inputs[0].display()))?
+            .is_dir()
+    {
+        // All workers, verification and history must share the same chosen directory.
+        bound.output = Some(adjacent_output_dir(args));
+    }
+    Ok(bound)
+}
+
+fn output_resource_check_dir(output: &Path) -> Result<PathBuf> {
+    let mut candidate = output;
+    loop {
+        if candidate.as_os_str().is_empty() {
+            candidate = Path::new(".");
+        }
+        match fs::symlink_metadata(candidate) {
+            Ok(_) => {
+                let metadata = fs::metadata(candidate).with_context(|| {
+                    format!("resolve output resource directory {}", candidate.display())
+                })?;
+                anyhow::ensure!(
+                    metadata.is_dir(),
+                    "output resource path is not a directory: {}",
+                    candidate.display()
+                );
+                return Ok(candidate.to_path_buf());
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                candidate = candidate.parent().with_context(|| {
+                    format!("no existing directory for output {}", output.display())
+                })?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("inspect output resource path {}", candidate.display())
+                });
+            }
+        }
+    }
+}
+
 fn plan_routed_pipeline_commands(
     args: &Args,
     project_root: &Path,
@@ -2228,6 +2276,11 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    let bound = match bind_standard_output(args) {
+        Ok(bound) => bound,
+        Err(error) => return run_with_history(args, session, || Err(error)),
+    };
+    let args = &bound;
     run_with_history(args, session, || {
         run_drag_drop_inner(args, session, dir_lock)
     })
@@ -2378,15 +2431,15 @@ fn run_drag_drop_inner(
 
     if let (Some(scan), false) = (&scan, args.dry_run) {
         if scan.img_count > 0 || scan.vid_count > 0 {
-            let check_path = if args.in_place {
-                &args.inputs[0]
+            let output_check_dir = if args.in_place {
+                None
             } else {
-                args.output.as_deref().unwrap_or_else(|| {
-                    args.inputs
-                        .first()
-                        .map_or_else(|| Path::new("."), std::path::PathBuf::as_path)
-                })
+                args.output
+                    .as_deref()
+                    .map(output_resource_check_dir)
+                    .transpose()?
             };
+            let check_path = output_check_dir.as_deref().unwrap_or(&args.inputs[0]);
             check_system_resources(
                 check_path,
                 scan.media_total_size.saturating_add(1024 * 1024 * 1024),
@@ -4724,6 +4777,145 @@ mod tests {
             let (output, is_photos) = resolve_restore_jpeg_launch_output(input, None).unwrap();
             assert!(is_photos);
             assert_eq!(output, None);
+        }
+    }
+
+    #[test]
+    fn standard_adjacent_output_is_bound_for_entire_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "auto"]).unwrap();
+        args.inputs = vec![input.clone()];
+        fs::create_dir(temp.path().join("Album_optimized")).unwrap();
+        let args = bind_standard_output(&args).unwrap();
+        assert_eq!(args.output, Some(temp.path().join("Album_optimized_2")));
+        let scan = ContentScan {
+            img_count: 1,
+            vid_count: 1,
+            routed_images: vec!["synthetic.jpg".into()],
+            routed_videos: vec!["synthetic.mp4".into()],
+            ..ContentScan::default()
+        };
+        let commands =
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, false).unwrap();
+        assert_eq!(commands.len(), 2);
+        let output = args.output.as_ref().unwrap();
+        assert!(!output.exists());
+        assert_eq!(output_resource_check_dir(output).unwrap(), temp.path());
+        fs::create_dir(output).unwrap();
+        assert_eq!(adjacent_output_dir(&args), *output);
+        for command in commands.into_iter().chain(
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, true).unwrap(),
+        ) {
+            let output_arg = command
+                .args
+                .windows(2)
+                .find(|pair| pair[0] == "--output")
+                .unwrap();
+            assert_eq!(PathBuf::from(&output_arg[1]), *output);
+        }
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        run_with_history(&args, Some(&session), || Ok(())).unwrap();
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(contexts[0]["output"], serde_json::to_value(output).unwrap());
+    }
+
+    #[test]
+    fn standard_output_binding_preserves_explicit_in_place_multi_and_file_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Album");
+        let second = temp.path().join("Other");
+        let file = temp.path().join("synthetic.png");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(&file, b"\x89PNG\r\n\x1a\n").unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        args.inputs = vec![first.clone()];
+        args.output = Some(temp.path().join("Selected"));
+        assert_eq!(bind_standard_output(&args).unwrap().output, args.output);
+        args.output = None;
+        args.in_place = true;
+        assert!(bind_standard_output(&args).unwrap().output.is_none());
+        args.in_place = false;
+        args.inputs = vec![first.clone(), second];
+        let bound = bind_standard_output(&args).unwrap();
+        assert!(bound.output.is_none());
+        let commands = plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands
+                .iter()
+                .all(|command| !command.args.iter().any(|arg| arg == "--output"))
+        );
+        args.inputs = vec![file];
+        let original = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
+        let bound = bind_standard_output(&args).unwrap();
+        assert!(bound.output.is_none());
+        assert_eq!(
+            plan_cli_invocations(&bound, Path::new("/repo"), None).unwrap()[0].args,
+            original[0].args
+        );
+        args.inputs = vec![first];
+        args.mode = LaunchMode::FastImg;
+        assert!(bind_standard_output(&args).unwrap().output.is_none());
+    }
+
+    #[test]
+    fn standard_output_binding_records_selected_path_before_processing_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let input = temp.path().join("Album");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "images",
+            "--photos-backend",
+            "native",
+        ])
+        .unwrap();
+        args.inputs = vec![input];
+        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Photos import settings require --mode fast-img")
+        );
+        let output = temp.path().join("Album_optimized");
+        let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
+        assert_eq!(contexts[0]["output"], serde_json::to_value(&output).unwrap());
+        assert!(!output.exists());
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FINISHED")[0]["outcome"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn output_resource_directory_is_read_only_and_rejects_invalid_ancestors() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("new/nested/output");
+        assert_eq!(output_resource_check_dir(&output).unwrap(), temp.path());
+        assert!(!temp.path().join("new").exists());
+        assert_eq!(output_resource_check_dir(temp.path()).unwrap(), temp.path());
+        let file = temp.path().join("file");
+        fs::write(&file, b"synthetic").unwrap();
+        assert!(output_resource_check_dir(&file).is_err());
+        assert!(output_resource_check_dir(&file.join("output")).is_err());
+        assert!(output_resource_check_dir(Path::new("invalid\0output")).is_err());
+        #[cfg(unix)]
+        {
+            let dangling = temp.path().join("dangling");
+            std::os::unix::fs::symlink(temp.path().join("missing"), &dangling).unwrap();
+            assert!(output_resource_check_dir(&dangling).is_err());
+            assert!(output_resource_check_dir(&dangling.join("output")).is_err());
+            let link = temp.path().join("directory-link");
+            std::os::unix::fs::symlink(temp.path(), &link).unwrap();
+            assert_eq!(
+                output_resource_check_dir(&link.join("output")).unwrap(),
+                link
+            );
         }
     }
 

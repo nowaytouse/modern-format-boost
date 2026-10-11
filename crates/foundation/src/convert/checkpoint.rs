@@ -674,53 +674,51 @@ impl Manager {
                 crate::mfb_sqlite_store::NS_CHECKPOINT,
                 stale_key,
             ) {
+                let message = format!(
+                    "Failed to remove invalidated checkpoint blob for key {stale_key}: {err}"
+                );
+                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
+                    "checkpoint_progress",
+                    &message,
+                );
+                return Err(io::Error::other(message));
+            }
+        }
+
+        // Persist before constructing Manager: its Drop releases the checkpoint lock.
+        if resume_mode {
+            if let Err(err) = save_progress_to_sqlite(&checkpoint_key, &header, &completed_set) {
+                let message = format!("Failed to compact validated checkpoint state: {err}");
+                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
+                    "checkpoint_progress",
+                    &message,
+                );
+                return Err(io::Error::other(message));
+            }
+            if let Some(legacy_key) = loaded_legacy_key
+                && let Err(err) = crate::mfb_sqlite_store::blob_delete(
+                    crate::mfb_sqlite_store::NS_CHECKPOINT,
+                    &legacy_key,
+                )
+            {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     format!(
-                        "Failed to remove invalidated checkpoint blob for key {stale_key}: \
-                         {err}"
+                        "Migrated checkpoint to BLAKE3 key but failed to remove legacy key \
+                         {legacy_key}: {err}"
                     ),
                 );
             }
         }
 
-        let manager = Self {
+        Ok(Self {
             progress_dir: central_dir,
             lock_file,
             checkpoint_key,
             header,
             completed: Mutex::new(completed_set),
             resume_mode: AtomicBool::new(resume_mode),
-        };
-
-        if manager.resume_mode.load(Ordering::Relaxed) {
-            match manager.persist_progress() {
-                Ok(()) => {
-                    if let Some(legacy_key) = loaded_legacy_key
-                        && let Err(err) = crate::mfb_sqlite_store::blob_delete(
-                            crate::mfb_sqlite_store::NS_CHECKPOINT,
-                            &legacy_key,
-                        )
-                    {
-                        crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                            "checkpoint_progress",
-                            format!(
-                                "Migrated checkpoint to BLAKE3 key but failed to remove legacy key \
-                                 {legacy_key}: {err}"
-                            ),
-                        );
-                    }
-                }
-                Err(err) => {
-                    crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                        "checkpoint_progress",
-                        format!("Failed to compact validated checkpoint state: {err}"),
-                    );
-                }
-            }
-        }
-
-        Ok(manager)
+        })
     }
 
     fn discard_progress_for_fresh_run(checkpoint_key: &str) -> io::Result<()> {
@@ -1312,14 +1310,6 @@ impl Manager {
         (valid, resume_mode, None)
     }
 
-    fn persist_progress(&self) -> io::Result<()> {
-        let entries = crate::media_conversion_gate::mutex_guard_or_recover(
-            "checkpoint_completed",
-            self.completed.lock(),
-        );
-        save_progress_to_sqlite(&self.checkpoint_key, &self.header, &entries)
-    }
-
     fn drop_completed_entry(&self, key: &str, expected: &CheckpointEntry) -> io::Result<()> {
         let mut completed = crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
@@ -1802,6 +1792,64 @@ mod tests {
         assert_eq!(manager.completed_count(), 0);
         assert!(!manager.is_resume_mode());
         assert!(load_progress_from_sqlite(&manager.checkpoint_key)?.is_none());
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn resume_initialization_rejects_required_persistence_failures() -> anyhow::Result<()> {
+        let (target, progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let output_a = target.path().join("output-a");
+        let output_b = target.path().join("output-b");
+        fs::create_dir_all(&output_a)?;
+        fs::create_dir_all(&output_b)?;
+        let manager = Manager::new_with_context(target.path(), Some(&output_a))?;
+        manager.mark_completed(&input)?;
+        let key = manager.checkpoint_key.clone();
+        drop(manager);
+        crate::conversion::clear_processed_list();
+        let saved = crate::mfb_sqlite_store::blob_get(
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )?;
+        let source = fs::read(&input)?;
+        let lock = progress.path().join(format!("{key}.lock"));
+        fs::write(&lock, b"pre-existing fixture lock")?;
+        let conn = crate::mfb_sqlite_store::open_store_connection()?;
+        for (operation, output) in [("INSERT", &output_a), ("DELETE", &output_b)] {
+            let namespace = if operation == "INSERT" { "NEW" } else { "OLD" };
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER reject_resume_update BEFORE {operation} ON blob_store
+                 WHEN {namespace}.namespace = 'checkpoint'
+                 BEGIN SELECT RAISE(ABORT, 'fixture resume failure'); END;"
+            ))?;
+            assert!(Manager::new_resuming_with_context(target.path(), Some(output)).is_err());
+            assert_eq!(
+                crate::mfb_sqlite_store::blob_get(
+                    crate::mfb_sqlite_store::NS_CHECKPOINT,
+                    &key,
+                    CHECKPOINT_BLOB_SCHEMA,
+                )?,
+                saved
+            );
+            assert_eq!(fs::read(&input)?, source);
+            assert_eq!(fs::read(&lock)?, b"pre-existing fixture lock");
+            assert!(!crate::conversion::is_already_processed(&input));
+            conn.execute_batch("DROP TRIGGER reject_resume_update;")?;
+        }
+        fs::remove_file(&lock)?;
+        let resumed = Manager::new_resuming_with_context(target.path(), Some(&output_a))?;
+        assert!(resumed.is_completed(&input));
+        assert_eq!(resumed.completed_count(), 1);
+        drop(resumed);
+        let reset = Manager::new_resuming_with_context(target.path(), Some(&output_b))?;
+        assert_eq!(reset.completed_count(), 0);
+        assert!(!reset.is_resume_mode());
+        assert!(load_progress_from_sqlite(&key)?.is_none());
+        assert_eq!(fs::read(&input)?, source);
         teardown_test_env(guard);
         Ok(())
     }

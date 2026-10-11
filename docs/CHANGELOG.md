@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Stable output plans and durable-state startup (2026-10-11)
+
+- Bind the default adjacent destination once for single-directory standard runs.
+  History, workers, handoff, verification and size reporting share that path;
+  creating it no longer makes subsequent steps select a different suffix.
+  Disk-space checks inspect the nearest existing directory without creating
+  output folders. Explicit outputs, in-place and multi-input behavior are retained.
+- Enable WAL for validated history databases using the existing bounded SQLite
+  retry implementation and full synchronous writes. Validate current schemas in
+  a short read transaction, retaining serialized initialization and migration.
+  Read snapshots no longer block new history events or captured-output commits
+  in steady WAL mode. Unknown/malformed schemas and failed migrations remain
+  rejected; a WAL failure after migration reports the retained schema explicitly.
+- Stop resume initialization when required checkpoint compaction or invalidation
+  cannot be committed. Perform those operations before constructing the lock-
+  releasing manager, preserving an existing lock on failure. Keep audited legacy-
+  key cleanup optional only after the canonical state is durable. Add isolated
+  fault injection, recovery retry, concurrent history and stable-path regressions.
+
 ### Reliable inventory, failure paths and selective cache maintenance (2026-10-11)
 
 - Refuse launcher inventories with failed format probes, file metadata reads or

@@ -182,7 +182,11 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
     Ok(Some(version))
 }
 
-fn enable_wal(conn: &Connection) -> Result<()> {
+/// Enable WAL with bounded lock retries after the caller has validated its schema.
+///
+/// # Errors
+/// Returns an error if SQLite refuses WAL or the lock deadline expires.
+pub fn enable_wal(conn: &Connection) -> Result<()> {
     let started = Instant::now();
     loop {
         let remaining = STORE_BUSY_TIMEOUT.saturating_sub(started.elapsed());
