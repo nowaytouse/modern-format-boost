@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Reliable inventory, failure paths and selective cache maintenance (2026-10-11)
+
+- Refuse launcher inventories with failed format probes, file metadata reads or
+  routing audit writes. Check count and media-byte additions for overflow instead
+  of silently producing an incomplete scan. Legitimate unknown content and XMP
+  copy routing remain distinct from evidence failures.
+- Add a native single-run Failed files view with path filtering, bounded rows and
+  text, independent recorded/matched/shown totals, exact-path copy and existing-file
+  Finder navigation. Missing evidence does not imply zero failures; multi-selection
+  and filter changes invalidate prior per-file actions.
+- Connect Settings cache pruning to the existing transactional TTL/LRU command.
+  Resolve current draft policies before mutation, reject conflicting image/video
+  inheritance and pin both effective limits. Validate category counts and the
+  applied policy receipt; retain useful cache and all formal/unknown state. Keep
+  full clearing and database inspection separate, with three-language native UI.
+
 ### Partial completion and native history comparison (2026-10-11)
 
 - Share the live GUI and history partial-success count predicate. Complete mixed

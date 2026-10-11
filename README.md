@@ -113,6 +113,13 @@ Different measurement scopes or incomplete evidence are called out explicitly;
 the comparison does not guess throughput, tool versions or configuration differences.
 Select one run to return to its captured effective configuration and paged output.
 
+The single-run **Failed files** view filters recorded paths without opening logs.
+It displays at most 1,000 rows and 2 MiB of path text, with separate shown, matched
+and recorded totals. Select a row to copy its exact path or locate an existing
+regular file in Finder. Missing paths remain copyable but cannot be located;
+relative paths and leaf symlinks are not opened. Recorded paths are not proof that
+every failure was captured and never replace the independent processing counts.
+
 ### Live file progress
 
 During launcher-managed standard IMG/VID batches and Fast IMG encoding, the native
@@ -163,6 +170,14 @@ required; prompts go to stderr so JSON stdout remains machine-readable. If delet
 committed but subsequent inspection fails, the error states the committed counts.
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
+
+**Settings → Cache → Prune Cache** runs the same operation using the current
+draft's effective cache limits. It resolves relevant image/video configuration
+before any deletion and pins the resulting limits for the maintenance command.
+Different inherited limits must be reconciled with explicit shared overrides;
+the GUI does not choose one pipeline silently. Confirmation, category counts and
+the applied byte/idle limits remain visible. **Clear Cache** remains a separate
+action that removes all managed rebuildable cache, rather than only excess cache.
 
 The optional PostgreSQL analysis cache reports record counts and algorithm-version
 counts from one read snapshot. Its allocated size covers the analysis, quality,

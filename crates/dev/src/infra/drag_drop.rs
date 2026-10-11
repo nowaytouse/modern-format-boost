@@ -258,44 +258,55 @@ pub fn scan_content(
             )
         })?;
         let path = entry.path();
-        if !path.is_file() {
+        if entry.file_type().is_dir() {
             continue;
         }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
+        let name = path.file_name().and_then(|n| n.to_str()).with_context(|| {
+            format!(
+                "Cannot represent content scan path {}; inventory is incomplete",
+                path.display()
+            )
+        })?;
         if name.starts_with('.') {
             continue;
         }
-        scan.total_files += 1;
+        if path.to_str().is_none() {
+            bail!(
+                "Cannot represent content scan path {}; inventory is incomplete",
+                path.display()
+            );
+        }
+        let metadata = path.metadata().with_context(|| {
+            format!(
+                "Cannot stat content scan path {}; inventory is incomplete",
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            continue;
+        }
+        scan.total_files = scan
+            .total_files
+            .checked_add(1)
+            .context("content scan total file count overflow")?;
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let route = match classify_media_owner(path) {
-            Ok(owner) => owner,
-            Err(err) => {
-                let mut fields = HashMap::new();
-                fields.insert(
-                    "path".to_string(),
-                    path.strip_prefix(target)
-                        .unwrap_or(path)
-                        .display()
-                        .to_string(),
-                );
-                fields.insert("error".to_string(), err.to_string());
-                let _ = audit_line(
-                    session_audit,
-                    &format_audit_event("ROUTING_PROBE_FAILED", &fields),
-                );
-                None
-            }
-        };
+        let route = classify_media_owner(path).with_context(|| {
+            format!(
+                "Cannot classify content scan path {}; inventory is incomplete",
+                path.display()
+            )
+        })?;
         let is_img = route.as_deref() == Some(PIPELINE_IMAGE);
         let is_vid = route.as_deref() == Some(PIPELINE_VIDEO);
         if is_img {
-            scan.img_count += 1;
+            scan.img_count = scan
+                .img_count
+                .checked_add(1)
+                .context("content scan image count overflow")?;
             routed_images.insert(
                 path.strip_prefix(target)
                     .unwrap_or(path)
@@ -304,7 +315,10 @@ pub fn scan_content(
             );
         }
         if is_vid {
-            scan.vid_count += 1;
+            scan.vid_count = scan
+                .vid_count
+                .checked_add(1)
+                .context("content scan video count overflow")?;
             routed_videos.insert(
                 path.strip_prefix(target)
                     .unwrap_or(path)
@@ -313,16 +327,22 @@ pub fn scan_content(
             );
         }
         if ext == "xmp" {
-            scan.xmp_count += 1;
+            scan.xmp_count = scan
+                .xmp_count
+                .checked_add(1)
+                .context("content scan sidecar count overflow")?;
         } else if !is_img && !is_vid {
-            scan.other_count += 1;
+            scan.other_count = scan
+                .other_count
+                .checked_add(1)
+                .context("content scan other file count overflow")?;
         }
         let include_size = (filter.accepts_image() && is_img) || (filter.accepts_video() && is_vid);
         if include_size {
-            match path.metadata() {
-                Ok(meta) => scan.media_total_size += meta.len(),
-                Err(err) => eprintln!("[DRAG] metadata failed ({}): {err}", path.display()),
-            }
+            scan.media_total_size = scan
+                .media_total_size
+                .checked_add(metadata.len())
+                .context("content scan media byte total overflow")?;
         }
     }
 
@@ -369,7 +389,7 @@ pub fn scan_content(
         scan.other_count
     );
 
-    let _ = audit_line(
+    audit_line(
         session_audit,
         &format!(
             "ROUTING_SUMMARY images={} videos={} mode={}",
@@ -377,18 +397,21 @@ pub fn scan_content(
             scan.routed_videos.len(),
             filter.verify_mode_label()
         ),
-    );
+    )
+    .context("record content scan routing summary")?;
     for rel in &scan.routed_images {
-        let _ = audit_line(
+        audit_line(
             session_audit,
             &format_session_audit_routed(PIPELINE_IMAGE, rel),
-        );
+        )
+        .with_context(|| format!("record content scan image route {rel}"))?;
     }
     for rel in &scan.routed_videos {
-        let _ = audit_line(
+        audit_line(
             session_audit,
             &format_session_audit_routed(PIPELINE_VIDEO, rel),
-        );
+        )
+        .with_context(|| format!("record content scan video route {rel}"))?;
     }
     Ok(scan)
 }
@@ -1207,6 +1230,85 @@ mod tests {
         assert!(diagnostic.contains("inventory is incomplete"));
         assert!(diagnostic.contains(&missing.display().to_string()));
         assert!(error.downcast_ref::<walkdir::Error>().is_some());
+    }
+
+    #[test]
+    fn scan_content_rejects_probe_and_audit_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let malformed = tmp.path().join("truncated.bin");
+        for bytes in [&b"GIF89a\x01\x00"[..], &b"\x89PNG\r\n\x1a\n"[..]] {
+            fs::write(&malformed, bytes).unwrap();
+            let error = scan_content(tmp.path(), ProcessingFilter::Both, None).unwrap_err();
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("inventory is incomplete"));
+            assert!(diagnostic.contains(&malformed.display().to_string()));
+        }
+
+        fs::remove_file(&malformed).unwrap();
+        fs::write(tmp.path().join("notes.txt"), "synthetic document").unwrap();
+        let audit_directory = tempfile::tempdir().unwrap();
+        let error = scan_content(
+            tmp.path(),
+            ProcessingFilter::Both,
+            Some(audit_directory.path()),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("record content scan"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_content_rejects_unreadable_file_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dangling = tmp.path().join("dangling.jpg");
+        std::os::unix::fs::symlink(tmp.path().join("missing.jpg"), &dangling).unwrap();
+        let error = scan_content(tmp.path(), ProcessingFilter::Both, None).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("inventory is incomplete"));
+        assert!(diagnostic.contains(&dangling.display().to_string()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scan_content_rejects_unrepresentable_paths() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let invalid_name = std::ffi::OsString::from_vec(b"invalid-\xff.jpg".to_vec());
+        fs::write(tmp.path().join(invalid_name), "synthetic document").unwrap();
+        let error = scan_content(tmp.path(), ProcessingFilter::Both, None).unwrap_err();
+        assert!(format!("{error:#}").contains("Cannot represent content scan path"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let invalid_directory = std::ffi::OsString::from_vec(b"invalid-\xff".to_vec());
+        let directory = tmp.path().join(invalid_directory);
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("notes.txt"), "synthetic document").unwrap();
+        let error = scan_content(tmp.path(), ProcessingFilter::Both, None).unwrap_err();
+        assert!(format!("{error:#}").contains("Cannot represent content scan path"));
+    }
+
+    #[test]
+    fn scan_content_preserves_content_routing_and_exact_filtered_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jpeg = b"\xff\xd8\xff\xe0jpeg";
+        fs::write(tmp.path().join("still.bin"), jpeg).unwrap();
+        fs::write(tmp.path().join("fake.jpg"), "not media").unwrap();
+        fs::write(tmp.path().join("sidecar.xmp"), "synthetic sidecar").unwrap();
+        fs::write(tmp.path().join(".hidden.jpg"), jpeg).unwrap();
+        let scan = scan_content(tmp.path(), ProcessingFilter::ImagesOnly, None).unwrap();
+        assert_eq!(scan.total_files, 3);
+        assert_eq!(scan.img_count, 1);
+        assert_eq!(scan.other_count, 1);
+        assert_eq!(scan.xmp_count, 1);
+        assert_eq!(scan.media_total_size, u64::try_from(jpeg.len()).unwrap());
+        assert_eq!(scan.routed_images, ["still.bin"]);
+
+        let scan = scan_content(tmp.path(), ProcessingFilter::VideosOnly, None).unwrap();
+        assert_eq!(scan.total_files, 3);
+        assert_eq!(scan.img_count, 0);
+        assert_eq!(scan.media_total_size, 0);
+        assert!(scan.routed_images.is_empty());
     }
 
     #[test]

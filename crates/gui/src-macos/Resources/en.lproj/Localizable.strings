@@ -189,6 +189,12 @@
 "settings.cache.files" = "%@ files · %@";
 "settings.cache.refresh" = "Refresh cache statistics";
 "settings.cache.clear" = "Clear Cache";
+"settings.cache.prune" = "Prune Cache";
+"settings.cache.prune_confirm" = "Remove expired and excess cache?";
+"settings.cache.prune_detail" = "Use the current draft's cache limits. Keep useful snapshots, history and resume records. Conflicting image/video limits must be explicitly reconciled first.";
+"settings.cache.prune_mixed" = "Image and video cache limits differ. Set both cache limits explicitly in this tab before pruning.";
+"settings.cache.pruning" = "Resolving cache limits and removing expired or excess snapshots…";
+"settings.cache.pruned" = "Removed %@ expired/time-invalid and %@ excess records. Limit: %@ bytes; idle lifetime: %@ seconds. Database file size may not shrink.";
 "settings.cache.check" = "Check Database";
 "settings.cache.checking" = "Checking database structure and stored hashes…";
 "settings.cache.integrity.healthy" = "Check passed for this snapshot. No integrity issues found.";
@@ -308,6 +314,14 @@
 "history.attention" = "Needs Attention";
 "history.filter" = "Batch filter";
 "history.details" = "Batch details";
+"history.failed_files.search" = "Filter recorded paths";
+"history.failed_files.path" = "Recorded path";
+"history.failed_files.range" = "%d shown / %d matches / %d recorded";
+"history.failed_files.note" = "Recorded paths may not cover every failure; result counts are independent.";
+"history.failed_files.empty" = "No failure paths recorded. This does not prove there were zero failures.";
+"history.failed_files.copy" = "Copy selected path";
+"history.failed_files.reveal" = "Show selected file in Finder";
+"history.failed_files.unavailable" = "The recorded path is missing or cannot safely be located.";
 "history.compare" = "Compare Runs";
 "history.compare.batch" = "Run %d";
 "history.compare.select_two" = "Select exactly two runs to compare.";

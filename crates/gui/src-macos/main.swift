@@ -668,6 +668,15 @@ private func queryRuntimeSettings(arguments: [String], tool: String = "img") thr
 }
 
 private struct LocalCacheStatus: Decodable {
+    struct Pruning: Decodable {
+        struct Policy: Decodable {
+            let pathTreeMaxBytes: UInt64
+            let pathTreeTtlSeconds: UInt64
+        }
+        let policy: Policy
+        let expiredRows: UInt64
+        let evictedRows: UInt64
+    }
     struct Integrity: Decodable {
         struct Issue: Decodable { let code: String; let message: String }
         enum Status: String, Decodable { case healthy, unhealthy, error, absent }
@@ -723,6 +732,7 @@ private struct LocalCacheStatus: Decodable {
     let removedRows: UInt64
     let removedFiles: UInt64
     let integrity: Integrity?
+    let pruning: Pruning?
 
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
         var rows: UInt64 = 0, bytes: UInt64 = 0
@@ -750,6 +760,14 @@ private struct LocalCacheStatus: Decodable {
         }
         _ = try status.totals(rebuildable: true)
         _ = try status.totals(rebuildable: false)
+        if let pruning = status.pruning {
+            let removed = pruning.expiredRows.addingReportingOverflow(pruning.evictedRows)
+            guard pruning.policy.pathTreeMaxBytes > 0, pruning.policy.pathTreeMaxBytes <= UInt64(Int64.max),
+                  pruning.policy.pathTreeTtlSeconds > 0, pruning.policy.pathTreeTtlSeconds <= UInt64(Int64.max),
+                  !removed.overflow, removed.partialValue == status.removedRows, status.removedFiles == 0 else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
         try status.integrity?.validate()
         if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
             guard integrity.blobScanComplete,
@@ -762,16 +780,51 @@ private struct LocalCacheStatus: Decodable {
     }
 }
 
-private func queryLocalCache(clear: Bool, checkIntegrity: Bool = false) throws -> LocalCacheStatus {
+private enum LocalCacheAction: Equatable { case refresh, clear, check, prune }
+
+private func cachePruningArguments(_ policies: [EffectiveRuntimeSettings]) throws -> [String] {
+    let keys = ["cache.path_tree_max_bytes", "cache.path_tree_ttl_seconds"]
+    guard !policies.isEmpty else { throw HostError(message: localized("settings.config_invalid")) }
+    var arguments = ["--no-config"]
+    for (key, flag) in zip(keys, ["--cache-max-bytes", "--cache-ttl-seconds"]) {
+        let values = try policies.map { policy -> UInt64 in
+            guard let raw = policy[key], let value = UInt64(raw), value > 0, value <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.config_invalid"))
+            }
+            return value
+        }
+        guard Set(values).count == 1, let value = values.first else {
+            throw HostError(message: localized("settings.cache.prune_mixed"))
+        }
+        arguments += [flag, String(value)]
+    }
+    return arguments
+}
+
+private func queryLocalCache(action: LocalCacheAction, policyArguments: [String] = []) throws -> LocalCacheStatus {
     guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
         throw HostError(message: localized("settings.cache.backend_missing"))
     }
-    var arguments = clear ? ["--yes", "--json"] : ["--stats", "--json"]
-    if checkIntegrity { arguments.append("--check-integrity") }
+    let arguments: [String]
+    switch action {
+    case .refresh: arguments = ["--stats", "--json"]
+    case .clear: arguments = ["--yes", "--json"]
+    case .check: arguments = ["--stats", "--check-integrity", "--json"]
+    case .prune:
+        guard policyArguments.count == 5 else { throw HostError(message: localized("settings.config_invalid")) }
+        arguments = ["--prune", "--yes", "--json"] + policyArguments
+    }
     let status = try LocalCacheStatus.decode(settingsToolOutput(binary, arguments: arguments,
-        timeout: checkIntegrity ? 120 : 30, acceptedExitCodes: checkIntegrity ? [0, 1] : [0]))
-    guard !checkIntegrity || status.integrity != nil else {
+        timeout: action == .check ? 120 : 30, acceptedExitCodes: action == .check ? [0, 1] : [0]))
+    guard action != .check || status.integrity != nil else {
         throw HostError(message: localized("settings.cache.invalid"))
+    }
+    if action == .prune {
+        guard let pruning = status.pruning,
+              String(pruning.policy.pathTreeMaxBytes) == policyArguments[2],
+              String(pruning.policy.pathTreeTtlSeconds) == policyArguments[4] else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
     }
     return status
 }
@@ -823,6 +876,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let applyButton = NSButton()
     private let cacheRefresh = NSButton()
     private let cacheClear = NSButton()
+    private let cachePrune = NSButton()
     private let cacheCheck = NSButton()
     private var cacheLabels: [String: NSTextField] = [:]
     private let cacheMessage = NSTextField(wrappingLabelWithString: "")
@@ -1054,7 +1108,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
-                          "settings.cache.clear", "settings.cache.check"].map { localized($0) }.joined(separator: " ")
+                          "settings.cache.clear", "settings.cache.check", "settings.cache.prune"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1149,6 +1203,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheClear.target = self
         cacheClear.action = #selector(clearCache)
         cacheClear.isEnabled = false
+        cachePrune.title = localized("settings.cache.prune")
+        cachePrune.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: nil)
+        cachePrune.imagePosition = .imageLeading
+        cachePrune.toolTip = localized("settings.cache.prune_detail")
+        cachePrune.setAccessibilityLabel(localized("settings.cache.prune"))
+        cachePrune.bezelStyle = .rounded
+        cachePrune.target = self
+        cachePrune.action = #selector(pruneCache)
+        cachePrune.isEnabled = false
         cacheCheck.title = localized("settings.cache.check")
         cacheCheck.image = NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)
         cacheCheck.imagePosition = .imageLeading
@@ -1157,7 +1220,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheCheck.bezelStyle = .rounded
         cacheCheck.target = self
         cacheCheck.action = #selector(checkCacheIntegrity)
-        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheClear, cacheCheck])]).yPlacement = .center
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cachePrune, cacheClear, cacheCheck])]).yPlacement = .center
         cacheMessage.font = .systemFont(ofSize: 11)
         cacheMessage.maximumNumberOfLines = 4
         cacheMessage.isSelectable = true
@@ -1178,12 +1241,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
         cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
+        cachePrune.isEnabled = !cacheBusy && cache.rows > 0
         cacheCheck.isEnabled = !cacheBusy
         cacheLoaded = true
     }
 
-    @objc private func refreshCache() { updateCache(clear: false) }
-    @objc private func checkCacheIntegrity() { updateCache(clear: false, checkIntegrity: true) }
+    @objc private func refreshCache() { updateCache(action: .refresh) }
+    @objc private func checkCacheIntegrity() { updateCache(action: .check) }
+
+    @objc private func pruneCache() {
+        guard !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = localized("settings.cache.prune_confirm")
+        alert.informativeText = localized("settings.cache.prune_detail")
+        alert.addButton(withTitle: localized("settings.cache.prune"))
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.beginSheetModal(for: panel) { [weak self] response in
+            if response == .alertFirstButtonReturn { self?.updateCache(action: .prune) }
+        }
+    }
 
     @objc private func clearCache() {
         guard !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
@@ -1194,24 +1271,53 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         alert.addButton(withTitle: localized("settings.cache.clear"))
         alert.addButton(withTitle: localized("alert.cancel"))
         alert.beginSheetModal(for: panel) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.updateCache(clear: true) }
+            if response == .alertFirstButtonReturn { self?.updateCache(action: .clear) }
         }
     }
 
-    private func updateCache(clear: Bool, checkIntegrity: Bool = false) {
+    private func updateCache(action: LocalCacheAction) {
         guard !cacheBusy else { return }
+        let settings = draft()
+        let fast = self.fast, videos = self.videos
         cacheBusy = true
         cacheRefresh.isEnabled = false
         cacheClear.isEnabled = false
+        cachePrune.isEnabled = false
         cacheCheck.isEnabled = false
         cacheMessage.toolTip = nil
         cacheMessage.maximumNumberOfLines = 4
-        cacheMessage.stringValue = localized(checkIntegrity ? "settings.cache.checking" : (clear ? "settings.cache.clearing" : "settings.cache.loading"))
+        let message: String
+        switch action {
+        case .refresh: message = "settings.cache.loading"
+        case .check: message = "settings.cache.checking"
+        case .clear: message = "settings.cache.clearing"
+        case .prune: message = "settings.cache.pruning"
+        }
+        cacheMessage.stringValue = localized(message)
         cacheMessage.textColor = .secondaryLabelColor
         cacheMessageRow?.isHidden = false
         updatePanelSize()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Result { try queryLocalCache(clear: clear, checkIntegrity: checkIntegrity) }
+            let result = Result {
+                var arguments: [String] = []
+                if action == .prune {
+                    let fields: [MediaSetting] = [.cacheMaxBytes, .cacheTtlSeconds]
+                        + (fast ? [.fastConfig] : (videos ? [.vidConfig] : [.imgConfig, .vidConfig]))
+                    try settings.validate(fields)
+                    var policies: [EffectiveRuntimeSettings] = []
+                    if !videos {
+                        policies.append(try queryRuntimeSettings(arguments: settings.runtimeArguments(fast: fast, inheritedOnly: true)
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }))
+                    }
+                    if !fast {
+                        let configuration = settings.videoConfigurationFile.map { ["--config", $0] } ?? []
+                        policies.append(try queryRuntimeSettings(arguments: configuration
+                            + fields.filter(\.isCache).flatMap { field in settings.values[field].map(field.arguments) ?? [] }, tool: "vid"))
+                    }
+                    arguments = try cachePruningArguments(policies)
+                }
+                return try queryLocalCache(action: action, policyArguments: arguments)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.cacheBusy = false
@@ -1220,9 +1326,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 do {
                     let snapshot = try result.get()
                     try self.displayCache(snapshot)
-                    self.cacheMessage.stringValue = clear
+                    self.cacheMessage.stringValue = action == .clear
                         ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
-                    self.cacheMessageRow?.isHidden = !clear
+                    if let pruning = snapshot.pruning {
+                        self.cacheMessage.stringValue = localized("settings.cache.pruned", String(pruning.expiredRows),
+                            String(pruning.evictedRows), String(pruning.policy.pathTreeMaxBytes), String(pruning.policy.pathTreeTtlSeconds))
+                    }
+                    self.cacheMessageRow?.isHidden = self.cacheMessage.stringValue.isEmpty
                     if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
                 } catch {
                     self.cacheLoaded = false
@@ -1241,6 +1351,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if report.status == .error {
             cacheLoaded = false
             cacheClear.isEnabled = false
+            cachePrune.isEnabled = false
             for (key, label) in cacheLabels where key != "path" {
                 label.stringValue = localized("settings.cache.unavailable")
                 label.toolTip = nil
@@ -1903,18 +2014,46 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         try displayCache(snapshot)
         tabs.selectTabViewItem(withIdentifier: "cache")
-        guard cacheClear.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
+        guard cacheClear.isEnabled, cachePrune.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
               cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
         }
         cacheBusy = true
         try displayCache(snapshot)
         updatePanelSize()
-        guard !cacheClear.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
+        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false
         try displayCache(snapshot)
+        let policy = EffectiveRuntimeSettings(values: ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "60"],
+            sources: [:], sourceChain: [:])
+        guard try cachePruningArguments([policy, policy]) == ["--no-config", "--cache-max-bytes", "4096", "--cache-ttl-seconds", "60"] else {
+            throw HostError(message: "Cache pruning did not pin the resolved policy")
+        }
+        for values in [[String: String](), ["cache.path_tree_max_bytes": "0", "cache.path_tree_ttl_seconds": "60"],
+                       ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "61"],
+                       ["cache.path_tree_max_bytes": "18446744073709551615", "cache.path_tree_ttl_seconds": "60"]] {
+            let other = EffectiveRuntimeSettings(values: values, sources: [:], sourceChain: [:])
+            do { _ = try cachePruningArguments([policy, other]) }
+            catch { continue }
+            throw HostError(message: "Missing, mixed or invalid pruning policy was accepted")
+        }
+        var pruned = document
+        pruned["removed_rows"] = 3
+        let pruning: [String: Any] = ["policy": ["path_tree_max_bytes": 4096, "path_tree_ttl_seconds": 60],
+            "expired_rows": 1, "evicted_rows": 2]
+        pruned["pruning"] = pruning
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: pruned)).pruning?.expiredRows == 1 else {
+            throw HostError(message: "Pruning receipt lost category counts")
+        }
+        for key in ["removed_rows", "removed_files"] {
+            var invalid = pruned
+            invalid[key] = 1
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Contradictory pruning receipt was accepted")
+        }
         cacheLabels["path"]?.stringValue = "/synthetic/" + String(repeating: "long-directory/", count: 30)
         cacheMessage.stringValue = String(repeating: "Synthetic cache error. ", count: 30)
         cacheMessageRow?.isHidden = false
@@ -1958,7 +2097,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             guard let integrity = decoded.integrity, integrity.status.rawValue == state else { throw HostError(message: "Integrity failure was lost") }
             displayCacheIntegrity(integrity)
             guard cacheMessage.textColor == .systemRed, cacheMessageRow?.isHidden == false,
-                  state != "error" || (!cacheClear.isEnabled && !cacheLoaded) else {
+                  state != "error" || (!cacheClear.isEnabled && !cachePrune.isEnabled && !cacheLoaded) else {
                 throw HostError(message: "Incomplete integrity check was shown as available or successful")
             }
         }

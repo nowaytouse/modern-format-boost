@@ -189,6 +189,12 @@
 "settings.cache.files" = "%@ ファイル · %@";
 "settings.cache.refresh" = "キャッシュ統計を更新";
 "settings.cache.clear" = "キャッシュを削除";
+"settings.cache.prune" = "キャッシュを整理";
+"settings.cache.prune_confirm" = "期限切れと容量超過のキャッシュを削除しますか？";
+"settings.cache.prune_detail" = "現在の設定案の制限を使用します。有効なスナップショット、履歴、再開レコードは保持します。画像と動画の制限が異なる場合は先に共通の値を明示してください。";
+"settings.cache.prune_mixed" = "画像と動画のキャッシュ制限が異なります。このタブで容量と有効期間の両方を明示してから整理してください。";
+"settings.cache.pruning" = "制限を確認し、期限切れと容量超過のスナップショットを削除中…";
+"settings.cache.pruned" = "期限切れ・時刻異常 %@ 件、容量超過 %@ 件を削除しました。上限 %@ バイト、有効期間 %@ 秒。ファイルサイズは縮小しない場合があります。";
 "settings.cache.check" = "データベースを検査";
 "settings.cache.checking" = "データベース構造と保存データの整合性を検査中…";
 "settings.cache.integrity.healthy" = "今回の検査に合格しました。整合性の問題はありません。";
@@ -308,6 +314,14 @@
 "history.attention" = "要確認";
 "history.filter" = "バッチの絞り込み";
 "history.details" = "バッチの詳細";
+"history.failed_files.search" = "記録されたパスを絞り込み";
+"history.failed_files.path" = "記録されたパス";
+"history.failed_files.range" = "表示 %d 件 / 一致 %d 件 / 記録 %d 件";
+"history.failed_files.note" = "パス一覧にすべての失敗が含まれるとは限りません。結果の件数は別に集計されます。";
+"history.failed_files.empty" = "失敗したファイルのパスは未記録です。失敗がゼロとは限りません。";
+"history.failed_files.copy" = "選択したパスをコピー";
+"history.failed_files.reveal" = "選択したファイルをFinderに表示";
+"history.failed_files.unavailable" = "記録されたパスが存在しないか、安全に表示できません。";
 "history.compare" = "バッチ比較";
 "history.compare.batch" = "バッチ %d";
 "history.compare.select_two" = "比較するバッチを二つ選択してください。";

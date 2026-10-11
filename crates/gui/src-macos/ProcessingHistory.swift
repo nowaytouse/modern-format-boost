@@ -969,8 +969,17 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
-    private let detailMode = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let detailMode = NSSegmentedControl(labels: ["", "", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let failedTable = NSTableView()
+    private let failedSearch = NSSearchField()
+    private let failedStatus = NSTextField(wrappingLabelWithString: "")
+    private let failedContent = NSStackView()
+    private var failedCopyButton = NSButton()
+    private var failedRevealButton = NSButton()
+    private var failedPaths: [String] = []
+    private var detailScroll = NSScrollView()
+    private var outputNavigation = NSStackView()
     private var olderButton = NSButton()
     private var newerButton = NSButton()
     private var outputPage: HistoryStore.Output?
@@ -1122,7 +1131,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detail.textContainer?.widthTracksTextView = true
         detail.minSize = NSSize(width: 0, height: 0)
         detail.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        let detailScroll = NSScrollView(frame: NSRect(x: 575, y: 0, width: 433, height: 540))
+        detailScroll = NSScrollView(frame: NSRect(x: 575, y: 0, width: 433, height: 540))
         detailScroll.hasVerticalScroller = true
         detailScroll.autohidesScrollers = true
         detailScroll.documentView = detail
@@ -1147,15 +1156,17 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         newerButton = iconButton("chevron.right", key: "history.output.newer", action: #selector(newerOutput))
         outputFilter.controlSize = .small
         outputFilter.font = HistoryLayout.smallFont
-        let navigation = NSStackView(views: [detailMode, olderButton, newerButton])
-        navigation.spacing = 4
-        let detailRoot = NSStackView(views: [navigation, outputFilter, detailScroll])
+        outputNavigation = NSStackView(views: [outputFilter, olderButton, newerButton])
+        outputNavigation.spacing = 4
+        configureFailedFiles()
+        let detailRoot = NSStackView(views: [detailMode, outputNavigation, detailScroll, failedContent])
         detailRoot.orientation = .vertical
         detailRoot.alignment = .leading
         detailRoot.spacing = 6
         detailRoot.translatesAutoresizingMaskIntoConstraints = false
         detailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         detailScroll.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
+        failedContent.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
         // Keep toolbar intrinsic widths out of the split item's sizing negotiation.
         let detailContainer = NSView(frame: NSRect(x: 0, y: 0, width: 433, height: 540))
         detailContainer.addSubview(detailRoot)
@@ -1196,6 +1207,40 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         window?.center()
     }
 
+    private func configureFailedFiles() {
+        failedTable.delegate = self
+        failedTable.dataSource = self
+        failedTable.rowHeight = HistoryLayout.rowHeight
+        failedTable.usesAlternatingRowBackgroundColors = true
+        failedTable.style = .inset
+        failedTable.allowsEmptySelection = true
+        let path = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("failedPath"))
+        path.minWidth = 100
+        failedTable.addTableColumn(path)
+        failedTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = failedTable
+        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        failedSearch.delegate = self
+        failedSearch.sendsSearchStringImmediately = true
+        failedSearch.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        failedCopyButton = iconButton("doc.on.doc", key: "history.failed_files.copy", action: #selector(copyFailedPath))
+        failedRevealButton = iconButton("folder", key: "history.failed_files.reveal", action: #selector(revealFailedPath))
+        let toolbar = NSStackView(views: [failedSearch, failedCopyButton, failedRevealButton])
+        toolbar.spacing = 4
+        failedStatus.font = HistoryLayout.smallFont
+        failedStatus.textColor = .secondaryLabelColor
+        failedContent.orientation = .vertical
+        failedContent.alignment = .leading
+        failedContent.spacing = 6
+        for view in [toolbar, failedStatus, scroll] as [NSView] {
+            failedContent.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: failedContent.widthAnchor).isActive = true
+        }
+    }
+
     private func iconButton(_ symbol: String, key: String, action: Selector) -> NSButton {
         let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: localized(key)) ?? NSImage(),
                               target: self, action: action)
@@ -1219,12 +1264,19 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detail.setAccessibilityLabel(localized("history.details"))
         detailMode.setLabel(localized("history.summary"), forSegment: 0)
         detailMode.setLabel(localized("history.output.title"), forSegment: 1)
+        detailMode.setLabel(localized("history.failed_files"), forSegment: 2)
+        detailMode.setAccessibilityLabel(localized("history.details"))
+        failedSearch.placeholderString = localized("history.failed_files.search")
+        failedSearch.setAccessibilityLabel(localized("history.failed_files.search"))
+        failedTable.setAccessibilityLabel(localized("history.failed_files"))
+        failedTable.tableColumns.first?.title = localized("history.failed_files.path")
         outputFilter.setLabel(localized("history.output.all_page"), forSegment: 0)
         outputFilter.setLabel(localized("history.output.diagnostics_page"), forSegment: 1)
         outputFilter.setAccessibilityLabel(localized("history.output.filter_page"))
         for column in table.tableColumns { column.title = localized("history.column.\(column.identifier.rawValue)") }
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
+                              (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
             button.setAccessibilityLabel(localized(key))
@@ -1234,7 +1286,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     @objc private func refreshRequested() { refresh(directory: directory) }
     @objc private func filterChanged() { applyFilter() }
-    func controlTextDidChange(_ notification: Notification) { applyFilter() }
+    func controlTextDidChange(_ notification: Notification) {
+        if (notification.object as? NSSearchField) === failedSearch { filterFailedFiles() }
+        else { applyFilter() }
+    }
 
     private var selectedEntries: [HistoryEntry] {
         table.selectedRowIndexes.compactMap { displayed.indices.contains($0) ? displayed[$0] : nil }
@@ -1270,9 +1325,30 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.toolTip = directory.path
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { displayed.count }
-    func tableViewSelectionDidChange(_ notification: Notification) { showSelected() }
+    func numberOfRows(in tableView: NSTableView) -> Int { tableView === failedTable ? failedPaths.count : displayed.count }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        if (notification.object as? NSTableView) === failedTable { updateActions() }
+        else { showSelected() }
+    }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView === failedTable {
+            guard failedPaths.indices.contains(row) else { return nil }
+            let label = NSTextField(labelWithString: failedPaths[row])
+            label.font = HistoryLayout.smallFont
+            label.lineBreakMode = .byTruncatingMiddle
+            label.toolTip = failedPaths[row]
+            label.setAccessibilityLabel(failedPaths[row])
+            let cell = HistoryResultCell()
+            cell.textField = label
+            cell.addSubview(label)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            ])
+            return cell
+        }
         guard displayed.indices.contains(row), let column = tableColumn else { return nil }
         let entry = displayed[row]
         let label = NSTextField(labelWithString: "")
@@ -1322,6 +1398,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     private func showSelected() {
         resetOutput()
+        failedSearch.stringValue = ""
+        filterFailedFiles()
         updateHistoryStatus()
         let selection = selectedEntries
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare" : "history.summary"), forSegment: 0)
@@ -1457,8 +1535,17 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func updateActions() {
         let ready = refreshButton.isEnabled
         let single = ready && selected != nil
+        let failuresVisible = single && detailMode.selectedSegment == 2
+        failedContent.isHidden = !failuresVisible
+        detailScroll.isHidden = failuresVisible
+        outputNavigation.isHidden = detailMode.selectedSegment != 1
+        failedSearch.isEnabled = failuresVisible
+        failedTable.isEnabled = failuresVisible
+        failedCopyButton.isEnabled = failuresVisible && selectedFailedPath != nil
+        failedRevealButton.isEnabled = failuresVisible && selectedFailedURL != nil
         logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
+        detailMode.setEnabled(single, forSegment: 2)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
@@ -1468,6 +1555,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
             detailMode.selectedSegment = 1
+            updateActions()
             loadOutput(entry: entry)
             return
         }
@@ -1492,9 +1580,63 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             detail.string = selected.map { Self.render($0) } ?? localized("history.select")
             updateHistoryStatus()
         }
+        else if detailMode.selectedSegment == 2 { filterFailedFiles(); updateHistoryStatus() }
         else if outputPage != nil { renderOutput() }
         else if let entry = selected { loadOutput(entry: entry) }
         updateActions()
+    }
+
+    private var selectedFailedPath: String? {
+        guard selected != nil, failedPaths.indices.contains(failedTable.selectedRow) else { return nil }
+        return failedPaths[failedTable.selectedRow]
+    }
+
+    private var selectedFailedURL: URL? {
+        guard let path = selectedFailedPath, path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
+        let url = URL(fileURLWithPath: path)
+        return HistoryStore.regularFile(url) ? url : nil
+    }
+
+    private static func failureRows(_ paths: [String], query: String) -> (paths: [String], matches: Int) {
+        var shown: [String] = []
+        var matches = 0
+        var bytes = 0
+        for path in paths where query.isEmpty || path.localizedCaseInsensitiveContains(query) {
+            matches += 1
+            let length = path.utf8.count
+            if shown.count < HistoryStore.maximumOutputLines, length <= HistoryStore.maximumOutputBytes - bytes {
+                shown.append(path)
+                bytes += length
+            }
+        }
+        return (shown, matches)
+    }
+
+    private func filterFailedFiles() {
+        let paths = selected?.summary?.failed_files ?? []
+        let query = failedSearch.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rows = Self.failureRows(paths, query: query)
+        failedPaths = rows.paths
+        failedTable.deselectAll(nil)
+        failedTable.reloadData()
+        failedStatus.stringValue = (paths.isEmpty ? localized("history.failed_files.empty")
+            : localized("history.failed_files.range", failedPaths.count, rows.matches, paths.count))
+            + "\n" + localized("history.failed_files.note")
+        updateActions()
+    }
+
+    @objc private func copyFailedPath() {
+        guard detailMode.selectedSegment == 2, refreshButton.isEnabled, let path = selectedFailedPath else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+        status.stringValue = localized("history.copied")
+    }
+
+    @objc private func revealFailedPath() {
+        guard detailMode.selectedSegment == 2, refreshButton.isEnabled, let url = selectedFailedURL else {
+            status.stringValue = localized("history.failed_files.unavailable"); return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
     @objc private func outputFilterChanged() {
         outputGeneration = UUID()
@@ -1594,6 +1736,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
               logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
+               detailMode.segmentCount == 3, !detailMode.isEnabled(forSegment: 2),
+               failedContent.isHidden, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
                table.allowsMultipleSelection, table.allowsEmptySelection,
                window?.styleMask.contains(.resizable) == true else {
             throw HostError(message: "History native controls or selection state regressed")
@@ -1605,6 +1749,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard table.numberOfRows == 1, revealButton.isEnabled, !copyButton.isEnabled, !logButton.isEnabled else {
             throw HostError(message: "History selection actions invented missing paths")
         }
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        guard failedPaths.isEmpty, failedStatus.stringValue.contains(localized("history.failed_files.empty")),
+              selected?.summary == nil, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled else {
+            throw HostError(message: "Missing failure-path evidence became actionable or proved zero failures")
+        }
+        detailMode.selectedSegment = 0
+        detailModeChanged()
         search.stringValue = "absent synthetic search"
         applyFilter()
         guard table.numberOfRows == 0, !revealButton.isEnabled else {
@@ -1623,7 +1775,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
         showSelected()
         guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled,
-              !detailMode.isEnabled(forSegment: 1), !olderButton.isEnabled, !newerButton.isEnabled,
+              !detailMode.isEnabled(forSegment: 1), !detailMode.isEnabled(forSegment: 2),
+              !olderButton.isEnabled, !newerButton.isEnabled,
               !outputFilter.isEnabled, detail.string.contains(localized("history.compare")),
               detail.string.contains(other.stamp) else { throw HostError(message: "History comparison retained single-run actions") }
         let selectedIDs = Set(selectedEntries.map(\.id))
@@ -1646,6 +1799,59 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard selectedEntries.isEmpty, !logButton.isEnabled, !copyButton.isEnabled, !revealButton.isEnabled else {
             throw HostError(message: "Cleared history selection silently selected another batch")
         }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-history-files-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let existing = temporary.appendingPathComponent("synthetic retained.txt")
+        let missing = temporary.appendingPathComponent("synthetic missing.txt")
+        try Data().write(to: existing)
+        var fileEntry = synthetic
+        fileEntry.summary = HistorySummary(schema_version: 1, count_scope: "processor_outcomes",
+            img: HistoryMedia(active: true, succeeded: 1, skipped: 0, ignored: 0, failed: 2, unprocessed: 0, exit_code: 1),
+            vid: HistoryMedia(active: false, succeeded: nil, skipped: nil, ignored: nil, failed: nil, unprocessed: nil, exit_code: nil),
+            integrity: HistorySummary.Integrity(state: nil, issue_count: nil),
+            failed_files: [existing.path, missing.path, "relative/synthetic.txt"], skipped_files: [])
+        entries = [fileEntry]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        guard !failedContent.isHidden, detailScroll.isHidden, failedTable.numberOfRows == 3,
+              selected?.summary?.img.failed == 2, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled else {
+            throw HostError(message: "Recorded failure paths invented counts or selected actions")
+        }
+        failedTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        updateActions()
+        guard selectedFailedPath == existing.path, selectedFailedURL?.path == existing.path,
+              failedCopyButton.isEnabled, failedRevealButton.isEnabled else {
+            throw HostError(message: "Recorded existing path was not exactly selectable")
+        }
+        for row in [1, 2] {
+            failedTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            updateActions()
+            guard failedCopyButton.isEnabled, !failedRevealButton.isEnabled, selectedFailedURL == nil else {
+                throw HostError(message: "Missing or relative failure path enabled Finder navigation")
+            }
+        }
+        failedSearch.stringValue = "RETAINED"
+        filterFailedFiles()
+        guard failedPaths == [existing.path], !failedCopyButton.isEnabled,
+              failedStatus.stringValue.contains(localized("history.failed_files.range", 1, 1, 3)) else {
+            throw HostError(message: "Failure path search changed totals or retained stale actions")
+        }
+        let bounded = Self.failureRows(Array(repeating: existing.path, count: HistoryStore.maximumOutputLines + 1), query: "")
+        let oversized = Self.failureRows([String(repeating: "x", count: HistoryStore.maximumOutputBytes + 1), existing.path], query: "")
+        guard bounded.matches == HistoryStore.maximumOutputLines + 1, bounded.paths.count == HistoryStore.maximumOutputLines,
+              oversized.matches == 2, oversized.paths == [existing.path] else {
+            throw HostError(message: "Failure path bounds lost matching totals or exact paths")
+        }
+        entries = [fileEntry, other]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
+        showSelected()
+        guard failedContent.isHidden, failedPaths.isEmpty, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled else {
+            throw HostError(message: "Comparison retained prior failure-file navigation")
+        }
         let original = window!.frame
         window?.setContentSize(NSSize(width: 780, height: 440))
         content.layoutSubtreeIfNeeded()
@@ -1661,6 +1867,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 throw HostError(message: "History output toolbar clipped at minimum size")
             }
         }
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        content.layoutSubtreeIfNeeded()
+        for control in [detailMode, failedSearch, failedCopyButton, failedRevealButton, failedStatus, failedContent] as [NSView] {
+            let rect = control.convert(control.alignmentRect(forFrame: control.bounds), to: split.arrangedSubviews[1])
+            let bounds = split.arrangedSubviews[1].bounds
+            guard rect.minX >= -1, rect.maxX <= bounds.maxX + 1,
+                  rect.minY >= -1, rect.maxY <= bounds.maxY + 1 else {
+                throw HostError(message: "History failure-file controls clipped at minimum size: \(type(of: control)) \(rect), pane \(split.arrangedSubviews[1].bounds)")
+            }
+        }
+        table.deselectAll(nil)
+        showSelected()
         window?.setFrame(original, display: false)
     }
 
