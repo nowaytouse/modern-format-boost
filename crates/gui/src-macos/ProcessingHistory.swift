@@ -225,9 +225,18 @@ private struct HistoryEntry {
             || (summary?.integrity.issue_count ?? 0) > 0 || summary?.integrity.state == "WARNINGS"
     }
     var hasPending: Bool { (summary?.img.unprocessed ?? 0) > 0 || (summary?.vid.unprocessed ?? 0) > 0 }
+    var hasPartialSuccess: Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, context?.dry_run == false,
+              let summary, summary.valid, summary.img.complete, summary.vid.complete, !hasPending,
+              let outcome = finished?.outcome, ["completed", "failed"].contains(outcome) else { return false }
+        let active = [summary.img, summary.vid].filter(\.active)
+        return hasPartialProcessingSuccess(succeeded: active.map(\.succeeded), failed: active.map(\.failed),
+                                           countsComplete: true)
+    }
     var statusKey: String {
-        if finished?.outcome == "failed" { return "history.status.failed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
+        if hasPartialSuccess { return "history.status.partial" }
+        if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
         if hasFailures { return "history.status.file_failures" }
         if legacy { return "history.status.legacy" }
@@ -244,6 +253,7 @@ private struct HistoryEntry {
         !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings
     }
     var statusColor: NSColor {
+        if hasPartialSuccess { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
     }
@@ -274,6 +284,18 @@ private struct HistoryEntry {
     }
     static func sizeLabel(_ bytes: UInt64) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) + " (\(bytes) B)"
+    }
+    func sizeMeasurementsComparable(to other: HistoryEntry) -> Bool {
+        guard issues.isEmpty, other.issues.isEmpty, context?.dry_run == false, other.context?.dry_run == false,
+              finished.map({ ["completed", "failed"].contains($0.outcome) }) == true,
+              other.finished.map({ ["completed", "failed"].contains($0.outcome) }) == true,
+              let left = summary, let right = other.summary, left.valid, right.valid,
+              left.img.complete, left.vid.complete, right.img.complete, right.vid.complete,
+              let leftSize = left.size, let rightSize = right.size, !left.sizeInvalid, !right.sizeInvalid,
+              leftSize.input_bytes != nil, leftSize.output_bytes != nil,
+              rightSize.input_bytes != nil, rightSize.output_bytes != nil else { return false }
+        return leftSize.scope == rightSize.scope && left.count_scope == right.count_scope
+            && left.img.active == right.img.active && left.vid.active == right.vid.active
     }
 }
 
@@ -930,6 +952,18 @@ private enum HistoryStore {
     private enum HistoryParseError: Error { case invalid }
 }
 
+private final class HistoryResultCell: NSTableCellView {
+    var resultColor: NSColor = .labelColor {
+        didSet { updateTextColor() }
+    }
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { updateTextColor() }
+    }
+    private func updateTextColor() {
+        textField?.textColor = backgroundStyle == .emphasized ? .labelColor : resultColor
+    }
+}
+
 final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
@@ -957,6 +991,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var loadIssues: [String] = []
     private var limited = false
     private var initialDividerConfigured = false
+    private var selectionInitialized = false
 
     init(directory: URL) {
         self.directory = directory
@@ -996,6 +1031,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.stringValue = localized("history.loading")
         progress.startAnimation(nil)
         refreshButton.isEnabled = false
+        updateActions()
         let source = directory
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Swift.Result { try HistoryStore.load(directory: source) }
@@ -1012,6 +1048,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 case let .failure(error):
                     self.entries = []
                     self.displayed = []
+                    self.table.deselectAll(nil)
                     self.table.reloadData()
                     self.status.stringValue = error.localizedDescription
                     self.detail.string = error.localizedDescription
@@ -1056,7 +1093,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.rowHeight = HistoryLayout.rowHeight
         table.usesAlternatingRowBackgroundColors = true
         table.style = .inset
-        table.allowsMultipleSelection = false
+        table.allowsMultipleSelection = true
+        table.allowsEmptySelection = true
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         for (identifier, width) in [("time", CGFloat(120)), ("source", CGFloat(130)), ("status", CGFloat(115)),
                                     ("verification", CGFloat(110)), ("succeeded", CGFloat(65))] {
@@ -1198,21 +1236,29 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     @objc private func filterChanged() { applyFilter() }
     func controlTextDidChange(_ notification: Notification) { applyFilter() }
 
+    private var selectedEntries: [HistoryEntry] {
+        table.selectedRowIndexes.compactMap { displayed.indices.contains($0) ? displayed[$0] : nil }
+    }
     private var selected: HistoryEntry? {
-        displayed.indices.contains(table.selectedRow) ? displayed[table.selectedRow] : nil
+        let entries = selectedEntries
+        return entries.count == 1 ? entries[0] : nil
     }
 
     private func applyFilter() {
-        let selectedID = selected?.id
+        let selectedIDs = Set(selectedEntries.map(\.id))
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         displayed = entries.filter {
             (filter.selectedSegment != 1 || $0.needsAttention)
                 && (query.isEmpty || $0.searchable.localizedCaseInsensitiveContains(query))
         }
         table.reloadData()
-        if let index = displayed.firstIndex(where: { $0.id == selectedID }) {
-            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        } else if !displayed.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        let indexes = IndexSet(displayed.indices.filter { selectedIDs.contains(displayed[$0].id) })
+        if !indexes.isEmpty {
+            table.selectRowIndexes(indexes, byExtendingSelection: false)
+        } else if !selectionInitialized, !displayed.isEmpty {
+            table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        } else { table.deselectAll(nil) }
+        if !entries.isEmpty { selectionInitialized = true }
         showSelected()
     }
 
@@ -1230,6 +1276,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard displayed.indices.contains(row), let column = tableColumn else { return nil }
         let entry = displayed[row]
         let label = NSTextField(labelWithString: "")
+        var resultColor = NSColor.labelColor
         label.font = HistoryLayout.smallFont
         label.lineBreakMode = .byTruncatingMiddle
         switch column.identifier.rawValue {
@@ -1240,16 +1287,17 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 label.stringValue = paths.count == 1 ? first : localized("history.source_multiple", first, paths.count)
                 label.toolTip = paths.joined(separator: "\n")
             } else { label.stringValue = localized("result.unknown") }
-        case "status": label.stringValue = localized(entry.statusKey); label.textColor = entry.statusColor
+        case "status": label.stringValue = localized(entry.statusKey); resultColor = entry.statusColor
         case "verification":
             label.stringValue = entry.verification?.count_status ?? localized("result.unknown")
-            label.textColor = entry.verification?.count_status?.hasPrefix("MISMATCH") == true ? .systemRed : .secondaryLabelColor
+            resultColor = entry.verification?.count_status?.hasPrefix("MISMATCH") == true ? .systemRed : .secondaryLabelColor
         case "succeeded": label.stringValue = entry.succeededLabel; label.alignment = .right
         default: return nil
         }
         if label.toolTip == nil { label.toolTip = label.stringValue }
-        let cell = NSTableCellView()
+        let cell = HistoryResultCell()
         cell.textField = label
+        cell.resultColor = resultColor
         cell.addSubview(label)
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -1275,9 +1323,58 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func showSelected() {
         resetOutput()
         updateHistoryStatus()
-        detail.string = selected.map(Self.render) ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select")
+        let selection = selectedEntries
+        detailMode.setLabel(localized(selection.count == 2 ? "history.compare" : "history.summary"), forSegment: 0)
+        if selection.count == 2 { detail.string = Self.renderComparison(selection) }
+        else if selection.count > 2 { detail.string = localized("history.compare.select_two") }
+        else { detail.string = selected.map { Self.render($0) } ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select") }
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
+    }
+
+    fileprivate static func renderComparison(_ entries: [HistoryEntry]) -> String {
+        guard entries.count == 2 else { return localized("history.compare.select_two") }
+        var sections = [localized("history.compare")]
+        if !entries[0].sizeMeasurementsComparable(to: entries[1]) {
+            sections.append(localized("history.compare.not_comparable"))
+        }
+        let unknown = localized("result.unknown")
+        func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
+        func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
+        for (index, entry) in entries.enumerated() {
+            var lines = [localized("history.compare.batch", index + 1) + ": " + entry.stamp,
+                         localized(entry.statusKey) + " · " + timestampLabel(entry.timestamp),
+                         row("mode", entry.context?.mode ?? unknown), row("version", entry.context?.version ?? unknown)]
+            for (key, media) in [("img", entry.summary?.img), ("vid", entry.summary?.vid)] {
+                let title = localized("history.media.\(key)") + ": "
+                if media?.active == false { lines.append(title + localized("history.not_run")); continue }
+                lines += [title + localized("result.counts", count(media?.succeeded), count(media?.skipped),
+                                             count(media?.failed), count(media?.ignored)),
+                          row("exit", count(media?.exit_code)) + " · " + localized("result.unprocessed", count(media?.unprocessed))]
+            }
+            lines += [row("count_status", entry.verification?.count_status ?? unknown),
+                      row("integrity", entry.summary?.integrity.state ?? unknown)
+                        + " · " + row("issues", count(entry.summary?.integrity.issue_count))]
+            if let verification = entry.verification {
+                lines.append(row("verification_state", verification.has_warnings ? "WARNINGS" : "CLEAN")
+                    + " · " + row("issues", String(verification.issue_count)))
+            } else { lines.append(row("verification_state", unknown)) }
+            if let size = entry.summary?.size {
+                lines += [entry.sizeOutcome,
+                          row("input_bytes", size.input_bytes.map(HistoryEntry.sizeLabel) ?? unknown),
+                          row("output_bytes", size.output_bytes.map(HistoryEntry.sizeLabel) ?? unknown), localized(size.scopeKey)]
+            } else { lines.append(localized(entry.summary?.sizeInvalid == true ? "history.space.invalid" : "history.space.not_recorded")) }
+            let sources = entry.context?.inputs ?? []
+            lines += [row("sources", sources.isEmpty ? unknown : sources.joined(separator: "\n")),
+                      row("output", entry.verification?.output_path ?? entry.context?.output ?? unknown)]
+            for version in Set(entry.configSnapshots.map { $0.pipeline + ": " + $0.packageVersion }).sorted() {
+                lines.append(row("config_package_version", version))
+            }
+            if let error = entry.finished?.error { lines.append(row("error", error)) }
+            if !entry.issues.isEmpty { lines += entry.issues }
+            sections.append(lines.joined(separator: "\n"))
+        }
+        return sections.joined(separator: "\n\n")
     }
 
     private static func render(_ entry: HistoryEntry) -> String {
@@ -1358,13 +1455,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        logButton.isEnabled = !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
-        detailMode.setEnabled(selected?.hasStoredOutput == true, forSegment: 1)
-        olderButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
-        newerButton.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
-        outputFilter.isEnabled = detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
-        revealButton.isEnabled = selected != nil
-        copyButton.isEnabled = selected?.context?.inputs.isEmpty == false
+        let ready = refreshButton.isEnabled
+        let single = ready && selected != nil
+        logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
+        detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
+        olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
+        newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
+        outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
+        revealButton.isEnabled = single
+        copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
     }
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
@@ -1386,10 +1485,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func detailModeChanged() {
+        guard selected != nil else { showSelected(); return }
         outputGeneration = UUID()
         outputLoading = false
         if detailMode.selectedSegment == 0 {
-            detail.string = selected.map(Self.render) ?? localized("history.select")
+            detail.string = selected.map { Self.render($0) } ?? localized("history.select")
             updateHistoryStatus()
         }
         else if outputPage != nil { renderOutput() }
@@ -1453,13 +1553,28 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
     @objc private func copySources() {
-        guard let paths = selected?.context?.inputs, !paths.isEmpty else { return }
+        var seen = Set<String>()
+        let paths = selectedEntries.flatMap { $0.context?.inputs ?? [] }.filter { seen.insert($0).inserted }
+        guard !paths.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         status.stringValue = localized("history.copied")
     }
 
     func validateForSelfTest() throws {
+        let resultCell = HistoryResultCell()
+        let resultLabel = NSTextField(labelWithString: "synthetic partial success")
+        resultCell.addSubview(resultLabel)
+        resultCell.textField = resultLabel
+        resultCell.resultColor = .systemOrange
+        resultCell.backgroundStyle = .emphasized
+        guard resultCell.textField?.textColor == .labelColor else {
+            throw HostError(message: "Selected history result retained a low-contrast custom color")
+        }
+        resultCell.backgroundStyle = .normal
+        guard resultCell.textField?.textColor == .systemOrange else {
+            throw HostError(message: "Unselected history result lost its semantic color")
+        }
         guard let content = window?.contentView else { throw HostError(message: "Missing history content view") }
         content.layoutSubtreeIfNeeded()
         configureInitialDivider()
@@ -1479,7 +1594,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
               logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
-              window?.styleMask.contains(.resizable) == true else {
+               table.allowsMultipleSelection, table.allowsEmptySelection,
+               window?.styleMask.contains(.resizable) == true else {
             throw HostError(message: "History native controls or selection state regressed")
         }
         let synthetic = HistoryEntry(id: "synthetic:0", stamp: "synthetic", audit: URL(fileURLWithPath: "/synthetic/audit"),
@@ -1498,6 +1614,38 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         filter.selectedSegment = 1
         applyFilter()
         guard table.numberOfRows == 1 else { throw HostError(message: "Legacy history disappeared from attention filter") }
+        let other = HistoryEntry(id: "synthetic:1", stamp: "second synthetic", audit: synthetic.audit,
+                                 timestamp: "synthetic", legacy: true)
+        let third = HistoryEntry(id: "synthetic:2", stamp: "third synthetic", audit: synthetic.audit,
+                                 timestamp: "synthetic", legacy: true)
+        entries = [synthetic, other, third]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
+        showSelected()
+        guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled,
+              !detailMode.isEnabled(forSegment: 1), !olderButton.isEnabled, !newerButton.isEnabled,
+              !outputFilter.isEnabled, detail.string.contains(localized("history.compare")),
+              detail.string.contains(other.stamp) else { throw HostError(message: "History comparison retained single-run actions") }
+        let selectedIDs = Set(selectedEntries.map(\.id))
+        entries.reverse()
+        applyFilter()
+        guard Set(selectedEntries.map(\.id)) == selectedIDs else { throw HostError(message: "History filtering compared different run identities") }
+        search.stringValue = other.stamp
+        applyFilter()
+        guard selected?.id == other.id else { throw HostError(message: "History filtering lost the remaining selected run") }
+        search.stringValue = ""
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integersIn: 0...2), byExtendingSelection: false)
+        showSelected()
+        guard detail.string == localized("history.compare.select_two"), selected == nil else {
+            throw HostError(message: "History compared an ambiguous selection")
+        }
+        table.deselectAll(nil)
+        showSelected()
+        applyFilter()
+        guard selectedEntries.isEmpty, !logButton.isEnabled, !copyButton.isEnabled, !revealButton.isEnabled else {
+            throw HostError(message: "Cleared history selection silently selected another batch")
+        }
         let original = window!.frame
         window?.setContentSize(NSSize(width: 780, height: 440))
         content.layoutSubtreeIfNeeded()
@@ -1526,6 +1674,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
               table.numberOfRows == expectedStatuses.count, selected?.audit.lastPathComponent == "history.sqlite3",
               revealButton.isEnabled, detail.string.contains("history.sqlite3") else {
             throw HostError(message: "History panel did not load database records: \(status.stringValue)")
+        }
+        if displayed.count >= 2 {
+            table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
+            showSelected()
+            let selectedIDs = Set(selectedEntries.map(\.id))
+            refresh(directory: directory)
+            let refreshDeadline = Date().addingTimeInterval(5)
+            while !refreshButton.isEnabled, Date() < refreshDeadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            guard refreshButton.isEnabled, Set(selectedEntries.map(\.id)) == selectedIDs, selected == nil,
+                  !logButton.isEnabled, detail.string.contains(localized("history.compare")) else {
+                throw HostError(message: "History refresh lost or replaced the compared batches")
+            }
         }
         filter.selectedSegment = 1
         applyFilter()
@@ -1622,6 +1784,7 @@ func runProcessingHistorySelfTests() throws {
     let summary = try payload("MFB_HISTORY_SUMMARY", summaryValue)
     let completed = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "completed", "error": NSNull()])
     let failed = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed", "error": "synthetic final failure"])
+    let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
     func parsed(_ events: [String]) throws -> HistoryAudit { HistoryStore.parse(data: try records(events), stamp: "test", audit: fixtureURL) }
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw HostError(message: message) } }
     let success = try parsed(["SESSION_STARTED", context, summary, completed])
@@ -1803,6 +1966,52 @@ func runProcessingHistorySelfTests() throws {
     let failure = try parsed([context, summary, failed])
     try require(failure.entries[0].statusKey == "history.status.failed" && failure.entries[0].succeededLabel == "2",
                 "Converted items hid a final session failure")
+    var mixedMedia = media
+    mixedMedia["failed"] = 1
+    mixedMedia["exit_code"] = 1
+    var mixedSummary = summaryValue
+    mixedSummary["img"] = mixedMedia
+    mixedSummary["failed_files"] = ["/synthetic/failed.jpg"]
+    let mixedEvent = try payload("MFB_HISTORY_SUMMARY", mixedSummary)
+    for finish in [completed, failed] {
+        let mixed = try parsed([context, mixedEvent, finish]).entries[0]
+        try require(mixed.statusKey == "history.status.partial" && mixed.needsAttention
+                    && mixed.summary?.img.exit_code == 1 && mixed.summary?.failed_files == ["/synthetic/failed.jpg"]
+                    && mixed.succeededLabel == "2" && mixed.finished?.outcome == (finish == completed ? "completed" : "failed"),
+                    "Partial history hid preserved success, failed items, or terminal evidence")
+    }
+    let cancelledMixed = try parsed([context, mixedEvent, cancelled]).entries[0]
+    let unfinishedMixed = try parsed([context, mixedEvent]).entries[0]
+    let contradictoryMixed = try parsed([context, mixedEvent, summary, completed]).entries[0]
+    try require(cancelledMixed.statusKey == "history.status.cancelled" && !cancelledMixed.hasPartialSuccess
+                && unfinishedMixed.statusKey != "history.status.partial" && !unfinishedMixed.hasPartialSuccess
+                && contradictoryMixed.statusKey == "history.status.incomplete" && !contradictoryMixed.hasPartialSuccess,
+                "Cancelled, unfinished, or contradictory history became an ordinary partial result")
+    for key in ["succeeded", "skipped", "ignored", "failed", "unprocessed", "exit_code"] {
+        var unknownMedia = mixedMedia
+        unknownMedia[key] = NSNull()
+        var unknownSummary = mixedSummary
+        unknownSummary["img"] = unknownMedia
+        let unknown = try parsed([context, try payload("MFB_HISTORY_SUMMARY", unknownSummary), failed]).entries[0]
+        try require(!unknown.hasPartialSuccess && unknown.statusKey == "history.status.failed",
+                    "Unknown \(key) evidence became a reliable partial result")
+    }
+    var pendingMixedMedia = mixedMedia
+    pendingMixedMedia["unprocessed"] = 1
+    var pendingMixedSummary = mixedSummary
+    pendingMixedSummary["img"] = pendingMixedMedia
+    let pendingMixed = try parsed([context, try payload("MFB_HISTORY_SUMMARY", pendingMixedSummary), failed]).entries[0]
+    try require(!pendingMixed.hasPartialSuccess && pendingMixed.statusKey == "history.status.failed",
+                "Unprocessed sources became a finished partial batch")
+    var failedVideo = media
+    failedVideo["succeeded"] = 0
+    failedVideo["failed"] = 1
+    failedVideo["exit_code"] = 1
+    var combinedSummary = summaryValue
+    combinedSummary["vid"] = failedVideo
+    let combined = try parsed([context, try payload("MFB_HISTORY_SUMMARY", combinedSummary), failed]).entries[0]
+    try require(combined.hasPartialSuccess && combined.summary?.img.succeeded == 2 && combined.summary?.vid.failed == 1,
+                "Partial history only considered one active pipeline")
     let batches = try parsed([context, summary, completed, context, failed])
     try require(batches.entries.count == 2 && batches.entries[1].summary == nil && batches.entries[1].statusKey == "history.status.failed",
                 "History merged independent batches or leaked counts")
@@ -1849,6 +2058,31 @@ func runProcessingHistorySelfTests() throws {
     let verified = try parsed([context, verification, summary, completed])
     try require(verified.entries[0].verification?.count_status == "MATCH (1 expected handoff gap)",
                 "History reinterpreted the verifier's count status")
+    try require(reduced.sizeMeasurementsComparable(to: expanded)
+                && !reduced.sizeMeasurementsComparable(to: partialSize)
+                && !reduced.sizeMeasurementsComparable(to: cancelledMixed),
+                "History size comparison accepted missing or cancelled measurements")
+    var scopeChanged = reduced
+    scopeChanged.summary?.size = HistorySummary.Size(scope: "converted_this_run", input_bytes: 1_024, output_bytes: 512)
+    try require(!reduced.sizeMeasurementsComparable(to: scopeChanged), "Different byte measurement scopes became directly comparable")
+    var videoOnlySummary = summaryValue
+    videoOnlySummary["img"] = inactive
+    videoOnlySummary["vid"] = media
+    videoOnlySummary["size"] = ["scope": "converted_this_run", "input_bytes": 1_024, "output_bytes": 512]
+    let videoOnly = try parsed([context, try payload("MFB_HISTORY_SUMMARY", videoOnlySummary), completed]).entries[0]
+    try require(!scopeChanged.sizeMeasurementsComparable(to: videoOnly), "Different active pipelines became comparable size measurements")
+    let comparison = ProcessingHistoryPanel.renderComparison([reduced, verified.entries[0]])
+    try require(comparison.contains(localized("history.compare.not_comparable"))
+                && comparison.contains("MATCH (1 expected handoff gap)")
+                && comparison.contains("/synthetic/input") && comparison.contains("/synthetic/output")
+                && comparison.contains(HistoryEntry.sizeLabel(1_024))
+                && !comparison.contains(localized("history.effective_config")),
+                "History comparison lost recorded evidence or invented configuration differences")
+    let configuredComparison = ProcessingHistoryPanel.renderComparison([configEntry, combined])
+    try require(configuredComparison.contains("img: 0.12.0") && configuredComparison.contains("vid: 0.12.0")
+                && configuredComparison.contains("synthetic final failure")
+                && !configuredComparison.contains(configEntry.configSnapshots[0].values),
+                "History comparison lost worker versions or buried outcomes in configuration JSON")
     var mismatchValue = verificationValue
     mismatchValue["count_status"] = "MISMATCH (1 invariant issue)"
     let mismatched = try parsed([context, try payload("MFB_HISTORY_VERIFICATION", mismatchValue), summary, completed])
@@ -1968,7 +2202,6 @@ func runProcessingHistorySelfTests() throws {
             throw HostError(message: "Synthetic history commit failed")
         }
     }
-    let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
     var pendingMedia = media
     pendingMedia["unprocessed"] = 1
     var pendingSummary = summaryValue
@@ -1992,7 +2225,7 @@ func runProcessingHistorySelfTests() throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: databaseURL.path)
     let databaseLoaded = try HistoryStore.load(directory: directory)
     let expectedStatuses = ["history.status.completed", "history.status.failed", "history.status.cancelled",
-        "history.status.preview", "history.status.unfinished", "history.status.file_failures",
+        "history.status.preview", "history.status.unfinished", "history.status.partial",
         "history.status.verification_warnings", "history.status.incomplete", "history.status.incomplete"]
     try require(databaseLoaded.entries.map(\.statusKey).sorted() == expectedStatuses.sorted(),
                 "Database history changed counted terminal states")

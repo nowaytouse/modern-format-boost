@@ -295,6 +295,7 @@
 "result.unprocessed" = "未完成 %@";
 "result.unknown" = "未知";
 "result.finished_with_failures" = "处理已结束，但有文件失败";
+"result.partially_completed" = "部分成功，仍有文件失败";
 "result.stopped_with_error" = "因错误停止";
 "result.invalid" = "批次结果格式无效或不受支持，结果计数不可用。";
 "result.incomplete" = "进程已结束，但未报告全部结果计数";
@@ -307,6 +308,10 @@
 "history.attention" = "需要关注";
 "history.filter" = "批次筛选";
 "history.details" = "批次详情";
+"history.compare" = "批次对比";
+"history.compare.batch" = "批次 %d";
+"history.compare.select_two" = "请选择两个批次进行对比。";
+"history.compare.not_comparable" = "统计范围不同或记录不完整，大小结果不能直接对比。";
 "history.refresh" = "刷新记录";
 "history.open_log" = "查看处理输出";
 "history.output.loading" = "正在读取处理输出...";
@@ -329,6 +334,7 @@
 "history.column.verification" = "数量核对";
 "history.column.succeeded" = "成功";
 "history.status.completed" = "处理完成";
+"history.status.partial" = "部分成功";
 "history.status.failed" = "因错误停止";
 "history.status.cancelled" = "已取消";
 "history.status.file_failures" = "存在文件失败";

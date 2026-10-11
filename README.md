@@ -101,6 +101,18 @@ Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.
 
+The live result and Processing History distinguish partial completion from an
+all-file failure when complete recorded counts contain both successes and failures.
+Failures remain actionable, with their original exit codes and reasons; cancellation,
+unfinished work and incomplete evidence do not become partial success. The final
+live summary uses checked receipt totals, preserving unknown counts instead of zero.
+
+Select two runs in Processing History to compare recorded outcomes, versions,
+paths, count checks and current-run size measurements in the existing detail pane.
+Different measurement scopes or incomplete evidence are called out explicitly;
+the comparison does not guess throughput, tool versions or configuration differences.
+Select one run to return to its captured effective configuration and paged output.
+
 ### Live file progress
 
 During launcher-managed standard IMG/VID batches and Fast IMG encoding, the native
@@ -575,7 +587,7 @@ continue to retain final sources, not this new preview-only override chain.
 Standard IMG/VID batch reports aggregate only this run's successful conversions.
 Missing output measurements or overflowing byte totals remain unknown and suppress
 size-difference percentages; input size is never substituted for missing output.
-This CLI accounting does not yet add standard IMG/VID size totals to history.
+Launcher-managed standard IMG/VID runs also record these structured size receipts in history.
 **Processing History** opens a read-only recent-batch inspector with search,
 attention filtering, processor outcome counts, source/output paths and the
 verifier's recorded count status (`MATCH`, `EXPLAINED` or `MISMATCH`). Select a

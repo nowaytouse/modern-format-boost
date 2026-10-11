@@ -295,6 +295,7 @@
 "result.unprocessed" = "Unprocessed %@";
 "result.unknown" = "unknown";
 "result.finished_with_failures" = "Finished with file failures";
+"result.partially_completed" = "Partially completed; some files failed";
 "result.stopped_with_error" = "Stopped with an error";
 "result.invalid" = "Batch result is malformed or unsupported; counts are unavailable.";
 "result.incomplete" = "Process exited; some result counts were not reported";
@@ -307,6 +308,10 @@
 "history.attention" = "Needs Attention";
 "history.filter" = "Batch filter";
 "history.details" = "Batch details";
+"history.compare" = "Compare Runs";
+"history.compare.batch" = "Run %d";
+"history.compare.select_two" = "Select exactly two runs to compare.";
+"history.compare.not_comparable" = "Different scopes or incomplete evidence: size results are not directly comparable.";
 "history.refresh" = "Refresh history";
 "history.open_log" = "View processing output";
 "history.output.loading" = "Loading processing output...";
@@ -329,6 +334,7 @@
 "history.column.verification" = "Inventory Check";
 "history.column.succeeded" = "Succeeded";
 "history.status.completed" = "Completed";
+"history.status.partial" = "Partially Completed";
 "history.status.failed" = "Stopped with Error";
 "history.status.cancelled" = "Cancelled";
 "history.status.file_failures" = "File Failures";

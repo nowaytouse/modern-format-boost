@@ -2261,6 +2261,25 @@ private struct PhaseLogPresentation {
     }
 }
 
+func processingCountTotal(_ values: [Int?]) -> Int? {
+    guard !values.isEmpty else { return nil }
+    var total = 0
+    for value in values {
+        guard let value, value >= 0 else { return nil }
+        let sum = total.addingReportingOverflow(value)
+        guard !sum.overflow else { return nil }
+        total = sum.partialValue
+    }
+    return total
+}
+
+func hasPartialProcessingSuccess(succeeded: [Int?], failed: [Int?], countsComplete: Bool) -> Bool {
+    guard countsComplete, succeeded.count == failed.count,
+          let successes = processingCountTotal(succeeded), let failures = processingCountTotal(failed),
+          !successes.addingReportingOverflow(failures).overflow else { return false }
+    return successes > 0 && failures > 0
+}
+
 private struct BatchResults {
     struct Event: Decodable {
         let schemaVersion: Int
@@ -2304,6 +2323,25 @@ private struct BatchResults {
             total = sum.partialValue
         }
         return false
+    }
+
+    var hasPartialSuccess: Bool {
+        hasPartialProcessingSuccess(succeeded: totals.values.map { $0[0] },
+                                    failed: totals.values.map { $0[2] },
+                                    countsComplete: !isIncomplete && !hasUnprocessed
+                                        && pendingTotals.count == totals.count
+                                        && pendingTotals.values.allSatisfy { $0 == 0 })
+    }
+
+    var summary: String? {
+        guard !totals.isEmpty else { return nil }
+        let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
+        let counts = (0..<4).map { field in
+            count(invalid ? nil : processingCountTotal(totals.values.map { $0[field] }))
+        }
+        return localized("result.counts", counts[0], counts[1], counts[2], counts[3])
+            + " · " + localized("result.unprocessed", count(invalid ? nil
+                : processingCountTotal(Array(pendingTotals.values))))
     }
 
     mutating func ingest(_ line: String) -> String? {
@@ -4345,6 +4383,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
             photosDiagnostics.markFailed()
             refreshDiagnostics()
@@ -4354,7 +4393,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
             }
             statusLabel.stringValue = localized("status.stopped")
-            appendLog(localized("status.stopped"))
+            appendLog(localized("status.stopped") + countSummary)
             if closeWhenFinished { NSApp.terminate(nil) }
             return
         }
@@ -4362,24 +4401,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .success(message):
             setProcessing(false)
             if batchResults.hasFailure {
-                statusLabel.stringValue = localized(batchResults.hasFileFailures
-                    ? "result.finished_with_failures" : "result.stopped_with_error")
-                appendLog("[FAIL] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.failure == nil)
+                statusLabel.stringValue = localized(batchResults.hasPartialSuccess ? "result.partially_completed"
+                    : (batchResults.hasFileFailures ? "result.finished_with_failures" : "result.stopped_with_error"))
+                appendLog("[FAIL] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.failure == nil)
             } else if batchResults.isIncomplete
                 || (batchResults.hasUnprocessed && host.controlState != "paused")
                 || (batchResults.totals.isEmpty
                 && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
                 statusLabel.stringValue = localized(batchResults.isIncomplete || batchResults.totals.isEmpty
                     ? "result.incomplete" : "result.unfinished")
-                appendLog("[WARN] \(statusLabel.stringValue)", captureDiagnostics: latestDiagnostics.warning == nil)
+                appendLog("[WARN] \(statusLabel.stringValue)" + countSummary,
+                          captureDiagnostics: latestDiagnostics.warning == nil)
             } else {
                 statusLabel.stringValue = message
-                appendLog("✓ \(message)")
+                appendLog("[DONE] \(message)" + countSummary)
             }
         case let .failure(error):
             photosDiagnostics.markFailed()
             refreshDiagnostics()
-            appendLog("✗ \(error.localizedDescription)", captureDiagnostics: latestDiagnostics.failure == nil)
+            let failureMessage = batchResults.hasPartialSuccess
+                ? localized("result.partially_completed") + " · " + error.localizedDescription
+                : error.localizedDescription
+            appendLog("[FAIL] \(failureMessage)" + countSummary,
+                      captureDiagnostics: latestDiagnostics.failure == nil)
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
@@ -4411,9 +4456,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 host.startProcessing(retry)
             } else {
                 setProcessing(false)
-                statusLabel.stringValue = batchResults.hasFileFailures
-                    ? localized("result.finished_with_failures")
-                    : error.localizedDescription
+                statusLabel.stringValue = batchResults.hasPartialSuccess ? localized("result.partially_completed")
+                    : (batchResults.hasFileFailures ? localized("result.finished_with_failures") : error.localizedDescription)
             }
         }
     }
@@ -4756,6 +4800,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard statusLabel.stringValue == localized("result.finished_with_failures"),
               logView.string.contains("[FAIL] IMG:"), batchResults.hasFailure else {
             throw HostError(message: "GUI treated reported file failures as success")
+        }
+        clearBatchLog()
+        appendLog("[ERROR] synthetic encoder failure\n"
+            + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        guard statusLabel.stringValue == localized("result.partially_completed"), batchResults.hasFailure,
+              latestDiagnostics.failure == "[ERROR] synthetic encoder failure",
+              logView.string.contains("synthetic exit=1"),
+              logView.string.contains("[RESULT] " + localized("result.counts", "3", "1", "1", "0")) else {
+            throw HostError(message: "Partial completion hid the failure, exit status or final counts")
         }
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
@@ -5192,6 +5246,41 @@ private func runSelfTest() -> Int32 {
         } catch let error as HostError where error.message.hasPrefix("Out-of-range") { throw error }
         catch {}
         var results = BatchResults()
+        let mixedResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#
+        var mixed = BatchResults()
+        _ = mixed.ingest(mixedResult)
+        guard mixed.hasPartialSuccess, mixed.hasFailure, !mixed.isIncomplete,
+              mixed.summary == localized("result.counts", "3", "2", "1", "0")
+                + " · " + localized("result.unprocessed", "0"),
+              !hasPartialProcessingSuccess(succeeded: [nil], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [Int.max], failed: [1], countsComplete: true),
+              !hasPartialProcessingSuccess(succeeded: [1], failed: [1], countsComplete: false),
+              !hasPartialProcessingSuccess(succeeded: [], failed: [], countsComplete: true) else {
+            throw HostError(message: "Partial success or checked final counts were incorrectly classified")
+        }
+        for event in [
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":null,"exit_code":1}"#,
+            #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":0,"failed":1,"ignored":0,"unprocessed":1,"exit_code":1}"#,
+        ] {
+            var notPartial = BatchResults()
+            _ = notPartial.ingest(event)
+            guard !notPartial.hasPartialSuccess, notPartial.hasFailure else {
+                throw HostError(message: "Skipped, unknown or unfinished items became partial success")
+            }
+        }
+        _ = mixed.ingest(#"MFB_BATCH_RESULT={"schema_version":1,"media":"vid","succeeded":1,"skipped":0,"failed":0,"ignored":1,"unprocessed":0,"exit_code":0}"#)
+        guard mixed.hasPartialSuccess, mixed.summary == localized("result.counts", "4", "2", "1", "1")
+            + " · " + localized("result.unprocessed", "0") else {
+            throw HostError(message: "Combined media final counts lost their receipt scope")
+        }
+        _ = mixed.ingest("MFB_BATCH_RESULT={}")
+        guard !mixed.hasPartialSuccess, mixed.isIncomplete,
+              mixed.summary == localized("result.counts", localized("result.unknown"), localized("result.unknown"),
+                                         localized("result.unknown"), localized("result.unknown"))
+                + " · " + localized("result.unprocessed", localized("result.unknown")) else {
+            throw HostError(message: "Malformed receipt left partial counts appearing complete")
+        }
         let skipped = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":0,"ignored":1,"exit_code":0}"#
         let legacyLine = results.ingest(skipped)
         guard legacyLine?.contains(localized("result.unprocessed", localized("result.unknown"))) == true,

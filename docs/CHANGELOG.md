@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Partial completion and native history comparison (2026-10-11)
+
+- Share the live GUI and history partial-success count predicate. Complete mixed
+  outcomes show partial completion without changing failed items, nonzero exits,
+  terminal errors or attention filtering. Cancelled, unfinished, contradictory,
+  missing and overflowing evidence never becomes partial success.
+- Append a final live outcome summary from checked structured receipt counts.
+  Retain existing concrete diagnostics; malformed receipts cannot make a partial
+  aggregate appear complete, and unknown counts are not replaced with zero.
+- Compare exactly two selected historical runs in the existing native detail pane:
+  recorded counts, paths, versions, inventory checks, errors and byte measurements.
+  Call out different scopes or incomplete size evidence without inferring speed or
+  configuration differences. Single-run configuration and paged output stay intact.
+- Preserve selected run identities through search and refresh, invalidate stale
+  asynchronous output on selection changes and disable single-run actions for
+  multi-selection. Add English, Simplified Chinese and Japanese copy and native
+  model, selection, refresh and live-result regression coverage.
+
 ### Native XMP custody and failure visibility (2026-10-11)
 
 - Copy native XMP as a complete packet instead of rationalizing GPS fields.
