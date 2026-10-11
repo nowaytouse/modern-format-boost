@@ -3861,6 +3861,12 @@ mod tests {
                 "[SKIP    ]   current.jpg: no gain  [SOURCE RETAINED]",
             )
             .unwrap();
+        output
+            .push_line(
+                "IMG",
+                "[FAIL    ]   nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained",
+            )
+            .unwrap();
         output.flush().unwrap();
         let current = dev::infra::history_store::read_session_output_since(
             &session.log_dir,
@@ -3870,7 +3876,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             fast_img_retained_file_names(&current),
-            vec![("current.jpg: no gain".to_owned(), "skipped".to_owned())]
+            vec![
+                ("current.jpg: no gain".to_owned(), "skipped".to_owned()),
+                (
+                    "nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained".to_owned(),
+                    "failed".to_owned(),
+                ),
+            ]
         );
         assert!(!current.contains("prior"));
     }

@@ -239,7 +239,11 @@ concurrent calls on one manager cannot commit snapshots out of order.
   XMP is carried into the JXL container and the output is checked for pixels,
   dimensions, auxiliary/HDR/provenance indicators, and metadata consistency.
   FastImg JXL Tier 2 uses a staged, format-native XMP writer for an already-modern
-  source and commits only when the same proof passes. AVIF Meme Mode is the
+  source and commits only when the same proof passes. Native XMP packets are
+  copied intact to avoid sidecar GPS rational/coordinate rewriting; unrelated
+  embedded fields are first added only where a staged sidecar has no value.
+  Full post-write metadata proof still applies. Relocated IFD1 thumbnail offsets
+  are not treated as changed content: thumbnail bytes still have to match. AVIF Meme Mode is the
   deliberate clean-output exception: it does not merge XMP into the output,
   clears removable metadata, and removes a validated source sidecar only after
   delivery proof. Existing AVIF keeps its encoded image items and is never
@@ -1303,6 +1307,7 @@ Runtime behavior for delivery, inference, UI, and training is documented as
 | Algorithm / inference gates                                         | [`ALGORITHM_LAYER_CONTRACT.md`](docs/hardening/ALGORITHM_LAYER_CONTRACT.md)                                                                                                         |
 | Terminal + native macOS UI                                          | [`UI_LAYER_CONTRACT.md`](docs/hardening/UI_LAYER_CONTRACT.md)                                                                                                                       |
 | JXL/XMP archive + JPEG restoration                                  | [`JXL_XMP_ARCHIVE_CONTRACT.md`](docs/hardening/JXL_XMP_ARCHIVE_CONTRACT.md)                                                                                                         |
+| Current policies and generalization readiness                       | [`POLICY_READINESS.md`](docs/hardening/POLICY_READINESS.md) |
 | Logging / session                                                   | [`LOGGING_LAYER_CONTRACT.md`](docs/hardening/LOGGING_LAYER_CONTRACT.md)                                                                                                             |
 | Database                                                            | [`DATABASE_LAYER_CONTRACT.md`](docs/hardening/DATABASE_LAYER_CONTRACT.md)                                                                                                           |
 

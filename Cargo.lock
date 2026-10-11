@@ -1260,7 +1260,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.49.0"
-source = "git+https://github.com/mitsuhiko/insta#5df39ceafc8a47f82ec9953aaba12072d316adc8"
+source = "git+https://github.com/mitsuhiko/insta#4b270ba4349f1f7b9d674852fb415d20bd8f205d"
 dependencies = [
  "console",
  "once_cell",
@@ -2191,16 +2191,16 @@ dependencies = [
 
 [[package]]
 name = "proptest"
-version = "1.11.0"
-source = "git+https://github.com/proptest-rs/proptest#4b0594eb07c53695dc3c24d3fa06bdceb98540e9"
+version = "1.12.0"
+source = "git+https://github.com/proptest-rs/proptest#70cf37d46b7d83393b6ed94c611f8c52209f585d"
 dependencies = [
  "bit-set",
  "bit-vec",
  "bitflags",
+ "chacha20",
  "core_detect",
  "num-traits",
  "rand 0.10.3",
- "rand_chacha 0.10.0",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -2284,7 +2284,7 @@ version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
- "rand_chacha 0.9.0",
+ "rand_chacha",
  "rand_core 0.9.5",
 ]
 
@@ -2307,16 +2307,6 @@ checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2371,7 +2361,7 @@ dependencies = [
  "paste",
  "profiling",
  "rand 0.9.5",
- "rand_chacha 0.9.0",
+ "rand_chacha",
  "simd_helpers",
  "thiserror",
  "v_frame",
@@ -2590,9 +2580,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.152"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "1741ab7a6cc54a03a89b5d563ed60075c277d9e3cfa73ad0c1f23f23974703c6"
 dependencies = [
  "itoa",
  "memchr",

@@ -69,7 +69,7 @@ mod tests {
         let mut loaded = crate::runtime_config::load(None, true).unwrap();
         let default = Cli::try_parse_from(["test"]).unwrap();
         assert!(default.cache.is_empty());
-        assert!(default.cache.cli_arguments().is_empty());
+        assert_eq!(default.cache.cli_arguments(), Vec::<String>::new());
         default.cache.apply_to(&mut loaded);
         assert_eq!(loaded.sources["cache.path_tree_max_bytes"], "default");
         let cli = Cli::try_parse_from(["test", "--cache-max-bytes", "268435456"]).unwrap();

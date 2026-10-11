@@ -250,7 +250,13 @@ pub fn scan_content(
     let mut routed_images = std::collections::HashSet::new();
     let mut routed_videos = std::collections::HashSet::new();
 
-    for entry in WalkDir::new(target).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(target) {
+        let entry = entry.with_context(|| {
+            format!(
+                "Cannot complete content scan for {}; inventory is incomplete",
+                target.display()
+            )
+        })?;
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -1182,6 +1188,26 @@ fn read_line(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_content_rejects_incomplete_inventory() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("notes.txt"), "synthetic document").unwrap();
+        fs::write(tmp.path().join("metadata.xmp"), "synthetic sidecar").unwrap();
+        let scan = scan_content(tmp.path(), ProcessingFilter::Both, None).unwrap();
+        assert_eq!(scan.total_files, 2);
+        assert_eq!(scan.other_count, 1);
+        assert_eq!(scan.xmp_count, 1);
+        assert_eq!(scan.img_count, 0);
+        assert_eq!(scan.vid_count, 0);
+
+        let missing = tmp.path().join("missing-root");
+        let error = scan_content(&missing, ProcessingFilter::Both, None).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("inventory is incomplete"));
+        assert!(diagnostic.contains(&missing.display().to_string()));
+        assert!(error.downcast_ref::<walkdir::Error>().is_some());
+    }
 
     #[test]
     fn effective_counts_apply_integrity_penalty() {

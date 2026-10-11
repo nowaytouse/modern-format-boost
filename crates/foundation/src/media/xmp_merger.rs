@@ -496,6 +496,8 @@ fn modern_proof_key_ignored(key: &str) -> bool {
         || normalized.contains("mediadataoffset")
         || normalized.contains("mediadatasize")
         || normalized.ends_with(":mediadata")
+        // The explicit metadata audit compares thumbnail bytes, not their relocated file offset.
+        || normalized == "ifd1:thumbnailoffset"
         || normalized == "imagedatahash"
         || normalized.ends_with(":imagedatahash")
         || normalized == "hasxmp"
@@ -1596,6 +1598,46 @@ impl XmpMerger {
         let xmp_hash = crate::common_utils::calculate_blake3_hash(xmp_path)
             .context("failed to hash XMP sidecar before modern merge")?;
         let before = Self::capture_modern_container_proof(media_path, format)?;
+        let merged_packet = if before.has_xmp {
+            let packet = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+                "modern_xmp_packet",
+                Some(".mfb-modern-xmp-"),
+                Some(".xmp"),
+            )?
+            .into_temp_path();
+            std::fs::copy(xmp_path, &packet).context("failed to stage XMP sidecar")?;
+            anyhow::ensure!(
+                crate::common_utils::calculate_blake3_hash(&packet)? == xmp_hash,
+                "XMP sidecar changed while staging native merge"
+            );
+            // Create only missing tags; rewriting sidecar GPS rationals loses precision.
+            let mut command = ExiftoolBuilder::new()
+                .tags_from_file(media_path)
+                .arg("-XMP:all")
+                .arg("-n")
+                .arg("-wm")
+                .arg("cg")
+                .overwrite_original()
+                .input(&packet)
+                .build();
+            let output = crate::process_runner::run_command_with_liveness_timeout(
+                &mut command,
+                Duration::from_secs(120),
+                crate::process_runner::image_process_hard_timeout(),
+                "modern container XMP packet overlay",
+            )?;
+            anyhow::ensure!(
+                output.status.success(),
+                "failed to preserve existing XMP fields in staged sidecar: {}",
+                crate::infra::logging::combined_tool_output(
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr)
+                )
+            );
+            Some(packet)
+        } else {
+            None
+        };
         let parent = crate::media_conversion_gate::output_parent_or_dot(media_path);
         let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
             "modern_xmp_native_merge",
@@ -1621,8 +1663,9 @@ impl XmpMerger {
 
         let mut builder = crate::ExiftoolBuilder::new();
         builder
-            .tags_from_file(xmp_path)
-            .arg("-XMP:all")
+            .tags_from_file(merged_packet.as_deref().unwrap_or(xmp_path))
+            .arg("-XMP")
+            .arg("-n")
             .preserve_date()
             .overwrite_original()
             .arg(safe_path_arg(&staged_path).as_ref());
@@ -2572,6 +2615,8 @@ mod tests {
         fs::create_dir(&sidecar_dir)
             .unwrap_or_else(|error| panic!("create sidecar directory: {error}"));
         let xmp = sidecar_dir.join("fixture.xmp");
+        let thumbnail = temp_dir.path().join("thumbnail.jpg");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([37, 61, 83])).save(&thumbnail)?;
         fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/metadata_clear_baseline.avif.fixture"),
@@ -2580,6 +2625,7 @@ mod tests {
         .unwrap_or_else(|error| panic!("copy AVIF fixture: {error}"));
         let seeded = crate::ExiftoolBuilder::new()
             .arg("-XMP-dc:Title=existing embedded")
+            .arg(format!("-ThumbnailImage<={}", thumbnail.display()))
             .overwrite_original()
             .input(&media)
             .build()
@@ -2627,6 +2673,20 @@ mod tests {
             "existing embedded",
             "existing embedded XMP value was not preserved"
         );
+        let embedded_thumbnail = ExiftoolBuilder::new()
+            .arg("-b")
+            .arg("-ThumbnailImage")
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(
+            embedded_thumbnail.status.success(),
+            "thumbnail readback failed"
+        );
+        assert_eq!(embedded_thumbnail.stdout, fs::read(&thumbnail)?);
+        assert!(modern_proof_key_ignored("IFD1:ThumbnailOffset"));
+        assert!(!modern_proof_key_ignored("IFD1:ThumbnailImage"));
+        assert!(!modern_proof_key_ignored("MakerNotes:ThumbnailOffset"));
 
         let idempotent_hash = crate::common_utils::calculate_blake3_hash(&media)?;
         merger.merge_xmp(&xmp, &media)?;
@@ -2656,7 +2716,7 @@ mod tests {
         .save(&media)?;
         fs::write(
             &xmp,
-            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">WebP archive proof</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:mfb="https://example.invalid/synthetic/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">WebP archive proof</rdf:li></rdf:Alt></dc:description><exif:GPSAltitude>123456789/1234567</exif:GPSAltitude><exif:GPSSpeed>0.0</exif:GPSSpeed><exif:GPSImgDirection>123456789/1234567</exif:GPSImgDirection><exif:GPSLatitude>0,0.123456789N</exif:GPSLatitude><exif:GPSLatitudeRef>N</exif:GPSLatitudeRef><exif:GPSLongitude>0,0.123456789E</exif:GPSLongitude><exif:GPSLongitudeRef>E</exif:GPSLongitudeRef><mfb:OpaqueValue>123456789/1234567</mfb:OpaqueValue></rdf:Description></rdf:RDF></x:xmpmeta>"#,
         )?;
 
         let before = crate::image_formats::webp::archival_feature_hash(&media)?;
@@ -2665,6 +2725,111 @@ mod tests {
             crate::image_formats::webp::archival_feature_hash(&media)?,
             before,
             "native WebP XMP merge changed a non-XMP archival chunk"
+        );
+        let packet = ExiftoolBuilder::new()
+            .arg("-b")
+            .arg("-a")
+            .arg("-XMP")
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(packet.status.success(), "XMP packet readback failed");
+        let xml = fs::read(&xmp)?;
+        assert_eq!(
+            packet
+                .stdout
+                .windows(xml.len())
+                .filter(|bytes| *bytes == xml)
+                .count(),
+            1,
+            "the original XML must survive the standard xpacket wrapper verbatim"
+        );
+        let committed = fs::read(&media)?;
+        XmpMerger::new(Config::default()).merge_xmp(&xmp, &media)?;
+        assert_eq!(
+            fs::read(&media)?,
+            committed,
+            "exact packet reuse must be idempotent"
+        );
+        let seeded = ExiftoolBuilder::new()
+            .arg("-XMP-dc:Title=existing embedded")
+            .overwrite_original()
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(seeded.status.success(), "failed to seed existing XMP");
+        XmpMerger::new(Config::default()).merge_xmp(&xmp, &media)?;
+        let title = ExiftoolBuilder::new()
+            .arg("-s3")
+            .arg("-XMP-dc:Title")
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(title.status.success(), "existing XMP readback failed");
+        assert_eq!(String::from_utf8(title.stdout)?.trim(), "existing embedded");
+        let committed = fs::read(&media)?;
+        XmpMerger::new(Config::default()).merge_xmp(&xmp, &media)?;
+        assert_eq!(
+            fs::read(&media)?,
+            committed,
+            "partial XMP overlay must be idempotent"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn modern_heic_xmp_merge_preserves_relocated_thumbnail() -> Result<()> {
+        let Some(encoder) = crate::common_utils::resolve_tool_path("heif-enc") else {
+            eprintln!("heif-enc unavailable for synthetic HEIC thumbnail regression");
+            return Ok(());
+        };
+        if !ExiftoolBuilder::check_available() {
+            return Ok(());
+        }
+        let temp_dir = TempDir::new()?;
+        let png = temp_dir.path().join("fixture.png");
+        let media = temp_dir.path().join("fixture.heic");
+        let original = temp_dir.path().join("original.heic");
+        let thumbnail = temp_dir.path().join("thumbnail.jpg");
+        let xmp = temp_dir.path().join("fixture.xmp");
+        image::RgbImage::from_pixel(24, 16, image::Rgb([37, 61, 83])).save(&png)?;
+        image::RgbImage::from_pixel(8, 8, image::Rgb([19, 41, 73])).save(&thumbnail)?;
+        let encoded = std::process::Command::new(encoder)
+            .args(["-q", "80", "-o"])
+            .arg(&media)
+            .arg(&png)
+            .output()?;
+        anyhow::ensure!(encoded.status.success(), "synthetic HEIC encoding failed");
+        let seeded = ExiftoolBuilder::new()
+            .arg(format!("-ThumbnailImage<={}", thumbnail.display()))
+            .overwrite_original()
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(seeded.status.success(), "HEIC thumbnail seeding failed");
+        fs::copy(&media, &original)?;
+        fs::write(
+            &xmp,
+            br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:description="synthetic HEIC thumbnail proof"/></rdf:RDF></x:xmpmeta>"#,
+        )?;
+        XmpMerger::new(Config::default()).merge_xmp(&xmp, &media)?;
+        crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+            &original, &xmp, &media,
+        )?;
+        image::RgbImage::from_pixel(8, 8, image::Rgb([83, 61, 37])).save(&thumbnail)?;
+        let altered = ExiftoolBuilder::new()
+            .arg(format!("-ThumbnailImage<={}", thumbnail.display()))
+            .overwrite_original()
+            .input(&media)
+            .build()
+            .output()?;
+        anyhow::ensure!(altered.status.success(), "thumbnail mutation setup failed");
+        assert!(
+            crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+                &original, &xmp, &media,
+            )
+            .is_err(),
+            "changed thumbnail bytes must not pass as an offset-only relocation"
         );
         Ok(())
     }

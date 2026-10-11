@@ -319,6 +319,7 @@ mod tests {
                 || content.contains("_ENV_LOCK")
                 || content.contains("ENV_LOCK:")
                 || content.contains("TEST_LOCK")
+                || content.contains("TEST_PROCESSED_LOCK")
                 || content.contains("LOOP_INTENT_ENV_LOCK");
             if !isolated {
                 violations.push(format!(

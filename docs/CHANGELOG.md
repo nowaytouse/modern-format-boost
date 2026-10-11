@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Native XMP custody and failure visibility (2026-10-11)
+
+- Copy native XMP as a complete packet instead of rationalizing GPS fields.
+  Preserve sidecar coordinate precision, rational values, reference tags and
+  unknown namespaces. Existing embedded fields are added only where the staged
+  sidecar has no value; full post-write metadata proof remains mandatory.
+  No metadata tolerance is widened.
+- Align modern-container proof with the shared metadata audit for relocated IFD1
+  thumbnail offsets. Thumbnail bytes, length, MakerNotes, primary payload and
+  codec features remain checked. Add synthetic positive and corrupted-thumbnail
+  coverage, existing-field preservation and repeat-application idempotence.
+- Include original-media XMP delivery failures in the launcher's per-file history
+  list, with line-safe paths. Clarify original-delivery versus whole-batch error
+  counts without changing authoritative delivered/failed/retained accounting.
+- Reject incomplete directory inventories when traversal fails, retaining the
+  failing root/path context instead of silently dropping unreadable entries.
+- Document current product choices, safety constraints and capability boundaries
+  in the policy-readiness inventory. No default routing, profile system or new
+  Preflight runtime is introduced.
+- Repair the completed CI run's environment-isolation audit, empty-vector Clippy
+  assertion, pinned toolchain-action contract and receipt-parser diagnostic path.
+  Preserve the workspace dependency lock refresh; no new dependency is added.
+
 ### Standard batch size history (2026-10-10)
 
 - Carry exact current-run converted bytes from standard IMG/VID reports through

@@ -2031,6 +2031,10 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                 rel_path = %candidate.rel_path,
                 "tier-2 XMP delivery rejected unsafe relative path; source and sidecar retained"
             );
+            println!(
+                "[FAIL    ]   {}: original-media XMP delivery rejected unsafe relative path; source and sidecar retained",
+                candidate.rel_path.replace(['\r', '\n'], " ")
+            );
             continue;
         }
         let staged_path = staging.path().join(relative);
@@ -2221,6 +2225,10 @@ fn import_modern_lossy_static_tier_with_checkpoint(
                     rel_path = %candidate.rel_path,
                     error = %error,
                     "tier-2 XMP delivery failed; source and sidecar retained"
+                );
+                println!(
+                    "[FAIL    ]   {}: original-media XMP delivery verification failed; source and sidecar retained",
+                    candidate.rel_path.replace(['\r', '\n'], " ")
                 );
             }
         }

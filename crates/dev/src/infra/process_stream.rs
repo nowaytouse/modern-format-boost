@@ -61,7 +61,13 @@ fn parse_converted_bytes(payload: &str) -> Option<ProcessorByteTotals> {
     if payload.len() > 4096 {
         return None;
     }
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let value: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("[PROCESS] converted-byte receipt JSON parse failed: {error}");
+            return None;
+        }
+    };
     if value.get("schema_version")?.as_u64()? != 1
         || value.get("scope")?.as_str()? != "converted_this_run"
     {
@@ -745,6 +751,7 @@ mod tests {
                 .is_none()
         );
         for invalid in [
+            "{",
             r#"{"schema_version":2,"scope":"converted_this_run","input_bytes":1,"output_bytes":2}"#,
             r#"{"schema_version":1,"scope":"all_files","input_bytes":1,"output_bytes":2}"#,
             r#"{"schema_version":1,"scope":"converted_this_run","input_bytes":-1,"output_bytes":2}"#,
