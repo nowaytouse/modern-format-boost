@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Custom IMG byte budgets, history diagnostics and live localization (2026-10-12)
+
+- Add `img.size_tolerance_bytes`, default 524288, through typed configuration,
+  standard IMG CLI, launcher, effective-config sources/history and native Images
+  settings. Explicit options carry the same budget through shared final checks,
+  JXL exploration and eligible AVIF fallbacks; changing the budget alone does not
+  enable growth. Preserve strict-layer veto, metadata independence and integrity
+  gates. Zero allows equal size only with enabled tolerance; disabled remains
+  strictly smaller. Fast IMG/VID retain their existing budgets and policies.
+- Group current-page history diagnostics by pipeline, explicitly recorded phase,
+  severity and complete normalized message. Keep distinct paths/numbers separate,
+  unknown phases explicit, invalid control records visible and all original output
+  available. Show log occurrences/repeats and record ranges without presenting them
+  as failed-file or whole-batch error counts. No schema change or extra batch scan.
+- Keep core readiness as typed state and render it in the currently selected GUI
+  language. Refresh status/help wording without resetting errors, completion,
+  elapsed processing time or command drafts; do not compare translated strings
+  to decide whether the core is ready. Preserve original failure diagnostics.
+- Remove verified completed requirements and duplicated delivery reports from the
+  private task handoff, retaining numbered remaining requirements, reference ideas,
+  durable contract/changelog links and evidence limitations. This does not close
+  partially implemented main tasks or delete their outstanding acceptance work.
+- Verify 85 focused Rust regressions, related strict Clippy, workspace formatting,
+  warnings-as-errors Swift compilation, three-language native self-tests and
+  isolated AppKit views. Exercise budget save/reopen/zero/reset and raw/grouped
+  history switching with synthetic records. This is not production Photos,
+  end-to-end media throughput, full workspace/platform or new CI acceptance;
+  the installed application was not repackaged.
+
 ### Bounded IMG gate reuse, size-tolerance settings and native layout (2026-10-12)
 
 - Share exact JPEG reconstruction evidence between layered-XMP and JPEG-only

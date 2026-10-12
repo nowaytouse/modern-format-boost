@@ -79,14 +79,17 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
-Standard IMG exposes **Allow slight size growth** in the Images tab, backed by
-`img.allow_size_tolerance` (default `false`). `img run --allow-size-tolerance`
-enables the existing 512 KiB (524288-byte) pure-media budget; `=false` or
-`--no-allow-size-tolerance` overrides a saved permission. Metadata is excluded,
-strict-size policy may veto growth, and mandatory verification is unchanged.
-Effective config/history record the request and source; run logs also report
-the effective budget. This setting is not a custom byte limit and does not apply
-to Fast IMG or VID; inapplicable explicit launcher/worker flags are rejected.
+Standard IMG exposes **Allow size growth** and **Growth limit (bytes)** in Images,
+backed by `img.allow_size_tolerance` (default `false`) and `img.size_tolerance_bytes`
+(default `524288`, or 512 KiB). `img run --allow-size-tolerance --size-tolerance-bytes 4096`
+requests at most 4096 bytes of pure-media growth; setting the budget alone does not
+enable it. `=false` or `--no-allow-size-tolerance` overrides saved permission.
+Metadata is excluded, strict-size policy may veto growth, and mandatory verification
+is unchanged. A zero enabled budget permits equal size without growth; disabled or
+strict-size policy still requires a smaller result. Effective config/history retain
+each value and its source; logs report requested and effective bytes. The launcher
+forwards `--img-size-tolerance-bytes`. Fast IMG and VID keep their existing policies;
+inapplicable explicit launcher/worker flags are rejected.
 Photos checkboxes now keep their labels beside the control in a narrower settings
 panel, including after inherited settings load or tab reset.
 
@@ -716,8 +719,12 @@ The launcher's captured combined worker output is now buffered into the same
 database, not duplicated into session and verbose text logs. **View processing
 output** opens its latest page, with older/newer navigation and a Summary/Output
 switch. Each page is bounded to 1,000 records and 2 MiB; record ranges and totals
-refer to the captured output snapshot, not files. A Diagnostics filter shows only
-warnings, errors and unreadable-row notices on the current page. Oversized or
+refer to the captured output snapshot, not files. **Diagnostic groups** combines
+exactly repeated messages on the current page by pipeline, recorded phase and
+severity, showing occurrences and record ranges. Paths and numbers remain part of
+the identity; a missing phase is unknown, never inferred from another page. These
+are log-record counts, not failed-file or whole-batch error counts. **All** preserves
+each original record. Oversized or
 invalid records are explicitly marked without blocking navigation. Refresh to
 include output appended since the snapshot. Batch sequence boundaries keep
 watch-mode runs separate; output is not interpreted as authoritative failure counts.
@@ -1362,7 +1369,10 @@ heuristic, fallback, tool-path and Photos naming/backend settings.
   library or any media. Folder/file comparison is deliberately not part of
   MFB; use a dedicated external deduplication tool for that job. The native
   GUI exposes the same **Compare backup** action and rejects non-Photos inputs.
-- `--allow-size-tolerance`: relaxes the default strict output-size gate.
+- `--allow-size-tolerance`: requests the configured pure-media growth budget where
+  the active policy permits it; strict-size and integrity gates remain mandatory.
+- `--size-tolerance-bytes N`: standard IMG byte budget, default 524288; does not
+  enable growth on its own.
 - `--allow-expert-options`: permits explicitly gated fallback/experimental
   encoder paths; it does not weaken final verification.
 - `--in-place`: Replace original files. **WARNING: IRREVERSIBLE.**

@@ -447,6 +447,23 @@ private enum HistoryStore {
             let sequence: Int64
             let text: String
             let diagnostic: Bool
+            let pipeline: String?
+            let line: String?
+        }
+        struct DiagnosticGroup {
+            let pipeline: String?
+            let phase: String?
+            let severity: String
+            let message: String
+            var count: Int
+            let firstSequence: Int64
+            var lastSequence: Int64
+        }
+        private struct DiagnosticKey: Hashable {
+            let pipeline: String?
+            let phase: String?
+            let severity: String
+            let message: String
         }
         let rows: [Row]
         let total: Int64
@@ -457,6 +474,46 @@ private enum HistoryStore {
         var shown: Int { rows.count }
         var hasOlder: Bool { shown > 0 && firstOrdinal > 1 }
         var hasNewer: Bool { shown > 0 && firstOrdinal + Int64(shown) - 1 < total }
+        var diagnosticGroups: [DiagnosticGroup] {
+            var phases: [String: PhaseLogPresentation] = [:]
+            var indices: [DiagnosticKey: Int] = [:]
+            var groups: [DiagnosticGroup] = []
+            for row in rows {
+                var invalidPhase = false
+                if row.line == nil {
+                    if let pipeline = row.pipeline { phases[pipeline] = PhaseLogPresentation(now: 0) }
+                    else { phases.removeAll() }
+                }
+                if let pipeline = row.pipeline, let line = row.line {
+                    var state = phases[pipeline] ?? PhaseLogPresentation(now: 0)
+                    if let update = state.ingest(line, now: 0) {
+                        if update == .invalid {
+                            state = PhaseLogPresentation(now: 0)
+                            invalidPhase = true
+                        }
+                        phases[pipeline] = state
+                        if !invalidPhase { continue }
+                    }
+                }
+                guard row.diagnostic || invalidPhase else { continue }
+                let phase = row.pipeline.flatMap { phases[$0]?.phase?.rawValue }
+                let message = invalidPhase ? localized("log.phase.invalid") + "\n" + (row.line ?? row.text)
+                    : row.line.map(LogTone.message) ?? row.text
+                let severity = invalidPhase ? "warning" : row.line.map {
+                    LogTone.classify($0) == .warning ? "warning" : "failure"
+                } ?? "unreadable"
+                let key = DiagnosticKey(pipeline: row.pipeline, phase: phase, severity: severity, message: message)
+                if let index = indices[key] {
+                    groups[index].count += 1
+                    groups[index].lastSequence = row.sequence
+                } else {
+                    indices[key] = groups.count
+                    groups.append(DiagnosticGroup(pipeline: row.pipeline, phase: phase, severity: severity,
+                        message: message, count: 1, firstSequence: row.sequence, lastSequence: row.sequence))
+                }
+            }
+            return groups
+        }
     }
 
     enum OutputDirection { case older, newer }
@@ -794,14 +851,18 @@ private enum HistoryStore {
             let sequence = sqlite3_column_int64(query, 0)
             var text: String
             var diagnostic = false
+            var pipeline: String?
+            var line: String?
             do {
                 let ts = try databaseText(query, 1, database: database)
-                let pipeline = try databaseText(query, 2, database: database)
-                let line = try databaseText(query, 3, database: database)
-                text = "[\(ts)] \(pipeline): \(line)"
-                let tone = LogTone.classify(line)
+                let rawPipeline = try databaseText(query, 2, database: database)
+                pipeline = rawPipeline
+                let rawLine = try databaseText(query, 3, database: database)
+                text = "[\(ts)] \(rawPipeline): \(rawLine)"
+                let tone = LogTone.classify(rawLine)
                 diagnostic = tone == .warning || tone == .failure
                 if text.utf8.count + 1 > maximumOutputBytes { throw HistoryParseError.invalid }
+                line = rawLine
             } catch {
                 text = localized("history.output.row_issue", sequence)
                 issues.append(text)
@@ -810,7 +871,7 @@ private enum HistoryStore {
             let size = text.utf8.count + 1
             guard size <= maximumOutputBytes - bytes else { break }
             bytes += size
-            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic))
+            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic, pipeline: pipeline, line: line))
         }
         if !ascending { rows.reverse() }
         var ordinal: Int64 = 0
@@ -1864,11 +1925,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
     private func renderOutput() {
         guard let page = outputPage else { return }
-        let rows = outputFilter.selectedSegment == 1 ? page.rows.filter(\.diagnostic) : page.rows
         let end = page.shown == 0 ? 0 : page.firstOrdinal + Int64(page.shown) - 1
         let label = localized("history.output.range", page.firstOrdinal, end, page.total)
-        detail.string = label + "\n" + localized("history.output.visible_page", rows.count, page.shown)
-            + "\n\n" + rows.map(\.text).joined(separator: "\n")
+        if outputFilter.selectedSegment == 1 {
+            let groups = page.diagnosticGroups
+            let count = groups.reduce(0) { $0 + $1.count }
+            let sections = groups.map { group in
+                localized("history.output.diagnostic_group", group.pipeline ?? localized("result.unknown"),
+                    group.phase.map { localized("log.phase.\($0)") } ?? localized("history.output.phase_unknown"),
+                    localized("history.output.severity.\(group.severity)"), group.count, group.count - 1,
+                    group.firstSequence, group.lastSequence) + "\n" + group.message
+            }
+            detail.string = label + "\n" + localized("history.output.diagnostic_groups", count, groups.count)
+                + "\n" + localized("history.output.diagnostics_note") + "\n\n" + sections.joined(separator: "\n\n")
+        } else {
+            detail.string = label + "\n" + localized("history.output.visible_page", page.shown, page.shown)
+                + "\n\n" + page.rows.map(\.text).joined(separator: "\n")
+        }
         detail.scrollToBeginningOfDocument(nil)
         status.stringValue = label
     }
@@ -2172,6 +2245,30 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard !detail.string.contains("synthetic next run"), outputPage?.shown == HistoryStore.maximumOutputLines else {
             throw HostError(message: "Page diagnostics changed pagination or exposed routine records")
         }
+        let previousPage = outputPage
+        let phase = "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"processing\"}"
+        let repeated = "[WARN] /synthetic/file.jpg: repeated warning 1"
+        let groupedRows = [
+            HistoryStore.Output.Row(sequence: 1, text: phase, diagnostic: false, pipeline: "IMG", line: phase),
+            HistoryStore.Output.Row(sequence: 2, text: repeated, diagnostic: true, pipeline: "IMG", line: repeated),
+            HistoryStore.Output.Row(sequence: 3, text: "ERR: " + repeated, diagnostic: true, pipeline: "IMG", line: "ERR: " + repeated),
+        ]
+        outputPage = HistoryStore.Output(rows: groupedRows, total: 100, upper: 100, firstOrdinal: 1, issues: [])
+        outputFilterChanged()
+        guard detail.string.contains(localized("history.output.diagnostic_groups", 2, 1)),
+              detail.string.contains(localized("history.output.diagnostics_note")),
+              detail.string.contains(localized("log.phase.processing")),
+              !detail.string.contains("ERR: " + repeated), outputPage?.total == 100 else {
+            throw HostError(message: "Diagnostic group presentation repeated logs or claimed whole-batch failure counts")
+        }
+        outputFilter.selectedSegment = 0
+        outputFilterChanged()
+        guard detail.string.contains(phase), detail.string.contains("ERR: " + repeated), outputPage?.shown == 3 else {
+            throw HostError(message: "All output did not retain the original diagnostic and phase records")
+        }
+        outputPage = previousPage
+        outputFilter.selectedSegment = 1
+        outputFilterChanged()
         olderOutput()
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         showSelected()
@@ -2217,6 +2314,43 @@ func runProcessingHistorySelfTests() throws {
     let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
     func parsed(_ events: [String]) throws -> HistoryAudit { HistoryStore.parse(data: try records(events), stamp: "test", audit: fixtureURL) }
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw HostError(message: message) } }
+    func diagnosticRow(_ sequence: Int64, _ pipeline: String, _ line: String) -> HistoryStore.Output.Row {
+        let tone = LogTone.classify(line)
+        return HistoryStore.Output.Row(sequence: sequence, text: "[synthetic] \(pipeline): \(line)",
+            diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line)
+    }
+    let processingPhase = try payload("MFB_LOG_PHASE", ["schema_version": 1, "phase": "processing"])
+    let verificationPhase = try payload("MFB_LOG_PHASE", ["schema_version": 1, "phase": "verification"])
+    let diagnosticRows = [
+        diagnosticRow(1, "IMG", "[WARN] /synthetic/first.jpg: warning 1"),
+        diagnosticRow(2, "IMG", processingPhase),
+        diagnosticRow(3, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(4, "IMG", "ERR: \u{001B}[31m[FAIL] /synthetic/one.jpg: error 1\u{001B}[0m"),
+        diagnosticRow(5, "IMG", "[FAIL] /synthetic/two.jpg: error 1"),
+        diagnosticRow(6, "VID", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(7, "IMG", "[FAIL] /synthetic/one.jpg: error 2"),
+        diagnosticRow(8, "IMG", verificationPhase),
+        diagnosticRow(9, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(10, "IMG", "MFB_LOG_PHASE={invalid}"),
+        diagnosticRow(11, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        HistoryStore.Output.Row(sequence: 12, text: "synthetic unreadable record", diagnostic: true, pipeline: nil, line: nil),
+    ]
+    let diagnosticPage = HistoryStore.Output(rows: diagnosticRows, total: 100, upper: 100, firstOrdinal: 1, issues: [])
+    let groups = diagnosticPage.diagnosticGroups
+    try require(groups.count == 9 && groups.reduce(0, { $0 + $1.count }) == 10
+                && groups[1].pipeline == "IMG" && groups[1].phase == "processing" && groups[1].count == 2
+                && groups[1].firstSequence == 3 && groups[1].lastSequence == 4
+                && groups[2].message.contains("two.jpg") && groups[3].pipeline == "VID" && groups[3].phase == nil
+                && groups[4].message.contains("error 2") && groups[5].phase == "verification"
+                && groups[6].severity == "warning" && groups[6].phase == nil && groups[6].message.contains("{invalid}")
+                && groups[7].phase == nil && groups[8].severity == "unreadable",
+                "Page diagnostic grouping merged paths, numbers, pipelines, phases, or hid invalid evidence")
+    try require(diagnosticPage.total == 100 && diagnosticPage.shown == 12
+                && diagnosticPage.text == diagnosticRows.map(\.text).joined(separator: "\n"),
+                "Diagnostic grouping changed authoritative pagination or discarded original output")
+    let laterPage = HistoryStore.Output(rows: [diagnosticRows[8]], total: 100, upper: 100, firstOrdinal: 9, issues: [])
+    try require(laterPage.diagnosticGroups.first?.phase == nil && laterPage.diagnosticGroups.first?.count == 1,
+                "A new page guessed its phase or carried diagnostic counts from another page")
     let success = try parsed(["SESSION_STARTED", context, summary, completed])
     try require(success.entries.count == 1 && success.entries[0].statusKey == "history.status.completed"
                 && success.entries[0].context?.output == nil && success.entries[0].succeededLabel == "2", "Typed history did not retain nullable paths or active counts")
@@ -2962,7 +3096,8 @@ func runProcessingHistorySelfTests() throws {
     try require(outputEntries.count == 2, "Output sessions merged watch-mode batches")
     let firstOutput = try HistoryStore.output(for: outputEntries[0])
     try require(firstOutput.total == 1 && firstOutput.shown == 1 && firstOutput.text.contains("first failure")
-                && !firstOutput.text.contains("next run"), "Output leaked another batch")
+                && !firstOutput.text.contains("next run") && firstOutput.rows[0].pipeline == "IMG"
+                && firstOutput.rows[0].line == "synthetic first failure", "Output leaked another batch or lost diagnostic identity")
     let nextOutput = try HistoryStore.output(for: outputEntries[1])
     try require(nextOutput.total == Int64(HistoryStore.maximumOutputLines + 2)
                 && nextOutput.shown == HistoryStore.maximumOutputLines

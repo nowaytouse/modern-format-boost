@@ -274,7 +274,7 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgErrorMode, imgToolPolicy
+    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig
     case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
@@ -310,6 +310,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
         case .imgSizeTolerance: "--img-allow-size-tolerance"
+        case .imgSizeToleranceBytes: "--img-size-tolerance-bytes"
         case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
         case .imgErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
@@ -348,6 +349,7 @@ private enum MediaSetting: String, CaseIterable {
         case .photosAppleScriptBatch: 1...50
         case .photosTargetSeconds: 1...600
         case .cacheMaxBytes, .cacheTtlSeconds: 1...Int.max
+        case .imgSizeToleranceBytes: 0...Int.max
         default: nil
         }
     }
@@ -361,6 +363,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgSizeTolerance: "img.allow_size_tolerance"
+        case .imgSizeToleranceBytes: "img.size_tolerance_bytes"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
         case .imgErrorMode, .vidErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
@@ -432,6 +435,7 @@ private struct MediaSettings {
     var photos = PhotosImportSettings()
     var imageFailure: FileFailurePolicy?
     var imageSizeTolerance: Bool?
+    var imageSizeToleranceBytes: Int?
     var videoFailure: FileFailurePolicy?
     var videoCodec: VideoCodec?
     var videoConfigurationFile: String?
@@ -450,6 +454,7 @@ private struct MediaSettings {
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
                 .imgSizeTolerance: imageSizeTolerance.map(String.init),
+                .imgSizeToleranceBytes: imageSizeToleranceBytes.map(String.init),
                 .imgToolPolicy: image.toolPolicy?.rawValue,
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
@@ -486,6 +491,7 @@ private struct MediaSettings {
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
                 case .imgSizeTolerance: imageSizeTolerance = Bool(value)
+                case .imgSizeToleranceBytes: imageSizeToleranceBytes = Int(value)
                 case .imgToolPolicy: image.toolPolicy = ToolSelectionPolicy(rawValue: value)
                 case .imgErrorMode: imageFailure = FileFailurePolicy(rawValue: value)
                 case .fastConfig: fastImage.configurationFile = value
@@ -960,7 +966,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
                     textFields[field] = text
-                    if field.isCache {
+                    if field.isCache || field == .imgSizeToleranceBytes {
                         // Keep full Int64 precision; NSStepper stores its value as Double.
                         text.placeholderString = localized("settings.automatic")
                         control = text
@@ -1731,6 +1737,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try validatePhotosForSelfTest()
         try validateSearchForSelfTest()
         try validateFailurePolicyForSelfTest()
+        if !fast && !videos {
+            var budget = MediaSettings()
+            budget.values = [.imgSizeToleranceBytes: String(Int.max)]
+            restore(budget)
+            guard draft().imageSizeToleranceBytes == Int.max, steppers[.imgSizeToleranceBytes] == nil,
+                  draft().imageSizeTolerance == nil else {
+                throw HostError(message: "Image growth limit lost precision or enabled tolerance")
+            }
+            budget.values[.imgSizeToleranceBytes] = "0"
+            restore(budget)
+            guard draft().imageSizeToleranceBytes == 0 else {
+                throw HostError(message: "Zero image growth budget was not preserved")
+            }
+            for invalid in ["-1", "1.5", "9223372036854775808"] {
+                budget.values[.imgSizeToleranceBytes] = invalid
+                do { try budget.validate() }
+                catch { continue }
+                throw HostError(message: "Invalid image growth budget was accepted")
+            }
+        }
         var settings = MediaSettings()
         let effort: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
         let database: MediaSetting = fast ? .fastDatabase : .imgDatabase
@@ -2465,7 +2491,7 @@ private struct FileStageProgress {
     }
 }
 
-private struct PhaseLogPresentation {
+struct PhaseLogPresentation {
     enum Phase: String, Decodable { case processing, verification }
     enum Update: Equatable {
         case unchanged, invalid
@@ -3168,6 +3194,23 @@ private func queryPhotosAuditContainers(binary: URL, library: String) throws -> 
     return containers
 }
 
+private enum ProcessorReadiness: Equatable, Sendable {
+    case checking, ready, unavailable
+    case failed(diagnostic: String, omitted: Bool)
+
+    var message: String {
+        switch self {
+        case .checking: return localized("status.checking_processor")
+        case .ready: return localized("status.processor_ready")
+        case .unavailable: return localized("status.processor_unavailable")
+        case let .failed(diagnostic, omitted):
+            let detail = [diagnostic, omitted ? localized("log.omitted", UInt64(1)) : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            return localized("status.processor_failed") + (detail.isEmpty ? "" : ": " + detail)
+        }
+    }
+}
+
 @MainActor
 private final class NativeHost {
     var onLog: ((String) -> Void)?
@@ -3236,10 +3279,10 @@ private final class NativeHost {
         }
     }
 
-    nonisolated func checkVersionAlignment() -> String {
+    nonisolated func checkVersionAlignment() -> ProcessorReadiness {
         guard let binary = ProcessorLocator.resolve(), ProcessorLocator.resolveTool(named: "img") != nil,
               ProcessorLocator.resolveTool(named: "vid") != nil else {
-            return localized("status.processor_unavailable")
+            return .unavailable
         }
         let process = Process()
         process.executableURL = binary
@@ -3260,19 +3303,13 @@ private final class NativeHost {
             )
             process.waitUntilExit()
             if process.terminationStatus == 0 {
-                return localized("status.processor_ready")
+                return .ready
             }
-            var diagnostic = String(decoding: capture.data, as: UTF8.self)
+            let diagnostic = String(decoding: capture.data, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if capture.exceeded {
-                if !diagnostic.isEmpty { diagnostic.append("\n") }
-                diagnostic.append(localized("log.omitted", UInt64(1)))
-            }
-            return diagnostic.isEmpty
-                ? localized("status.processor_failed")
-                : "\(localized("status.processor_failed")): \(diagnostic)"
+            return .failed(diagnostic: diagnostic, omitted: capture.exceeded)
         } catch {
-            return "\(localized("status.processor_failed")): \(error.localizedDescription)"
+            return .failed(diagnostic: error.localizedDescription, omitted: false)
         }
     }
 
@@ -3670,7 +3707,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var lastRequest: ProcessorRequest?
     private var sawResumeDecision = false
     private var configurationControlsEnabled = true
-    private var processorStatus = ""
+    private var processorStatus: ProcessorReadiness = .checking
+    private enum StatusDisplay {
+        case processor
+        case localized(String, [CVarArg])
+        case message(String)
+    }
+    private var statusDisplay: StatusDisplay = .processor
     private var selectedPhotosContainer: PhotosAuditContainer?
     private var processingStartedAt: TimeInterval?
     private var refreshTimer: Timer?
@@ -3736,14 +3779,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        statusLabel.stringValue = localized("status.checking_processor")
+        processorStatus = .checking
+        statusDisplay = .processor
+        refreshStatus()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let status = self.host.checkVersionAlignment()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.processorStatus = status
-                if self.configurationControlsEnabled { self.statusLabel.stringValue = status }
+                if self.configurationControlsEnabled, case .processor = self.statusDisplay { self.refreshStatus() }
             }
         }
     }
@@ -3765,19 +3810,39 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshProcessingStatus()
     }
 
+    private func refreshStatus() {
+        switch statusDisplay {
+        case .processor: statusLabel.stringValue = processorStatus.message
+        case let .localized(key, arguments):
+            let format = LocalizationCatalog.shared.text(key)
+            statusLabel.stringValue = arguments.isEmpty ? format : String(format: format, locale: Locale.current, arguments: arguments)
+        case let .message(message): statusLabel.stringValue = message
+        }
+    }
+
+    private func setLocalizedStatus(_ key: String, _ arguments: CVarArg...) {
+        statusDisplay = .localized(key, arguments)
+        refreshStatus()
+    }
+
+    private func setStatus(_ message: String) {
+        statusDisplay = .message(message)
+        refreshStatus()
+    }
+
     @objc private func refreshProcessingStatus() {
         guard let startedAt = processingStartedAt else { return }
         pauseButton.isEnabled = host.canPause
         if host.controlState == "cancelled" {
-            statusLabel.stringValue = localized("status.stopping")
+            setLocalizedStatus("status.stopping")
             return
         }
         if host.controlState == "paused" {
-            statusLabel.stringValue = localized(host.isPaused ? "status.paused" : "status.pausing")
+            setLocalizedStatus(host.isPaused ? "status.paused" : "status.pausing")
             return
         }
         let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt))
-        statusLabel.stringValue = localized("status.running_elapsed", elapsed / 60, elapsed % 60)
+        setLocalizedStatus("status.running_elapsed", elapsed / 60, elapsed % 60)
     }
 
     private func configureWindow() {
@@ -4124,7 +4189,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             return
         }
         photosScopeButton.isEnabled = false
-        statusLabel.stringValue = localized("status.photos_scope_loading")
+        setLocalizedStatus("status.photos_scope_loading")
         host.loadPhotosAuditContainers(library: library) { [weak self] result in
             guard let self, self.targetField.stringValue == library,
                   self.selectedOperation == .restoreJpeg, self.configurationControlsEnabled
@@ -4163,7 +4228,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 : containers[safe: popup.indexOfSelectedItem - 1]
             configurationChanged()
         } else {
-            statusLabel.stringValue = localized("status.ready")
+            setLocalizedStatus("status.ready")
         }
     }
 
@@ -4173,15 +4238,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard configurationControlsEnabled else { return }
         guard !targetField.stringValue.isEmpty else {
             commandField.stringValue = ""
-            statusLabel.stringValue = processorStatus.isEmpty ? localized("status.ready") : processorStatus
+            statusDisplay = .processor
+            refreshStatus()
             return
         }
         do {
             commandField.stringValue = try host.terminalCommand(for: request())
-            statusLabel.stringValue = localized("status.ready")
+            setLocalizedStatus("status.ready")
         } catch {
             commandField.stringValue = ""
-            statusLabel.stringValue = error.localizedDescription
+            setStatus(error.localizedDescription)
         }
     }
 
@@ -4226,7 +4292,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func openInTerminal() {
         guard developerMode, configurationControlsEnabled else { return }
-        do { statusLabel.stringValue = try host.openInTerminal(request()) }
+        do { setStatus(try host.openInTerminal(request())) }
         catch { present(error) }
     }
 
@@ -4235,7 +4301,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             let command = try host.terminalCommand(for: request())
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(command, forType: .string)
-            statusLabel.stringValue = localized("status.command_copied")
+            setLocalizedStatus("status.command_copied")
         } catch { present(error) }
     }
 
@@ -4630,7 +4696,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 applyResumeDecision(fresh: false, to: &retry)
                 lastRequest = retry
             }
-            statusLabel.stringValue = localized("status.stopped")
+            setLocalizedStatus("status.stopped")
             appendLog(localized("status.stopped") + countSummary)
             if closeWhenFinished { NSApp.terminate(nil) }
             return
@@ -4639,7 +4705,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .success(message):
             setProcessing(false)
             if batchResults.hasFailure {
-                statusLabel.stringValue = localized(batchResults.hasPartialSuccess ? "result.partially_completed"
+                setLocalizedStatus(batchResults.hasPartialSuccess ? "result.partially_completed"
                     : (batchResults.hasFileFailures ? "result.finished_with_failures" : "result.stopped_with_error"))
                 appendLog("[FAIL] \(statusLabel.stringValue)" + countSummary,
                           captureDiagnostics: latestDiagnostics.failure == nil)
@@ -4647,12 +4713,12 @@ private final class AppController: NSObject, NSWindowDelegate {
                 || (batchResults.hasUnprocessed && host.controlState != "paused")
                 || (batchResults.totals.isEmpty
                 && lastRequest.map { !$0.dryRun && [.adjacent, .fastImgJxl, .fastImgAvif, .fastVid].contains($0.operationMode) } == true) {
-                statusLabel.stringValue = localized(batchResults.isIncomplete || batchResults.totals.isEmpty
+                setLocalizedStatus(batchResults.isIncomplete || batchResults.totals.isEmpty
                     ? "result.incomplete" : "result.unfinished")
                 appendLog("[WARN] \(statusLabel.stringValue)" + countSummary,
                           captureDiagnostics: latestDiagnostics.warning == nil)
             } else {
-                statusLabel.stringValue = message
+                setStatus(message)
                 appendLog("[DONE] \(message)" + countSummary)
             }
         case let .failure(error):
@@ -4677,7 +4743,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                     applyResumeDecision(fresh: true, to: &retry)
                 default:
                     setProcessing(false)
-                    statusLabel.stringValue = error.localizedDescription
+                    setStatus(error.localizedDescription)
                     return
                 }
                 lastRequest = retry
@@ -4694,8 +4760,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 host.startProcessing(retry)
             } else {
                 setProcessing(false)
-                statusLabel.stringValue = batchResults.hasPartialSuccess ? localized("result.partially_completed")
-                    : (batchResults.hasFileFailures ? localized("result.finished_with_failures") : error.localizedDescription)
+                if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
+                else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
+                else { setStatus(error.localizedDescription) }
             }
         }
     }
@@ -4716,7 +4783,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func repairCore() {
-        guard configurationControlsEnabled, processorStatus != localized("status.processor_ready") else { return }
+        guard configurationControlsEnabled, processorStatus != .ready else { return }
         if developerMode {
             let chooser = NSOpenPanel()
             chooser.canChooseDirectories = false
@@ -4740,7 +4807,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         LocalizationCatalog.shared.select(language)
         applyLocalization()
         (NSApp.delegate as? AppDelegate)?.configureMenus()
-        configurationChanged()
+        updateMetadataSafetyNotice()
     }
 
     @objc private func appearanceChanged() {
@@ -4795,6 +4862,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         historyButton.toolTip = resolvedHistoryDirectory.path
         pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
         stopButton.title = localized("button.stop")
+        statusLabel.toolTip = localized("status.core_help")
         updateOptionTitles()
         commandField.placeholderString = localized("command.placeholder")
         replaceTitles(processingPopup, with: [
@@ -4807,6 +4875,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshFileProgress()
         refreshLatestDiagnostics()
         refreshDiagnostics()
+        refreshStatus()
         refreshProcessingStatus()
     }
 
@@ -4893,7 +4962,76 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func validateStatusLocalizationForSelfTest() throws {
+        let catalog = LocalizationCatalog.shared
+        let language = catalog.language
+        let previousProcessor = processorStatus
+        let previousDisplay = statusDisplay
+        let previousStartedAt = processingStartedAt
+        let previousTarget = targetField.stringValue
+        let previousBackup = backupField.stringValue
+        let previousCommand = commandField.stringValue
+        let optionStates = optionControls.map { $0.0.state }
+        defer {
+            processorStatus = previousProcessor
+            statusDisplay = previousDisplay
+            processingStartedAt = previousStartedAt
+            targetField.stringValue = previousTarget
+            backupField.stringValue = previousBackup
+            commandField.stringValue = previousCommand
+            languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language) ?? 0)
+            languageChanged()
+        }
+        targetField.stringValue = "/synthetic/language-draft"
+        backupField.stringValue = "/synthetic/language-backup"
+        commandField.stringValue = "synthetic command preview"
+        func changeLanguage(_ language: AppLanguage) {
+            languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language)!)
+            languageChanged()
+        }
+        for language in [AppLanguage.english, .simplifiedChinese, .japanese] {
+            for (state, key) in [(ProcessorReadiness.checking, "status.checking_processor"),
+                                 (.ready, "status.processor_ready"), (.unavailable, "status.processor_unavailable")] {
+                processorStatus = state
+                statusDisplay = .processor
+                changeLanguage(language)
+                guard statusLabel.stringValue == localized(key), processorStatus == state else {
+                    throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
+                }
+            }
+            processorStatus = .failed(diagnostic: "synthetic original failure", omitted: true)
+            changeLanguage(language)
+            guard statusLabel.stringValue == localized("status.processor_failed") + ": synthetic original failure\n"
+                + localized("log.omitted", UInt64(1)), processorStatus != .ready else {
+                throw HostError(message: "Language change lost the core failure evidence or relabeled it ready")
+            }
+            setStatus("synthetic original diagnostic")
+            changeLanguage(language)
+            guard statusLabel.stringValue == "synthetic original diagnostic" else {
+                throw HostError(message: "Language change replaced an actionable error with core readiness")
+            }
+            for key in ["status.ready", "result.partially_completed", "result.finished_with_failures", "status.stopped"] {
+                setLocalizedStatus(key)
+                changeLanguage(language)
+                guard statusLabel.stringValue == localized(key) else {
+                    throw HostError(message: "Language change reset a completed, failed, or stopped status")
+                }
+            }
+        }
+        processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
+        let startedAt = processingStartedAt
+        changeLanguage(.japanese)
+        let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt!))
+        guard statusLabel.stringValue == localized("status.running_elapsed", elapsed / 60, elapsed % 60),
+              processingStartedAt == startedAt, targetField.stringValue == "/synthetic/language-draft",
+              backupField.stringValue == "/synthetic/language-backup", commandField.stringValue == "synthetic command preview",
+              optionControls.map({ $0.0.state }) == optionStates else {
+            throw HostError(message: "Language change reset running state or the user's command draft")
+        }
+    }
+
     func validateInterfaceForSelfTest() throws {
+        try validateStatusLocalizationForSelfTest()
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
         guard !developerMode, copyButton.isHidden, openButton.isHidden, diagnosticsButton.isHidden,
               commandField.isHidden, watchCheck.isHidden,
@@ -5125,7 +5263,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetField.stringValue = longPath + "test.photoslibrary"
         backupField.stringValue = longPath + "backup"
         commandField.stringValue = longPath + "command"
-        statusLabel.stringValue = longPath
+        setStatus(longPath)
         photosScopeButton.title = longPath
         for operation in [OperationMode.adjacent, .collect, .restoreJpeg] {
             operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: operation)!)
@@ -5273,7 +5411,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func present(_ error: Error) {
-        statusLabel.stringValue = error.localizedDescription
+        setStatus(error.localizedDescription)
         NSAlert(error: error).runModal()
     }
 }
@@ -5411,7 +5549,7 @@ private func runSelfTest() -> Int32 {
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
-                                           .imgDatabase: "false", .imgSizeTolerance: "true", .imgErrorMode: "log-and-continue",
+                                           .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         let configuredArguments = try ProcessorCommand.arguments(from: configured)
         guard configuredArguments.contains("--img-fallback-policy"),
@@ -5421,6 +5559,7 @@ private func runSelfTest() -> Int32 {
               configuredArguments.contains("--img-allow-database=false"),
               !configuredArguments.contains("--img-error-mode"),
               !configuredArguments.contains("--img-allow-size-tolerance=true"),
+               !configuredArguments.contains("--img-size-tolerance-bytes"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
                 == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"],
@@ -5450,6 +5589,8 @@ private func runSelfTest() -> Int32 {
             + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
         guard imageEffective["execution.error_mode"] == "log-and-continue",
               imageEffective["img.allow_size_tolerance"] == "true",
+               imageEffective["img.size_tolerance_bytes"] == "4096",
+               imageEffective.sourceChain["img.size_tolerance_bytes"]?.last == "CLI",
               imageEffective.sourceChain["img.allow_size_tolerance"]?.last == "CLI",
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .imagesOnly)
                 .contains("--img-allow-size-tolerance=true"),

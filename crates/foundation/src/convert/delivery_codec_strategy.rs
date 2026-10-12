@@ -312,6 +312,7 @@ pub fn build_video_convert_options(flags: &RunDeliveryFlags) -> ConvertOptions {
 
     ConvertOptions {
         flags: convert_flags,
+        size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         output_dir: flags.output_dir.clone(),
         base_dir: flags.base_dir.clone(),
         codec: flags.codec,
@@ -630,6 +631,20 @@ pub const fn gpu_search_flags_for_codec(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_options_keep_the_existing_growth_budget_and_explicit_permission() {
+        let mut flags = RunDeliveryFlags::from_conversion_config(&ConversionConfig::default());
+        for enabled in [false, true] {
+            flags.allow_size_tolerance = enabled;
+            let options = build_video_convert_options(&flags);
+            assert_eq!(
+                options.size_tolerance_bytes,
+                crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+            );
+            assert_eq!(options.allow_size_tolerance(), enabled);
+        }
+    }
 
     #[test]
     fn parse_cli_defaults_to_hevc_family() {

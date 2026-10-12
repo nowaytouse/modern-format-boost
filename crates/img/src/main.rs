@@ -464,10 +464,11 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         no_resume,
     )?;
     let apple_compat = apple_compat && !no_apple_compat;
-    let allow_size_tolerance = foundation::infra::runtime_config::active()
+    let image_policy = &foundation::infra::runtime_config::active()
         .context("IMG runtime configuration must be installed before processing")?
-        .img
-        .allow_size_tolerance;
+        .img;
+    let allow_size_tolerance = image_policy.allow_size_tolerance;
+    let size_tolerance_bytes = image_policy.size_tolerance_bytes;
     let should_delete = delete_original || in_place;
 
     let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
@@ -574,9 +575,9 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     log_stat!(
         foundation::infra::static_logs::messages::LABEL_CONFIG,
         format!(
-            "Pure-media size policy: requested_tolerance={allow_size_tolerance} effective_tolerance={effective_tolerance} max_extra_bytes={} (metadata excluded)",
+            "Pure-media size policy: requested_tolerance={allow_size_tolerance} requested_extra_bytes={size_tolerance_bytes} effective_tolerance={effective_tolerance} max_extra_bytes={} (metadata excluded)",
             if effective_tolerance {
-                foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+                size_tolerance_bytes
             } else {
                 0
             }
@@ -618,6 +619,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         output_dir: output,
         base_dir,
         flags: config_flags,
+        size_tolerance_bytes,
         child_threads: 0,
         cache,
         tool_preflight: Arc::default(),
@@ -1215,6 +1217,7 @@ struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
     flags: ConfigFlags,
+    size_tolerance_bytes: u64,
     child_threads: usize,
 
     cache: Option<Arc<AnalysisCache>>,
@@ -1680,6 +1683,27 @@ mod conversion_result_adapter_tests {
     }
 
     #[test]
+    fn standard_options_preserve_explicit_size_budget_without_enabling_growth() {
+        let mut config = AutoConvertConfig {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::empty(),
+            size_tolerance_bytes: 17,
+            child_threads: 1,
+            cache: None,
+            tool_preflight: Arc::default(),
+            error_mode: foundation::BatchErrorMode::LogAndContinue,
+        };
+        let options = super::auto_convert_build_options(&config, "PNG".into(), "lossless".into());
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(!options.allow_size_tolerance());
+        config.flags.insert(ConfigFlags::ALLOW_SIZE_TOLERANCE);
+        let options = super::auto_convert_build_options(&config, "JPEG".into(), "lossless".into());
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(options.allow_size_tolerance());
+    }
+
+    #[test]
     fn raw_and_vector_inputs_are_preserved_without_hiding_real_rasters() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         for extension in [
@@ -1787,6 +1811,7 @@ mod conversion_result_adapter_tests {
             output_dir: Some(output.clone()),
             base_dir: Some(temp.path().to_path_buf()),
             flags: ConfigFlags::ARCHIVE_MODE | ConfigFlags::APPLE_COMPAT,
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -1830,6 +1855,7 @@ mod conversion_result_adapter_tests {
             output_dir: Some(output.clone()),
             base_dir: Some(temp.path().to_path_buf()),
             flags: ConfigFlags::ARCHIVE_MODE,
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -1896,6 +1922,7 @@ mod conversion_result_adapter_tests {
             output_dir: None,
             base_dir: None,
             flags: ConfigFlags::empty(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -5320,6 +5347,7 @@ fn fast_img_run_encode_job_inner(
             input_format: Some("JPEG".to_string()),
             quality_label: None,
             codec: foundation::conversion_types::SelectedCodec::default(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         };
         convert_jpeg_to_jxl(&job.source, &options, None)?
     };
@@ -10027,6 +10055,7 @@ fn auto_convert_build_options(
     img::lossless_converter::ConvertOptions {
         output_dir: config.output_dir.clone(),
         base_dir: config.base_dir.clone(),
+        size_tolerance_bytes: config.size_tolerance_bytes,
         flags: {
             img::lossless_converter::ConvertFlags::empty()
                 | if config.force() {

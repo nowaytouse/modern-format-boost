@@ -1026,8 +1026,8 @@ const fn resolved_jxl_distance_for_source(
 }
 
 /// Returns true when JXL d=0 output does NOT satisfy the active size policy.
-/// Callers must resolve the active policy from `ConvertOptions::effective_allow_size_tolerance()`
-/// and `DEFAULT_SIZE_TOLERANCE_BYTES` — never hardcode `StrictlySmaller` here.
+/// Callers must use `ConvertOptions::effective_size_policy()` to retain the configured
+/// budget and strict-layer veto; never hardcode `StrictlySmaller` here.
 const fn jxl_d0_misses_active_size_policy(
     input_size: u64,
     output_size: u64,
@@ -1291,11 +1291,7 @@ pub fn convert_to_jxl(
                     })?;
                 // Resolve active policy: respect effective_allow_size_tolerance which
                 // may veto tolerance even when the caller requested it.
-                let active_policy =
-                    foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
-                        options.effective_allow_size_tolerance(),
-                        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-                    );
+                let active_policy = options.effective_size_policy();
                 d0_missed_active_size_policy = jxl_d0_misses_active_size_policy(
                     input_payload_size,
                     output_payload_size,
@@ -3882,10 +3878,7 @@ fn try_jxl_to_avif_extreme_handoff(
         })?;
     let mut last_error = None;
     let mut metadata_retry = AvifencMetadataRetryState::default();
-    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
-        options.effective_allow_size_tolerance(),
-        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-    );
+    let active_policy = options.effective_size_policy();
     let (quality, probe_count) = search_highest_fitting_avif_quality_with(
         input_payload_size,
         (!options.require_output_delivery()).then_some(active_policy),
@@ -4038,10 +4031,7 @@ fn try_jxl_pre_avif_fallback(
     let candidate_output = foundation::path_safety::isolated_temp_path_for_search(jxl_temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let effort = foundation::constants::jxl_effort_for_mode(true);
-    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
-        options.effective_allow_size_tolerance(),
-        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-    );
+    let active_policy = options.effective_size_policy();
     let input_payload_size =
         foundation::image::static_payload::measure(input).map_err(|error| {
             ImgQualityError::ConversionError(format!(
@@ -4694,10 +4684,7 @@ fn try_explore_ultimate_jxl_distance(
     let exploration_effort = foundation::jxl_effort_policy::encoder_effort(true);
     // Active policy: must be consistent with d0 check and SizeToleranceCheck.
     // Resolves the same way as jxl_d0_misses_active_size_policy.
-    let active_policy = foundation::exploration_policy::SizePolicy::strict_or_allow_growth(
-        options.effective_allow_size_tolerance(),
-        foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-    );
+    let active_policy = options.effective_size_policy();
     let screening = foundation::jxl_explorer::screen_jxl_candidates(
         input_size,
         initial_output_size,

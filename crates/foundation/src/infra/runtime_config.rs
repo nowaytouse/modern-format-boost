@@ -137,8 +137,10 @@ impl ExecutionArgs {
 pub struct ImgPolicy {
     pub allow_database: bool,
     pub quality_heuristic: bool,
-    /// Standard IMG only: permit the existing 512 KiB pure-media growth budget.
+    /// Standard IMG only: permit the configured pure-media growth budget.
     pub allow_size_tolerance: bool,
+    /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
+    pub size_tolerance_bytes: u64,
     pub jpeg_effort: u8,
     pub fallback_policy: FallbackPolicy,
 }
@@ -173,6 +175,7 @@ impl Default for ImgPolicy {
             allow_database: false,
             quality_heuristic: false,
             allow_size_tolerance: false,
+            size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             jpeg_effort: 11,
             fallback_policy: FallbackPolicy::Strict,
         }
@@ -719,6 +722,53 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_size_tolerance_budget_defaults_layers_and_integer_bounds() -> Result<()> {
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        default_sources(&value, "", &mut sources, &mut source_chain);
+        assert_eq!(value["img"]["size_tolerance_bytes"], 524_288_u64);
+        assert_eq!(value["img"]["allow_size_tolerance"], false);
+        assert_eq!(sources["img.size_tolerance_bytes"], "default");
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(
+            file.path(),
+            br#"{"config_version":1,"img":{"size_tolerance_bytes":17}}"#,
+        )?;
+        apply_file(&mut value, file.path(), &mut sources, &mut source_chain)?;
+        let parsed: RuntimeConfig = serde_json::from_value(value.clone())?;
+        assert_eq!(parsed.img.size_tolerance_bytes, 17);
+        assert!(
+            !parsed.img.allow_size_tolerance,
+            "a budget must not enable tolerance"
+        );
+        assert_eq!(
+            source_chain["img.size_tolerance_bytes"],
+            ["default", file.path().to_str().context("config path")?]
+        );
+        for bytes in [0, u64::MAX] {
+            let parsed: RuntimeConfig =
+                serde_json::from_value(json!({"img":{"size_tolerance_bytes":bytes}}))?;
+            parsed.validate()?;
+            assert_eq!(parsed.img.size_tolerance_bytes, bytes);
+            assert!(!parsed.img.allow_size_tolerance);
+        }
+        for invalid in [json!(-1), json!(1.5), json!("17"), json!(true), Value::Null] {
+            let mut candidate = value.clone();
+            candidate["img"]["size_tolerance_bytes"] = invalid;
+            assert!(serde_json::from_value::<RuntimeConfig>(candidate).is_err());
+        }
+        let old_config: RuntimeConfig = serde_json::from_value(
+            json!({"config_version":1,"img":{"allow_size_tolerance":true}}),
+        )?;
+        assert_eq!(
+            old_config.img.size_tolerance_bytes,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+        );
+        Ok(())
+    }
 
     #[test]
     fn execution_policy_defaults_file_layers_and_cli_are_transparent() -> Result<()> {

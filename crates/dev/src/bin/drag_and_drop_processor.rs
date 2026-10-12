@@ -181,9 +181,12 @@ struct Args {
     /// Permit or deny optional image database access, not database credentials.
     #[arg(long, num_args = 1, require_equals = true)]
     img_allow_database: Option<bool>,
-    /// Standard IMG only: permit up to 512 KiB pure-media growth.
+    /// Standard IMG only: enable the configured pure-media growth budget.
     #[arg(long, num_args = 1, require_equals = true)]
     img_allow_size_tolerance: Option<bool>,
+    /// Standard IMG only: pure-media growth budget in bytes; does not enable tolerance.
+    #[arg(long)]
+    img_size_tolerance_bytes: Option<u64>,
 
     #[command(flatten)]
     photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
@@ -1294,7 +1297,7 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
-        args.img_allow_size_tolerance.is_none()
+        (args.img_allow_size_tolerance.is_none() && args.img_size_tolerance_bytes.is_none())
             || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
         "image size tolerance requires --mode auto or images; Fast IMG is unchanged"
     );
@@ -2119,6 +2122,9 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     }
     if let Some(tolerance) = args.img_allow_size_tolerance {
         command.push(format!("--allow-size-tolerance={tolerance}"));
+    }
+    if let Some(bytes) = args.img_size_tolerance_bytes {
+        command.extend(["--size-tolerance-bytes".to_owned(), bytes.to_string()]);
     }
 }
 
@@ -3508,6 +3514,7 @@ fn build_run_args(
         img_quality_heuristic: None,
         img_allow_database: None,
         img_allow_size_tolerance: None,
+        img_size_tolerance_bytes: None,
         photos: Default::default(),
         img_error_mode: None,
         vid_error_mode: None,
@@ -4463,6 +4470,8 @@ mod tests {
                 "--img-quality-heuristic=false",
                 "--img-allow-database=true",
                 "--img-allow-size-tolerance=false",
+                "--img-size-tolerance-bytes",
+                "1234",
                 "--img-error-mode",
                 "log-and-continue",
                 "/tmp/media",
@@ -4471,6 +4480,12 @@ mod tests {
         );
         validate_media_options(&args).unwrap();
         let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--size-tolerance-bytes", "1234"])
+        );
         assert!(
             command
                 .args
@@ -4713,6 +4728,14 @@ mod tests {
         );
         for argv in [
             vec!["mfb", "--videos-only", "--img-allow-size-tolerance=true"],
+            vec!["mfb", "--videos-only", "--img-size-tolerance-bytes", "0"],
+            vec![
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--img-size-tolerance-bytes",
+                "1",
+            ],
             vec![
                 "mfb",
                 "--mode",
@@ -5678,6 +5701,7 @@ mod tests {
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
+            img_size_tolerance_bytes: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5784,6 +5808,7 @@ mod tests {
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,
+                img_size_tolerance_bytes: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
@@ -5831,6 +5856,7 @@ mod tests {
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
+            img_size_tolerance_bytes: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5900,6 +5926,7 @@ mod tests {
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,
+                img_size_tolerance_bytes: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
