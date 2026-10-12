@@ -22,6 +22,7 @@ pub mod infra {
     pub mod recovery_collection;
     pub mod rich_panel;
     pub mod signal_handlers;
+    pub mod sqlite_backup;
     pub mod system_checks;
     pub mod terminal_input;
     pub mod training_scan;

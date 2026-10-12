@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### History backup, whole-batch issue review and cache decisions (2026-10-12)
+
+- Add explicit `cache_cleaner --history-backup DEST --history-directory SOURCE`
+  and native Settings backup for the independent History SQLite database. Read
+  the existing source only; preserve schema 1/2 and raw rows without migration.
+  Include committed WAL, exclude pending transactions, verify the copied
+  snapshot's structure/foreign keys/schema and report session/event/output row
+  counts. Publish privately without replacing files/sidecars or writing into the
+  active source directory or Git workspaces. Reuse the Core backup publication
+  helpers and recheck late Git markers before publication. No restore/retention,
+  real media or Core/PostgreSQL copy is implied.
+- Add a compact native History Issues view for all stored output in one selected
+  batch, carrying explicit phase across pages and grouping exact messages by
+  pipeline/phase/severity. Preserve values/paths and first/last original records.
+  Count log occurrences, not failed files or shared root causes. Show active runs
+  as snapshots; reject invalid evidence/boundaries and bounded-read overflow
+  rather than displaying partial zeroes. Selection/refresh/close interrupts the
+  actual reader; existing raw paging, source data and outcome counts are retained.
+- Report one bounded structured path_tree decision per standard IMG/VID lookup,
+  distinguishing hit/miss/invalidated/bypassed/error with actual reason and opaque
+  key. Reuse the existing SQLite row fetch and filesystem validation; do not add
+  queries, scans, content hashes, persistent counters or a weaker verification
+  route. Preserve formal-state corruption and transaction failure behavior.
+- Validation: 65 distinct scoped Rust tests passed; History, cache-manager and
+  path_tree tests also ran with four test threads without counting reruns as new
+  tests. Affected-target strict Clippy, workspace formatting, localization syntax,
+  native Swift warnings-as-errors and three-language self-tests passed. Isolated
+  AppKit checks confirmed 1,002 stored rows aggregate to 1,000 log occurrences in
+  three groups while processing outcomes remain separate. Native History backup
+  saved one session, three events and 1,002 output rows; SQLite integrity/schema/
+  foreign-key checks of the saved file passed. No production Photos/history/media,
+  full workspace, cross-platform, throughput or new CI acceptance is claimed.
+  The installed app was not rebuilt or replaced.
+
 ### IMG admission, local Gate activity and worker launch provenance (2026-10-12)
 
 - Retain standard IMG discovery metadata through task admission and check it before

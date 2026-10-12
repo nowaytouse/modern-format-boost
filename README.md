@@ -194,6 +194,17 @@ filled with defaults. This does not establish equal tools, inputs or environment
 guess throughput, or explain causality from configuration changes.
 Select one run to return to its captured effective configuration and paged output.
 
+The single-run **Issues** view scans all stored output for the selected batch,
+not just the current page. It groups exact normalized messages by pipeline,
+explicit stage and severity, retaining paths, values and first/last original
+records with their sequence numbers. Occurrences count log records, not files or
+shared root causes. Unfinished batches are labeled snapshot-only. Reads are
+bounded to 100,000 rows/64 MiB, 4,096 groups/2 MiB retained group content and 15
+seconds; invalid boundaries, damaged evidence, cancellation or exceeded limits
+make the result unavailable instead of presenting a partial or zero total.
+Selection changes and closing the window cancel the read; original output paging
+and processing results are unchanged.
+
 The export button saves a versioned **selected-run diagnostic JSON** locally.
 It rereads that batch from one read-only SQLite snapshot, including recorded
 configuration, outcomes, verification and terminal state, plus raw warning/error
@@ -235,6 +246,13 @@ or terminal-state changes clear the live activity without changing result counts
 
 Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
+Each standard IMG/VID directory-cache lookup emits one versioned structured
+`path_tree` decision: hit, miss, invalidated, bypassed or error, with its actual
+reason and opaque cache key when applicable. Reasons distinguish absent records,
+idle expiry, future timestamps, schema/digest/JSON failures and incomplete,
+changed or unreadable filesystem identities. No extra scan, hash or database
+query is added for this reporting; it is not a hit-rate counter, other-cache
+inventory or media verification proof.
 Versioned cache identities preserve native path bytes and normalized scan options.
 Directory freshness uses full-resolution timestamps, requires root evidence, and
 rejects missing or unknown evidence. File metadata is also checked, including
@@ -317,6 +335,19 @@ is required. Publication never overwrites a file or SQLite sidecar and requires
 filesystem hard-link support; Unix backups use mode 0600. Normal errors clean
 staging; a forced termination can leave a private staging directory. This does
 not add automatic restore or retention, and backups can contain private paths.
+
+**Back Up History** in Settings separately snapshots the displayed History
+location. CLI: `cache_cleaner --history-backup /path/to/new-history.sqlite
+--history-directory /absolute/history-directory --json`. The source must already
+exist; there is no implicit fallback, initialization, migration or restore.
+Committed WAL is included and pending transactions are excluded. The copied
+snapshot is checked for supported schema (1 or 2), SQLite integrity and foreign
+keys before private, no-overwrite publication outside the active History
+directory and Git workspaces. The receipt counts sessions, events and output
+rows in that snapshot, not media files. All original stored rows remain intact;
+Core state, media and PostgreSQL are not included. Filesystem hard-link support
+is required and Unix backups use mode 0600; errors remove ordinary staging, while
+forced termination can leave a private staging directory.
 
 **Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
 checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read

@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use dev::infra::sqlite_backup;
 use dev::infra::ui_tokens::pick_symbol;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::Serialize;
@@ -58,6 +59,16 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     about = "Modern Format Boost Cache Cleaner"
 )]
 struct Args {
+    #[arg(long, requires = "history_directory", conflicts_with_all = ["local_backup", "stats", "prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Create a verified snapshot of the explicitly selected History SQLite database at a new local destination; no source creation or migration")]
+    history_backup: Option<PathBuf>,
+
+    #[arg(
+        long,
+        requires = "history_backup",
+        help = "Existing absolute history log directory to back up; no implicit source or fallback"
+    )]
+    history_directory: Option<PathBuf>,
+
     #[arg(long, conflicts_with_all = ["stats", "prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Create a verified snapshot of Core SQLite state and cache at a new local destination; History and PostgreSQL are not included")]
     local_backup: Option<PathBuf>,
 
@@ -735,21 +746,6 @@ fn require_healthy_store(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn require_new_backup_destination(destination: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
-        let mut path = destination.as_os_str().to_os_string();
-        path.push(suffix);
-        match fs::symlink_metadata(Path::new(&path)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).context("inspect backup destination"),
-            Ok(_) => anyhow::bail!(
-                "backup destination or SQLite sidecar already exists; nothing overwritten"
-            ),
-        }
-    }
-    Ok(())
-}
-
 fn backup_local_store(cache_dir: &Path, destination: &Path) -> Result<BackupReceipt> {
     ensure_cache_directory(cache_dir)?;
     let source = cache_dir.join("mfb_store.sqlite");
@@ -761,31 +757,15 @@ fn backup_local_store(cache_dir: &Path, destination: &Path) -> Result<BackupRece
         "Core database is absent; no backup created"
     );
     let source = cache_dir.canonicalize()?.join("mfb_store.sqlite");
-    let absolute = std::path::absolute(destination)?;
-    let parent = absolute
+    let destination = sqlite_backup::resolve_destination(&source, destination)?;
+    let parent = destination
         .parent()
-        .context("backup destination has no parent")?
-        .canonicalize()?;
-    let name = absolute
-        .file_name()
-        .context("backup destination has no filename")?;
-    let destination = parent.join(name);
-    anyhow::ensure!(
-        !parent.starts_with(source.parent().context("Core database has no parent")?),
-        "backup destination must be outside the active Core database directory"
-    );
-    for ancestor in parent.ancestors() {
-        anyhow::ensure!(
-            !ancestor.join(".git").try_exists()?,
-            "backup destination must be outside Git workspaces to protect private state"
-        );
-    }
-    require_new_backup_destination(&destination)?;
+        .context("backup destination has no parent")?;
     let mut conn = open_cache_store(&source, true)?;
     require_healthy_store(&mut conn)?;
     let staged = tempfile::Builder::new()
         .prefix(".mfb-core-backup-")
-        .tempdir_in(&parent)?;
+        .tempdir_in(parent)?;
     let backup = staged.path().join("mfb_store.sqlite");
     // The main database remains READ_ONLY; query_only would also block SQLite's new output database.
     conn.pragma_update(None, "query_only", false)?;
@@ -799,19 +779,7 @@ fn backup_local_store(cache_dir: &Path, destination: &Path) -> Result<BackupRece
     let mut verified = open_cache_store(&backup, true)?;
     require_healthy_store(&mut verified)?;
     drop(verified);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&backup, fs::Permissions::from_mode(0o600))?;
-    }
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&backup)?;
-    let bytes = file.metadata()?.len();
-    anyhow::ensure!(bytes > 0, "SQLite backup is empty; not published");
-    file.sync_all()?;
-    drop(file);
+    let bytes = sqlite_backup::synchronize_private_snapshot(&backup)?;
     let receipt = BackupReceipt {
         schema_version: 1,
         source: source
@@ -825,14 +793,7 @@ fn backup_local_store(cache_dir: &Path, destination: &Path) -> Result<BackupRece
         store_schema_version: foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION,
         bytes,
     };
-    require_new_backup_destination(&destination)?;
-    // shortcut: atomic publication requires hard-link support, add native no-replace rename if supported filesystems require it.
-    fs::hard_link(&backup, &destination)
-        .context("publish verified backup without overwriting an existing destination")?;
-    #[cfg(unix)]
-    fs::File::open(&parent)?
-        .sync_all()
-        .context("backup published but destination directory could not be synchronized")?;
+    sqlite_backup::publish_snapshot(&backup, &destination)?;
     Ok(receipt)
 }
 
@@ -1499,6 +1460,29 @@ fn main() -> Result<()> {
         args.prune || args.cache.is_empty(),
         "cache policy flags require --prune; no action taken"
     );
+    if let Some(destination) = &args.history_backup {
+        let directory = args
+            .history_directory
+            .as_deref()
+            .context("History backup requires an explicit history directory")?;
+        let receipt = dev::infra::history_store::backup_history_store(directory, destination)?;
+        if args.json {
+            println!("{}", serde_json::to_string(&receipt)?);
+        } else {
+            println!(
+                "History SQLite backup: {} -> {} ({} bytes, history schema {}, {} sessions, {} event rows, {} output rows). These are storage row counts, not media file counts.",
+                receipt.source,
+                receipt.destination,
+                receipt.bytes,
+                receipt.history_schema_version,
+                receipt.sessions,
+                receipt.events,
+                receipt.output_rows
+            );
+        }
+        io::stdout().flush()?;
+        return Ok(());
+    }
     if let Some(destination) = &args.local_backup {
         let receipt = backup_local_store(&backup_cache_directory()?, destination)?;
         if args.json {
@@ -1975,6 +1959,56 @@ mod tests {
             );
         }
         assert!(Args::try_parse_from(["cache_cleaner", "--local-backup"]).is_err());
+    }
+
+    #[test]
+    fn history_backup_cli_requires_explicit_source_and_excludes_other_actions() {
+        let base = [
+            "cache_cleaner",
+            "--history-backup",
+            "/synthetic/backup.sqlite",
+            "--history-directory",
+            "/synthetic/history",
+        ];
+        let mut arguments = base.to_vec();
+        arguments.push("--json");
+        let args = Args::try_parse_from(arguments).unwrap();
+        assert_eq!(
+            args.history_directory.unwrap(),
+            PathBuf::from("/synthetic/history")
+        );
+        assert!(args.history_backup.is_some() && args.json && !args.yes);
+        assert!(
+            Args::try_parse_from([
+                "cache_cleaner",
+                "--history-backup",
+                "/synthetic/backup.sqlite"
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from(["cache_cleaner", "--history-directory", "/synthetic/history"])
+                .is_err()
+        );
+        for additional in [
+            vec!["--stats"],
+            vec!["--prune"],
+            vec!["--check-integrity"],
+            vec!["--postgres"],
+            vec!["--purge-animation-cache"],
+            vec!["--purge-session-state"],
+            vec!["--yes"],
+            vec!["--no-config"],
+            vec!["--config", "/synthetic/config.json"],
+            vec!["--cache-max-bytes", "10"],
+            vec!["--cache-ttl-seconds", "10"],
+            vec!["--local-backup", "/synthetic/core.sqlite"],
+            vec!["/synthetic/input"],
+        ] {
+            let mut arguments = base.to_vec();
+            arguments.extend(additional);
+            assert!(Args::try_parse_from(arguments).is_err());
+        }
     }
 
     #[test]

@@ -849,6 +849,50 @@ private func backupCoreDatabase(to destination: URL, source: URL, schema: Int) t
     return try CoreDatabaseBackup.decode(data, source: source, destination: destination, storeSchemaVersion: schema)
 }
 
+private struct HistoryDatabaseBackup: Decodable {
+    let schemaVersion: Int
+    let kind: String
+    let source: String
+    let destination: String
+    let historySchemaVersion: Int
+    let bytes: UInt64
+    let sessions: UInt64
+    let events: UInt64
+    let outputRows: UInt64
+
+    static func decode(_ data: Data, source: URL, destination: URL) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let receipt = try decoder.decode(Self.self, from: data)
+        guard receipt.schemaVersion == 1, receipt.kind == "history_sqlite", [1, 2].contains(receipt.historySchemaVersion),
+              receipt.historySchemaVersion != 1 || receipt.outputRows == 0,
+              receipt.source.hasPrefix("/"), receipt.destination.hasPrefix("/"), receipt.bytes > 0,
+              [receipt.bytes, receipt.sessions, receipt.events, receipt.outputRows].allSatisfy({ $0 <= UInt64(Int64.max) }),
+              URL(fileURLWithPath: receipt.source).standardizedFileURL == source.resolvingSymlinksInPath().standardizedFileURL,
+              URL(fileURLWithPath: receipt.destination).standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL else {
+            throw HostError(message: localized("settings.history.backup_invalid"))
+        }
+        let values = try destination.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              values.fileSize.flatMap(UInt64.init(exactly:)) == receipt.bytes else {
+            throw HostError(message: localized("settings.history.backup_invalid"))
+        }
+        return receipt
+    }
+}
+
+private func historyBackupArguments(directory: URL, destination: URL) -> [String] {
+    ["--history-backup", destination.path, "--history-directory", directory.path, "--json"]
+}
+
+private func backupHistoryDatabase(to destination: URL, directory: URL) throws -> HistoryDatabaseBackup {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: historyBackupArguments(directory: directory, destination: destination), timeout: 120)
+    return try HistoryDatabaseBackup.decode(data, source: directory.appendingPathComponent("history.sqlite3"), destination: destination)
+}
+
 private enum LocalCacheAction: Equatable { case refresh, clear, check, prune }
 
 private func cachePruningArguments(_ policies: [EffectiveRuntimeSettings]) throws -> [String] {
@@ -948,6 +992,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let cachePrune = NSButton()
     private let cacheCheck = NSButton()
     private let cacheBackup = NSButton()
+    private let historyBackup = NSButton()
+    private var historyBackupDirectory: URL {
+        initialHistoryDirectory(preferences: preferences)
+    }
     private var cacheStore: (url: URL, schema: Int)?
     private var cacheLabels: [String: NSTextField] = [:]
     private let cacheMessage = NSTextField(wrappingLabelWithString: "")
@@ -1182,7 +1230,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
                           "settings.cache.clear", "settings.cache.check", "settings.cache.prune",
-                          "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup"].map { localized($0) }.joined(separator: " ")
+                          "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup",
+                          "settings.history.path", "settings.history.backup", "settings.history.backup_help"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1305,6 +1354,22 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheBackup.isEnabled = false
         grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheCheck, cacheBackup])]).yPlacement = .center
         grid.addRow(with: [NSView(), NSStackView(views: [cachePrune, cacheClear])]).yPlacement = .center
+        let historyPath = NSTextField(labelWithString: historyBackupDirectory.path)
+        historyPath.isSelectable = true
+        historyPath.lineBreakMode = .byTruncatingMiddle
+        historyPath.toolTip = historyBackupDirectory.path
+        historyPath.setAccessibilityLabel(localized("settings.history.path"))
+        historyPath.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        grid.addRow(with: [NSTextField(labelWithString: localized("settings.history.path")), historyPath]).yPlacement = .center
+        historyBackup.title = localized("settings.history.backup")
+        historyBackup.image = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: nil)
+        historyBackup.imagePosition = .imageLeading
+        historyBackup.bezelStyle = .rounded
+        historyBackup.toolTip = localized("settings.history.backup_help")
+        historyBackup.setAccessibilityLabel(localized("settings.history.backup"))
+        historyBackup.target = self
+        historyBackup.action = #selector(backupHistory)
+        grid.addRow(with: [NSView(), NSStackView(views: [historyBackup])]).yPlacement = .center
         cacheMessage.font = .systemFont(ofSize: 11)
         cacheMessage.maximumNumberOfLines = 4
         cacheMessage.isSelectable = true
@@ -1347,6 +1412,48 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     @objc private func refreshCache() { updateCache(action: .refresh) }
     @objc private func checkCacheIntegrity() { updateCache(action: .check) }
 
+    @objc private func backupHistory() {
+        guard !cacheBusy, historyBackup.isEnabled else { return }
+        let directory = historyBackupDirectory
+        let save = NSSavePanel()
+        save.title = localized("settings.history.backup")
+        save.message = localized("settings.history.backup_help")
+        save.nameFieldStringValue = "mfb-history-backup-\(UUID().uuidString.prefix(8)).sqlite"
+        save.canCreateDirectories = true
+        save.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let destination = save.url, !self.cacheBusy,
+                  self.panel.sheetParent != nil else { return }
+            let previous = [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear].map { ($0, $0.isEnabled) }
+            self.cacheBusy = true
+            for (button, _) in previous { button.isEnabled = false }
+            self.cacheMessage.stringValue = localized("settings.history.backing_up")
+            self.cacheMessage.textColor = .secondaryLabelColor
+            self.cacheMessage.toolTip = nil
+            self.cacheMessageRow?.isHidden = false
+            self.updatePanelSize()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try backupHistoryDatabase(to: destination, directory: directory) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.cacheBusy = false
+                    for (button, enabled) in previous { button.isEnabled = enabled }
+                    guard self.panel.sheetParent != nil else { return }
+                    do {
+                        let receipt = try result.get()
+                        self.cacheMessage.stringValue = localized("settings.history.backed_up", destination.lastPathComponent,
+                            String(receipt.sessions), String(receipt.events), String(receipt.outputRows))
+                        self.cacheMessage.textColor = .labelColor
+                        self.cacheMessage.toolTip = receipt.destination
+                    } catch {
+                        self.cacheMessage.stringValue = error.localizedDescription
+                        self.cacheMessage.textColor = .systemRed
+                    }
+                    self.updatePanelSize()
+                }
+            }
+        }
+    }
+
     @objc private func backupStore() {
         guard !cacheBusy, cacheLoaded, cacheBackup.isEnabled, let store = cacheStore else { return }
         let save = NSSavePanel()
@@ -1359,7 +1466,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                   self.panel.sheetParent != nil else { return }
             let previousCleanup = (self.cachePrune.isEnabled, self.cacheClear.isEnabled)
             self.cacheBusy = true
-            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear] { button.isEnabled = false }
+            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear, self.historyBackup] { button.isEnabled = false }
             self.cacheMessage.stringValue = localized("settings.cache.backing_up")
             self.cacheMessage.textColor = .secondaryLabelColor
             self.cacheMessage.toolTip = nil
@@ -1535,6 +1642,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cancelButton.isEnabled = !cacheBusy
         resetButton.isEnabled = !cacheBusy
         applyButton.isEnabled = !cacheBusy && !applying
+        historyBackup.isEnabled = !cacheBusy
         status.isHidden = status.stringValue.isEmpty
         let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
         let rowsHeight: CGFloat
@@ -2273,6 +2381,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard matchingSettings(localized("settings.cache.backup")).contains(.cache) else {
             throw HostError(message: "Database backup was omitted from Settings search")
         }
+        guard matchingSettings(localized("settings.history.backup")).contains(.cache),
+              historyBackup.toolTip == localized("settings.history.backup_help") else {
+            throw HostError(message: "History backup is missing from Settings search or accessibility context")
+        }
         try displayCache(databaseSnapshot)
         guard cacheBackup.isEnabled, cacheStore?.schema == 2,
               cacheLabels["journal"]?.stringValue == "WAL",
@@ -2317,6 +2429,37 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             throw HostError(message: "Symlinked backup was accepted")
         } catch let error as HostError where error.message == "Symlinked backup was accepted" { throw error }
           catch { }
+        let historySource = URL(fileURLWithPath: "/synthetic/history/history.sqlite3")
+        var historyReceipt: [String: Any] = ["schema_version": 1, "kind": "history_sqlite", "source": historySource.path,
+            "destination": destination.resolvingSymlinksInPath().path, "history_schema_version": 2, "bytes": 4,
+            "sessions": 2, "events": 3, "output_rows": 5]
+        let historyData = try JSONSerialization.data(withJSONObject: historyReceipt)
+        let history = try HistoryDatabaseBackup.decode(historyData, source: historySource, destination: destination)
+        guard history.sessions == 2, history.events == 3, history.outputRows == 5,
+              historyBackupArguments(directory: historySource.deletingLastPathComponent(), destination: destination)
+                == ["--history-backup", destination.path, "--history-directory", "/synthetic/history", "--json"] else {
+            throw HostError(message: "History backup receipt or explicit source arguments lost their scope")
+        }
+        for (key, value) in [("kind", "core_sqlite" as Any), ("schema_version", 2),
+                             ("history_schema_version", 0), ("history_schema_version", 1),
+                             ("source", "/synthetic/other.sqlite"), ("destination", "/synthetic/other.sqlite"),
+                             ("bytes", 5), ("sessions", UInt64.max), ("events", -1), ("output_rows", NSNull())] {
+            var invalid = historyReceipt
+            invalid[key] = value
+            do { _ = try HistoryDatabaseBackup.decode(JSONSerialization.data(withJSONObject: invalid), source: historySource, destination: destination) }
+            catch { continue }
+            throw HostError(message: "Invalid History backup evidence was accepted: \(key)")
+        }
+        do {
+            _ = try HistoryDatabaseBackup.decode(historyData, source: historySource, destination: link)
+            throw HostError(message: "History backup destination symlink was accepted")
+        } catch let error as HostError where error.message == "History backup destination symlink was accepted" { throw error }
+          catch { }
+        historyReceipt["history_schema_version"] = 1
+        historyReceipt["output_rows"] = 0
+        guard try HistoryDatabaseBackup.decode(JSONSerialization.data(withJSONObject: historyReceipt), source: historySource, destination: destination).historySchemaVersion == 1 else {
+            throw HostError(message: "Version-one History backup was incorrectly migrated or rejected")
+        }
         guard try snapshot.totals(rebuildable: true).rows == 3,
               try snapshot.totals(rebuildable: false).rows == 6 else {
             throw HostError(message: "Cache and retained state counts were mixed")
@@ -2333,7 +2476,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheBusy = true
         try displayCache(databaseSnapshot)
         updatePanelSize()
-        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cacheBackup.isEnabled, !cancelButton.isEnabled else {
+        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cacheBackup.isEnabled,
+              !historyBackup.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false

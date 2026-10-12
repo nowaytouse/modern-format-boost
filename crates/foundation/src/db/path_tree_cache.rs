@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 use std::path::Path;
 
 use crate::mfb_sqlite_store::{self, NS_PATH_TREE};
+pub(crate) use crate::mfb_sqlite_store::{PathTreeLookup, PathTreeMissReason};
 
 /// Path-tree snapshot schema version (bump when snapshot semantics change).
 pub const PATH_TREE_SCHEMA_VERSION: u32 = 4;
@@ -21,6 +22,32 @@ fn decode_snapshot<T: DeserializeOwned>(bytes: &[u8], cache_key: &str) -> Result
         .with_context(|| format!("path_tree snapshot JSON decode failed for cache_key={cache_key}"))
 }
 
+pub(crate) struct SnapshotLoadError {
+    pub(crate) reason: &'static str,
+    pub(crate) error: anyhow::Error,
+}
+
+pub(crate) fn load_path_tree_snapshot_with_status<T: DeserializeOwned>(
+    cache_key: &str,
+    expected_schema_version: u32,
+) -> std::result::Result<PathTreeLookup<T>, SnapshotLoadError> {
+    let loaded = schema_i32(expected_schema_version)
+        .and_then(|schema| mfb_sqlite_store::path_tree_lookup(cache_key, schema))
+        .map_err(|error| SnapshotLoadError {
+            reason: "store_read_error",
+            error,
+        })?;
+    match loaded {
+        PathTreeLookup::Hit(bytes) => decode_snapshot(&bytes, cache_key)
+            .map(PathTreeLookup::Hit)
+            .map_err(|error| SnapshotLoadError {
+                reason: "snapshot_json_invalid",
+                error,
+            }),
+        PathTreeLookup::Miss(reason) => Ok(PathTreeLookup::Miss(reason)),
+    }
+}
+
 /// Load a local snapshot within the configured idle TTL, refreshing its last-use time.
 /// Callers must still validate filesystem freshness.
 ///
@@ -30,11 +57,9 @@ pub fn load_path_tree_snapshot<T: DeserializeOwned>(
     cache_key: &str,
     expected_schema_version: u32,
 ) -> Result<Option<T>> {
-    let schema = schema_i32(expected_schema_version)?;
-    let Some(bytes) = mfb_sqlite_store::blob_get(NS_PATH_TREE, cache_key, schema)? else {
-        return Ok(None);
-    };
-    decode_snapshot(&bytes, cache_key).map(Some)
+    load_path_tree_snapshot_with_status(cache_key, expected_schema_version)
+        .map(PathTreeLookup::into_option)
+        .map_err(|failure| failure.error)
 }
 
 /// Persist a snapshot locally, without an advanced database service.
@@ -99,6 +124,44 @@ pub fn purge_all_path_tree_snapshots() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_tree_snapshot_load_status_distinguishes_decode_and_store_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store.sqlite");
+        let _guard = mfb_sqlite_store::set_test_store_path_for_tests(store.clone());
+        assert!(matches!(
+            load_path_tree_snapshot_with_status::<Vec<String>>("absent", 4),
+            Ok(PathTreeLookup::Miss(PathTreeMissReason::Absent)),
+        ));
+        mfb_sqlite_store::blob_put(NS_PATH_TREE, "invalid", 4, None, b"not JSON").unwrap();
+        let invalid = load_path_tree_snapshot_with_status::<Vec<String>>("invalid", 4)
+            .err()
+            .unwrap();
+        assert_eq!(invalid.reason, "snapshot_json_invalid");
+        assert!(invalid.error.to_string().contains("JSON decode failed"));
+        assert!(
+            mfb_sqlite_store::blob_get(NS_PATH_TREE, "invalid", 4)
+                .unwrap()
+                .is_some()
+        );
+        let connection = mfb_sqlite_store::open_store_connection().unwrap();
+        connection
+            .execute("UPDATE store_metadata SET value = 99", [])
+            .unwrap();
+        let inaccessible = load_path_tree_snapshot_with_status::<Vec<String>>("invalid", 4)
+            .err()
+            .unwrap();
+        assert_eq!(inaccessible.reason, "store_read_error");
+        assert!(inaccessible.error.to_string().contains("schema"));
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM blob_store", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1,
+        );
+    }
 
     #[test]
     fn path_tree_cache_key_is_stable() {

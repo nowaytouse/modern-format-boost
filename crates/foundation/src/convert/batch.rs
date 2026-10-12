@@ -340,13 +340,13 @@ pub fn collect_admitted_image_files_for_perceived_speed(
     recursive: bool,
 ) -> crate::unified_error::Result<Vec<AdmittedImageFile>> {
     if !crate::algorithm_runtime::static_quality_db_lookup_enabled() {
+        emit_path_tree_decision("image", None, "bypassed", "lookup_disabled");
         return Ok(admitted_image_files(scan_image_tree_snapshot(
             dir, extensions, recursive,
         )?));
     }
 
-    let cached = load_cached_image_tree(dir, extensions, recursive)
-        .filter(|snapshot| validate_cached_image_tree(snapshot, dir, extensions, recursive));
+    let cached = load_cached_image_tree(dir, extensions, recursive);
     let snapshot = if let Some(snapshot) = cached {
         snapshot
     } else {
@@ -383,8 +383,7 @@ pub fn collect_video_files_for_perceived_speed(
     extensions: &[&str],
     recursive: bool,
 ) -> crate::unified_error::Result<Vec<PathBuf>> {
-    let cached = load_cached_video_tree(dir, extensions, recursive)
-        .filter(|snapshot| validate_cached_video_tree(snapshot, dir, extensions, recursive));
+    let cached = load_cached_video_tree(dir, extensions, recursive);
     let snapshot = if let Some(snapshot) = cached {
         snapshot
     } else {
@@ -724,27 +723,34 @@ fn directory_native_identity(path: &Path) -> Option<(u64, u64, (i64, i64))> {
     }
 }
 
+fn cached_directory_freshness(
+    directories: &[CachedDirectoryState],
+    root: &Path,
+) -> Result<(), &'static str> {
+    if !directories.iter().any(|directory| directory.path == root) {
+        return Err("root_directory_record_missing");
+    }
+    for directory in directories {
+        if !directory.modified_time.is_some_and(|expected| {
+            crate::media_conversion_gate::delivery_directory_modified_time_optional(&directory.path)
+                == Some(expected)
+        }) {
+            return Err("directory_mtime_unproven");
+        }
+        #[cfg(unix)]
+        if directory
+            .native_identity
+            .is_none_or(|expected| directory_native_identity(&directory.path) != Some(expected))
+        {
+            return Err("directory_native_identity_unproven");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn cached_directories_are_current(directories: &[CachedDirectoryState], root: &Path) -> bool {
-    directories.iter().any(|directory| directory.path == root)
-        && directories.iter().all(|directory| {
-            if !directory.modified_time.is_some_and(|expected| {
-                crate::media_conversion_gate::delivery_directory_modified_time_optional(
-                    &directory.path,
-                ) == Some(expected)
-            }) {
-                return false;
-            }
-            #[cfg(unix)]
-            {
-                directory.native_identity.is_some_and(|expected| {
-                    directory_native_identity(&directory.path) == Some(expected)
-                })
-            }
-            #[cfg(not(unix))]
-            {
-                true
-            }
-        })
+    cached_directory_freshness(directories, root).is_ok()
 }
 
 fn cache_file_metadata(path: &Path) -> crate::unified_error::Result<fs::Metadata> {
@@ -787,31 +793,45 @@ fn ensure_cache_file_unchanged(
     Ok(())
 }
 
-fn cached_files_are_current<'a>(
+fn cached_file_freshness<'a>(
     observed_files: &[CachedFileState],
     mut admitted: impl Iterator<Item = (&'a Path, &'a CachedFileIdentity)>,
-) -> bool {
+) -> Result<(), &'static str> {
     let identities = observed_files
         .iter()
         .map(|file| (file.path.as_path(), &file.identity))
         .collect::<std::collections::HashMap<_, _>>();
-    identities.len() == observed_files.len()
-        && admitted.all(|(path, identity)| identities.get(path) == Some(&identity))
-        && observed_files.iter().all(|file| {
-            match fs::metadata(&file.path)
-                .and_then(|metadata| CachedFileIdentity::from_metadata(&metadata))
-            {
-                Ok(identity) => identity == file.identity,
-                Err(error) => {
-                    crate::media_conversion_gate::delivery_pipeline_path_audit(
-                        "delivery_pipeline_batch",
-                        &file.path,
-                        format!("Path-tree cache cannot read file identity: {error}"),
-                    );
-                    false
-                }
+    if identities.len() != observed_files.len() {
+        return Err("duplicate_candidate_identity");
+    }
+    if !admitted.all(|(path, identity)| identities.get(path) == Some(&identity)) {
+        return Err("admitted_candidate_identity_mismatch");
+    }
+    for file in observed_files {
+        match fs::metadata(&file.path)
+            .and_then(|metadata| CachedFileIdentity::from_metadata(&metadata))
+        {
+            Ok(identity) if identity == file.identity => {}
+            Ok(_) => return Err("file_identity_changed"),
+            Err(error) => {
+                crate::media_conversion_gate::delivery_pipeline_path_audit(
+                    "delivery_pipeline_batch",
+                    &file.path,
+                    format!("Path-tree cache cannot read file identity: {error}"),
+                );
+                return Err("file_identity_unreadable");
             }
-        })
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn cached_files_are_current<'a>(
+    observed_files: &[CachedFileState],
+    admitted: impl Iterator<Item = (&'a Path, &'a CachedFileIdentity)>,
+) -> bool {
+    cached_file_freshness(observed_files, admitted).is_ok()
 }
 
 /// Relative depth from batch root (`None` when `path` is not under `root`).
@@ -1001,8 +1021,8 @@ fn build_cached_image_entry(
 /// Loads a cached image tree snapshot from the path-tree store.
 ///
 /// Attempts to read and deserialize a previously cached image tree.
-/// Returns None if the cache file doesn't exist, is corrupted, or schema
-/// version mismatch.
+/// Returns None when storage or filesystem freshness cannot establish a reusable snapshot.
+/// Each lookup records one bounded decision; detailed read failures remain audited.
 ///
 /// # Arguments
 /// * `dir` - The root directory path
@@ -1016,21 +1036,71 @@ fn load_cached_image_tree(
     extensions: &[&str],
     recursive: bool,
 ) -> Option<CachedImageTreeSnapshot> {
+    load_cached_tree(dir, extensions, recursive, "image", |snapshot| {
+        cached_image_tree_freshness(snapshot, dir, extensions, recursive)
+    })
+}
+
+fn emit_path_tree_decision(
+    media_kind: &'static str,
+    cache_key: Option<&str>,
+    outcome: &'static str,
+    reason: &'static str,
+) {
+    tracing::info!(
+        target: "static_log",
+        schema_version = 1_u32,
+        namespace = crate::mfb_sqlite_store::NS_PATH_TREE,
+        media_kind,
+        cache_key,
+        outcome,
+        reason,
+        "Path-tree cache decision: {outcome} ({reason})"
+    );
+}
+
+fn load_cached_tree<T: serde::de::DeserializeOwned>(
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+    media_kind: &'static str,
+    validate: impl FnOnce(&T) -> Result<(), &'static str>,
+) -> Option<T> {
+    use crate::path_tree_cache::{PathTreeLookup, PathTreeMissReason};
+
     let cache_key =
-        crate::path_tree_cache::path_tree_cache_key(dir, extensions, recursive, "image");
-    match crate::path_tree_cache::load_path_tree_snapshot(
-        &cache_key,
-        crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
-    ) {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                "delivery_pipeline_batch",
-                format!("path_tree image cache load failed for {cache_key}: {err}"),
-            );
-            None
-        }
-    }
+        crate::path_tree_cache::path_tree_cache_key(dir, extensions, recursive, media_kind);
+    let (snapshot, outcome, reason) =
+        match crate::path_tree_cache::load_path_tree_snapshot_with_status(
+            &cache_key,
+            crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
+        ) {
+            Ok(PathTreeLookup::Hit(snapshot)) => match validate(&snapshot) {
+                Ok(()) => (Some(snapshot), "hit", "filesystem_identity_current"),
+                Err(reason) => (None, "invalidated", reason),
+            },
+            Ok(PathTreeLookup::Miss(reason)) => (
+                None,
+                if reason == PathTreeMissReason::Absent {
+                    "miss"
+                } else {
+                    "invalidated"
+                },
+                reason.label(),
+            ),
+            Err(failure) => {
+                crate::media_conversion_gate::delivery_pipeline_batch_audit(
+                    "delivery_pipeline_batch",
+                    format!(
+                        "path_tree {media_kind} cache load failed for {cache_key}: {}",
+                        failure.error
+                    ),
+                );
+                (None, "error", failure.reason)
+            }
+        };
+    emit_path_tree_decision(media_kind, Some(&cache_key), outcome, reason);
+    snapshot
 }
 
 /// Saves a cached image tree snapshot to disk.
@@ -1062,8 +1132,8 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
 /// Loads a cached video tree snapshot from the path-tree store.
 ///
 /// Attempts to read and deserialize a previously cached video tree.
-/// Returns None if the cache file doesn't exist, is corrupted, or schema
-/// version mismatch.
+/// Returns None when storage or filesystem freshness cannot establish a reusable snapshot.
+/// Each lookup records one bounded decision; detailed read failures remain audited.
 ///
 /// # Arguments
 /// * `dir` - The root directory path
@@ -1077,21 +1147,9 @@ fn load_cached_video_tree(
     extensions: &[&str],
     recursive: bool,
 ) -> Option<CachedVideoTreeSnapshot> {
-    let cache_key =
-        crate::path_tree_cache::path_tree_cache_key(dir, extensions, recursive, "video");
-    match crate::path_tree_cache::load_path_tree_snapshot(
-        &cache_key,
-        crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION,
-    ) {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                "delivery_pipeline_batch",
-                format!("path_tree video cache load failed for {cache_key}: {err}"),
-            );
-            None
-        }
-    }
+    load_cached_tree(dir, extensions, recursive, "video", |snapshot| {
+        cached_video_tree_freshness(snapshot, dir, extensions, recursive)
+    })
 }
 
 /// Saves a cached video tree snapshot to disk.
@@ -1133,15 +1191,15 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
 /// * `recursive` - The expected recursive flag
 ///
 /// # Returns
-/// `true` if the cache is valid, `false` otherwise
-fn validate_cached_image_tree(
+/// `Ok(())` if reusable; otherwise the first unproven freshness boundary.
+fn cached_image_tree_freshness(
     snapshot: &CachedImageTreeSnapshot,
     dir: &Path,
     extensions: &[&str],
     recursive: bool,
-) -> bool {
+) -> Result<(), &'static str> {
     if snapshot.schema_version != crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION {
-        return false;
+        return Err("snapshot_schema_mismatch");
     }
 
     let expected_root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
@@ -1149,17 +1207,27 @@ fn validate_cached_image_tree(
         || snapshot.recursive != recursive
         || snapshot.extensions != normalized_extensions(extensions)
     {
-        return false;
+        return Err("snapshot_request_mismatch");
     }
 
-    cached_directories_are_current(&snapshot.directories, &expected_root)
-        && cached_files_are_current(
-            &snapshot.observed_files,
-            snapshot
-                .files
-                .iter()
-                .map(|entry| (entry.path.as_path(), &entry.identity)),
-        )
+    cached_directory_freshness(&snapshot.directories, &expected_root)?;
+    cached_file_freshness(
+        &snapshot.observed_files,
+        snapshot
+            .files
+            .iter()
+            .map(|entry| (entry.path.as_path(), &entry.identity)),
+    )
+}
+
+#[cfg(test)]
+fn validate_cached_image_tree(
+    snapshot: &CachedImageTreeSnapshot,
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+) -> bool {
+    cached_image_tree_freshness(snapshot, dir, extensions, recursive).is_ok()
 }
 
 /// Validates that a cached video tree snapshot matches the expected
@@ -1175,15 +1243,15 @@ fn validate_cached_image_tree(
 /// * `recursive` - The expected recursive flag
 ///
 /// # Returns
-/// `true` if the cache is valid, `false` otherwise
-fn validate_cached_video_tree(
+/// `Ok(())` if reusable; otherwise the first unproven freshness boundary.
+fn cached_video_tree_freshness(
     snapshot: &CachedVideoTreeSnapshot,
     dir: &Path,
     extensions: &[&str],
     recursive: bool,
-) -> bool {
+) -> Result<(), &'static str> {
     if snapshot.schema_version != crate::path_tree_cache::PATH_TREE_SCHEMA_VERSION {
-        return false;
+        return Err("snapshot_schema_mismatch");
     }
 
     let expected_root = crate::media_conversion_gate::canonicalize_for_tool_input(dir);
@@ -1191,17 +1259,27 @@ fn validate_cached_video_tree(
         || snapshot.recursive != recursive
         || snapshot.extensions != normalized_extensions(extensions)
     {
-        return false;
+        return Err("snapshot_request_mismatch");
     }
 
-    cached_directories_are_current(&snapshot.directories, &expected_root)
-        && cached_files_are_current(
-            &snapshot.observed_files,
-            snapshot
-                .files
-                .iter()
-                .map(|entry| (entry.path.as_path(), &entry.identity)),
-        )
+    cached_directory_freshness(&snapshot.directories, &expected_root)?;
+    cached_file_freshness(
+        &snapshot.observed_files,
+        snapshot
+            .files
+            .iter()
+            .map(|entry| (entry.path.as_path(), &entry.identity)),
+    )
+}
+
+#[cfg(test)]
+fn validate_cached_video_tree(
+    snapshot: &CachedVideoTreeSnapshot,
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+) -> bool {
+    cached_video_tree_freshness(snapshot, dir, extensions, recursive).is_ok()
 }
 
 /// Scans the filesystem to create a fresh image tree snapshot.
@@ -1568,6 +1646,153 @@ mod tests {
         image
             .save_with_format(path, format)
             .expect("failed to write test image");
+    }
+
+    #[test]
+    fn path_tree_decisions_report_once_without_paths_or_file_counts() -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        #[derive(Clone)]
+        struct Capture(std::sync::Arc<Mutex<Vec<u8>>>);
+        impl io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let root = TempDir::new()?;
+        let media = root.path().join("media");
+        fs::create_dir(&media)?;
+        let source = media.join("source.png");
+        write_test_image(&source, 2, 2, ImageFormat::Png);
+        let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("store.sqlite"),
+        );
+        let snapshot = scan_image_tree_snapshot(&media, &["png"], true)?;
+        let buffer = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let output = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(move || Capture(output.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || -> anyhow::Result<()> {
+            assert!(load_cached_image_tree(&media, &["png"], true).is_none());
+            save_cached_image_tree(&snapshot)?;
+            assert!(load_cached_image_tree(&media, &["png"], true).is_some());
+            let mut mismatch = snapshot.clone();
+            mismatch.recursive = false;
+            let key = crate::path_tree_cache::path_tree_cache_key(&media, &["png"], true, "image");
+            crate::path_tree_cache::save_path_tree_snapshot(&key, &media, 4, &mismatch)?;
+            assert!(load_cached_image_tree(&media, &["png"], true).is_none());
+            save_cached_image_tree(&snapshot)?;
+            fs::write(&source, b"changed after cached scan")?;
+            assert!(load_cached_image_tree(&media, &["png"], true).is_none());
+            crate::mfb_sqlite_store::blob_put(
+                crate::mfb_sqlite_store::NS_PATH_TREE,
+                &key,
+                4,
+                Some(&media),
+                b"invalid JSON",
+            )?;
+            assert!(load_cached_image_tree(&media, &["png"], true).is_none());
+            let mut config = crate::runtime_config::RuntimeConfig::default();
+            config.img.quality_heuristic = false;
+            config.img.allow_database = false;
+            crate::runtime_config::install(config)?;
+            // No lookup or key is invented when the policy bypasses cache.
+            let empty = root.path().join("empty");
+            fs::create_dir(&empty)?;
+            assert!(
+                collect_admitted_image_files_for_perceived_speed(&empty, &["png"], true)?
+                    .is_empty()
+            );
+            let video = scan_video_tree_snapshot(&empty, &["mp4"], true)?;
+            save_cached_video_tree(&video)?;
+            assert!(load_cached_video_tree(&empty, &["mp4"], true).is_some());
+            let connection = crate::mfb_sqlite_store::open_store_connection()?;
+            connection.execute("UPDATE store_metadata SET value = 99", [])?;
+            assert!(load_cached_video_tree(&empty, &["mp4"], true).is_none());
+            Ok(())
+        })?;
+        let events: Vec<serde_json::Value> = String::from_utf8(buffer.lock().unwrap().clone())?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|event| {
+                (event["fields"]["namespace"] == "path_tree").then(|| event["fields"].clone())
+            })
+            .collect();
+        let expected = [
+            ("image", "miss", "record_absent"),
+            ("image", "hit", "filesystem_identity_current"),
+            ("image", "invalidated", "snapshot_request_mismatch"),
+            ("image", "invalidated", "file_identity_changed"),
+            ("image", "error", "snapshot_json_invalid"),
+            ("image", "bypassed", "lookup_disabled"),
+            ("video", "hit", "filesystem_identity_current"),
+            ("video", "error", "store_read_error"),
+        ];
+        assert_eq!(events.len(), expected.len());
+        for (event, (media_kind, outcome, reason)) in events.iter().zip(expected) {
+            assert_eq!(event["schema_version"], 1);
+            assert_eq!(event["media_kind"], media_kind);
+            assert_eq!(event["outcome"], outcome);
+            assert_eq!(event["reason"], reason);
+            assert!(event.get("path").is_none());
+            assert!(event.get("file_count").is_none());
+            if outcome == "bypassed" {
+                assert!(event.get("cache_key").is_none());
+            } else {
+                assert_eq!(event["cache_key"].as_str().unwrap().len(), 64);
+            }
+            assert!(!event.to_string().contains(root.path().to_str().unwrap()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn path_tree_freshness_reasons_preserve_incomplete_and_unreadable_boundaries()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("source.png");
+        write_test_image(&source, 2, 2, ImageFormat::Png);
+        let snapshot = scan_image_tree_snapshot(root.path(), &["png"], true)?;
+        assert_eq!(
+            cached_directory_freshness(&[], &snapshot.root),
+            Err("root_directory_record_missing")
+        );
+        let mut incomplete = snapshot.clone();
+        incomplete.directories[0].modified_time = None;
+        assert_eq!(
+            cached_image_tree_freshness(&incomplete, root.path(), &["png"], true),
+            Err("directory_mtime_unproven")
+        );
+        incomplete = snapshot.clone();
+        incomplete
+            .observed_files
+            .push(incomplete.observed_files[0].clone());
+        assert_eq!(
+            cached_image_tree_freshness(&incomplete, root.path(), &["png"], true),
+            Err("duplicate_candidate_identity")
+        );
+        incomplete = snapshot.clone();
+        incomplete.observed_files.clear();
+        assert_eq!(
+            cached_image_tree_freshness(&incomplete, root.path(), &["png"], true),
+            Err("admitted_candidate_identity_mismatch")
+        );
+        fs::remove_file(source)?;
+        assert_eq!(
+            cached_file_freshness(&snapshot.observed_files, std::iter::empty()),
+            Err("file_identity_unreadable")
+        );
+        Ok(())
     }
 
     #[test]
