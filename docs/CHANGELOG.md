@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### IMG admission, local Gate activity and worker launch provenance (2026-10-12)
+
+- Retain standard IMG discovery metadata through task admission and check it before
+  conversion or resume skip: size/modification time plus Unix device/inode/change
+  time. Fast IMG checks its planned BLAKE3 before encoding or accepting a no-encode
+  result. Refuse changed, replaced or unreadable sources as failures and retain
+  them; do not mark them completed or skipped. Reuse the existing scan snapshot
+  without adding a second scan. This is worker-queue admission, not complete
+  Unified Preflight, cross-process inventory binding or final delivery evidence;
+  standard metadata identities are not content hashes and non-Unix evidence is weaker.
+- Emit bounded versioned activity records around Gate 1 inventory and its six
+  existing checks, retaining their order and early failure behavior. Show the
+  latest check, returned-check count, unrun checks on failure and time since the GUI
+  received the update in the native progress row, without file or whole-run
+  percentages, elapsed-check claims or timeout inference. Clear live activity on
+  processing/terminal transitions, retain the raw events in History, and reject
+  invalid/regressing activity without rewriting processing outcomes. Local Gate
+  completion does not mean whole-batch or Photos delivery completion.
+- Record versioned worker `launch_requested` evidence before invocation: exact
+  program/arguments, bounded unique invocation identity and the path/size/BLAKE3
+  observed before launch. Bind captured effective configuration to its invocation
+  and display it in native History; unknown or unreadable binary evidence remains
+  unknown with its diagnostic. Selected-run JSON includes worker requests/bound
+  configuration and raw Gate activity with separate activity-row accounting. This
+  is not proof of the executed image, PID, build or a complete Run Manifest.
+- Correct two new launcher test fixtures: initialize the History schema through
+  the official writer before installing a failure trigger, and assert that a dry
+  run leaves the lazily created database absent instead of opening a nonexistent
+  database. Preserve child draining, exit status and processing-count assertions;
+  production lazy initialization and database behavior are unchanged.
+- Preserve the underlying error chain in collected worker failures, so History
+  persistence diagnostics retain the specific SQLite cause without losing child
+  exit status, counts or trailing output. Accept valid inventory `running` to
+  `failed` activity with zero checks completed, including diagnostic export, while
+  still refusing to reopen a terminal Gate.
+- Use the native semantic log background without a fixed alpha transformation,
+  preserving text contrast when changing between light and dark appearances.
+  Cover both appearance resolutions in native self-tests and inspect the actual
+  switched window; no processing behavior is changed.
+- Preserve the concurrent dependency refresh: cc 1.8.0, serde_json 1.0.154,
+  syn 3.0.8 and unicode-ident 1.0.27, plus the pinned OSS-Fuzz builder digest.
+  These updates are not established causes of the test-fixture failures; the
+  Docker image build was not exercised locally.
+- Validation: 86 distinct scoped Rust tests passed with the refreshed lockfile;
+  the same 53 launcher tests also passed with four test threads. Affected-target
+  strict Clippy, workspace formatting, three localization syntax checks, native
+  Swift warnings-as-errors and three-language self-tests passed. Isolated AppKit
+  checks covered light/dark layouts and synthetic History export with three raw
+  rows split into one diagnostic, one phase and one activity record, preserving
+  exact arguments and unknown binary/config evidence. No production Photos/media,
+  full-workspace, cross-platform, throughput or new CI verdict is claimed; the
+  installed application was not rebuilt or replaced.
+
 ### Core database management and selected-run diagnostics (2026-10-12)
 
 - Add a read-only Core database overview alongside namespace statistics: current

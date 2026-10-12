@@ -234,6 +234,48 @@ private struct HistoryConfigMetadata: Decodable {
     let pipeline: String
     let package_version: String
     let sources: [String: String]
+    let invocation_id: String?
+}
+
+private struct HistoryInvocation: Codable {
+    struct Binary: Codable {
+        let scope: String
+        let bytes: UInt64?
+        let blake3: String?
+        let diagnostic: String?
+
+        var valid: Bool {
+            guard scope == "observed_before_launch" else { return false }
+            if let bytes, let blake3 {
+                return bytes <= UInt64(Int64.max) && diagnostic == nil && blake3.utf8.count == 64
+                    && blake3.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            }
+            return bytes == nil && blake3 == nil && diagnostic.map { !$0.isEmpty && $0.utf8.count <= 4096 } == true
+        }
+    }
+    let schema_version: Int
+    let invocation_id: String
+    let pipeline: String
+    let state: String
+    let program_requested: String
+    let program_path: String?
+    let arguments: [String]
+    let binary: Binary
+
+    var valid: Bool {
+        guard schema_version == 1, !invocation_id.isEmpty, invocation_id.utf8.count <= 256,
+              invocation_id.rangeOfCharacter(from: .controlCharacters) == nil,
+              ["img", "vid", "cmd"].contains(pipeline), state == "launch_requested",
+              !program_requested.isEmpty, program_requested.utf8.count <= 32 * 1024, !program_requested.contains("\0"),
+              program_path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+              arguments.count <= 4096, binary.valid, program_path != nil || binary.blake3 == nil else { return false }
+        var bytes = 0
+        for argument in arguments {
+            guard !argument.contains("\0"), argument.utf8.count <= 256 * 1024 - bytes else { return false }
+            bytes += argument.utf8.count
+        }
+        return true
+    }
 }
 
 private struct HistoryRecord: Decodable {
@@ -256,6 +298,9 @@ private struct HistoryEntry {
     var configInvocationCount = 0
     var configMarkerSeen = false
     var configEvidenceInvalid = false
+    var invocations: [HistoryInvocation] = []
+    var invocationConfigs: [String: HistoryConfigSnapshot] = [:]
+    var invocationEvidenceInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -679,12 +724,30 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
                     current.configMarkerSeen = true
                     let snapshot = try decodeConfig(event)
+                    let metadata = try decode(HistoryConfigMetadata.self, from: event, prefix: "MFB_HISTORY_CONFIG=")
+                    if let id = metadata.invocation_id {
+                        guard let invocation = current.invocations.first(where: { $0.invocation_id == id }),
+                              invocation.pipeline == snapshot.pipeline, current.invocationConfigs[id] == nil,
+                              !current.invocationEvidenceInvalid else { throw HistoryParseError.invalid }
+                        current.invocationConfigs[id] = snapshot
+                    } else {
+                        let object = try JSONSerialization.jsonObject(with: Data(event.dropFirst("MFB_HISTORY_CONFIG=".count).utf8)) as? [String: Any]
+                        guard object?["invocation_id"] == nil, current.invocations.isEmpty else { throw HistoryParseError.invalid }
+                    }
                     current.configInvocationCount += 1
                     if !current.configSet.contains(snapshot) {
                         guard current.configSnapshots.count < maximumConfigSnapshots else { throw HistoryParseError.invalid }
                         current.configSet.insert(snapshot)
                         current.configSnapshots.append(snapshot)
                     }
+                } else if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
+                    let invocation = try decode(HistoryInvocation.self, from: event, prefix: "MFB_HISTORY_INVOCATION=")
+                    guard current.context != nil, current.finished == nil, invocation.valid,
+                          current.invocations.count < 1000, !current.invocationEvidenceInvalid,
+                          !current.invocations.contains(where: { $0.invocation_id == invocation.invocation_id }) else {
+                        throw HistoryParseError.invalid
+                    }
+                    current.invocations.append(invocation)
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -711,6 +774,12 @@ private enum HistoryStore {
                 }
             } catch {
                 if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
+                if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
+                    current.invocations.removeAll()
+                    current.invocationConfigs.removeAll()
+                    current.invocationEvidenceInvalid = true
+                    current.contradictoryFields.insert("invocation")
+                }
                 if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     current.summary = nil
                     current.contradictoryFields.insert("summary")
@@ -916,7 +985,7 @@ private enum HistoryStore {
         let audit = try databaseAudit(database, stamp: selected.stamp, url: selected.audit, readBytes: &bytes, limited: &limited)
         guard !limited else { throw HostError(message: localized("history.export.limit")) }
         guard let entry = audit.entries.first(where: { $0.id == selected.id && $0.context == selectedContext }),
-              entry.issues.isEmpty, entry.contradictoryFields.isEmpty, !entry.configEvidenceInvalid,
+               entry.issues.isEmpty, entry.contradictoryFields.isEmpty, !entry.configEvidenceInvalid, !entry.invocationEvidenceInvalid,
               !entry.legacy, let context = entry.context else { throw HostError(message: localized("history.export.invalid")) }
         let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
         defer { sqlite3_finalize(maximum) }
@@ -937,7 +1006,9 @@ private enum HistoryStore {
         var total = 0
         var diagnosticCount = 0
         var phaseCount = 0
+        var activityCount = 0
         var phases: [String: PhaseLogPresentation] = [:]
+        var activities: [String: GateCheckActivity] = [:]
         while true {
             let result = sqlite3_step(query)
             if result == SQLITE_DONE { break }
@@ -958,10 +1029,21 @@ private enum HistoryStore {
             if let update = phase.ingest(normalized, now: 0) {
                 guard update != .invalid else { throw HostError(message: localized("history.export.invalid")) }
                 phases[pipeline] = phase
+                if phase.phase == .processing { activities[pipeline] = nil }
                 phaseCount += 1
                 retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
                     "normalized_message": normalized, "kind": "phase", "phase": phase.phase?.rawValue as Any? ?? NSNull()])
             } else {
+                var activity = activities[pipeline] ?? GateCheckActivity()
+                if activity.ingest(normalized, now: 0) {
+                    guard !activity.invalid else { throw HostError(message: localized("history.export.invalid")) }
+                    activities[pipeline] = activity
+                    activityCount += 1
+                    retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                        "normalized_message": normalized, "kind": "verification_activity",
+                        "phase": phases[pipeline]?.phase?.rawValue as Any? ?? NSNull()])
+                    continue
+                }
                 let tone = LogTone.classify(line)
                 guard tone == .warning || tone == .failure else { continue }
                 diagnosticCount += 1
@@ -1002,6 +1084,20 @@ private enum HistoryStore {
              "config": try JSONSerialization.jsonObject(with: Data($0.values.utf8)),
              "sources": try JSONSerialization.jsonObject(with: Data($0.sources.utf8))]
         }
+        let launches: [[String: Any]] = try entry.invocations.map { invocation in
+            guard var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(invocation)) as? [String: Any] else {
+                throw HostError(message: localized("history.export.invalid"))
+            }
+            object["program_path"] = nullable(invocation.program_path)
+            object["binary"] = ["scope": invocation.binary.scope, "bytes": nullable(invocation.binary.bytes),
+                "blake3": nullable(invocation.binary.blake3), "diagnostic": nullable(invocation.binary.diagnostic)]
+            if let config = entry.invocationConfigs[invocation.invocation_id] {
+                object["configuration"] = ["pipeline": config.pipeline, "package_version": config.packageVersion,
+                    "config": try JSONSerialization.jsonObject(with: Data(config.values.utf8)),
+                    "sources": try JSONSerialization.jsonObject(with: Data(config.sources.utf8))]
+            } else { object["configuration"] = NSNull() }
+            return object
+        }
         let plan: [String: Any]? = entry.inputPlan.map {
             ["schema_version": $0.schema_version, "inputs": $0.inputs.map {
                 ["source": $0.source, "output": nullable($0.output), "in_place": $0.in_place, "requires_verification": $0.requires_verification]
@@ -1013,10 +1109,12 @@ private enum HistoryStore {
             "scope": ["output_start_exclusive": start, "output_end_inclusive": end, "known_end_sequence": nullable(knownEnd),
                 "end_source": entry.outputEndSource,
                 "total_output_rows": total, "retained_output_rows": retained.count, "diagnostic_log_rows": diagnosticCount,
-                "phase_control_rows": phaseCount, "omitted_non_diagnostic_output_rows": total - retained.count,
+                "phase_control_rows": phaseCount, "verification_activity_rows": activityCount,
+                "omitted_non_diagnostic_output_rows": total - retained.count,
                 "scan_complete": true, "count_scope": "log_records_not_files", "contains_local_paths_and_diagnostics": true],
             "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
             "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
+            "worker_launches": launches.isEmpty ? NSNull() : launches,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
             "input_verifications": entry.inputVerifications.mapValues(verification), "records": retained]
         let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
@@ -1289,6 +1387,9 @@ private enum HistoryStore {
                         entry.configSet = []
                         entry.configInvocationCount = 0
                         entry.configMarkerSeen = true
+                        entry.invocations = []
+                        entry.invocationConfigs = [:]
+                        entry.invocationEvidenceInvalid = true
                         entry.finished = nil
                         entry.issues.append(localized("history.issue.conflicting_copies"))
                     }
@@ -2023,6 +2124,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                           row("config_package_version", snapshot.packageVersion),
                           row("config_values", snapshot.values),
                           row("config_sources", snapshot.sources)]
+            }
+        }
+        lines += ["", localized("history.worker.title"), localized("history.worker.note")]
+        if entry.invocationEvidenceInvalid {
+            lines.append(localized("history.worker.invalid"))
+        } else if entry.invocations.isEmpty {
+            lines.append(localized("history.worker.not_recorded"))
+        } else {
+            for invocation in entry.invocations {
+                lines += ["", row("invocation_id", invocation.invocation_id), row("config_pipeline", invocation.pipeline),
+                    row("worker_program", invocation.program_requested), row("worker_path", invocation.program_path ?? unknown)]
+                let arguments = try? JSONSerialization.data(withJSONObject: invocation.arguments, options: [.prettyPrinted, .sortedKeys])
+                lines.append(row("worker_arguments", arguments.map { String(decoding: $0, as: UTF8.self) } ?? unknown))
+                if let bytes = invocation.binary.bytes, let hash = invocation.binary.blake3 {
+                    lines.append(row("worker_binary", "\(bytes) B · \(hash)"))
+                } else { lines.append(row("worker_observation_error", invocation.binary.diagnostic ?? unknown)) }
+                lines.append(row("config_package_version", entry.invocationConfigs[invocation.invocation_id]?.packageVersion ?? unknown))
             }
         }
         lines += ["", localized("history.processor_counts")]
@@ -2805,6 +2923,59 @@ func runProcessingHistorySelfTests() throws {
     vidConfigValue["config"] = ["config_version": 1, "performance": ["mode": "relaxed"]]
     let imgConfig = try payload("MFB_HISTORY_CONFIG", imgConfigValue)
     let vidConfig = try payload("MFB_HISTORY_CONFIG", vidConfigValue)
+    let launchValue: [String: Any] = ["schema_version": 1, "invocation_id": "synthetic-call-1", "pipeline": "img",
+        "state": "launch_requested", "program_requested": "/synthetic/worker 界面/img", "program_path": "/synthetic/worker 界面/img",
+        "arguments": ["run", "/synthetic/folder with spaces/界面.jpg", "--error-mode", "log-and-continue"],
+        "binary": ["scope": "observed_before_launch", "bytes": 123, "blake3": String(repeating: "a", count: 64), "diagnostic": NSNull()]]
+    let launch = try payload("MFB_HISTORY_INVOCATION", launchValue)
+    var secondLaunchValue = launchValue
+    secondLaunchValue["invocation_id"] = "synthetic-call-2"
+    secondLaunchValue["pipeline"] = "vid"
+    secondLaunchValue["program_requested"] = "/synthetic/vid"
+    secondLaunchValue["program_path"] = NSNull()
+    secondLaunchValue["binary"] = ["scope": "observed_before_launch", "bytes": NSNull(), "blake3": NSNull(), "diagnostic": "synthetic read denied"]
+    let secondLaunch = try payload("MFB_HISTORY_INVOCATION", secondLaunchValue)
+    var boundImageValue = imgConfigValue
+    boundImageValue["invocation_id"] = "synthetic-call-1"
+    var boundVideoValue = vidConfigValue
+    boundVideoValue["invocation_id"] = "synthetic-call-2"
+    let boundImage = try payload("MFB_HISTORY_CONFIG", boundImageValue)
+    let boundVideo = try payload("MFB_HISTORY_CONFIG", boundVideoValue)
+    let launched = try parsed([context, launch, boundImage, secondLaunch, boundVideo, summary, completed]).entries[0]
+    try require(launched.invocations.count == 2 && launched.invocationConfigs.count == 2
+                && launched.invocationConfigs["synthetic-call-1"]?.pipeline == "img"
+                && launched.invocationConfigs["synthetic-call-2"]?.pipeline == "vid"
+                && launched.invocations[0].arguments[1] == "/synthetic/folder with spaces/界面.jpg"
+                && launched.invocations[1].program_path == nil && launched.invocations[1].binary.bytes == nil
+                && launched.invocations[1].binary.diagnostic == "synthetic read denied"
+                && launched.succeededLabel == "2" && launched.statusKey == "history.status.completed"
+                && ProcessingHistoryPanel.render(launched).contains(localized("history.worker.note")),
+                "Worker launch provenance lost exact argv, unknown evidence, configuration binding, or real processing counts")
+    let launchBatches = try parsed([context, launch, boundImage, summary, completed, context, secondLaunch, boundVideo, summary, completed])
+    try require(launchBatches.entries[0].invocations.map(\.invocation_id) == ["synthetic-call-1"]
+                && launchBatches.entries[1].invocations.map(\.invocation_id) == ["synthetic-call-2"],
+                "Worker launch evidence crossed selected-run boundaries")
+    try require(success.entries[0].invocations.isEmpty
+                && ProcessingHistoryPanel.render(success.entries[0]).contains(localized("history.worker.not_recorded")),
+                "Old history fabricated a worker launch receipt")
+    var wrongBindingValue = boundVideoValue
+    wrongBindingValue["invocation_id"] = "synthetic-call-1"
+    for invalidSequence in [[launch, launch], [launch, boundImage, boundImage], [launch, imgConfig],
+                             [launch, try payload("MFB_HISTORY_CONFIG", wrongBindingValue)], [boundImage]] {
+        let invalid = try parsed([context] + invalidSequence + [summary, failed]).entries[0]
+        try require(!invalid.issues.isEmpty && invalid.succeededLabel == "2" && invalid.statusKey == "history.status.failed"
+                    && (invalid.invocationEvidenceInvalid || invalid.configEvidenceInvalid),
+                    "Duplicate, missing or mismatched launch binding replaced real counts or appeared trustworthy")
+    }
+    for (key, value) in [("schema_version", 2 as Any), ("state", "spawned"), ("invocation_id", ""),
+                          ("arguments", Array(repeating: "x", count: 4097)), ("arguments", [String(repeating: "x", count: 256 * 1024 + 1)]),
+                          ("arguments", ["invalid\0argument"]), ("program_path", "relative/img")] {
+        var invalidLaunch = launchValue
+        invalidLaunch[key] = value
+        let invalid = try parsed([context, try payload("MFB_HISTORY_INVOCATION", invalidLaunch), summary, completed]).entries[0]
+        try require(invalid.invocationEvidenceInvalid && invalid.invocations.isEmpty && invalid.succeededLabel == "2",
+                    "Malformed worker provenance was accepted or changed processing counts")
+    }
     let withConfigs = try parsed([context, imgConfig, imgConfig, vidConfig, summary, completed])
     let configEntry = withConfigs.entries[0]
     let shownValues = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].values.utf8)) as? [String: Any]
@@ -3507,7 +3678,7 @@ func runProcessingHistorySelfTests() throws {
         do { try operation() } catch { return }
         throw HostError(message: message)
     }
-    let exportConfig = try payload("MFB_HISTORY_CONFIG", ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
+    let exportConfig = try payload("MFB_HISTORY_CONFIG", ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "invocation_id": "synthetic-call-1",
         "config": ["config_version": 1, "execution": ["error_mode": "log-and-continue"]],
         "sources": ["config_version": "default", "execution.error_mode": "CLI"]])
     var exportContextValue = outputContext
@@ -3521,7 +3692,7 @@ func runProcessingHistorySelfTests() throws {
     let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
     let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
         "error": "synthetic terminal failure", "output_sequence": 6])
-    try writeDatabase([("export", [exportContext, exportConfig, unknownSummary, exportFinished, adjacentContext])], schema: 2)
+    try writeDatabase([("export", [exportContext, launch, exportConfig, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
     var exportDB: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
         throw HostError(message: "Synthetic export database open failed")
@@ -3563,6 +3734,7 @@ func runProcessingHistorySelfTests() throws {
           let exportedImage = exportedSummary["img"] as? [String: Any],
           let exportedConfig = document["configuration"] as? [String: Any],
           let snapshots = exportedConfig["snapshots"] as? [[String: Any]],
+          let workerLaunches = document["worker_launches"] as? [[String: Any]],
           let exportedRows = document["records"] as? [[String: Any]] else { throw HostError(message: "Diagnostic artifact schema is invalid") }
     try require(document["schema_version"] as? Int == 1 && document["authoritative_state"] as? Bool == false
                 && document["full_run_manifest"] as? Bool == false && scope["total_output_rows"] as? Int == 4
@@ -3570,6 +3742,9 @@ func runProcessingHistorySelfTests() throws {
                 && scope["phase_control_rows"] as? Int == 1 && scope["omitted_non_diagnostic_output_rows"] as? Int == 1
                 && scope["end_source"] as? String == "terminal_boundary"
                 && exportedImage["succeeded"] is NSNull && snapshots.count == 1
+                && workerLaunches.count == 1 && workerLaunches[0]["invocation_id"] as? String == "synthetic-call-1"
+                && workerLaunches[0]["arguments"] as? [String] == launchValue["arguments"] as? [String]
+                && (workerLaunches[0]["configuration"] as? [String: Any])?["package_version"] as? String == "0.12.0"
                 && (snapshots[0]["sources"] as? [String: String])?["execution.error_mode"] == "CLI"
                 && exportedRows.map({ $0["sequence"] as? Int }) == [3, 4, 6]
                 && exportedRows[1]["line"] as? String == warningLine && exportedRows[2]["line"] as? String == errorLine
@@ -3579,8 +3754,11 @@ func runProcessingHistorySelfTests() throws {
     let ongoingArtifact = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[1])) as? [String: Any]
     let ongoingScope = ongoingArtifact?["scope"] as? [String: Any]
     let ongoingRows = ongoingArtifact?["records"] as? [[String: Any]]
+    let ongoingLaunch = (ongoingArtifact?["worker_launches"] as? [[String: Any]])?.first
     try require(ongoingArtifact?["summary"] is NSNull && ongoingArtifact?["finished"] is NSNull
                 && ongoingScope?["known_end_sequence"] is NSNull && ongoingScope?["end_source"] as? String == "snapshot_only"
+                && ongoingLaunch?["program_path"] is NSNull && ongoingLaunch?["configuration"] is NSNull
+                && (ongoingLaunch?["binary"] as? [String: Any])?["blake3"] is NSNull
                 && ongoingRows?.first?["phase"] is NSNull,
                 "Ongoing diagnostic export invented a final state, counts, or phase")
     try require(try Data(contentsOf: databaseURL) == databaseBeforeExport, "Diagnostic export mutated its source database")
@@ -3649,6 +3827,49 @@ func runProcessingHistorySelfTests() throws {
     }
     sqlite3_finalize(boundaryUpdate)
     sqlite3_close(boundaryDB)
+    var activityExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &activityExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let activityExport else {
+        throw HostError(message: "Synthetic Gate activity export open failed")
+    }
+    defer { sqlite3_close(activityExport) }
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-gate","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}' WHERE sequence=5"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic Gate activity export write failed")
+    }
+    let activityDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[0])) as? [String: Any]
+    let activityScope = activityDocument?["scope"] as? [String: Any]
+    let activityRows = activityDocument?["records"] as? [[String: Any]]
+    try require(activityScope?["total_output_rows"] as? Int == 4
+                && activityScope?["retained_output_rows"] as? Int == 4
+                && activityScope?["verification_activity_rows"] as? Int == 1
+                && activityScope?["diagnostic_log_rows"] as? Int == 2
+                && activityScope?["phase_control_rows"] as? Int == 1
+                && activityScope?["omitted_non_diagnostic_output_rows"] as? Int == 0
+                && activityRows?.contains(where: { $0["kind"] as? String == "verification_activity" && $0["sequence"] as? Int == 5 }) == true,
+                "Diagnostic export discarded verification activity or counted it as a failed file")
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-inventory","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}' WHERE sequence=3; UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-inventory","gate":"local","check":"inventory","completed":0,"total":6,"state":"failed"}' WHERE sequence=5"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic inventory failure export write failed")
+    }
+    let inventoryDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[0])) as? [String: Any]
+    let inventoryScope = inventoryDocument?["scope"] as? [String: Any]
+    let inventoryRows = inventoryDocument?["records"] as? [[String: Any]]
+    try require(inventoryScope?["total_output_rows"] as? Int == 4
+                && inventoryScope?["retained_output_rows"] as? Int == 4
+                && inventoryScope?["verification_activity_rows"] as? Int == 2
+                && inventoryScope?["diagnostic_log_rows"] as? Int == 2
+                && inventoryScope?["phase_control_rows"] as? Int == 0
+                && inventoryRows?.filter({ $0["kind"] as? String == "verification_activity" }).map({ $0["sequence"] as? Int }) == [3, 5],
+                "Diagnostic export rejected a valid zero-check inventory failure or fabricated file counts")
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}' WHERE sequence=3"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export phase restoration failed")
+    }
+    guard sqlite3_exec(activityExport, "UPDATE history_output SET line='MFB_GATE_ACTIVITY={invalid}' WHERE sequence=5", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic invalid Gate activity write failed")
+    }
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) },
+                     "Invalid Gate activity evidence exported a misleading artifact")
+    guard sqlite3_exec(activityExport, "UPDATE history_output SET line='ordinary output omitted' WHERE sequence=5", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic Gate activity restoration failed")
+    }
     var corruptExport: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &corruptExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let corruptExport else {
         throw HostError(message: "Synthetic export corruption open failed")

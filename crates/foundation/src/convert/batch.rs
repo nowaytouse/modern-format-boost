@@ -52,6 +52,29 @@ impl CachedFileIdentity {
     }
 }
 
+/// Discovery identity retained until standard IMG task admission, not a content or delivery proof.
+#[derive(Debug, Clone)]
+pub struct AdmittedImageFile {
+    path: PathBuf,
+    identity: CachedFileIdentity,
+}
+
+impl AdmittedImageFile {
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn verify_unchanged(&self) -> crate::unified_error::Result<()> {
+        ensure_cache_file_unchanged(&self.path, &self.identity).map_err(|error| {
+            crate::unified_error::UnifiedError::analysis_error(format!(
+                "Image source changed or became unreadable after discovery: {} ({error}); task refused and source retained",
+                self.path.display()
+            ))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedFileState {
     path: PathBuf,
@@ -303,8 +326,23 @@ pub fn collect_image_files_for_perceived_speed(
     extensions: &[&str],
     recursive: bool,
 ) -> crate::unified_error::Result<Vec<PathBuf>> {
+    Ok(
+        collect_admitted_image_files_for_perceived_speed(dir, extensions, recursive)?
+            .into_iter()
+            .map(|file| file.path)
+            .collect(),
+    )
+}
+
+pub fn collect_admitted_image_files_for_perceived_speed(
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+) -> crate::unified_error::Result<Vec<AdmittedImageFile>> {
     if !crate::algorithm_runtime::static_quality_db_lookup_enabled() {
-        return scan_image_files(dir, extensions, recursive);
+        return Ok(admitted_image_files(scan_image_tree_snapshot(
+            dir, extensions, recursive,
+        )?));
     }
 
     let cached = load_cached_image_tree(dir, extensions, recursive)
@@ -326,7 +364,18 @@ pub fn collect_image_files_for_perceived_speed(
         snapshot
     };
 
-    Ok(snapshot.files.into_iter().map(|entry| entry.path).collect())
+    Ok(admitted_image_files(snapshot))
+}
+
+fn admitted_image_files(snapshot: CachedImageTreeSnapshot) -> Vec<AdmittedImageFile> {
+    snapshot
+        .files
+        .into_iter()
+        .map(|entry| AdmittedImageFile {
+            path: entry.path,
+            identity: entry.identity,
+        })
+        .collect()
 }
 
 pub fn collect_video_files_for_perceived_speed(
@@ -1509,6 +1558,7 @@ impl CachedVideoTreeSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use filetime::FileTime;
     use image::{ImageFormat, Rgb, RgbImage};
     use tempfile::TempDir;
@@ -1518,6 +1568,126 @@ mod tests {
         image
             .save_with_format(path, format)
             .expect("failed to write test image");
+    }
+
+    #[test]
+    fn image_admissions_preserve_scanned_and_cached_identity_until_execution() -> anyhow::Result<()>
+    {
+        let root = TempDir::new()?;
+        let source = root.path().join("admitted.png");
+        write_test_image(&source, 8, 8, ImageFormat::Png);
+        let snapshot = scan_image_tree_snapshot(root.path(), &["png"], true)?;
+        let cached: CachedImageTreeSnapshot =
+            serde_json::from_slice(&serde_json::to_vec(&snapshot)?)?;
+        let fresh = admitted_image_files(snapshot);
+        let persisted = admitted_image_files(cached);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(persisted.len(), 1);
+        for admitted in fresh.iter().chain(&persisted) {
+            assert_eq!(admitted.path(), source.canonicalize()?);
+            admitted.verify_unchanged()?;
+        }
+        let changed = b"changed after admission";
+        fs::write(&source, changed)?;
+        for admitted in fresh.iter().chain(&persisted) {
+            assert!(admitted.verify_unchanged().is_err());
+        }
+        assert_eq!(fs::read(&source)?, changed);
+        fs::remove_file(&source)?;
+        assert!(fresh[0].verify_unchanged().is_err());
+        assert!(persisted[0].verify_unchanged().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_image_collection_keeps_identity_in_database_and_filesystem_modes()
+    -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_ADMITTED_IMAGE_COLLECTION_CHILD";
+        if let Ok(mode) = std::env::var(CHILD) {
+            let root = TempDir::new()?;
+            let media = root.path().join("media");
+            fs::create_dir(&media)?;
+            let source = media.join("admitted.png");
+            write_test_image(&source, 8, 8, ImageFormat::Png);
+            let _store = crate::mfb_sqlite_store::set_test_store_path_for_tests(
+                root.path().join("store.sqlite"),
+            );
+            let mut config = crate::runtime_config::RuntimeConfig::default();
+            config.img.quality_heuristic = mode == "cache";
+            config.img.allow_database = mode == "cache";
+            crate::runtime_config::install(config)?;
+            assert_eq!(
+                crate::algorithm_runtime::static_quality_db_lookup_enabled(),
+                mode == "cache"
+            );
+            let files = collect_admitted_image_files_for_perceived_speed(&media, &["png"], true)?;
+            assert_eq!(files.len(), 1);
+            files[0].verify_unchanged()?;
+            if mode == "cache" {
+                let cached = load_cached_image_tree(&media, &["png"], true)
+                    .context("cached image inventory")?;
+                assert!(validate_cached_image_tree(&cached, &media, &["png"], true));
+            } else {
+                assert!(!root.path().join("store.sqlite").exists());
+            }
+            let again = collect_admitted_image_files_for_perceived_speed(&media, &["png"], true)?;
+            assert_eq!(again.len(), 1);
+            assert_eq!(files[0].path(), again[0].path());
+            assert_eq!(
+                collect_image_files_for_perceived_speed(&media, &["png"], true)?,
+                [files[0].path().to_path_buf()]
+            );
+            fs::write(&source, b"changed before execution")?;
+            assert!(files[0].verify_unchanged().is_err());
+            assert!(again[0].verify_unchanged().is_err());
+            return Ok(());
+        }
+        let name = format!(
+            "{}::admitted_image_collection_keeps_identity_in_database_and_filesystem_modes",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").context("test module path")?;
+        for mode in ["filesystem", "cache"] {
+            let root = TempDir::new()?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", name])
+                .env(CHILD, mode)
+                .env(crate::constants::ENV_MFB_HOME_ROOT, root.path())
+                .env(crate::constants::ENV_DISABLE_STATIC_QUALITY_DB_LOOKUP, "0")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{mode}: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_admissions_reject_same_size_restored_mtime_and_replaced_inode() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("admitted.png");
+        write_test_image(&source, 8, 8, ImageFormat::Png);
+        let admitted = admitted_image_files(scan_image_tree_snapshot(root.path(), &["png"], true)?);
+        let metadata = fs::metadata(&source)?;
+        let modified = FileTime::from_last_modification_time(&metadata);
+        let mut bytes = fs::read(&source)?;
+        bytes[0] ^= 1;
+        fs::write(&source, &bytes)?;
+        filetime::set_file_mtime(&source, modified)?;
+        assert!(admitted[0].verify_unchanged().is_err());
+        write_test_image(&source, 8, 8, ImageFormat::Png);
+        let admitted = admitted_image_files(scan_image_tree_snapshot(root.path(), &["png"], true)?);
+        let modified = FileTime::from_last_modification_time(&fs::metadata(&source)?);
+        let replacement = root.path().join("replacement");
+        fs::copy(&source, &replacement)?;
+        filetime::set_file_mtime(&replacement, modified)?;
+        fs::rename(&replacement, &source)?;
+        assert!(admitted[0].verify_unchanged().is_err());
+        Ok(())
     }
 
     fn sorted_relative_paths(root: &Path, files: &[PathBuf]) -> anyhow::Result<Vec<String>> {

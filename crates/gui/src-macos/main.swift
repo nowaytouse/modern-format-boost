@@ -2678,6 +2678,82 @@ private struct FileStageProgress {
     }
 }
 
+struct GateCheckActivity {
+    struct Event: Decodable, Equatable {
+        let schema_version: Int
+        let stage_id: String
+        let gate: String
+        let check: String
+        let completed: UInt64
+        let total: UInt64
+        let state: String
+
+        var valid: Bool {
+            guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64,
+                  gate == "local", total == 6 else { return false }
+            if check == "inventory" { return completed == 0 && ["running", "failed"].contains(state) }
+            guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else { return false }
+            switch state {
+            case "running": return completed == UInt64(index)
+            case "failed": return completed == UInt64(index + 1)
+            case "passed": return check == "decode" && completed == total
+            default: return false
+            }
+        }
+    }
+
+    private(set) var event: Event?
+    private(set) var invalid = false
+    private var updatedAt: TimeInterval?
+
+    mutating func ingest(_ line: String, now: TimeInterval) -> Bool {
+        let raw = line.hasPrefix("ERR: ") ? line.dropFirst(5) : line[...]
+        let prefix = "MFB_GATE_ACTIVITY="
+        guard raw.hasPrefix(prefix) else { return false }
+        let payload = raw.dropFirst(prefix.count)
+        guard now.isFinite, payload.utf8.count <= 1_024,
+              let next = try? JSONDecoder().decode(Event.self, from: Data(payload.utf8)), next.valid else {
+            invalidate()
+            return true
+        }
+        if let previous = event, previous.stage_id == next.stage_id {
+            guard next.completed >= previous.completed,
+                  previous.state == "running" || previous == next,
+                  next.completed != previous.completed || previous == next
+                    || (previous.check == "inventory" && next.check == "count" && next.state == "running")
+                    || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed") else {
+                invalidate()
+                return true
+            }
+        }
+        event = next
+        updatedAt = now
+        invalid = false
+        return true
+    }
+
+    private mutating func invalidate() {
+        event = nil
+        updatedAt = nil
+        invalid = true
+    }
+
+    func label(now: TimeInterval) -> String {
+        guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
+        let text: String
+        switch event.state {
+        case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
+        case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
+                                        String(event.completed), String(event.total), String(event.total - event.completed))
+        default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
+                                  String(event.completed), String(event.total))
+        }
+        guard event.state == "running", let updatedAt, now.isFinite else { return text }
+        let age = UInt64(min(Double(Int64.max), max(0, now - updatedAt)))
+        return text + " · " + localized("gate.activity.updated", String(age))
+    }
+}
+
 struct PhaseLogPresentation {
     enum Phase: String, Decodable { case processing, verification }
     enum Update: Equatable {
@@ -3861,6 +3937,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var gateActivity = GateCheckActivity()
     private var logPhase = PhaseLogPresentation()
     private var latestDiagnostics = LatestDiagnostics()
     private let latestFailureLabel = NSTextField(labelWithString: "")
@@ -4020,6 +4097,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func refreshProcessingStatus() {
         guard let startedAt = processingStartedAt else { return }
+        refreshFileProgress()
         pauseButton.isEnabled = host.canPause
         if host.controlState == "cancelled" {
             setLocalizedStatus("status.stopping")
@@ -4248,7 +4326,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         logView.isSelectable = true
         logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         logView.textContainerInset = NSSize(width: 8, height: 8)
-        logView.backgroundColor = .textBackgroundColor.withAlphaComponent(0.72)
+        logView.backgroundColor = .textBackgroundColor
         logScroll.documentView = logView
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .lineBorder
@@ -4264,7 +4342,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressIndicator.isIndeterminate = false
         fileProgressIndicator.widthAnchor.constraint(equalToConstant: 180).isActive = true
         fileProgressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        fileProgressLabel.lineBreakMode = .byTruncatingTail
+        fileProgressLabel.lineBreakMode = .byWordWrapping
+        fileProgressLabel.maximumNumberOfLines = 2
+        fileProgressLabel.cell?.wraps = true
+        fileProgressLabel.cell?.usesSingleLineMode = false
         fileProgressLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         fileProgressRow.orientation = .horizontal
         fileProgressRow.alignment = .centerY
@@ -4500,6 +4581,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
+        gateActivity = GateCheckActivity()
         refreshFileProgress()
         photosDiagnostics.reset()
         refreshDiagnostics()
@@ -4757,17 +4839,27 @@ private final class AppController: NSObject, NSWindowDelegate {
             if let phaseUpdate = logPhase.ingest(line, now: now) {
                 switch phaseUpdate {
                 case .changed(let phase, let replace):
+                    if phase == .processing { gateActivity = GateCheckActivity() }
                     if replace {
                         displayLines.removeAll(keepingCapacity: true)
                         replacePresentation = true
                     }
                     displayLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
-                    refreshFileProgress()
+                    refreshFileProgress(now: now)
                 case .invalid:
                     let warning = "[WARN] " + localized("log.phase.invalid")
                     displayLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 case .unchanged: break
+                }
+                continue
+            }
+            if gateActivity.ingest(line, now: now) {
+                refreshFileProgress(now: now)
+                if gateActivity.invalid {
+                    let warning = "[WARN] " + localized("gate.activity.invalid")
+                    displayLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 }
                 continue
             }
@@ -4849,7 +4941,20 @@ private final class AppController: NSObject, NSWindowDelegate {
         latestDiagnosticsRow.isHidden = latestDiagnostics.failure == nil && latestDiagnostics.warning == nil
     }
 
-    private func refreshFileProgress() {
+    private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        if logPhase.phase == .verification, gateActivity.event != nil || gateActivity.invalid {
+            fileProgressRow.isHidden = false
+            fileProgressIndicator.isHidden = true
+            fileProgressIndicator.stopAnimation(nil)
+            let label = gateActivity.label(now: now)
+            fileProgressLabel.stringValue = label
+            fileProgressLabel.toolTip = label
+            fileProgressLabel.setAccessibilityLabel(label)
+            fileProgressLabel.textColor = gateActivity.event?.state == "failed" ? .systemRed : .secondaryLabelColor
+            return
+        }
+        fileProgressIndicator.isHidden = false
+        fileProgressLabel.textColor = .labelColor
         fileProgressRow.isHidden = logPhase.phase == .verification || (fileProgress.event == nil && !fileProgress.invalid)
         fileProgressLabel.stringValue = fileProgress.label
         fileProgressLabel.toolTip = fileProgress.label
@@ -4941,6 +5046,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 fileProgress = FileStageProgress()
+                gateActivity = GateCheckActivity()
                 refreshFileProgress()
                 photosDiagnostics.reset()
                 refreshDiagnostics()
@@ -5148,7 +5254,56 @@ private final class AppController: NSObject, NSWindowDelegate {
             processingActivity = nil
             progressIndicator.stopAnimation(nil)
             fileProgress = FileStageProgress()
+            gateActivity = GateCheckActivity()
             refreshFileProgress()
+        }
+    }
+
+    private func validateGateActivityForSelfTest() throws {
+        let oldPhase = logPhase
+        let oldActivity = gateActivity
+        let oldWarnings = latestDiagnostics
+        let oldLog = logView.string
+        defer {
+            logPhase = oldPhase
+            gateActivity = oldActivity
+            latestDiagnostics = oldWarnings
+            logView.string = oldLog
+            refreshLatestDiagnostics()
+            refreshFileProgress()
+        }
+        let phase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        let activity = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"unit-gate","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#
+        appendLog(phase + "\n" + activity, now: 10)
+        refreshFileProgress(now: 75)
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.activity.running", localized("gate.check.metadata"), "3", "6")
+                + " · " + localized("gate.activity.updated", "65"),
+              !logView.string.contains("MFB_GATE_ACTIVITY="), fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+            throw HostError(message: "Gate activity fabricated file percentages, lost elapsed receipt age or accessibility")
+        }
+        let failed = activity.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":4")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\"")
+        appendLog(failed, now: 80)
+        guard gateActivity.event?.state == "failed", gateActivity.event?.completed == 4,
+              fileProgressLabel.stringValue == localized("gate.activity.failed", localized("gate.check.metadata"), "4", "6", "2") else {
+            throw HostError(message: "Gate failure hid unexecuted checks or claimed six completed checks")
+        }
+        appendLog(activity, now: 81)
+        guard gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.activity.invalid"),
+              latestDiagnostics.warning == "[WARN] " + localized("gate.activity.invalid") else {
+            throw HostError(message: "Contradictory Gate activity was silently accepted")
+        }
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#, now: 90)
+        guard gateActivity.event == nil, !gateActivity.invalid else {
+            throw HostError(message: "A new processing phase retained obsolete verification activity")
+        }
+        gateActivity = GateCheckActivity()
+        _ = gateActivity.ingest(activity, now: 100)
+        setProcessing(false)
+        guard gateActivity.event == nil, !gateActivity.invalid else {
+            throw HostError(message: "Ending a run retained live Gate activity")
         }
     }
 
@@ -5223,6 +5378,23 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func validateInterfaceForSelfTest() throws {
         try validateStatusLocalizationForSelfTest()
+        try validateGateActivityForSelfTest()
+        let previousAppearance = NSApp.appearance
+        var logBackgrounds: [NSColor] = []
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            guard let appearance = NSAppearance(named: name) else {
+                throw HostError(message: "Missing native log appearance")
+            }
+            NSApp.appearance = appearance
+            appearance.performAsCurrentDrawingAppearance {
+                if let color = logView.backgroundColor.usingColorSpace(.sRGB) { logBackgrounds.append(color) }
+            }
+        }
+        NSApp.appearance = previousAppearance
+        guard logBackgrounds.count == 2, logBackgrounds.allSatisfy({ $0.alphaComponent == 1 }),
+              !logBackgrounds[0].isEqual(logBackgrounds[1]) else {
+            throw HostError(message: "Log background lost native light/dark contrast")
+        }
         guard let content = window.contentView else { throw HostError(message: "Missing content view") }
         guard !developerMode, copyButton.isHidden, openButton.isHidden, diagnosticsButton.isHidden,
               commandField.isHidden, watchCheck.isHidden,
@@ -6106,11 +6278,53 @@ private func runSelfTest() -> Int32 {
                 throw HostError(message: "Malformed phase event changed the current phase")
             }
         }
+        let activityLine = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"gate-test","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#
+        var gate = GateCheckActivity()
+        guard !gate.ingest("[INFO] " + activityLine, now: 1), gate.event == nil,
+              gate.ingest(activityLine, now: 1), gate.event?.completed == 3,
+              gate.label(now: 66).hasSuffix(localized("gate.activity.updated", "65")),
+              gate.ingest(activityLine.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":4")
+                .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""), now: 70),
+              gate.event?.state == "failed", !gate.label(now: 80).contains("100%"),
+              gate.ingest(activityLine, now: 81), gate.invalid, gate.event == nil else {
+            throw HostError(message: "Gate activity accepted incidental output, regressed checks or claimed batch percentages")
+        }
+        for malformed in ["MFB_GATE_ACTIVITY={}", activityLine.replacingOccurrences(of: ":1,", with: ":2,"),
+                          activityLine.replacingOccurrences(of: "metadata", with: "unknown"),
+                          activityLine.replacingOccurrences(of: "\"total\":6", with: "\"total\":7"),
+                          activityLine.replacingOccurrences(of: "\"completed\":3", with: "\"completed\":-1"),
+                          activityLine.replacingOccurrences(of: "running", with: "passed"),
+                          "MFB_GATE_ACTIVITY=" + String(repeating: "x", count: 1_025)] {
+            guard gate.ingest(malformed, now: 90), gate.invalid, gate.event == nil else {
+                throw HostError(message: "Invalid Gate schema, check, counts or outcome were accepted")
+            }
+        }
+        let allPassed = activityLine.replacingOccurrences(of: "gate-test", with: "new-gate")
+            .replacingOccurrences(of: "metadata", with: "decode")
+            .replacingOccurrences(of: "\"completed\":3", with: "\"completed\":6")
+            .replacingOccurrences(of: "running", with: "passed")
+        guard gate.ingest(allPassed, now: 100), !gate.invalid, gate.event?.state == "passed", gate.event?.completed == 6 else {
+            throw HostError(message: "A valid independent Gate did not replace stale invalid activity")
+        }
+        let inventoryRunning = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"inventory-test","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}"#
+        let inventoryFailed = inventoryRunning.replacingOccurrences(of: "running", with: "failed")
+        guard gate.ingest(inventoryRunning, now: 101), !gate.invalid,
+              gate.ingest(inventoryFailed, now: 102), !gate.invalid,
+              gate.event?.check == "inventory", gate.event?.state == "failed", gate.event?.completed == 0,
+              gate.label(now: 103) == localized("gate.activity.failed", localized("gate.check.inventory"), "0", "6", "6"),
+              gate.ingest(inventoryRunning, now: 104), gate.invalid else {
+            throw HostError(message: "Inventory failure was rejected as malformed activity or reopened its terminal Gate")
+        }
         let phaseQueue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0)
         _ = phaseQueue.enqueue(processingPhase + "\n[WARN] retained warning\n" + verificationPhase)
         guard phaseQueue.takeDelivery() == processingPhase + "\n[WARN] retained warning\n" + verificationPhase,
               !phaseQueue.finishDelivery(), phaseQueue.isIdle else {
             throw HostError(message: "Backpressure reordered or discarded phase boundaries and diagnostics")
+        }
+        _ = phaseQueue.enqueue(verificationPhase + "\n" + activityLine + "\n[WARN] gate example")
+        guard phaseQueue.takeDelivery() == verificationPhase + "\n" + activityLine + "\n[WARN] gate example",
+              !phaseQueue.finishDelivery(), phaseQueue.isIdle else {
+            throw HostError(message: "Backpressure dropped or reordered Gate activity after exhausting ordinary output")
         }
         var fileProgress = FileStageProgress()
         let stageStart = #"MFB_PROGRESS={"schema_version":1,"stage_id":"unit-1","stage":"image_processing","processed":0,"total":20000,"state":"running"}"#

@@ -118,6 +118,13 @@ Multiple worker invocations remain distinct from media counts; identical snapsho
 share a display entry. Older records explicitly say configuration was not recorded.
 This captures fields in `RuntimeConfig`, not every command-specific flag, the full
 override chain, tool versions or the backend ultimately selected after a fallback.
+New worker launch requests also record the exact requested program and argument
+array, an invocation ID, and the binary path, byte size and BLAKE3 hash observed
+before launch. Processing History binds the captured configuration to that invocation.
+Missing or unreadable binary evidence remains unknown with a diagnostic; older
+records are not filled from current executables. `launch_requested` is a request,
+not proof of the executed process, loaded binary, PID or build provenance, and does
+not establish a complete Run Manifest.
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
@@ -150,8 +157,15 @@ succeeded. Multi-input watch mode is rejected rather than silently watching one 
 Previews record plans without scanning media or inventing processing/verification counts.
 Standard pre-scans include legal linked directories before routing workers. Linked
 targets are checked before descent; loops, broken links and unsafe targets fail
-with an incomplete-inventory error. Fast mode link policy is unchanged; this is
-not the complete Unified Preflight or a scan-to-execution identity guarantee.
+with an incomplete-inventory error. Fast mode link policy is unchanged.
+Within the worker queue, standard IMG retains each discovered file's size and
+modification time, plus device/inode/change time on Unix, and checks them before
+conversion or a resume skip. Fast IMG checks the planned source's BLAKE3 before
+encoding or accepting an intentional no-encode result. Changed, replaced or unreadable
+sources are refused and retained as failures, not silently counted as skips.
+Standard metadata evidence is not a content hash; non-Unix evidence remains weaker.
+This admission check does not complete Unified Preflight, bind the launcher's
+inventory across processes or replace verification of the final artifact.
 
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
@@ -183,7 +197,9 @@ Select one run to return to its captured effective configuration and paged outpu
 The export button saves a versioned **selected-run diagnostic JSON** locally.
 It rereads that batch from one read-only SQLite snapshot, including recorded
 configuration, outcomes, verification and terminal state, plus raw warning/error
-and explicit phase records. Its scope lists retained and intentionally omitted
+and explicit phase/Gate activity records and recorded worker launch requests with
+their bound configuration. Its scope counts activity rows separately from phase
+and diagnostic rows, and lists retained and intentionally omitted
 ordinary log rows; unknown values stay null. This is neither recovery state nor
 a complete Run Manifest. Invalid critical evidence or size limits stop export;
 closing the window or changing selection cancels publication. Existing files,
@@ -205,6 +221,15 @@ files can advance a stage, and verification/delivery may still follow. Fast IMG
 counts newly pending jobs only after their wave results are persisted, excluding
 resume-reused outputs. Other phases remain indeterminate until reliable totals
 are available; final success still comes from the processing result.
+
+During Gate 1, the GUI instead shows the latest explicitly reported local check:
+count, size, BLAKE3, metadata, orientation or decode. Inventory preparation starts
+at zero checks; returned check counts include a failed check, and the remaining
+checks are explicitly unrun after failure. Passing all six checks completes that
+local Gate instance, not the batch or Photos delivery. The activity label shows
+how long ago the GUI received its latest update, not a timeout, remaining-time
+estimate or whole-run percentage. Original events remain in History, and processing
+or terminal-state changes clear the live activity without changing result counts.
 
 ### Database and cache management
 

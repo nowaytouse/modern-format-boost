@@ -1,6 +1,7 @@
 //! Shared verification gate model for fast/full media pipelines.
 
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
+use crate::ui::progress::{GateActivityState, LocalGateActivity};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -91,6 +92,21 @@ pub struct Gate1Local;
 pub struct Gate2Import;
 pub struct Gate3Deep;
 
+type LocalCheckProbe = fn(&PipelineCtx, &[PathBuf]) -> CheckDetail;
+
+const LOCAL_REQUIRED_CHECKS: [(&str, LocalCheckProbe); 6] = [
+    ("count", |ctx, files| {
+        check_count(ctx.expected_count, files.len(), files)
+    }),
+    ("size", |ctx, files| {
+        check_nonzero_size(ctx.expected_count, files)
+    }),
+    ("blake3", |ctx, _| check_blake3_logged_outputs(ctx)),
+    ("metadata", |ctx, _| check_metadata_policy(ctx)),
+    ("orient", check_orientation_policy),
+    ("decode", |_, files| check_decode_probe(files)),
+];
+
 impl VerificationGate for Gate1Local {
     fn name(&self) -> &'static str {
         "Gate 1 — Pre-import local verification"
@@ -98,44 +114,66 @@ impl VerificationGate for Gate1Local {
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
         crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
-        let jxl_files = match collect_delivery_output_files(&ctx.working_copy, None) {
-            Ok(files) => files,
-            Err(err) => {
-                return gate_result(vec![detail(
-                    "count",
-                    false,
-                    ctx.expected_count.to_string(),
-                    format!("walkdir traversal failed: {err}"),
-                    vec![ctx.working_copy.clone()],
-                )]);
-            }
-        };
-        // Reject cheap structural failures before launching metadata/decoder tools.
-        run_required_checks(&[
-            &|| check_count(ctx.expected_count, jxl_files.len(), &jxl_files),
-            &|| check_nonzero_size(ctx.expected_count, &jxl_files),
-            &|| check_blake3_logged_outputs(ctx),
-            &|| check_metadata_policy(ctx),
-            &|| check_orientation_policy(ctx, &jxl_files),
-            &|| check_decode_probe(&jxl_files),
-        ])
+        let activity = LocalGateActivity::new();
+        run_local_checks(
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, None),
+            |check, completed, total, state| activity.emit(check, completed, total, state),
+        )
     }
 }
 
-fn run_required_checks(probes: &[&dyn Fn() -> CheckDetail]) -> GateResult {
+fn run_local_checks(
+    ctx: &PipelineCtx,
+    inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+    mut emit: impl FnMut(&'static str, usize, usize, GateActivityState),
+) -> GateResult {
+    let total = LOCAL_REQUIRED_CHECKS.len();
+    emit("inventory", 0, total, GateActivityState::Running);
+    let jxl_files = match inventory() {
+        Ok(files) => files,
+        Err(err) => {
+            emit("inventory", 0, total, GateActivityState::Failed);
+            return gate_result(vec![detail(
+                "count",
+                false,
+                ctx.expected_count.to_string(),
+                format!("walkdir traversal failed: {err}"),
+                vec![ctx.working_copy.clone()],
+            )]);
+        }
+    };
+    // Reject cheap structural failures before launching metadata/decoder tools.
+    run_required_checks(&LOCAL_REQUIRED_CHECKS, ctx, &jxl_files, emit)
+}
+
+fn run_required_checks<F>(
+    probes: &[(&'static str, F)],
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    mut emit: impl FnMut(&'static str, usize, usize, GateActivityState),
+) -> GateResult
+where
+    F: Fn(&PipelineCtx, &[PathBuf]) -> CheckDetail,
+{
     let mut checks = Vec::with_capacity(probes.len());
-    for probe in probes {
+    for (name, probe) in probes {
+        emit(name, checks.len(), probes.len(), GateActivityState::Running);
         let started = std::time::Instant::now();
-        let check = probe();
+        let check = probe(ctx, files);
         tracing::info!(target: "verification_gate", gate = "local", check = check.name,
             duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
             "required check completed");
         let passed = check.passed;
         checks.push(check);
         if !passed {
+            emit(name, checks.len(), probes.len(), GateActivityState::Failed);
             tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
                 "remaining checks not run after mandatory failure; import and cleanup blocked");
             break;
+        }
+        if checks.len() == probes.len() {
+            emit(name, checks.len(), probes.len(), GateActivityState::Passed);
         }
     }
     gate_result(checks)
@@ -1226,18 +1264,123 @@ mod tests {
     #[test]
     fn required_checks_stop_on_failure_and_run_all_on_success() {
         let calls = std::cell::Cell::new(0);
-        let probe = || {
+        let probe = |_: &PipelineCtx, _: &[PathBuf]| {
             calls.set(calls.get() + 1);
             super::detail("probe", true, "pass".into(), "pass".into(), vec![])
         };
-        let fail = || super::detail("failed", false, "pass".into(), "failed".into(), vec![]);
-        let result = super::run_required_checks(&[&probe, &fail, &probe]);
+        let fail = |_: &PipelineCtx, _: &[PathBuf]| {
+            super::detail("failed", false, "pass".into(), "failed".into(), vec![])
+        };
+        type TestProbe<'a> = (
+            &'static str,
+            &'a dyn Fn(&PipelineCtx, &[PathBuf]) -> super::CheckDetail,
+        );
+        let probes: [TestProbe<'_>; 3] = [("count", &probe), ("size", &fail), ("blake3", &probe)];
+        let ctx = ctx_with_library(1, vec![]);
+        let mut events = vec![];
+        let result = super::run_required_checks(&probes, &ctx, &[], |name, n, total, state| {
+            events.push((name, n, total, state));
+        });
         assert!(!result.passed);
         assert_eq!(calls.get(), 1);
         assert_eq!(result.checks.len(), 2);
-        assert!(super::run_required_checks(&[&probe, &probe]).passed);
+        assert_eq!(
+            events,
+            [
+                ("count", 0, 3, super::GateActivityState::Running),
+                ("size", 1, 3, super::GateActivityState::Running),
+                ("size", 2, 3, super::GateActivityState::Failed),
+            ]
+        );
+        events.clear();
+        assert!(
+            super::run_required_checks(
+                &[("count", &probe), ("size", &probe)],
+                &ctx,
+                &[],
+                |name, n, total, state| events.push((name, n, total, state)),
+            )
+            .passed
+        );
         assert_eq!(calls.get(), 3);
-        assert!(!super::run_required_checks(&[]).passed);
+        assert_eq!(
+            events,
+            [
+                ("count", 0, 2, super::GateActivityState::Running),
+                ("size", 1, 2, super::GateActivityState::Running),
+                ("size", 2, 2, super::GateActivityState::Passed),
+            ]
+        );
+        events.clear();
+        assert!(
+            !super::run_required_checks::<super::LocalCheckProbe>(
+                &[],
+                &ctx,
+                &[],
+                |name, n, total, state| events.push((name, n, total, state)),
+            )
+            .passed
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn local_gate_activity_reports_inventory_failure_before_required_checks() {
+        let root = tempfile::tempdir().expect("create isolated gate test root");
+        let mut ctx = ctx_with_library(1, vec![]);
+        ctx.working_copy = root.path().join("missing");
+        let mut events = vec![];
+        let result = super::run_local_checks(
+            &ctx,
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "synthetic inventory read failure",
+                )
+                .into())
+            },
+            |name, n, total, state| events.push((name, n, total, state)),
+        );
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].name, "count");
+        assert!(
+            result.checks[0]
+                .actual
+                .contains("synthetic inventory read failure")
+        );
+        assert_eq!(
+            events,
+            [
+                ("inventory", 0, 6, super::GateActivityState::Running),
+                ("inventory", 0, 6, super::GateActivityState::Failed),
+            ]
+        );
+
+        for working_copy in [root.path().join("missing"), root.path().to_path_buf()] {
+            ctx.working_copy = working_copy;
+            events.clear();
+            let result = super::run_local_checks(
+                &ctx,
+                || super::collect_delivery_output_files(&ctx.working_copy, None),
+                |name, n, total, state| events.push((name, n, total, state)),
+            );
+            assert!(!result.passed);
+            assert_eq!(result.checks.len(), 1);
+            assert_eq!(result.checks[0].name, "count");
+            assert_eq!(
+                events,
+                [
+                    ("inventory", 0, 6, super::GateActivityState::Running),
+                    ("count", 0, 6, super::GateActivityState::Running),
+                    ("count", 1, 6, super::GateActivityState::Failed),
+                ]
+            );
+        }
+        assert_eq!(
+            super::LOCAL_REQUIRED_CHECKS.map(|(name, _)| name),
+            ["count", "size", "blake3", "metadata", "orient", "decode"]
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
 static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static GATE_ACTIVITY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +66,75 @@ pub(crate) fn emit_log_phase(phase: LogPhase) {
     .and_then(|json| write_terminal_marker("MFB_LOG_PHASE", &json, "log_phase_emit"));
     if let Err(error) = result {
         tracing::error!(%error, "failed to write log phase event");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GateActivityState {
+    Running,
+    Passed,
+    Failed,
+}
+
+#[derive(serde::Serialize)]
+struct GateActivityEvent<'a> {
+    schema_version: u8,
+    stage_id: &'a str,
+    gate: &'static str,
+    check: &'static str,
+    completed: usize,
+    total: usize,
+    state: GateActivityState,
+}
+
+pub(crate) struct LocalGateActivity {
+    stage_id: Option<String>,
+}
+
+impl LocalGateActivity {
+    pub(crate) fn new() -> Self {
+        Self {
+            stage_id: std::env::var_os("MFB_SESSION_ID")
+                .filter(|id| !id.is_empty())
+                .map(|_| {
+                    format!(
+                        "{}-{}",
+                        std::process::id(),
+                        GATE_ACTIVITY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                    )
+                }),
+        }
+    }
+
+    pub(crate) fn emit(
+        &self,
+        check: &'static str,
+        completed: usize,
+        total: usize,
+        state: GateActivityState,
+    ) {
+        let Some(stage_id) = &self.stage_id else {
+            return;
+        };
+        let event = GateActivityEvent {
+            schema_version: 1,
+            stage_id,
+            gate: "local",
+            check,
+            completed,
+            total,
+            state,
+        };
+        let result = serde_json::to_vec(&event)
+            .map_err(io::Error::other)
+            .and_then(|json| {
+                write_terminal_marker("MFB_GATE_ACTIVITY", &json, "local_gate_activity_emit")
+            });
+        if let Err(error) = result {
+            tracing::error!(%error, %stage_id, check, completed, total, ?state,
+                "failed to write local gate activity event");
+        }
     }
 }
 
@@ -2075,6 +2145,59 @@ mod tests {
     }
 
     #[test]
+    fn local_gate_activity_marker_has_explicit_check_counts_and_terminal_state() {
+        for (check, completed, state, expected) in [
+            ("inventory", 0, GateActivityState::Running, "running"),
+            ("count", 1, GateActivityState::Failed, "failed"),
+            ("decode", 6, GateActivityState::Passed, "passed"),
+        ] {
+            let json = serde_json::to_vec(&GateActivityEvent {
+                schema_version: 1,
+                stage_id: "123-4",
+                gate: "local",
+                check,
+                completed,
+                total: 6,
+                state,
+            })
+            .expect("serialize gate activity");
+            let expected_json = format!(
+                "{{\"schema_version\":1,\"stage_id\":\"123-4\",\"gate\":\"local\",\"check\":\"{check}\",\"completed\":{completed},\"total\":6,\"state\":\"{expected}\"}}"
+            );
+            assert_eq!(json, expected_json.as_bytes());
+            let mut output = Vec::new();
+            write_marker(&mut output, "MFB_GATE_ACTIVITY", &json).expect("write gate activity");
+            assert_eq!(
+                output,
+                format!("\nMFB_GATE_ACTIVITY={expected_json}\n").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn local_gate_activity_is_session_scoped_with_independent_concurrent_ids() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let _disabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "");
+        let disabled = LocalGateActivity::new();
+        assert!(disabled.stage_id.is_none());
+        disabled.emit("inventory", 0, 6, GateActivityState::Running);
+
+        let _enabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "synthetic-gate");
+        let reporters: Vec<_> = (0..16)
+            .map(|_| std::thread::spawn(|| LocalGateActivity::new().stage_id.unwrap()))
+            .collect();
+        let ids: std::collections::BTreeSet<_> = reporters
+            .into_iter()
+            .map(|thread| thread.join().expect("gate reporter thread"))
+            .collect();
+        assert_eq!(ids.len(), 16);
+        let prefix = format!("{}-", std::process::id());
+        assert!(ids.iter().all(|id| id.starts_with(&prefix)));
+    }
+
+    #[test]
     fn shared_marker_writer_returns_io_errors() {
         struct FailingWriter {
             fail_write: bool,
@@ -2115,9 +2238,11 @@ mod tests {
                 "flush failed",
             ),
         ] {
-            let error = write_marker(&mut writer, "MFB_LOG_PHASE", b"{}").unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::Other);
-            assert_eq!(error.to_string(), expected);
+            for marker in ["MFB_LOG_PHASE", "MFB_GATE_ACTIVITY"] {
+                let error = write_marker(&mut writer, marker, b"{}").unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::Other);
+                assert_eq!(error.to_string(), expected);
+            }
         }
     }
 

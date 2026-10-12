@@ -52,10 +52,10 @@ use foundation::process_lock::DirLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -219,6 +219,81 @@ struct LaunchCommand {
     env_overrides: Vec<(String, Option<String>)>,
 }
 
+const INVOCATION_MAX_ARGUMENTS: usize = 4096;
+const INVOCATION_MAX_ARGUMENT_BYTES: usize = 256 * 1024;
+static INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Serialize)]
+struct BinaryObservation {
+    scope: &'static str,
+    bytes: Option<u64>,
+    blake3: Option<String>,
+    diagnostic: Option<String>,
+}
+
+impl BinaryObservation {
+    fn observe(program: Option<&Path>) -> Self {
+        let observed = (|| -> Result<(u64, String)> {
+            let program = program
+                .context("executable path was not resolved from the child launch environment")?;
+            let mut file =
+                fs::File::open(program).context("open worker binary for launch observation")?;
+            let before = file.metadata()?;
+            anyhow::ensure!(
+                before.is_file(),
+                "worker launch observation is not a regular file"
+            );
+            let mut hasher = blake3::Hasher::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut bytes = 0_u64;
+            loop {
+                let length = file.read(&mut buffer)?;
+                if length == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..length]);
+                bytes = bytes
+                    .checked_add(u64::try_from(length)?)
+                    .context("worker binary observation length overflow")?;
+            }
+            let after = file.metadata()?;
+            anyhow::ensure!(
+                bytes == before.len()
+                    && before.len() == after.len()
+                    && before.modified()? == after.modified()?,
+                "worker binary changed during launch observation"
+            );
+            Ok((bytes, hasher.finalize().to_hex().to_string()))
+        })();
+        match observed {
+            Ok((bytes, blake3)) => Self {
+                scope: "observed_before_launch",
+                bytes: Some(bytes),
+                blake3: Some(blake3),
+                diagnostic: None,
+            },
+            Err(error) => Self {
+                scope: "observed_before_launch",
+                bytes: None,
+                blake3: None,
+                diagnostic: Some(format!("{error:#}")),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct LaunchInvocation<'a> {
+    schema_version: u8,
+    invocation_id: String,
+    pipeline: &'static str,
+    state: &'static str,
+    program_requested: &'a str,
+    program_path: Option<PathBuf>,
+    arguments: &'a [String],
+    binary: BinaryObservation,
+}
+
 #[derive(Debug)]
 struct CollectedChildError {
     stats: ProcessorStats,
@@ -231,7 +306,11 @@ impl std::fmt::Display for CollectedChildError {
     }
 }
 
-impl std::error::Error for CollectedChildError {}
+impl std::error::Error for CollectedChildError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -581,6 +660,90 @@ impl DragDropSession {
 }
 
 impl LaunchCommand {
+    fn invocation(&self, session: &DragDropSession) -> Result<LaunchInvocation<'_>> {
+        let program = self
+            .program
+            .to_str()
+            .context("worker program is not UTF-8")?;
+        anyhow::ensure!(
+            !program.is_empty() && !program.contains('\0') && program.len() <= 32 * 1024,
+            "worker program is empty, invalid, or exceeds the history limit"
+        );
+        anyhow::ensure!(
+            self.args.len() <= INVOCATION_MAX_ARGUMENTS,
+            "worker argument count exceeds the history limit"
+        );
+        let argument_bytes = self.args.iter().try_fold(0_usize, |bytes, argument| {
+            anyhow::ensure!(!argument.contains('\0'), "worker argument contains a NUL");
+            bytes
+                .checked_add(argument.len())
+                .context("worker argument length overflow")
+        })?;
+        anyhow::ensure!(
+            argument_bytes <= INVOCATION_MAX_ARGUMENT_BYTES,
+            "worker arguments exceed the history byte limit"
+        );
+        let program_path = self.observed_program_path();
+        let binary = BinaryObservation::observe(program_path.as_deref());
+        let sequence = INVOCATION_SEQUENCE
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("worker invocation sequence exhausted"))?;
+        Ok(LaunchInvocation {
+            schema_version: 1,
+            invocation_id: format!(
+                "{}-{}-{sequence}",
+                std::process::id(),
+                blake3::hash(session.stamp.as_bytes()).to_hex()
+            ),
+            pipeline: match self.pipeline_label() {
+                "IMG" => "img",
+                "VID" => "vid",
+                _ => "cmd",
+            },
+            state: "launch_requested",
+            program_requested: program,
+            program_path,
+            arguments: &self.args,
+            binary,
+        })
+    }
+
+    fn observed_program_path(&self) -> Option<PathBuf> {
+        if self.program.components().count() > 1 || self.program.is_absolute() {
+            return std::path::absolute(&self.program).ok();
+        }
+        #[cfg(unix)]
+        {
+            let path = self
+                .env_overrides
+                .iter()
+                .rev()
+                .find(|(key, _)| key == "PATH")
+                .map_or_else(
+                    || std::env::var_os("PATH"),
+                    |(_, value)| value.as_ref().map(std::ffi::OsString::from),
+                )?;
+            for directory in std::env::split_paths(&path) {
+                let candidate = directory.join(&self.program);
+                let Ok(candidate) = std::path::absolute(candidate) else {
+                    continue;
+                };
+                let Ok(encoded) = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes())
+                else {
+                    continue;
+                };
+                // access only observes the exact PATH candidate; execution still uses the original request.
+                if candidate.is_file() && unsafe { libc::access(encoded.as_ptr(), libc::X_OK) } == 0
+                {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
+
     fn from_argv(argv: Vec<String>) -> Result<Self> {
         let mut iter = argv.into_iter();
         let Some(program) = iter.next() else {
@@ -652,7 +815,7 @@ impl LaunchCommand {
         }
         if let Some(sess) = session {
             let event = format!(
-                "{}_PIPELINE_SPAWN cmd={}",
+                "{}_PIPELINE_LAUNCH_REQUEST cmd={}",
                 self.pipeline_label(),
                 self.display()
             );
@@ -660,6 +823,20 @@ impl LaunchCommand {
             sess.append_line(&sess.session_log, &event)?;
             sess.append_line(&sess.verbose_log, &event)?;
         }
+
+        let invocation = session
+            .map(|session| self.invocation(session))
+            .transpose()?;
+        let invocation_id = invocation
+            .as_ref()
+            .map(|invocation| invocation.invocation_id.as_str());
+        let invocation_error = match (session, invocation.as_ref()) {
+            (Some(session), Some(invocation)) => session
+                .append_history_event("MFB_HISTORY_INVOCATION", serde_json::to_value(invocation)?)
+                .context("worker invocation history write failed")
+                .err(),
+            _ => None,
+        };
 
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
@@ -719,10 +896,10 @@ impl LaunchCommand {
                             if let Err(error) =
                                 ChildConfigMarker::parse(payload, expected_config_pipeline)
                                     .and_then(|marker| {
-                                        sess.append_history_event(
-                                            "MFB_HISTORY_CONFIG",
-                                            serde_json::to_value(marker)?,
-                                        )
+                                        let mut marker = serde_json::to_value(marker)?;
+                                        marker["invocation_id"] =
+                                            serde_json::to_value(invocation_id)?;
+                                        sess.append_history_event("MFB_HISTORY_CONFIG", marker)
                                     })
                             {
                                 config_marker_error = Some(error);
@@ -770,6 +947,9 @@ impl LaunchCommand {
                 }
                 Ok(stats) => stats,
                 Err(error) => {
+                    if let Some(invocation_error) = &invocation_error {
+                        eprintln!("[LOG] {invocation_error:#}");
+                    }
                     let event = format!(
                         "{pipeline_label}_PIPELINE_STREAM_ERROR elapsed_secs={} error={error}",
                         pipeline_started_at.elapsed().as_secs()
@@ -803,6 +983,12 @@ impl LaunchCommand {
                 ..ProcessorStats::default()
             }
         };
+        if let Some(error) = invocation_error {
+            collected_error = Some(match collected_error {
+                Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
+                None => error,
+            });
+        }
         if let Some(sess) = session {
             let count = |index: usize, value: usize| {
                 stats.reported[index]
@@ -4363,6 +4549,30 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(receipt).unwrap(), session.stamp);
         let recorded = history_payloads(&session, "MFB_HISTORY_CONFIG");
+        let invocations = history_payloads(&session, "MFB_HISTORY_INVOCATION");
+        assert_eq!(invocations.len(), 2);
+        assert_ne!(
+            invocations[0]["invocation_id"],
+            invocations[1]["invocation_id"]
+        );
+        for (invocation, config) in invocations.iter().zip(&recorded) {
+            assert_eq!(invocation["state"], "launch_requested");
+            assert_eq!(invocation["pipeline"], "img");
+            assert_eq!(
+                invocation["program_path"],
+                serde_json::to_value(std::path::absolute(&program).unwrap()).unwrap()
+            );
+            assert_eq!(
+                invocation["arguments"],
+                serde_json::to_value(&command.args).unwrap()
+            );
+            assert_eq!(
+                invocation["binary"]["bytes"],
+                fs::metadata(&program).unwrap().len()
+            );
+            assert_eq!(invocation["binary"]["blake3"].as_str().unwrap().len(), 64);
+            assert_eq!(config["invocation_id"], invocation["invocation_id"]);
+        }
         assert_eq!(recorded[0]["pipeline"], "img");
         assert_eq!(recorded[0]["config"]["vid"]["codec"], "hevc");
         let worker_output = dev::infra::history_store::read_session_output_since(
@@ -4378,6 +4588,113 @@ mod tests {
                 .filter(|line| *line == progress)
                 .count(),
             2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_launch_observations_preserve_exact_arguments_unknowns_and_dry_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut command = LaunchCommand::from_argv(vec![
+            "sh".into(),
+            "-c".into(),
+            "printf '%s\\n' \"$1\"".into(),
+            "test".into(),
+            "Unicode 界面 with spaces\nnext line".into(),
+        ])
+        .unwrap();
+        command.env_overrides = vec![("PATH".into(), Some("/bin:/usr/bin".into()))];
+        let observation = command.invocation(&session).unwrap();
+        assert_eq!(
+            observation.arguments[3],
+            "Unicode 界面 with spaces\nnext line"
+        );
+        assert_eq!(observation.program_path, Some(PathBuf::from("/bin/sh")));
+        assert!(observation.binary.blake3.is_some());
+        let observed_invocation_id = observation.invocation_id;
+        let unknown = BinaryObservation::observe(Some(&temp.path().join("unreadable-or-missing")));
+        assert!(unknown.bytes.is_none() && unknown.blake3.is_none());
+        assert!(unknown.diagnostic.is_some());
+        command.env_overrides = vec![("PATH".into(), None)];
+        assert!(command.invocation(&session).unwrap().program_path.is_none());
+        assert!(
+            command
+                .invocation(&session)
+                .unwrap()
+                .binary
+                .diagnostic
+                .is_some()
+        );
+        let database_path = session
+            .log_dir
+            .join(dev::infra::history_store::HISTORY_DATABASE);
+        assert!(!database_path.try_exists().unwrap());
+        command.run_collecting(true, Some(&session), false).unwrap();
+        assert!(!database_path.try_exists().unwrap());
+        let mut long_session = session.clone();
+        long_session.stamp = "Unicode 界面".repeat(300);
+        let long_invocation = command.invocation(&long_session).unwrap();
+        assert!(long_invocation.invocation_id.len() <= 256);
+        assert!(long_invocation.invocation_id.is_ascii());
+        assert!(
+            long_invocation
+                .invocation_id
+                .starts_with(&format!("{}-", std::process::id()))
+        );
+        assert_ne!(long_invocation.invocation_id, observed_invocation_id);
+        assert_ne!(
+            long_invocation.invocation_id,
+            command.invocation(&long_session).unwrap().invocation_id
+        );
+        command.args = vec!["too many".into(); INVOCATION_MAX_ARGUMENTS + 1];
+        assert!(command.invocation(&session).is_err());
+        command.args = vec!["x".repeat(INVOCATION_MAX_ARGUMENT_BYTES + 1)];
+        assert!(command.invocation(&session).is_err());
+        command.args = vec!["invalid\0argument".into()];
+        assert!(command.invocation(&session).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_invocation_persistence_failure_drains_child_and_preserves_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        drop(
+            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
+                .unwrap(),
+        );
+        let database = rusqlite::Connection::open(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        database.execute_batch("CREATE TRIGGER reject_invocation BEFORE INSERT ON history_events WHEN NEW.event LIKE 'MFB_HISTORY_INVOCATION=%' BEGIN SELECT RAISE(ABORT, 'synthetic invocation failure'); END;").unwrap();
+        let completed = temp.path().join("child_completed");
+        let command = LaunchCommand::from_argv(vec!["/bin/sh".into(), "-c".into(),
+            "printf 'Succeeded: 3\\nFailed: 1\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'; printf 'tail drained\\n'; printf done > \"$1\"; exit 7".into(),
+            "test".into(), completed.to_str().unwrap().into()]).unwrap();
+        let error = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("synthetic invocation failure"),
+            "unexpected invocation persistence error: {error:#}"
+        );
+        let collected = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(collected.stats.succeeded, 3);
+        assert_eq!(collected.stats.failed, 1);
+        assert_eq!(collected.stats.exit_code, 7);
+        assert_eq!(fs::read_to_string(completed).unwrap(), "done");
+        assert!(
+            dev::infra::history_store::read_session_output_since(
+                &session.log_dir,
+                &session.stamp,
+                0
+            )
+            .unwrap()
+            .contains("tail drained")
         );
     }
 
