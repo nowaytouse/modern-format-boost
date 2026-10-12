@@ -6,32 +6,31 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
+use dev::app::worker::{CollectedChildError, LaunchCommand, WorkerSession};
 use dev::infra::drag_drop::{
-    ContentScan, FastImgAction, ProcessingFilter, acquire_global_lock, adjacent_output_for_target,
-    build_size_comparison_summary, confirm_in_place, count_fast_img_jxl_outputs,
-    create_directory_structure, delete_fast_img_shortest_path_output_dir,
-    fast_img_retained_file_names, fast_img_session_size_metrics, run_unified_verification,
-    safety_check, scan_content, sync_non_media_files,
+    ContentScan, FastImgAction, ProcessingFilter, ScanRoute, acquire_global_lock,
+    adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
+    count_fast_img_jxl_outputs, create_directory_structure,
+    delete_fast_img_shortest_path_output_dir, fast_img_retained_file_names,
+    fast_img_session_size_metrics, run_unified_verification, safety_check, scan_content,
+    sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
 use dev::infra::fastmode_paths::{
     build_fast_img_command, build_fast_img_restore_command, build_fast_vid_command,
     fast_img_restore_output_dir_for_target, fast_vid_output_dir_for_target,
 };
-use dev::infra::hardening::delegated_exit_code;
 use dev::infra::log_paths::{
     append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
     format_session_stamp,
 };
-use dev::infra::process_stream::{
-    ProcessorByteTotals, ProcessorStats, stream_process_with_pty_with_env,
-};
+use dev::infra::process_stream::{ProcessorByteTotals, ProcessorStats};
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
     print_runtime_panel, print_summary_report,
 };
-use dev::infra::signal_handlers::{install_signal_handlers, set_child_active};
+use dev::infra::signal_handlers::install_signal_handlers;
 use dev::infra::terminal_input::{
     NavKey, drain_stdin, read_nav_key, resize_terminal_for_gui, validate_drag_drop_path,
 };
@@ -47,15 +46,14 @@ use dev::media::scope::{
     report_handoff_preserve_gaps_from_paths,
 };
 use foundation::BatchErrorMode;
-use foundation::infra::runtime_config::{FallbackPolicy, RuntimeConfig, ToolPolicy, VidCodec};
+use foundation::infra::runtime_config::{FallbackPolicy, ToolPolicy, VidCodec};
 use foundation::process_lock::DirLock;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -113,6 +111,11 @@ struct Args {
 
     #[arg(long)]
     dry_run: bool,
+
+    /// Inspect standard IMG/VID routing and print a read-only per-file JSON plan.
+    /// Does not create sessions, outputs, locks, or launch processing workers.
+    #[arg(long, conflicts_with_all = ["dry_run", "watch"])]
+    plan_json: bool,
 
     #[arg(long)]
     plain: bool,
@@ -181,6 +184,12 @@ struct Args {
     /// Permit or deny optional image database access, not database credentials.
     #[arg(long, num_args = 1, require_equals = true)]
     img_allow_database: Option<bool>,
+    /// Standard IMG only: enable the configured pure-media growth budget.
+    #[arg(long, num_args = 1, require_equals = true)]
+    img_allow_size_tolerance: Option<bool>,
+    /// Standard IMG only: pure-media growth budget in bytes; does not enable tolerance.
+    #[arg(long)]
+    img_size_tolerance_bytes: Option<u64>,
 
     #[command(flatten)]
     photos: foundation::infra::runtime_config::photos_args::PhotosArgs,
@@ -206,95 +215,6 @@ struct Args {
     photos_folder_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LaunchCommand {
-    program: PathBuf,
-    args: Vec<String>,
-    env_overrides: Vec<(String, Option<String>)>,
-}
-
-#[derive(Debug)]
-struct CollectedChildError {
-    stats: ProcessorStats,
-    cause: anyhow::Error,
-}
-
-impl std::fmt::Display for CollectedChildError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.cause)
-    }
-}
-
-impl std::error::Error for CollectedChildError {}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ChildConfigMarker {
-    schema_version: u32,
-    pipeline: String,
-    package_version: String,
-    config: RuntimeConfig,
-    sources: BTreeMap<String, String>,
-}
-
-impl ChildConfigMarker {
-    fn parse(payload: &str, expected_pipeline: &str) -> Result<Self> {
-        anyhow::ensure!(
-            matches!(expected_pipeline, "img" | "vid"),
-            "unexpected config marker from non-media child"
-        );
-        let raw: serde_json::Value =
-            serde_json::from_str(payload).context("parse child config marker")?;
-        let marker: Self =
-            serde_json::from_value(raw.clone()).context("decode child config marker")?;
-        anyhow::ensure!(
-            marker.schema_version == 1,
-            "unsupported child config marker version"
-        );
-        anyhow::ensure!(
-            marker.pipeline == expected_pipeline,
-            "child config marker pipeline mismatch: expected {expected_pipeline}"
-        );
-        anyhow::ensure!(
-            !marker.package_version.trim().is_empty(),
-            "child config marker package_version is empty"
-        );
-        marker.config.validate()?;
-        anyhow::ensure!(
-            raw.get("config") == Some(&serde_json::to_value(&marker.config)?),
-            "child config marker omits or changes resolved configuration fields"
-        );
-        let mut leaf_paths = BTreeSet::new();
-        collect_config_leaf_paths(&serde_json::to_value(&marker.config)?, "", &mut leaf_paths);
-        anyhow::ensure!(
-            marker.sources.keys().all(|key| !key.is_empty())
-                && marker.sources.values().all(|source| !source.is_empty())
-                && marker.sources.keys().cloned().collect::<BTreeSet<_>>() == leaf_paths,
-            "child config marker sources do not cover the resolved configuration"
-        );
-        Ok(marker)
-    }
-}
-
-fn collect_config_leaf_paths(
-    value: &serde_json::Value,
-    prefix: &str,
-    paths: &mut BTreeSet<String>,
-) {
-    if let Some(object) = value.as_object() {
-        for (key, child) in object {
-            let path = if prefix.is_empty() {
-                key.clone()
-            } else {
-                format!("{prefix}.{key}")
-            };
-            collect_config_leaf_paths(child, &path, paths);
-        }
-    } else {
-        paths.insert(prefix.to_owned());
-    }
-}
-
 #[derive(Clone)]
 struct DragDropSession {
     started_at: DateTime<Local>,
@@ -303,9 +223,27 @@ struct DragDropSession {
     session_log: PathBuf,
     verbose_log: PathBuf,
     session_audit: PathBuf,
+    run_id: Option<String>,
 }
 
+static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 impl DragDropSession {
+    fn for_run(&self) -> Result<Self> {
+        let sequence = RUN_SEQUENCE
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("run identity sequence exhausted"))?;
+        let mut scoped = self.clone();
+        let stamp_hash = blake3::hash(self.stamp.as_bytes()).to_hex();
+        scoped.run_id = Some(format!(
+            "run-{}-{}-{sequence}",
+            std::process::id(),
+            &stamp_hash[..24]
+        ));
+        Ok(scoped)
+    }
     fn start() -> Result<Self> {
         let log_dir = ensure_unified_log_dir()?;
         Self::start_with_log_dir(&log_dir, true)
@@ -336,6 +274,7 @@ impl DragDropSession {
             session_audit: log_dir.join(format!("session_audit_{stamp}.jsonl")),
             log_dir,
             stamp,
+            run_id: None,
         };
         // A collision must never append another session's events or counters.
         fs::OpenOptions::new()
@@ -371,7 +310,20 @@ impl DragDropSession {
             .with_context(|| format!("write drag/drop log {}", path.display()))
     }
 
-    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+    fn append_history_event(&self, name: &str, mut payload: serde_json::Value) -> Result<()> {
+        if let Some(run_id) = &self.run_id {
+            let fields = payload
+                .as_object_mut()
+                .context("history payload is not an object")?;
+            if let Some(existing) = fields.get("run_id") {
+                anyhow::ensure!(
+                    existing.as_str() == Some(run_id.as_str()),
+                    "history event run identity does not match the active run"
+                );
+            } else {
+                fields.insert("run_id".to_owned(), serde_json::json!(run_id));
+            }
+        }
         let event = format!("{name}={payload}");
         dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
     }
@@ -574,297 +526,32 @@ impl DragDropSession {
     }
 }
 
-impl LaunchCommand {
-    fn from_argv(argv: Vec<String>) -> Result<Self> {
-        let mut iter = argv.into_iter();
-        let Some(program) = iter.next() else {
-            bail!("internal launcher error: empty command argv");
-        };
-        Ok(Self {
-            program: PathBuf::from(program),
-            args: iter.collect(),
-            env_overrides: Vec::new(),
-        })
+impl WorkerSession for DragDropSession {
+    fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
+    }
+    fn stamp(&self) -> &str {
+        &self.stamp
     }
 
-    fn with_error_mode(mut self, mode: Option<BatchErrorMode>) -> Self {
-        if let Some(mode) = mode {
-            self.args
-                .extend(["--error-mode".to_owned(), mode.as_str().to_owned()]);
-        }
-        self
+    fn log_dir(&self) -> &Path {
+        &self.log_dir
     }
 
-    fn display(&self) -> String {
-        let mut parts = Vec::with_capacity(self.args.len() + 1);
-        parts.push(self.program.display().to_string());
-        parts.extend(self.args.iter().cloned());
-        parts.join(" ")
+    fn session_audit(&self) -> &Path {
+        &self.session_audit
     }
 
-    fn pipeline_label(&self) -> &'static str {
-        match self.program.file_name().and_then(|name| name.to_str()) {
-            Some("img") => "IMG",
-            Some("vid") => "VID",
-            _ => "CMD",
-        }
+    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+        DragDropSession::append_history_event(self, name, payload)
     }
 
-    #[allow(dead_code)]
-    fn run(&self, dry_run: bool) -> Result<()> {
-        self.run_with_session(dry_run, None).map(|_| ())
+    fn append_session_line(&self, event: &str) -> Result<()> {
+        self.append_line(&self.session_log, event)
     }
 
-    fn run_with_session(
-        &self,
-        dry_run: bool,
-        session: Option<&DragDropSession>,
-    ) -> Result<ProcessorStats> {
-        self.run_collecting(dry_run, session, true)
-    }
-
-    fn run_collecting(
-        &self,
-        dry_run: bool,
-        session: Option<&DragDropSession>,
-        bail_on_failure: bool,
-    ) -> Result<ProcessorStats> {
-        println!("+ {}", self.display());
-        if dry_run {
-            return Ok(ProcessorStats::default());
-        }
-        foundation::batch_control::checkpoint()?;
-        if self.program.components().count() > 1 && !self.program.is_file() {
-            bail!(
-                "Rust CLI binary missing: {}. Build it with `cargo build -p {}` first.",
-                self.program.display(),
-                self.program
-                    .file_name()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("dev"))
-                    .to_string_lossy()
-            );
-        }
-        if let Some(sess) = session {
-            let event = format!(
-                "{}_PIPELINE_SPAWN cmd={}",
-                self.pipeline_label(),
-                self.display()
-            );
-            append_jsonl_audit_record(&sess.session_audit, &event)?;
-            sess.append_line(&sess.session_log, &event)?;
-            sess.append_line(&sess.verbose_log, &event)?;
-        }
-
-        let mut cmd = Command::new(&self.program);
-        cmd.args(&self.args);
-        for (name, value) in &self.env_overrides {
-            if let Some(value) = value {
-                cmd.env(name, value);
-            } else {
-                cmd.env_remove(name);
-            }
-        }
-        cmd.env("COLUMNS", "223");
-        cmd.env("LINES", "45");
-        if let Some(config) = foundation::runtime_config::active() {
-            let mode = clap::ValueEnum::to_possible_value(&config.performance.mode)
-                .context("performance mode has no CLI value")?;
-            cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
-        }
-        let mut collected_error = None;
-        let stats = if let Some(sess) = session {
-            let mut output =
-                dev::infra::history_store::HistoryOutputWriter::open(&sess.log_dir, &sess.stamp)?;
-            let heartbeat = sess.session_audit.clone();
-            let mut last_heartbeat = Instant::now();
-            let pipeline_label = self.pipeline_label().to_string();
-            let expected_config_pipeline = match self.pipeline_label() {
-                "IMG" => "img",
-                "VID" => "vid",
-                _ => "",
-            };
-            let pipeline_started_at = Instant::now();
-            let argv = self.argv();
-            let mut env_overrides = self
-                .env_overrides
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_deref()))
-                .collect::<Vec<_>>();
-            env_overrides.push(("MFB_SESSION_ID", Some(sess.stamp.as_str())));
-            set_child_active(true);
-            let mut session_log_error = None;
-            let mut config_marker_error = None;
-            let mut seen_config_marker = false;
-            let result = stream_process_with_pty_with_env(
-                &argv,
-                None,
-                &env_overrides,
-                |line| {
-                    if let Some(payload) = line.strip_prefix("MFB_HISTORY_CONFIG=") {
-                        if config_marker_error.is_some() {
-                            return;
-                        }
-                        if seen_config_marker {
-                            config_marker_error = Some(anyhow::anyhow!(
-                                "duplicate child config marker in one invocation"
-                            ));
-                        } else {
-                            seen_config_marker = true;
-                            if let Err(error) =
-                                ChildConfigMarker::parse(payload, expected_config_pipeline)
-                                    .and_then(|marker| {
-                                        sess.append_history_event(
-                                            "MFB_HISTORY_CONFIG",
-                                            serde_json::to_value(marker)?,
-                                        )
-                                    })
-                            {
-                                config_marker_error = Some(error);
-                            }
-                        }
-                        return;
-                    }
-                    if !line.starts_with("MFB_CONVERTED_BYTES=") {
-                        println!("{line}");
-                        let _ = io::stdout().flush();
-                    }
-                    if session_log_error.is_none()
-                        && let Err(error) = output.push_line(&pipeline_label, line)
-                    {
-                        session_log_error = Some(error);
-                    }
-                },
-                || {
-                    if last_heartbeat.elapsed() >= std::time::Duration::from_mins(1) {
-                        let event = format!(
-                            "SESSION_HEARTBEAT pipeline={pipeline_label} elapsed_secs={}",
-                            pipeline_started_at.elapsed().as_secs()
-                        );
-                        let _ = append_jsonl_audit_record(&heartbeat, &event);
-                        last_heartbeat = Instant::now();
-                    }
-                },
-            );
-            set_child_active(false);
-            if let Err(error) = output.flush()
-                && session_log_error.is_none()
-            {
-                session_log_error = Some(error);
-            }
-            match result {
-                Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
-                    collected_error = match (session_log_error, config_marker_error) {
-                        (Some(output_error), Some(config_error)) => Some(anyhow::anyhow!(
-                            "processing history output write failed: {output_error:#}; child configuration marker failed: {config_error:#}"
-                        )),
-                        (Some(error), None) | (None, Some(error)) => Some(error),
-                        (None, None) => unreachable!("checked child history errors"),
-                    };
-                    stats
-                }
-                Ok(stats) => stats,
-                Err(error) => {
-                    let event = format!(
-                        "{pipeline_label}_PIPELINE_STREAM_ERROR elapsed_secs={} error={error}",
-                        pipeline_started_at.elapsed().as_secs()
-                    );
-                    let _ = append_jsonl_audit_record(&heartbeat, &event);
-                    if let Some(log_error) = session_log_error {
-                        eprintln!("[LOG] processing history output write failed: {log_error:#}");
-                    }
-                    if let Some(config_error) = config_marker_error {
-                        eprintln!("[LOG] child configuration marker failed: {config_error:#}");
-                    }
-                    if let Err(log_error) = sess.append_line(&sess.session_log, &event) {
-                        eprintln!("[LOG] session stream error write failed: {log_error:#}");
-                    }
-                    return Err(error);
-                }
-            }
-        } else {
-            let mut child = cmd
-                .spawn()
-                .with_context(|| format!("launch {}", self.display()))?;
-            let status = child
-                .wait()
-                .with_context(|| format!("wait {}", self.display()))?;
-            ProcessorStats {
-                exit_code: delegated_exit_code(
-                    status,
-                    &self.program.to_string_lossy(),
-                    "LaunchCommand",
-                ),
-                ..ProcessorStats::default()
-            }
-        };
-        if let Some(sess) = session {
-            let count = |index: usize, value: usize| {
-                stats.reported[index]
-                    .then_some(value)
-                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
-            };
-            let event = format!(
-                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={} unprocessed={}",
-                self.pipeline_label(),
-                stats.exit_code,
-                count(0, stats.succeeded),
-                count(1, stats.skipped),
-                count(2, stats.ignored),
-                count(3, stats.failed),
-                stats
-                    .unprocessed
-                    .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
-            );
-            for result in [
-                append_jsonl_audit_record(&sess.session_audit, &event),
-                sess.append_line(&sess.session_log, &event),
-                sess.append_line(&sess.verbose_log, &event),
-            ] {
-                if let Err(cause) = result
-                    && collected_error.is_none()
-                {
-                    collected_error = Some(cause);
-                }
-            }
-            if stats.exit_code != 0 {
-                let error_event = format!(
-                    "{}_PIPELINE_ERROR command failed with exit {}: {}",
-                    self.pipeline_label(),
-                    stats.exit_code,
-                    self.display()
-                );
-                for result in [
-                    sess.append_line(&sess.session_log, &error_event),
-                    sess.append_line(&sess.verbose_log, &error_event),
-                ] {
-                    if let Err(cause) = result
-                        && collected_error.is_none()
-                    {
-                        collected_error = Some(cause);
-                    }
-                }
-            }
-        }
-        if let Some(cause) = collected_error {
-            return Err(CollectedChildError { stats, cause }.into());
-        }
-        // The delegated child has finished its own file/checkpoint boundary.
-        foundation::batch_control::checkpoint()?;
-        if stats.exit_code != 0 && bail_on_failure {
-            bail!(
-                "command failed with exit {}: {}",
-                stats.exit_code,
-                self.display()
-            );
-        }
-        Ok(stats)
-    }
-
-    fn argv(&self) -> Vec<String> {
-        let mut argv = Vec::with_capacity(self.args.len() + 1);
-        argv.push(self.program.to_string_lossy().into_owned());
-        argv.extend(self.args.iter().cloned());
-        argv
+    fn append_verbose_line(&self, event: &str) -> Result<()> {
+        self.append_line(&self.verbose_log, event)
     }
 }
 
@@ -1278,7 +965,11 @@ const fn processing_filter(args: &Args) -> ProcessingFilter {
     } else if args.videos_only {
         ProcessingFilter::VideosOnly
     } else {
-        ProcessingFilter::Both
+        match args.mode {
+            LaunchMode::Images => ProcessingFilter::ImagesOnly,
+            LaunchMode::Videos => ProcessingFilter::VideosOnly,
+            _ => ProcessingFilter::Both,
+        }
     }
 }
 
@@ -1290,6 +981,11 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 }
 
 fn validate_media_options(args: &Args) -> Result<()> {
+    anyhow::ensure!(
+        (args.img_allow_size_tolerance.is_none() && args.img_size_tolerance_bytes.is_none())
+            || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
+        "image size tolerance requires --mode auto or images; Fast IMG is unchanged"
+    );
     anyhow::ensure!(
         args.cache.is_empty()
             || matches!(
@@ -1543,7 +1239,22 @@ fn bind_processing_output(args: &Args) -> Result<Args> {
 
 fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
     if !mode_uses_standard_pipeline(&args.mode) || args.inputs.len() < 2 {
-        return Ok(vec![bind_processing_output(args)?]);
+        let planned = bind_processing_output(args)?;
+        if mode_uses_standard_pipeline(&args.mode)
+            && !args.in_place
+            && let (Some(input), Some(output)) = (args.inputs.first(), &planned.output)
+            && fs::metadata(input)?.is_dir()
+        {
+            let source = fs::canonicalize(input)?;
+            let resolved = resolve_planned_output(output)?;
+            anyhow::ensure!(
+                !resolved.starts_with(&source) && !source.starts_with(&resolved),
+                "output overlaps an input: {} and {}",
+                output.display(),
+                source.display()
+            );
+        }
+        return Ok(vec![planned]);
     }
     anyhow::ensure!(!args.watch, "--watch requires exactly one input directory");
     anyhow::ensure!(
@@ -1597,18 +1308,7 @@ fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
                 unique_adjacent_output(input, "optimized")
             };
             let output = std::path::absolute(output)?;
-            let existing = output_resource_check_dir(&output)?;
-            let mut resolved = fs::canonicalize(&existing)?.join(output.strip_prefix(&existing)?);
-            // Normalize only the nonexistent suffix; existing symlinks were resolved above.
-            let mut normalized = PathBuf::new();
-            for component in resolved.components() {
-                if component == std::path::Component::ParentDir {
-                    anyhow::ensure!(normalized.pop(), "output path escapes filesystem root");
-                } else if component != std::path::Component::CurDir {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            resolved = normalized;
+            let resolved = resolve_planned_output(&output)?;
             for source in &inputs {
                 anyhow::ensure!(
                     !resolved.starts_with(source) && !source.starts_with(&resolved),
@@ -1637,6 +1337,22 @@ fn standard_input_plans(args: &Args) -> Result<Vec<Args>> {
         plans.push(planned);
     }
     Ok(plans)
+}
+
+fn resolve_planned_output(output: &Path) -> Result<PathBuf> {
+    let output = std::path::absolute(output)?;
+    let existing = output_resource_check_dir(&output)?;
+    let resolved = fs::canonicalize(&existing)?.join(output.strip_prefix(&existing)?);
+    // Normalize only the nonexistent suffix; existing symlinks were resolved above.
+    let mut normalized = PathBuf::new();
+    for component in resolved.components() {
+        if component == std::path::Component::ParentDir {
+            anyhow::ensure!(normalized.pop(), "output path escapes filesystem root");
+        } else if component != std::path::Component::CurDir {
+            normalized.push(component.as_os_str());
+        }
+    }
+    Ok(normalized)
 }
 
 fn scan_standard_inputs(
@@ -1771,6 +1487,59 @@ fn output_resource_check_dir(output: &Path) -> Result<PathBuf> {
 }
 
 fn plan_routed_pipeline_commands(
+    args: &Args,
+    project_root: &Path,
+    scan: &ContentScan,
+    fail_fast: bool,
+) -> Result<Vec<LaunchCommand>> {
+    let commands = plan_routed_pipeline_commands_unbound(args, project_root, scan, fail_fast)?;
+    bind_scanned_sources(commands, scan)
+}
+
+fn bind_scanned_sources(
+    commands: Vec<LaunchCommand>,
+    scan: &ContentScan,
+) -> Result<Vec<LaunchCommand>> {
+    let image_sources = scan.selected_sources(ScanRoute::Image);
+    let video_sources = scan.selected_sources(ScanRoute::Video);
+    anyhow::ensure!(
+        image_sources.len() == scan.img_count && video_sources.len() == scan.vid_count,
+        "scanned media source identities do not cover the routed inventory"
+    );
+    commands
+        .into_iter()
+        .map(|command| {
+            let sources = match command.pipeline_label() {
+                "IMG" => &image_sources,
+                "VID" => &video_sources,
+                _ => return Ok(command),
+            };
+            let input = command
+                .args
+                .get(1)
+                .context("media worker command omitted its input")?;
+            let input = Path::new(input);
+            let selected = if input.is_dir() {
+                sources.clone()
+            } else {
+                let selected = sources
+                    .iter()
+                    .filter(|source| source.path() == input)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                anyhow::ensure!(
+                    selected.len() == 1,
+                    "media worker source was not uniquely observed during preflight: {}",
+                    input.display()
+                );
+                selected
+            };
+            Ok(command.with_sources(selected))
+        })
+        .collect()
+}
+
+fn plan_routed_pipeline_commands_unbound(
     args: &Args,
     project_root: &Path,
     scan: &ContentScan,
@@ -2108,6 +1877,12 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     }
     if let Some(database) = args.img_allow_database {
         command.push(format!("--allow-database={database}"));
+    }
+    if let Some(tolerance) = args.img_allow_size_tolerance {
+        command.push(format!("--allow-size-tolerance={tolerance}"));
+    }
+    if let Some(bytes) = args.img_size_tolerance_bytes {
+        command.extend(["--size-tolerance-bytes".to_owned(), bytes.to_string()]);
     }
 }
 
@@ -2464,6 +2239,8 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    let scoped_session = session.map(DragDropSession::for_run).transpose()?;
+    let session = scoped_session.as_ref();
     let plans = match standard_input_plans(args) {
         Ok(plans) => plans,
         Err(error) => return run_with_history(args, session, || Err(error)),
@@ -2709,7 +2486,7 @@ fn run_drag_drop_inner(
                 args.photos_folder_id.as_deref(),
             ))?;
             draw_separator("Processing (restore-jpeg)");
-            match command.run_collecting(false, session, false) {
+            match command.run_collecting(false, session.map(|s| s as &dyn WorkerSession), false) {
                 Ok(stats) => {
                     print_batch_result(&command, &stats, false);
                     summary.img = stats.clone();
@@ -2850,7 +2627,11 @@ fn run_drag_drop_inner(
                 "VID" => video_error_mode,
                 _ => error_mode,
             };
-            match command.run_collecting(args.dry_run, session, false) {
+            match command.run_collecting(
+                args.dry_run,
+                session.map(|s| s as &dyn WorkerSession),
+                false,
+            ) {
                 Ok(stats) => {
                     print_batch_result(&command, &stats, args.dry_run);
                     let child_exit_code = stats.exit_code;
@@ -3474,6 +3255,7 @@ fn build_run_args(
         retry: false,
         force: false,
         dry_run: false,
+        plan_json: false,
         plain: false,
         base_dir: None,
         in_place,
@@ -3496,6 +3278,8 @@ fn build_run_args(
         img_jpeg_effort: None,
         img_quality_heuristic: None,
         img_allow_database: None,
+        img_allow_size_tolerance: None,
+        img_size_tolerance_bytes: None,
         photos: Default::default(),
         img_error_mode: None,
         vid_error_mode: None,
@@ -3794,8 +3578,47 @@ fn initialize_launcher_runtime(args: &Args) -> Result<()> {
     foundation::runtime_config::install(runtime.config)
 }
 
+fn inspect_routing_plan(args: &Args) -> Result<dev::infra::preflight_plan::PreflightReport> {
+    anyhow::ensure!(
+        mode_uses_standard_pipeline(&args.mode),
+        "--plan-json supports only auto, images, or videos; it does not preview Fast or management modes"
+    );
+    anyhow::ensure!(
+        !args.inputs.is_empty(),
+        "--plan-json requires at least one input"
+    );
+    anyhow::ensure!(
+        args.backup.is_none() && args.photos_album_id.is_none() && args.photos_folder_id.is_none(),
+        "backup and Photos recovery selections are not applicable to standard routing plans"
+    );
+    validate_media_options(args)?;
+    let plans = standard_input_plans(args)?
+        .iter()
+        .map(|plan| {
+            let input = plan
+                .inputs
+                .first()
+                .context("routing plan omitted its input")?;
+            safety_check(input)?;
+            dev::infra::preflight_plan::RoutingPlan::inspect(
+                input,
+                plan.output.as_deref(),
+                processing_filter(plan),
+                plan.in_place,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(dev::infra::preflight_plan::PreflightReport::new(plans))
+}
+
 fn main() -> Result<()> {
     use std::io::IsTerminal;
+    let args = apply_mode_overrides(Args::parse());
+    if args.plan_json {
+        let plan = inspect_routing_plan(&args)?;
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+        return Ok(());
+    }
     unsafe {
         std::env::set_var("MFB_GUI_LAUNCH", "1");
         std::env::set_var("FORCE_COLOR", "1");
@@ -3805,7 +3628,6 @@ fn main() -> Result<()> {
         }
     }
     resize_terminal_for_gui(35, 110);
-    let args = apply_mode_overrides(Args::parse());
     initialize_launcher_runtime(&args)?;
     install_signal_handlers()?;
     let mut session = DragDropSession::start()?;
@@ -3880,6 +3702,185 @@ fn report_drag_drop_failure(result: &Result<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dev::app::worker::{
+        BinaryObservation, ChildConfigMarker, INVOCATION_MAX_ARGUMENT_BYTES,
+        INVOCATION_MAX_ARGUMENTS, collect_config_leaf_paths,
+    };
+    use foundation::infra::runtime_config::RuntimeConfig;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn run_identity_is_distinct_per_attempt_and_binds_every_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let first = session.for_run().unwrap();
+        let second = session.for_run().unwrap();
+        assert_ne!(first.run_id, second.run_id);
+        assert!(session.run_id.is_none());
+        assert_eq!(first.clone().run_id, first.run_id);
+        let args = Args::try_parse_from(["mfb", "--mode", "images", "--dry-run"]).unwrap();
+        for scoped in [&first, &second] {
+            run_with_history(&args, Some(scoped), || {
+                scoped.append_history_event(
+                    "MFB_HISTORY_INPUT_PLAN",
+                    serde_json::json!({"schema_version":1,"inputs":[]}),
+                )
+            })
+            .unwrap();
+        }
+        for name in [
+            "MFB_HISTORY_CONTEXT",
+            "MFB_HISTORY_INPUT_PLAN",
+            "MFB_HISTORY_FINISHED",
+        ] {
+            let events = history_payloads(&session, name);
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0]["run_id"], first.run_id.as_deref().unwrap());
+            assert_eq!(events[1]["run_id"], second.run_id.as_deref().unwrap());
+        }
+        assert!(
+            first
+                .append_history_event(
+                    "MFB_HISTORY_FINISHED",
+                    serde_json::json!({"schema_version":1,"run_id":second.run_id})
+                )
+                .is_err()
+        );
+        let unchanged = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(unchanged.len(), 2);
+    }
+
+    #[test]
+    fn explicit_standard_modes_and_filter_flags_share_scan_scope() {
+        for (mode, expected) in [
+            ("auto", ProcessingFilter::Both),
+            ("images", ProcessingFilter::ImagesOnly),
+            ("videos", ProcessingFilter::VideosOnly),
+        ] {
+            let args = Args::try_parse_from(["mfb", "--mode", mode]).unwrap();
+            assert_eq!(processing_filter(&args), expected);
+        }
+        for (flag, expected) in [
+            ("--images-only", ProcessingFilter::ImagesOnly),
+            ("--videos-only", ProcessingFilter::VideosOnly),
+        ] {
+            let args = apply_mode_overrides(
+                Args::try_parse_from(["mfb", "--mode", "auto", flag]).unwrap(),
+            );
+            assert_eq!(processing_filter(&args), expected);
+        }
+        let args = Args::try_parse_from(["mfb", "--mode", "fast-img"]).unwrap();
+        assert_eq!(processing_filter(&args), ProcessingFilter::Both);
+    }
+
+    #[test]
+    fn single_directory_plans_refuse_overlapping_outputs_without_creating_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input");
+        fs::create_dir(&input).unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        args.inputs = vec![input.clone()];
+        for output in [
+            input.clone(),
+            input.join("nested"),
+            temp.path().to_path_buf(),
+            input.join("absent/../nested"),
+        ] {
+            args.output = Some(output);
+            assert!(
+                standard_input_plans(&args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("output overlaps")
+            );
+        }
+        #[cfg(unix)]
+        {
+            let link = temp.path().join("alias");
+            std::os::unix::fs::symlink(&input, &link).unwrap();
+            args.output = Some(link.join("output"));
+            assert!(standard_input_plans(&args).is_err());
+        }
+        assert_eq!(fs::read_dir(&input).unwrap().count(), 0);
+        args.output = Some(temp.path().join("safe"));
+        assert!(standard_input_plans(&args).is_ok());
+        assert!(!temp.path().join("safe").exists());
+    }
+
+    #[test]
+    fn read_only_plan_reports_all_inputs_without_output_or_session_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("First");
+        let second = temp.path().join("Second");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(first.join("misnamed.bin"), b"\xff\xd8\xff\xe0synthetic").unwrap();
+        fs::write(second.join("notes.txt"), "synthetic notes").unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "auto"]).unwrap();
+        args.inputs = vec![first.clone(), second.clone()];
+        let plan = inspect_routing_plan(&args).unwrap();
+        assert_eq!(plan.plans.len(), 2);
+        assert_eq!(plan.plans[0].entries[0].action, "submit_img");
+        assert_eq!(plan.plans[1].entries[0].action, "copy_after_success");
+        assert!(
+            plan.plans
+                .iter()
+                .all(|plan| !plan.output_requested.as_ref().unwrap().exists())
+        );
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+        args.mode = LaunchMode::FastImg;
+        assert!(inspect_routing_plan(&args).is_err());
+        args.mode = LaunchMode::Images;
+        args.inputs.push(temp.path().join("missing"));
+        assert!(inspect_routing_plan(&args).is_err());
+        assert!(Args::try_parse_from(["mfb", "--plan-json", "--dry-run"]).is_err());
+        assert!(Args::try_parse_from(["mfb", "--plan-json", "--watch"]).is_err());
+    }
+
+    #[test]
+    fn scanned_sources_are_bound_to_each_standard_worker_command() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("first.bin"), b"\xff\xd8\xff\xe0first").unwrap();
+        fs::write(temp.path().join("second.bin"), b"\xff\xd8\xff\xe0second").unwrap();
+        let scan =
+            dev::infra::drag_drop::inspect_content(temp.path(), ProcessingFilter::ImagesOnly)
+                .unwrap();
+        let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        args.inputs = vec![temp.path().to_path_buf()];
+        for fail_fast in [false, true] {
+            let commands =
+                plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, fail_fast).unwrap();
+            assert_eq!(commands.len(), if fail_fast { 1 } else { 2 });
+            assert_eq!(
+                commands
+                    .iter()
+                    .map(|command| command.sources.len())
+                    .sum::<usize>(),
+                2
+            );
+            for command in commands {
+                for source in command.sources {
+                    source.verify_unchanged().unwrap();
+                }
+            }
+        }
+        let incomplete = ContentScan {
+            img_count: 2,
+            ..ContentScan::default()
+        };
+        assert!(
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &incomplete, true).is_err()
+        );
+        fs::write(temp.path().join("first.bin"), b"changed").unwrap();
+        let commands =
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, false).unwrap();
+        assert!(
+            commands
+                .iter()
+                .flat_map(|command| &command.sources)
+                .any(|source| source.verify_unchanged().is_err())
+        );
+    }
     use serial_test::serial;
     use std::path::{Path, PathBuf};
 
@@ -4344,6 +4345,30 @@ mod tests {
         }
         assert_eq!(fs::read_to_string(receipt).unwrap(), session.stamp);
         let recorded = history_payloads(&session, "MFB_HISTORY_CONFIG");
+        let invocations = history_payloads(&session, "MFB_HISTORY_INVOCATION");
+        assert_eq!(invocations.len(), 2);
+        assert_ne!(
+            invocations[0]["invocation_id"],
+            invocations[1]["invocation_id"]
+        );
+        for (invocation, config) in invocations.iter().zip(&recorded) {
+            assert_eq!(invocation["state"], "launch_requested");
+            assert_eq!(invocation["pipeline"], "img");
+            assert_eq!(
+                invocation["program_path"],
+                serde_json::to_value(std::path::absolute(&program).unwrap()).unwrap()
+            );
+            assert_eq!(
+                invocation["arguments"],
+                serde_json::to_value(&command.args).unwrap()
+            );
+            assert_eq!(
+                invocation["binary"]["bytes"],
+                fs::metadata(&program).unwrap().len()
+            );
+            assert_eq!(invocation["binary"]["blake3"].as_str().unwrap().len(), 64);
+            assert_eq!(config["invocation_id"], invocation["invocation_id"]);
+        }
         assert_eq!(recorded[0]["pipeline"], "img");
         assert_eq!(recorded[0]["config"]["vid"]["codec"], "hevc");
         let worker_output = dev::infra::history_store::read_session_output_since(
@@ -4359,6 +4384,113 @@ mod tests {
                 .filter(|line| *line == progress)
                 .count(),
             2
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_launch_observations_preserve_exact_arguments_unknowns_and_dry_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut command = LaunchCommand::from_argv(vec![
+            "sh".into(),
+            "-c".into(),
+            "printf '%s\\n' \"$1\"".into(),
+            "test".into(),
+            "Unicode 界面 with spaces\nnext line".into(),
+        ])
+        .unwrap();
+        command.env_overrides = vec![("PATH".into(), Some("/bin:/usr/bin".into()))];
+        let observation = command.invocation(&session).unwrap();
+        assert_eq!(
+            observation.arguments[3],
+            "Unicode 界面 with spaces\nnext line"
+        );
+        assert_eq!(observation.program_path, Some(PathBuf::from("/bin/sh")));
+        assert!(observation.binary.blake3.is_some());
+        let observed_invocation_id = observation.invocation_id;
+        let unknown = BinaryObservation::observe(Some(&temp.path().join("unreadable-or-missing")));
+        assert!(unknown.bytes.is_none() && unknown.blake3.is_none());
+        assert!(unknown.diagnostic.is_some());
+        command.env_overrides = vec![("PATH".into(), None)];
+        assert!(command.invocation(&session).unwrap().program_path.is_none());
+        assert!(
+            command
+                .invocation(&session)
+                .unwrap()
+                .binary
+                .diagnostic
+                .is_some()
+        );
+        let database_path = session
+            .log_dir
+            .join(dev::infra::history_store::HISTORY_DATABASE);
+        assert!(!database_path.try_exists().unwrap());
+        command.run_collecting(true, Some(&session), false).unwrap();
+        assert!(!database_path.try_exists().unwrap());
+        let mut long_session = session.clone();
+        long_session.stamp = "Unicode 界面".repeat(300);
+        let long_invocation = command.invocation(&long_session).unwrap();
+        assert!(long_invocation.invocation_id.len() <= 256);
+        assert!(long_invocation.invocation_id.is_ascii());
+        assert!(
+            long_invocation
+                .invocation_id
+                .starts_with(&format!("{}-", std::process::id()))
+        );
+        assert_ne!(long_invocation.invocation_id, observed_invocation_id);
+        assert_ne!(
+            long_invocation.invocation_id,
+            command.invocation(&long_session).unwrap().invocation_id
+        );
+        command.args = vec!["too many".into(); INVOCATION_MAX_ARGUMENTS + 1];
+        assert!(command.invocation(&session).is_err());
+        command.args = vec!["x".repeat(INVOCATION_MAX_ARGUMENT_BYTES + 1)];
+        assert!(command.invocation(&session).is_err());
+        command.args = vec!["invalid\0argument".into()];
+        assert!(command.invocation(&session).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_invocation_persistence_failure_drains_child_and_preserves_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        drop(
+            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
+                .unwrap(),
+        );
+        let database = rusqlite::Connection::open(
+            session
+                .log_dir
+                .join(dev::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        database.execute_batch("CREATE TRIGGER reject_invocation BEFORE INSERT ON history_events WHEN NEW.event LIKE 'MFB_HISTORY_INVOCATION=%' BEGIN SELECT RAISE(ABORT, 'synthetic invocation failure'); END;").unwrap();
+        let completed = temp.path().join("child_completed");
+        let command = LaunchCommand::from_argv(vec!["/bin/sh".into(), "-c".into(),
+            "printf 'Succeeded: 3\\nFailed: 1\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\n'; printf 'tail drained\\n'; printf done > \"$1\"; exit 7".into(),
+            "test".into(), completed.to_str().unwrap().into()]).unwrap();
+        let error = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("synthetic invocation failure"),
+            "unexpected invocation persistence error: {error:#}"
+        );
+        let collected = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(collected.stats.succeeded, 3);
+        assert_eq!(collected.stats.failed, 1);
+        assert_eq!(collected.stats.exit_code, 7);
+        assert_eq!(fs::read_to_string(completed).unwrap(), "done");
+        assert!(
+            dev::infra::history_store::read_session_output_since(
+                &session.log_dir,
+                &session.stamp,
+                0
+            )
+            .unwrap()
+            .contains("tail drained")
         );
     }
 
@@ -4450,6 +4582,9 @@ mod tests {
                 "11",
                 "--img-quality-heuristic=false",
                 "--img-allow-database=true",
+                "--img-allow-size-tolerance=false",
+                "--img-size-tolerance-bytes",
+                "1234",
                 "--img-error-mode",
                 "log-and-continue",
                 "/tmp/media",
@@ -4458,6 +4593,17 @@ mod tests {
         );
         validate_media_options(&args).unwrap();
         let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--size-tolerance-bytes", "1234"])
+        );
+        assert!(
+            command
+                .args
+                .contains(&"--allow-size-tolerance=false".to_owned())
+        );
         assert!(
             command
                 .args
@@ -4694,6 +4840,21 @@ mod tests {
             BatchErrorMode::LogAndContinue
         );
         for argv in [
+            vec!["mfb", "--videos-only", "--img-allow-size-tolerance=true"],
+            vec!["mfb", "--videos-only", "--img-size-tolerance-bytes", "0"],
+            vec![
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--img-size-tolerance-bytes",
+                "1",
+            ],
+            vec![
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--img-allow-size-tolerance=false",
+            ],
             vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
             vec!["mfb", "--images-only", "--vid-codec", "av1"],
             vec!["mfb", "--images-only", "--vid-config", "/tmp/vid.json"],
@@ -5487,13 +5648,14 @@ mod tests {
         fs::create_dir(temp.path().join("Album_optimized")).unwrap();
         let args = bind_processing_output(&args).unwrap();
         assert_eq!(args.output, Some(temp.path().join("Album_optimized_2")));
-        let scan = ContentScan {
-            img_count: 1,
-            vid_count: 1,
-            routed_images: vec!["synthetic.jpg".into()],
-            routed_videos: vec!["synthetic.mp4".into()],
-            ..ContentScan::default()
-        };
+        fs::write(input.join("synthetic.jpg"), b"\xff\xd8\xff\xe0synthetic").unwrap();
+        fs::write(
+            input.join("synthetic.mp4"),
+            b"\x00\x00\x00\x14ftypisom\x00\x00\x00\x00isom",
+        )
+        .unwrap();
+        let scan = dev::infra::drag_drop::inspect_content(&input, ProcessingFilter::Both).unwrap();
+        assert_eq!((scan.img_count, scan.vid_count), (1, 1));
         let commands =
             plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, false).unwrap();
         assert_eq!(commands.len(), 2);
@@ -5630,6 +5792,7 @@ mod tests {
             retry: false,
             force: false,
             dry_run: true,
+            plan_json: false,
             resume: false,
             no_resume: false,
             ultimate: false,
@@ -5652,6 +5815,8 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            img_allow_size_tolerance: None,
+            img_size_tolerance_bytes: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5735,6 +5900,7 @@ mod tests {
                 retry: false,
                 force: false,
                 dry_run: true,
+                plan_json: false,
                 resume: false,
                 no_resume: false,
                 ultimate: false,
@@ -5757,6 +5923,8 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                img_allow_size_tolerance: None,
+                img_size_tolerance_bytes: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,
@@ -5781,6 +5949,7 @@ mod tests {
             retry: false,
             force: false,
             dry_run: true,
+            plan_json: false,
             resume: false,
             no_resume: false,
             ultimate: false,
@@ -5803,6 +5972,8 @@ mod tests {
             img_jpeg_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
+            img_allow_size_tolerance: None,
+            img_size_tolerance_bytes: None,
             photos: Default::default(),
             img_error_mode: None,
             vid_error_mode: None,
@@ -5849,6 +6020,7 @@ mod tests {
                 retry: false,
                 force: false,
                 dry_run: true,
+                plan_json: false,
                 resume: false,
                 no_resume: false,
                 ultimate: false,
@@ -5871,6 +6043,8 @@ mod tests {
                 img_jpeg_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
+                img_allow_size_tolerance: None,
+                img_size_tolerance_bytes: None,
                 photos: Default::default(),
                 img_error_mode: None,
                 vid_error_mode: None,

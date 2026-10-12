@@ -110,12 +110,6 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         archive: bool,
 
-        #[arg(long, default_value_t = false)]
-        allow_size_tolerance: bool,
-
-        #[arg(long)]
-        no_allow_size_tolerance: bool,
-
         /// Enable explicitly gated lab-only encoder/decoder fallbacks. Final verification is unchanged.
         #[arg(long = "allow_expert_options", default_value_t = false)]
         allow_expert_options: bool,
@@ -447,8 +441,6 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         no_apple_compat,
         ultimate,
         archive,
-        allow_size_tolerance,
-        no_allow_size_tolerance,
         allow_expert_options,
         jxl_fixed_features,
         preserve_timestamps,
@@ -472,7 +464,11 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         no_resume,
     )?;
     let apple_compat = apple_compat && !no_apple_compat;
-    let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+    let image_policy = &foundation::infra::runtime_config::active()
+        .context("IMG runtime configuration must be installed before processing")?
+        .img;
+    let allow_size_tolerance = image_policy.allow_size_tolerance;
+    let size_tolerance_bytes = image_policy.size_tolerance_bytes;
     let should_delete = delete_original || in_place;
 
     let img_static_delivery = resolve_cli_img_static_delivery(&codec, apple_compat)?;
@@ -574,7 +570,20 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
             "JXL Fixed Features Audit: frozen advanced policy enabled; progressive/responsive transforms and generated noise disabled"
         );
     }
-    if !allow_size_tolerance {
+    let effective_tolerance =
+        foundation::media_conversion_gate::effective_allow_size_tolerance(allow_size_tolerance);
+    log_stat!(
+        foundation::infra::static_logs::messages::LABEL_CONFIG,
+        format!(
+            "Pure-media size policy: requested_tolerance={allow_size_tolerance} requested_extra_bytes={size_tolerance_bytes} effective_tolerance={effective_tolerance} max_extra_bytes={} (metadata excluded)",
+            if effective_tolerance {
+                size_tolerance_bytes
+            } else {
+                0
+            }
+        )
+    );
+    if !effective_tolerance {
         log_stat!(
             foundation::infra::static_logs::messages::LABEL_CONFIG,
             format!(
@@ -610,6 +619,7 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         output_dir: output,
         base_dir,
         flags: config_flags,
+        size_tolerance_bytes,
         child_threads: 0,
         cache,
         tool_preflight: Arc::default(),
@@ -651,6 +661,10 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    cli.policy.validate_size_tolerance_scope(matches!(
+        cli.command,
+        Commands::Run { .. } | Commands::Config { .. }
+    ))?;
     let legacy_expert = matches!(
         &cli.command,
         Commands::Run {
@@ -1203,6 +1217,7 @@ struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
     flags: ConfigFlags,
+    size_tolerance_bytes: u64,
     child_threads: usize,
 
     cache: Option<Arc<AnalysisCache>>,
@@ -1668,6 +1683,174 @@ mod conversion_result_adapter_tests {
     }
 
     #[test]
+    fn standard_options_preserve_explicit_size_budget_without_enabling_growth() {
+        let mut config = AutoConvertConfig {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::empty(),
+            size_tolerance_bytes: 17,
+            child_threads: 1,
+            cache: None,
+            tool_preflight: Arc::default(),
+            error_mode: foundation::BatchErrorMode::LogAndContinue,
+        };
+        let options = super::auto_convert_build_options(&config, "PNG".into(), "lossless".into());
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(!options.allow_size_tolerance());
+        config.flags.insert(ConfigFlags::ALLOW_SIZE_TOLERANCE);
+        let options = super::auto_convert_build_options(&config, "JPEG".into(), "lossless".into());
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(options.allow_size_tolerance());
+    }
+
+    #[test]
+    fn fast_image_admission_and_skip_proofs_reject_changed_planned_sources() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.jpg");
+        let original = b"same-length original";
+        std::fs::write(&source, original)?;
+        let job = super::FastImgTranscodeJob {
+            source: source.clone(),
+            src_hash: foundation::common_utils::calculate_blake3_hash(&source)?,
+            rel_key: "source.jpg".into(),
+            out_rel_key: "source.jxl".into(),
+        };
+        let skipped = super::fast_img_skipped_source_proof(&job, "planned skip".into())?;
+        assert_eq!(skipped.src_hash, job.src_hash);
+        let changed = b"same-length modified";
+        assert_eq!(original.len(), changed.len());
+        std::fs::write(&source, changed)?;
+        assert!(super::fast_img_skipped_source_proof(&job, "planned skip".into()).is_err());
+        for strategy in ["jxl", "avif"] {
+            let result = super::fast_img_run_encode_job(
+                &job,
+                root.path(),
+                &root.path().join("output"),
+                1,
+                false,
+                false,
+                strategy,
+            );
+            let failure = result
+                .err()
+                .expect("changed source must fail before encoder admission");
+            assert_eq!(failure.src_hash, job.src_hash);
+            assert!(failure.reason.contains("identity at encode admission"));
+            assert_eq!(std::fs::read(&source)?, changed);
+            assert!(!root.path().join("output").exists());
+        }
+        std::fs::remove_file(&source)?;
+        assert!(super::fast_img_skipped_source_proof(&job, "planned skip".into()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn standard_image_admission_precedes_resume_skip_and_counts_drift_as_failure()
+    -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_STANDARD_ADMISSION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = tempfile::tempdir()?;
+            let name = format!(
+                "{}::standard_image_admission_precedes_resume_skip_and_counts_drift_as_failure",
+                module_path!()
+            );
+            let (_, name) = name.split_once("::").expect("test module path");
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", name])
+                .env(CHILD, "1")
+                .env("MFB_HOME_ROOT", root.path())
+                .env("MFB_PROGRESS_DIR", root.path().join("progress"))
+                .env("HOME", root.path())
+                .env("MODERN_FORMAT_ENABLE_IMAGE_QUALITY_HEURISTIC", "false")
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.jpg");
+        std::fs::write(&source, [0xff, 0xd8, 0xff, 0xe0, b'f', b'a', b'k', b'e'])?;
+        let admitted = foundation::collect_admitted_image_files_for_perceived_speed(
+            root.path(),
+            &["jpg"],
+            true,
+        )?;
+        assert_eq!(admitted.len(), 1);
+        let checkpoint = foundation::checkpoint::Manager::new(root.path())?;
+        let before = b"changed after scan";
+        std::fs::write(&source, before)?;
+        checkpoint.mark_completed(admitted[0].path())?;
+        assert!(checkpoint.is_completed(admitted[0].path()));
+        for mode in [
+            foundation::BatchErrorMode::LogAndContinue,
+            foundation::BatchErrorMode::FailFast,
+        ] {
+            let config = AutoConvertConfig {
+                output_dir: None,
+                base_dir: None,
+                flags: ConfigFlags::empty(),
+                size_tolerance_bytes: 524_288,
+                child_threads: 1,
+                cache: None,
+                tool_preflight: std::sync::Arc::default(),
+                error_mode: mode,
+            };
+            let counters = super::ImageBatchCounters::default();
+            let failures = std::sync::Mutex::new(Vec::new());
+            let pause = foundation::PauseController::new();
+            let abort = std::sync::atomic::AtomicBool::new(false);
+            let reason = std::sync::Mutex::new(None);
+            let progress = foundation::CoarseProgressBar::new_file_stage(
+                1,
+                "Image admission test",
+                foundation::progress::FileProgressStage::ImageProcessing,
+            );
+            let worker = super::ImageBatchWorker {
+                config: &config,
+                checkpoint: Some(&checkpoint),
+                counters: &counters,
+                failed_paths: &failures,
+                pause_controller: &pause,
+                abort_requested: &abort,
+                abort_reason: &reason,
+                progress_bar: &progress,
+                start_time: std::time::Instant::now(),
+                total: 1,
+            };
+            worker.process(&admitted[0], 1);
+            assert_eq!(
+                counters.failed.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                counters
+                    .processed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                counters.skipped.load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(
+                counters.success.load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(failures.lock().expect("failure entries").len(), 1);
+            assert_eq!(
+                abort.load(std::sync::atomic::Ordering::Relaxed),
+                mode.is_fail_fast()
+            );
+            assert_eq!(std::fs::read(&source)?, before);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn raw_and_vector_inputs_are_preserved_without_hiding_real_rasters() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         for extension in [
@@ -1775,6 +1958,7 @@ mod conversion_result_adapter_tests {
             output_dir: Some(output.clone()),
             base_dir: Some(temp.path().to_path_buf()),
             flags: ConfigFlags::ARCHIVE_MODE | ConfigFlags::APPLE_COMPAT,
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -1818,6 +2002,7 @@ mod conversion_result_adapter_tests {
             output_dir: Some(output.clone()),
             base_dir: Some(temp.path().to_path_buf()),
             flags: ConfigFlags::ARCHIVE_MODE,
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -1884,6 +2069,7 @@ mod conversion_result_adapter_tests {
             output_dir: None,
             base_dir: None,
             flags: ConfigFlags::empty(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             child_threads: 1,
             cache: None,
             tool_preflight: Arc::default(),
@@ -2294,7 +2480,8 @@ impl ImageBatchWorker<'_> {
         }
     }
 
-    fn process(&self, path: &Path, child_threads: usize) {
+    fn process(&self, admitted: &foundation::batch::AdmittedImageFile, child_threads: usize) {
+        let path = admitted.path();
         // The guard spans conversion, delivery, and the resume checkpoint.
         let _batch_transaction = match foundation::batch_control::begin_transaction() {
             Ok(guard) => guard,
@@ -2320,6 +2507,18 @@ impl ImageBatchWorker<'_> {
             Some(path),
             &path.display().to_string(),
         );
+
+        if let Err(error) = admitted.verify_unchanged() {
+            let reason = error.to_string();
+            foundation::infra::static_logs::log_file_outcome_audit("img", "failed", path, &reason);
+            self.record_failure(
+                path,
+                &reason,
+                image_batch_should_abort(self.config.error_mode, &error.into()),
+            );
+            self.advance(path);
+            return;
+        }
 
         if let Some(checkpoint) = self.checkpoint
             && checkpoint.is_completed(path)
@@ -2463,7 +2662,7 @@ impl ImageBatchWorker<'_> {
 
 fn process_image_batch(
     pool: &rayon::ThreadPool,
-    files: &[PathBuf],
+    files: &[foundation::batch::AdmittedImageFile],
     max_threads: usize,
     worker: &ImageBatchWorker<'_>,
 ) {
@@ -2771,8 +2970,15 @@ fn auto_convert_directory(
 
     let mut img_candidates = foundation::IMAGE_EXTENSIONS_FOR_CONVERT.to_vec();
     img_candidates.extend_from_slice(&["mp4", "m4v", "mov", "mkv", "webm"]);
-    let files =
-        foundation::collect_image_files_for_perceived_speed(input, &img_candidates, recursive)?;
+    let admitted_files = foundation::collect_admitted_image_files_for_perceived_speed(
+        input,
+        &img_candidates,
+        recursive,
+    )?;
+    let files = admitted_files
+        .iter()
+        .map(|file| file.path().to_path_buf())
+        .collect::<Vec<_>>();
 
     tracing::info!(
         target: "static_log",
@@ -2916,7 +3122,7 @@ fn auto_convert_directory(
         start_time,
         total,
     };
-    process_image_batch(&pool, &files, max_threads, &worker);
+    process_image_batch(&pool, &admitted_files, max_threads, &worker);
 
     if let Err(error) = foundation::batch_control::checkpoint()
         && !abort_requested.swap(true, Ordering::SeqCst)
@@ -5167,6 +5373,8 @@ fn fast_img_run_encode_job_inner(
     allow_expert_options: bool,
     strategy: &str,
 ) -> anyhow::Result<FastImgTranscodeOutcome> {
+    fast_img_verify_source_hash_unchanged(&job.source, &job.src_hash)
+        .context("fast-img source identity at encode admission")?;
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
         if let Some(sidecar) = foundation::metadata::find_xmp_sidecar(&job.source) {
@@ -5308,16 +5516,13 @@ fn fast_img_run_encode_job_inner(
             input_format: Some("JPEG".to_string()),
             quality_label: None,
             codec: foundation::conversion_types::SelectedCodec::default(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         };
         convert_jpeg_to_jxl(&job.source, &options, None)?
     };
     if result.skipped && result.output_path.is_none() {
         return Ok(FastImgTranscodeOutcome::Skipped(
-            FastImgSkippedSourceProof {
-                rel_key: job.rel_key.clone(),
-                src_hash: calculate_blake3_hash(&job.source)?,
-                reason: result.message,
-            },
+            fast_img_skipped_source_proof(job, result.message)?,
         ));
     }
     let out_path = fast_img_encoded_output(&result)?;
@@ -5394,6 +5599,17 @@ fn fast_img_verify_source_hash_unchanged(
         source.display()
     );
     Ok(actual_hash)
+}
+
+fn fast_img_skipped_source_proof(
+    job: &FastImgTranscodeJob,
+    reason: String,
+) -> anyhow::Result<FastImgSkippedSourceProof> {
+    Ok(FastImgSkippedSourceProof {
+        rel_key: job.rel_key.clone(),
+        src_hash: fast_img_verify_source_hash_unchanged(&job.source, &job.src_hash)?,
+        reason,
+    })
 }
 
 fn fast_img_run_encode_job(
@@ -10015,6 +10231,7 @@ fn auto_convert_build_options(
     img::lossless_converter::ConvertOptions {
         output_dir: config.output_dir.clone(),
         base_dir: config.base_dir.clone(),
+        size_tolerance_bytes: config.size_tolerance_bytes,
         flags: {
             img::lossless_converter::ConvertFlags::empty()
                 | if config.force() {

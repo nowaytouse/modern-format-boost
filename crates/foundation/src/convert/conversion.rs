@@ -20,8 +20,8 @@
 //! permits only the bounded growth described below.
 //!
 //! ## `allow_size_tolerance` (default false)
-//! When true: "oversized" threshold is `output pure-media size increase <= 524_288 bytes`
-//! (512 KiB = `DEFAULT_SIZE_TOLERANCE_BYTES`, inclusive). Video path may treat
+//! When true: pure-media growth may not exceed `options.size_tolerance_bytes`
+//! (default 512 KiB = `DEFAULT_SIZE_TOLERANCE_BYTES`, inclusive). Video path may treat
 //! `video_compression_ratio < 1.01` as acceptable when `require_compression` is checked.
 //! This same bounded policy applies to exploration and final delivery.
 
@@ -1165,6 +1165,8 @@ pub struct ConvertOptions {
     pub child_threads: usize,
     pub input_format: Option<String>,
     pub quality_label: Option<String>,
+    /// Inclusive pure-media growth allowance; ignored when tolerance is disabled or vetoed.
+    pub size_tolerance_bytes: u64,
 }
 
 impl ConvertOptions {
@@ -1231,6 +1233,23 @@ impl ConvertOptions {
     }
 
     #[must_use]
+    pub fn effective_size_tolerance_bytes(&self) -> u64 {
+        if self.effective_allow_size_tolerance() {
+            self.size_tolerance_bytes
+        } else {
+            0
+        }
+    }
+
+    #[must_use]
+    pub fn effective_size_policy(&self) -> crate::exploration_policy::SizePolicy {
+        crate::exploration_policy::SizePolicy::strict_or_allow_growth(
+            self.effective_allow_size_tolerance(),
+            self.size_tolerance_bytes,
+        )
+    }
+
+    #[must_use]
     pub const fn verbose(&self) -> bool {
         self.flags.contains(ConvertFlags::VERBOSE)
     }
@@ -1272,6 +1291,7 @@ impl Default for ConvertOptions {
             child_threads: 0,
             input_format: None,
             quality_label: None,
+            size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         }
     }
 }
@@ -3235,10 +3255,7 @@ impl SizeToleranceCheck<'_> {
     }
 
     fn active_size_policy(&self) -> crate::exploration_policy::SizePolicy {
-        crate::exploration_policy::SizePolicy::strict_or_allow_growth(
-            self.options.effective_allow_size_tolerance(),
-            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
-        )
+        self.options.effective_size_policy()
     }
 
     fn evaluate(&self) -> Option<SizeGuardFailure> {
@@ -3250,7 +3267,7 @@ impl SizeToleranceCheck<'_> {
 
         // Primary size gate: candidate must fit within the active policy envelope.
         // Uses SizePolicy::fits() as the single acceptance truth, consistent with
-        // the JXL explorer. AllowGrowth(512 KiB): +524288 fits, +524289 → oversize.
+        // the JXL explorer, including the configured inclusive byte allowance.
         if self.is_guard_active() && !policy.fits(self.output_size, self.input_size) {
             return Some(SizeGuardFailure::ToleranceExceeded);
         }
@@ -3279,12 +3296,15 @@ impl SizeToleranceCheck<'_> {
     fn reject_tolerance_exceeded(&self) -> std::io::Result<TaskResult> {
         let delta = self.delta();
         let mode = if self.options.effective_allow_size_tolerance() {
-            "allowed growth: absolute byte allowance"
+            format!(
+                "allowed growth: {} pure-media bytes",
+                self.options.effective_size_tolerance_bytes()
+            )
         } else {
-            "strict mode: no tolerance"
+            "strict mode: no tolerance".to_owned()
         };
 
-        self.log_discard(delta, Some(mode));
+        self.log_discard(delta, Some(&mode));
         self.cleanup_output(SizeGuardFailure::ToleranceExceeded)?;
         self.preserve_original(SizeGuardFailure::ToleranceExceeded)?;
         mark_as_processed(self.input);
@@ -4891,6 +4911,11 @@ mod tests {
         assert!(!opts.should_delete_original());
         assert!(opts.use_gpu());
         assert!(!opts.allow_size_tolerance());
+        assert_eq!(
+            opts.size_tolerance_bytes,
+            crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+        );
+        assert_eq!(opts.effective_size_tolerance_bytes(), 0);
     }
 
     #[test]
@@ -5108,6 +5133,62 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn custom_size_tolerance_budget_respects_switch_strict_and_inclusive_boundaries() {
+        let _strict = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION,
+            "1",
+        );
+        let mut options = ConvertOptions {
+            size_tolerance_bytes: 17,
+            ..Default::default()
+        };
+        assert_eq!(options.effective_size_tolerance_bytes(), 0);
+        assert_eq!(
+            options.effective_size_policy(),
+            crate::exploration_policy::SizePolicy::StrictlySmaller
+        );
+        options
+            .flags
+            .insert(ConvertFlags::ALLOW_SIZE_TOLERANCE | ConvertFlags::COMPRESS);
+        assert_eq!(options.effective_size_tolerance_bytes(), 17);
+        for (candidate, expected) in [
+            (116, None),
+            (117, None),
+            (118, Some(SizeGuardFailure::ToleranceExceeded)),
+        ] {
+            let check = SizeToleranceCheck {
+                input: Path::new("input.jpg"),
+                output: Path::new("output.jxl"),
+                input_size: 100,
+                output_size: candidate,
+                options: &options,
+                format_label: "JXL",
+            };
+            assert_eq!(check.evaluate(), expected);
+        }
+        options.size_tolerance_bytes = 0;
+        assert!(options.effective_size_policy().fits(100, 100));
+        assert!(!options.effective_size_policy().fits(101, 100));
+        options.size_tolerance_bytes = u64::MAX;
+        assert!(options.effective_size_policy().fits(u64::MAX, u64::MAX - 1));
+        options.flags.remove(ConvertFlags::ALLOW_SIZE_TOLERANCE);
+        assert_eq!(options.effective_size_tolerance_bytes(), 0);
+        assert!(!options.effective_size_policy().fits(100, 100));
+        options.flags.insert(ConvertFlags::ALLOW_SIZE_TOLERANCE);
+        let _strict_enabled = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION,
+            "0",
+        );
+        assert_eq!(options.effective_size_tolerance_bytes(), 0);
+        assert_eq!(
+            options.effective_size_policy(),
+            crate::exploration_policy::SizePolicy::StrictlySmaller
+        );
+        assert!(!options.effective_size_policy().fits(100, 100));
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn test_size_tolerance_pure_media_independence() {
         let _strict = crate::common_utils::EnvGuard::set(
             crate::constants::ENV_DISABLE_STRICT_MEDIA_CONVERSION,
@@ -5135,6 +5216,7 @@ mod tests {
             child_threads: 1,
             input_format: None,
             quality_label: None,
+            size_tolerance_bytes: 1024,
         };
 
         let source_pure_media = 1_000_000;
@@ -5142,7 +5224,7 @@ mod tests {
             input: &input,
             output: &complete_larger,
             input_size: source_pure_media,
-            output_size: source_pure_media + 400 * 1024,
+            output_size: source_pure_media + options.size_tolerance_bytes,
             options: &options,
             format_label: "HEVC",
         };
@@ -5156,7 +5238,7 @@ mod tests {
             input: &input,
             output: &complete_smaller,
             input_size: source_pure_media,
-            output_size: source_pure_media + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES + 1,
+            output_size: source_pure_media + options.size_tolerance_bytes + 1,
             options: &options,
             format_label: "HEVC",
         };

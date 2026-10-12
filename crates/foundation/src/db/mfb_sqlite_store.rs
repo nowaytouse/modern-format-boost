@@ -16,6 +16,49 @@ pub const NS_PROCESSED: &str = "processed";
 const STORE_FILE_NAME: &str = "mfb_store.sqlite";
 const STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathTreeMissReason {
+    Absent,
+    IdleTtl,
+    FutureTimestamp,
+    SchemaMismatch,
+    IntegrityMismatch,
+}
+
+impl PathTreeMissReason {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Absent => "record_absent",
+            Self::IdleTtl => "idle_ttl_expired",
+            Self::FutureTimestamp => "future_timestamp",
+            Self::SchemaMismatch => "stored_schema_mismatch",
+            Self::IntegrityMismatch => "payload_blake3_mismatch",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PathTreeLookup<T> {
+    Hit(T),
+    Miss(PathTreeMissReason),
+}
+
+impl<T> PathTreeLookup<T> {
+    pub(crate) fn into_option(self) -> Option<T> {
+        match self {
+            Self::Hit(value) => Some(value),
+            Self::Miss(_) => None,
+        }
+    }
+}
+
+struct BlobRecord {
+    schema: i32,
+    payload: Option<Vec<u8>>,
+    stored_blake3: Option<Vec<u8>>,
+    updated_at: i64,
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_STORE_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
@@ -323,6 +366,20 @@ pub fn blob_get(
     with_conn(|conn| read_blob(conn, namespace, cache_key, expected_schema_version))
 }
 
+pub(crate) fn path_tree_lookup(
+    cache_key: &str,
+    expected_schema_version: i32,
+) -> Result<PathTreeLookup<Vec<u8>>> {
+    let mut conn = open_connection()?;
+    path_tree_get_with_status(
+        &mut conn,
+        cache_key,
+        expected_schema_version,
+        cache_policy(),
+        now_unix_secs,
+    )
+}
+
 fn cache_policy() -> CachePolicy {
     crate::runtime_config::active().map_or_else(CachePolicy::default, |config| config.cache)
 }
@@ -396,31 +453,67 @@ fn path_tree_get(
     policy: CachePolicy,
     clock: impl FnOnce() -> Result<i64>,
 ) -> Result<Option<Vec<u8>>> {
+    path_tree_get_with_status(conn, cache_key, expected_schema_version, policy, clock)
+        .map(PathTreeLookup::into_option)
+}
+
+fn path_tree_get_with_status(
+    conn: &mut Connection,
+    cache_key: &str,
+    expected_schema_version: i32,
+    policy: CachePolicy,
+    clock: impl FnOnce() -> Result<i64>,
+) -> Result<PathTreeLookup<Vec<u8>>> {
     policy.validate()?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let now = clock()?;
     let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
-    // Future timestamps cannot establish freshness after a backwards clock adjustment.
-    let expired = tx.execute(
-        "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2
-         AND (updated_at <= ?3 OR updated_at > ?4)",
-        params![NS_PATH_TREE, cache_key, cutoff, now],
-    )?;
-    let payload = read_blob(&tx, NS_PATH_TREE, cache_key, expected_schema_version)?;
-    if payload.is_some() {
+    let record = read_blob_record(&tx, NS_PATH_TREE, cache_key, Some((cutoff, now)))?;
+    let outcome = if let Some(record) = record {
+        let expiry = if record.updated_at > now {
+            Some(PathTreeMissReason::FutureTimestamp)
+        } else if record.updated_at <= cutoff {
+            Some(PathTreeMissReason::IdleTtl)
+        } else {
+            None
+        };
+        if let Some(reason) = expiry {
+            // Future timestamps cannot establish freshness after a backwards clock adjustment.
+            tx.execute(
+                "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2
+                 AND (updated_at <= ?3 OR updated_at > ?4)",
+                params![NS_PATH_TREE, cache_key, cutoff, now],
+            )?;
+            PathTreeLookup::Miss(reason)
+        } else {
+            validate_blob_record(
+                &tx,
+                NS_PATH_TREE,
+                cache_key,
+                expected_schema_version,
+                record,
+            )?
+        }
+    } else {
+        PathTreeLookup::Miss(PathTreeMissReason::Absent)
+    };
+    if matches!(outcome, PathTreeLookup::Hit(_)) {
         tx.execute(
             "UPDATE blob_store SET updated_at = ?1 WHERE namespace = ?2 AND cache_key = ?3",
             params![now, NS_PATH_TREE, cache_key],
         )?;
     }
     tx.commit()?;
-    if expired > 0 {
+    if matches!(
+        outcome,
+        PathTreeLookup::Miss(PathTreeMissReason::IdleTtl | PathTreeMissReason::FutureTimestamp)
+    ) {
         crate::media_conversion_gate::delivery_runtime_batch_audit(
             "delivery_runtime",
             "SQLITE AUDIT: expired path_tree cache entry removed",
         );
     }
-    Ok(payload)
+    Ok(outcome)
 }
 
 fn read_blob(
@@ -429,32 +522,65 @@ fn read_blob(
     cache_key: &str,
     expected_schema_version: i32,
 ) -> Result<Option<Vec<u8>>> {
-    let row = match conn.query_row(
-        "SELECT schema_version, payload, payload_blake3 FROM blob_store
-             WHERE namespace = ?1 AND cache_key = ?2",
-        params![namespace, cache_key],
-        |row| {
-            Ok((
-                row.get::<_, i32>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-            ))
-        },
-    ) {
-        Ok(v) => v,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(e) => return Err(e.into()),
+    let Some(record) = read_blob_record(conn, namespace, cache_key, None)? else {
+        return Ok(None);
     };
-    let (schema, payload, stored_blake3) = row;
+    validate_blob_record(conn, namespace, cache_key, expected_schema_version, record)
+        .map(PathTreeLookup::into_option)
+}
+
+fn read_blob_record(
+    conn: &Connection,
+    namespace: &str,
+    cache_key: &str,
+    freshness_window: Option<(i64, i64)>,
+) -> Result<Option<BlobRecord>> {
+    let (cutoff, now) = freshness_window.unzip();
+    // Reuse this row fetch for expiry diagnostics without materializing stale payloads.
+    conn.query_row(
+        "SELECT schema_version,
+             CASE WHEN ?3 IS NULL OR (updated_at > ?3 AND updated_at <= ?4) THEN payload END,
+             CASE WHEN ?3 IS NULL OR (updated_at > ?3 AND updated_at <= ?4) THEN payload_blake3 END,
+             updated_at FROM blob_store
+             WHERE namespace = ?1 AND cache_key = ?2",
+        params![namespace, cache_key, cutoff, now],
+        |row| {
+            Ok(BlobRecord {
+                schema: row.get(0)?,
+                payload: row.get(1)?,
+                stored_blake3: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn validate_blob_record(
+    conn: &Connection,
+    namespace: &str,
+    cache_key: &str,
+    expected_schema_version: i32,
+    record: BlobRecord,
+) -> Result<PathTreeLookup<Vec<u8>>> {
+    let BlobRecord {
+        schema,
+        payload,
+        stored_blake3,
+        ..
+    } = record;
+    let payload = payload.context("SQLite eligible record has no payload")?;
+    let stored_blake3 = stored_blake3.context("SQLite eligible record has no payload digest")?;
     let expected_blake3 = blake3::hash(&payload);
     let invalid = if schema != expected_schema_version {
-        Some("schema mismatch")
+        Some((PathTreeMissReason::SchemaMismatch, "schema mismatch"))
     } else if stored_blake3.as_slice() != expected_blake3.as_bytes() {
-        Some("BLAKE3 mismatch")
+        Some((PathTreeMissReason::IntegrityMismatch, "BLAKE3 mismatch"))
     } else {
         None
     };
-    if let Some(reason) = invalid {
+    if let Some((disposition, reason)) = invalid {
         anyhow::ensure!(
             namespace == NS_PATH_TREE,
             "SQLite {namespace} state {reason}; saved record retained, recovery cannot continue"
@@ -471,9 +597,9 @@ fn read_blob(
                 "SQLITE AUDIT: {reason} for reconstructable {namespace} cache (invalid snapshot evicted if unchanged)"
             ),
         );
-        return Ok(None);
+        return Ok(PathTreeLookup::Miss(disposition));
     }
-    Ok(Some(payload))
+    Ok(PathTreeLookup::Hit(payload))
 }
 
 /// Upsert a blob payload with a full BLAKE3 integrity digest.
@@ -669,6 +795,82 @@ pub fn set_test_store_path_for_tests(path: PathBuf) -> TestStoreGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_tree_lookup_reports_exact_miss_reasons_and_failed_mutations() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(dir.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 100,
+            path_tree_ttl_seconds: 10,
+        };
+        for (key, timestamp, schema) in [
+            ("expired", 90, 1),
+            ("future", 101, 1),
+            ("schema", 100, 2),
+            ("digest", 100, 1),
+            ("hit", 99, 1),
+        ] {
+            upsert_blob(&conn, NS_PATH_TREE, key, schema, None, b"cache", timestamp)?;
+            upsert_blob(&conn, NS_CHECKPOINT, key, 1, None, b"state", 0)?;
+        }
+        conn.execute(
+            "UPDATE blob_store SET payload_blake3 = X'00' WHERE namespace = ?1 AND cache_key = 'digest'",
+            [NS_PATH_TREE],
+        )?;
+        for (key, expected) in [
+            ("absent", PathTreeMissReason::Absent),
+            ("expired", PathTreeMissReason::IdleTtl),
+            ("future", PathTreeMissReason::FutureTimestamp),
+            ("schema", PathTreeMissReason::SchemaMismatch),
+            ("digest", PathTreeMissReason::IntegrityMismatch),
+        ] {
+            assert_eq!(
+                path_tree_get_with_status(&mut conn, key, 1, policy, || Ok(100))?,
+                PathTreeLookup::Miss(expected),
+            );
+        }
+        assert_eq!(
+            path_tree_get_with_status(&mut conn, "hit", 1, policy, || Ok(100))?,
+            PathTreeLookup::Hit(b"cache".to_vec()),
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT updated_at FROM blob_store WHERE namespace = ?1 AND cache_key = 'hit'",
+                [NS_PATH_TREE],
+                |row| row.get::<_, i64>(0),
+            )?,
+            100,
+        );
+        for key in ["expired", "future", "schema", "digest", "hit"] {
+            assert_eq!(
+                read_blob(&conn, NS_CHECKPOINT, key, 1)?,
+                Some(b"state".to_vec())
+            );
+        }
+        upsert_blob(&conn, NS_PATH_TREE, "expired", 1, None, b"keep", 0)?;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_lookup_delete BEFORE DELETE ON blob_store
+             WHEN OLD.namespace = 'path_tree' BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END;",
+        )?;
+        assert!(path_tree_get_with_status(&mut conn, "expired", 1, policy, || Ok(100)).is_err());
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "expired", 1)?,
+            Some(b"keep".to_vec())
+        );
+        conn.execute_batch(
+            "DROP TRIGGER reject_lookup_delete;
+             CREATE TRIGGER reject_lookup_touch BEFORE UPDATE ON blob_store
+             WHEN OLD.namespace = 'path_tree' BEGIN SELECT RAISE(ABORT, 'injected touch failure'); END;",
+        )?;
+        assert!(path_tree_get_with_status(&mut conn, "hit", 1, policy, || Ok(101)).is_err());
+        assert_eq!(
+            read_blob(&conn, NS_PATH_TREE, "hit", 1)?,
+            Some(b"cache".to_vec())
+        );
+        Ok(())
+    }
 
     #[test]
     fn explicit_pruning_counts_each_removal_once_and_rolls_back_on_failure() -> Result<()> {

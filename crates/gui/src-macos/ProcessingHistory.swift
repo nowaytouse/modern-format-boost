@@ -3,6 +3,7 @@ import Foundation
 import SQLite3
 import Darwin
 import CoreFoundation
+import UniformTypeIdentifiers
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -28,6 +29,51 @@ private struct HistoryContext: Decodable, Equatable {
     let resume: Bool?
     let no_resume: Bool?
     let output_sequence: Int64?
+    let run_id: String?
+}
+
+private func validHistoryIdentity(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 256 && value.utf8.allSatisfy { (33...126).contains($0) }
+}
+
+private enum HistoryFileFailureError: Error { case invalid }
+
+struct HistoryFileFailure: Codable, Hashable {
+    let schema_version: Int
+    let pipeline: String
+    let source_path: String
+    let absolute_path: String?
+    let message: String
+    let run_id: String
+    let invocation_id: String
+    let reason_code: String?
+
+    static let prefix = "MFB_FILE_FAILURE="
+
+    static func decode(_ line: String) throws -> Self? {
+        guard line.hasPrefix(prefix) else { return nil }
+        let data = Data(line.dropFirst(prefix.count).utf8)
+        guard data.count <= 64 * 1024 - prefix.utf8.count - 1 else { throw HistoryFileFailureError.invalid }
+        guard let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(fields.keys).isSubset(of: ["schema_version", "pipeline", "source_path", "absolute_path", "message", "run_id", "invocation_id", "reason_code"])
+        else { throw HistoryFileFailureError.invalid }
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.schema_version == 1, ["img", "vid"].contains(value.pipeline),
+              validHistoryIdentity(value.run_id), validHistoryIdentity(value.invocation_id),
+              !value.source_path.isEmpty, !value.source_path.contains("\0"),
+              !value.message.isEmpty, !value.message.contains("\0"),
+              value.absolute_path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+              value.reason_code.map(validHistoryIdentity) ?? true else { throw HistoryFileFailureError.invalid }
+        return value
+    }
+
+    fileprivate static func parse(_ line: String, context: HistoryContext, invocations: [HistoryInvocation], pipeline: String) throws -> Self? {
+        guard let value = try decode(line) else { return nil }
+        guard value.pipeline == pipeline.lowercased(), value.run_id == context.run_id,
+              invocations.contains(where: { $0.invocation_id == value.invocation_id && $0.pipeline == value.pipeline && $0.run_id == value.run_id })
+        else { throw HistoryFileFailureError.invalid }
+        return value
+    }
 }
 
 private struct HistoryMedia: Decodable, Equatable {
@@ -233,6 +279,50 @@ private struct HistoryConfigMetadata: Decodable {
     let pipeline: String
     let package_version: String
     let sources: [String: String]
+    let invocation_id: String?
+}
+
+private struct HistoryInvocation: Codable {
+    struct Binary: Codable {
+        let scope: String
+        let bytes: UInt64?
+        let blake3: String?
+        let diagnostic: String?
+
+        var valid: Bool {
+            guard scope == "observed_before_launch" else { return false }
+            if let bytes, let blake3 {
+                return bytes <= UInt64(Int64.max) && diagnostic == nil && blake3.utf8.count == 64
+                    && blake3.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            }
+            return bytes == nil && blake3 == nil && diagnostic.map { !$0.isEmpty && $0.utf8.count <= 4096 } == true
+        }
+    }
+    let schema_version: Int
+    let invocation_id: String
+    let run_id: String?
+    let pipeline: String
+    let state: String
+    let program_requested: String
+    let program_path: String?
+    let arguments: [String]
+    let binary: Binary
+
+    var valid: Bool {
+        guard schema_version == 1, !invocation_id.isEmpty, invocation_id.utf8.count <= 256,
+              run_id.map(validHistoryIdentity) ?? true,
+              invocation_id.rangeOfCharacter(from: .controlCharacters) == nil,
+              ["img", "vid", "cmd"].contains(pipeline), state == "launch_requested",
+              !program_requested.isEmpty, program_requested.utf8.count <= 32 * 1024, !program_requested.contains("\0"),
+              program_path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+              arguments.count <= 4096, binary.valid, program_path != nil || binary.blake3 == nil else { return false }
+        var bytes = 0
+        for argument in arguments {
+            guard !argument.contains("\0"), argument.utf8.count <= 256 * 1024 - bytes else { return false }
+            bytes += argument.utf8.count
+        }
+        return true
+    }
 }
 
 private struct HistoryRecord: Decodable {
@@ -255,6 +345,9 @@ private struct HistoryEntry {
     var configInvocationCount = 0
     var configMarkerSeen = false
     var configEvidenceInvalid = false
+    var invocations: [HistoryInvocation] = []
+    var invocationConfigs: [String: HistoryConfigSnapshot] = [:]
+    var invocationEvidenceInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -264,6 +357,10 @@ private struct HistoryEntry {
     var outputUpperSequence: Int64?
 
     var hasStoredOutput: Bool { audit.lastPathComponent == "history.sqlite3" && context?.output_sequence != nil }
+    var outputEndSource: String {
+        if finished?.output_sequence != nil { return "terminal_boundary" }
+        return outputUpperSequence != nil ? "next_batch_boundary" : "snapshot_only"
+    }
     var isRestoreJpeg: Bool { context?.mode == "restore-jpeg" }
     var modeLabel: String? { isRestoreJpeg ? localized("operation.restore_jpeg") : context?.mode }
 
@@ -447,6 +544,25 @@ private enum HistoryStore {
             let sequence: Int64
             let text: String
             let diagnostic: Bool
+            let pipeline: String?
+            let line: String?
+        }
+        struct DiagnosticGroup {
+            let pipeline: String?
+            let phase: String?
+            let severity: String
+            let message: String
+            var count: Int
+            let firstSequence: Int64
+            var lastSequence: Int64
+            let firstOriginal: String
+            var lastOriginal: String
+        }
+        private struct DiagnosticKey: Hashable {
+            let pipeline: String?
+            let phase: String?
+            let severity: String
+            let message: String
         }
         let rows: [Row]
         let total: Int64
@@ -457,6 +573,90 @@ private enum HistoryStore {
         var shown: Int { rows.count }
         var hasOlder: Bool { shown > 0 && firstOrdinal > 1 }
         var hasNewer: Bool { shown > 0 && firstOrdinal + Int64(shown) - 1 < total }
+        var diagnosticGroups: [DiagnosticGroup] {
+            var accumulator = DiagnosticAccumulator()
+            for row in rows { accumulator.ingest(row) }
+            return accumulator.groups
+        }
+
+        struct DiagnosticAccumulator {
+            private var phases: [String: PhaseLogPresentation] = [:]
+            private var indices: [DiagnosticKey: Int] = [:]
+            private(set) var groups: [DiagnosticGroup] = []
+            private(set) var retainedBytes = 0
+            private(set) var occurrences = 0
+            private(set) var invalidPhaseSeen = false
+
+            mutating func ingest(_ row: Row) {
+                var invalidPhase = false
+                if row.line == nil {
+                    if let pipeline = row.pipeline { phases[pipeline] = PhaseLogPresentation(now: 0) }
+                    else { phases.removeAll() }
+                }
+                if let pipeline = row.pipeline, let line = row.line {
+                    var state = phases[pipeline] ?? PhaseLogPresentation(now: 0)
+                    if let update = state.ingest(line, now: 0) {
+                        if update == .invalid {
+                            state = PhaseLogPresentation(now: 0)
+                            invalidPhase = true
+                            invalidPhaseSeen = true
+                        }
+                        phases[pipeline] = state
+                        if !invalidPhase { return }
+                    }
+                }
+                guard row.diagnostic || invalidPhase else { return }
+                let phase = row.pipeline.flatMap { phases[$0]?.phase?.rawValue }
+                let message = invalidPhase ? localized("log.phase.invalid") + "\n" + (row.line ?? row.text)
+                    : row.line.map(LogTone.message) ?? row.text
+                let severity = invalidPhase ? "warning" : row.line.map {
+                    LogTone.classify($0) == .warning ? "warning" : "failure"
+                } ?? "unreadable"
+                let key = DiagnosticKey(pipeline: row.pipeline, phase: phase, severity: severity, message: message)
+                if let index = indices[key] {
+                    groups[index].count += 1
+                    groups[index].lastSequence = row.sequence
+                    retainedBytes += row.text.utf8.count - groups[index].lastOriginal.utf8.count
+                    groups[index].lastOriginal = row.text
+                } else {
+                    indices[key] = groups.count
+                    groups.append(DiagnosticGroup(pipeline: row.pipeline, phase: phase, severity: severity,
+                        message: message, count: 1, firstSequence: row.sequence, lastSequence: row.sequence,
+                        firstOriginal: row.text, lastOriginal: row.text))
+                    retainedBytes += message.utf8.count + row.text.utf8.count * 2
+                        + (row.pipeline?.utf8.count ?? 0) + (phase?.utf8.count ?? 0)
+                }
+                occurrences += 1
+            }
+        }
+    }
+
+    struct BatchIssues {
+        let groups: [Output.DiagnosticGroup]
+        let occurrences: Int
+        let fileFailures: [HistoryFileFailure]
+        let scannedRows: Int64
+        let start: Int64
+        let upper: Int64
+        let endSource: String
+    }
+
+    final class IssueScanControl {
+        private let lock = NSLock()
+        private var cancelled = false
+        private let deadline = ProcessInfo.processInfo.systemUptime + 15
+
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+        var shouldInterrupt: Bool { isCancelled || ProcessInfo.processInfo.systemUptime >= deadline }
+        func check() throws {
+            if isCancelled { throw HostError(message: localized("history.batch_issues.cancelled")) }
+            if shouldInterrupt { throw HostError(message: localized("history.batch_issues.limit")) }
+        }
     }
 
     enum OutputDirection { case older, newer }
@@ -500,6 +700,7 @@ private enum HistoryStore {
         var current = HistoryEntry(id: stamp + ":0", stamp: stamp, audit: audit, timestamp: stamp)
         var hasContext = false
         var sawRecord = false
+        var runIDs: Set<String> = []
         let decoder = JSONDecoder()
         func decode<T: Decodable>(_ type: T.Type, from event: String, prefix: String) throws -> T {
             try decoder.decode(type, from: Data(event.dropFirst(prefix.count).utf8))
@@ -542,10 +743,25 @@ private enum HistoryStore {
             if !sawRecord { current.timestamp = record.ts; sawRecord = true }
             let event = record.event
             do {
+                if event.hasPrefix("MFB_HISTORY_"), !event.hasPrefix("MFB_HISTORY_CONTEXT=") {
+                    guard let separator = event.firstIndex(of: "="),
+                          let payload = try JSONSerialization.jsonObject(with: Data(event[event.index(after: separator)...].utf8)) as? [String: Any]
+                    else { throw HistoryParseError.invalid }
+                    let identity = payload["run_id"]
+                    if let expected = current.context?.run_id {
+                        guard identity as? String == expected else { throw HistoryParseError.invalid }
+                    } else if let identity, !(identity is NSNull) {
+                        throw HistoryParseError.invalid
+                    }
+                }
                 if event.hasPrefix("MFB_HISTORY_CONTEXT=") {
                     let context = try decode(HistoryContext.self, from: event, prefix: "MFB_HISTORY_CONTEXT=")
                     guard context.schema_version == 1, !context.mode.isEmpty,
-                          context.output_sequence.map({ $0 >= 0 }) ?? true else { throw HistoryParseError.invalid }
+                          context.output_sequence.map({ $0 >= 0 }) ?? true,
+                          context.run_id.map(validHistoryIdentity) ?? true else { throw HistoryParseError.invalid }
+                    if let identity = context.run_id {
+                        guard runIDs.insert(identity).inserted else { throw HistoryParseError.invalid }
+                    }
                     if hasContext {
                         guard entries.count < maximumEntriesPerSession - 1 else {
                             current.issues.append(localized("history.issue.entry_limit"))
@@ -617,12 +833,30 @@ private enum HistoryStore {
                 } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
                     current.configMarkerSeen = true
                     let snapshot = try decodeConfig(event)
+                    let metadata = try decode(HistoryConfigMetadata.self, from: event, prefix: "MFB_HISTORY_CONFIG=")
+                    if let id = metadata.invocation_id {
+                        guard let invocation = current.invocations.first(where: { $0.invocation_id == id }),
+                              invocation.pipeline == snapshot.pipeline, current.invocationConfigs[id] == nil,
+                              !current.invocationEvidenceInvalid else { throw HistoryParseError.invalid }
+                        current.invocationConfigs[id] = snapshot
+                    } else {
+                        let object = try JSONSerialization.jsonObject(with: Data(event.dropFirst("MFB_HISTORY_CONFIG=".count).utf8)) as? [String: Any]
+                        guard object?["invocation_id"] == nil, current.invocations.isEmpty else { throw HistoryParseError.invalid }
+                    }
                     current.configInvocationCount += 1
                     if !current.configSet.contains(snapshot) {
                         guard current.configSnapshots.count < maximumConfigSnapshots else { throw HistoryParseError.invalid }
                         current.configSet.insert(snapshot)
                         current.configSnapshots.append(snapshot)
                     }
+                } else if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
+                    let invocation = try decode(HistoryInvocation.self, from: event, prefix: "MFB_HISTORY_INVOCATION=")
+                    guard current.context != nil, current.finished == nil, invocation.valid,
+                          current.invocations.count < 1000, !current.invocationEvidenceInvalid,
+                          !current.invocations.contains(where: { $0.invocation_id == invocation.invocation_id }) else {
+                        throw HistoryParseError.invalid
+                    }
+                    current.invocations.append(invocation)
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -649,6 +883,12 @@ private enum HistoryStore {
                 }
             } catch {
                 if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
+                if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
+                    current.invocations.removeAll()
+                    current.invocationConfigs.removeAll()
+                    current.invocationEvidenceInvalid = true
+                    current.contradictoryFields.insert("invocation")
+                }
                 if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     current.summary = nil
                     current.contradictoryFields.insert("summary")
@@ -720,7 +960,7 @@ private enum HistoryStore {
         return text
     }
 
-    private static func databasePath(_ url: URL) throws -> String {
+    fileprivate static func databasePath(_ url: URL) throws -> String {
         // Foundation preserves the /var alias; SQLite NOFOLLOW needs the real parent.
         let parent = url.deletingLastPathComponent().withUnsafeFileSystemRepresentation { path -> String? in
             guard let path, let resolved = realpath(path, nil) else { return nil }
@@ -794,14 +1034,18 @@ private enum HistoryStore {
             let sequence = sqlite3_column_int64(query, 0)
             var text: String
             var diagnostic = false
+            var pipeline: String?
+            var line: String?
             do {
                 let ts = try databaseText(query, 1, database: database)
-                let pipeline = try databaseText(query, 2, database: database)
-                let line = try databaseText(query, 3, database: database)
-                text = "[\(ts)] \(pipeline): \(line)"
-                let tone = LogTone.classify(line)
+                let rawPipeline = try databaseText(query, 2, database: database)
+                pipeline = rawPipeline
+                let rawLine = try databaseText(query, 3, database: database)
+                text = "[\(ts)] \(rawPipeline): \(rawLine)"
+                let tone = LogTone.classify(rawLine)
                 diagnostic = tone == .warning || tone == .failure
                 if text.utf8.count + 1 > maximumOutputBytes { throw HistoryParseError.invalid }
+                line = rawLine
             } catch {
                 text = localized("history.output.row_issue", sequence)
                 issues.append(text)
@@ -810,7 +1054,7 @@ private enum HistoryStore {
             let size = text.utf8.count + 1
             guard size <= maximumOutputBytes - bytes else { break }
             bytes += size
-            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic))
+            rows.append(Output.Row(sequence: sequence, text: text, diagnostic: diagnostic, pipeline: pipeline, line: line))
         }
         if !ascending { rows.reverse() }
         var ordinal: Int64 = 0
@@ -823,6 +1067,308 @@ private enum HistoryStore {
         }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
         return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
+    }
+
+    static func batchIssues(for selected: HistoryEntry, control: IssueScanControl = IssueScanControl()) throws -> BatchIssues {
+        try control.check()
+        guard selected.hasStoredOutput, let selectedContext = selected.context,
+              let start = selectedContext.output_sequence, start >= 0, regularFile(selected.audit) else {
+            throw HostError(message: localized("history.batch_issues.invalid"))
+        }
+        let path = try databasePath(selected.audit)
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let database = handle else {
+            let error = databaseError(handle)
+            if let handle { sqlite3_close(handle) }
+            throw error
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
+        sqlite3_progress_handler(database, 1_000, { pointer in
+            guard let pointer else { return 1 }
+            return Unmanaged<IssueScanControl>.fromOpaque(pointer).takeUnretainedValue().shouldInterrupt ? 1 : 0
+        }, Unmanaged.passUnretained(control).toOpaque())
+        defer { sqlite3_progress_handler(database, 0, nil, nil) }
+        guard sqlite3_busy_timeout(database, 1_000) == SQLITE_OK,
+              sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else {
+            try control.check()
+            throw databaseError(database)
+        }
+        let version = try statement(database, "PRAGMA user_version")
+        defer { sqlite3_finalize(version) }
+        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else {
+            try control.check()
+            throw databaseError(database, "unsupported output schema")
+        }
+        var bytes = 0
+        var limited = false
+        let audit = try databaseAudit(database, stamp: selected.stamp, url: selected.audit, readBytes: &bytes, limited: &limited)
+        try control.check()
+        guard !limited else { throw HostError(message: localized("history.batch_issues.limit")) }
+        guard let entry = audit.entries.first(where: { $0.id == selected.id && $0.context == selectedContext }),
+              entry.issues.isEmpty, entry.contradictoryFields.isEmpty, !entry.legacy else {
+            throw HostError(message: localized("history.batch_issues.invalid"))
+        }
+        let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
+        defer { sqlite3_finalize(maximum) }
+        guard selected.stamp.withCString({ sqlite3_bind_text(maximum, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(maximum) == SQLITE_ROW, sqlite3_column_type(maximum, 0) == SQLITE_INTEGER else {
+            try control.check()
+            throw databaseError(database)
+        }
+        let snapshotEnd = sqlite3_column_int64(maximum, 0)
+        let knownEnd = entry.finished?.output_sequence ?? entry.outputUpperSequence
+        let end = knownEnd ?? max(start, snapshotEnd)
+        guard end >= start, knownEnd.map({ $0 == start || snapshotEnd >= $0 }) ?? true,
+              entry.outputUpperSequence.map({ $0 >= start && end <= $0 }) ?? true else {
+            throw HostError(message: localized("history.batch_issues.invalid"))
+        }
+        func bind(_ query: OpaquePointer) throws {
+            guard selected.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+                  sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
+                throw databaseError(database)
+            }
+        }
+        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+        defer { sqlite3_finalize(count) }
+        try bind(count)
+        guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER else {
+            try control.check()
+            throw databaseError(database)
+        }
+        let total = sqlite3_column_int64(count, 0)
+        guard total >= 0, total <= Int64(maximumRecordsPerSession) else { throw HostError(message: localized("history.batch_issues.limit")) }
+        let columns = ["ts", "pipeline", "line"].map {
+            "CASE WHEN typeof(\($0))='text' AND length(CAST(\($0) AS BLOB))<=\(maximumOutputBytes) THEN \($0) ELSE NULL END"
+        }.joined(separator: ", ")
+        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence")
+        defer { sqlite3_finalize(query) }
+        try bind(query)
+        var accumulator = Output.DiagnosticAccumulator()
+        var fileFailures: [HistoryFileFailure] = []
+        var failureBytes = 0
+        var scanned: Int64 = 0
+        var previous = start
+        while true {
+            try control.check()
+            let result = sqlite3_step(query)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { try control.check(); throw databaseError(database) }
+            let sequence = sqlite3_column_int64(query, 0)
+            guard sqlite3_column_type(query, 0) == SQLITE_INTEGER, sequence > previous, sequence <= end else {
+                throw HostError(message: localized("history.batch_issues.invalid"))
+            }
+            let length = (1...3).reduce(0) { $0 + Int(sqlite3_column_bytes(query, Int32($1))) }
+            guard length <= maximumOutputBytes, length <= maximumScanBytes - bytes else {
+                throw HostError(message: localized("history.batch_issues.limit"))
+            }
+            let timestamp = try databaseText(query, 1, database: database)
+            let pipeline = try databaseText(query, 2, database: database)
+            let line = try databaseText(query, 3, database: database)
+            guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.batch_issues.invalid")) }
+            do {
+                if let failure = try HistoryFileFailure.parse(line, context: selectedContext, invocations: entry.invocations, pipeline: pipeline) {
+                    guard fileFailures.count < 4_096, length <= maximumOutputBytes - failureBytes else {
+                        throw HostError(message: localized("history.batch_issues.limit"))
+                    }
+                    fileFailures.append(failure)
+                    failureBytes += length
+                }
+            } catch let error as HostError { throw error }
+            catch { throw HostError(message: localized("history.batch_issues.invalid")) }
+            let tone = LogTone.classify(line)
+            accumulator.ingest(Output.Row(sequence: sequence, text: "[\(timestamp)] \(pipeline): \(line)",
+                diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line))
+            guard !accumulator.invalidPhaseSeen else { throw HostError(message: localized("history.batch_issues.invalid")) }
+            guard accumulator.groups.count <= 4_096, accumulator.retainedBytes <= maximumOutputBytes - failureBytes else {
+                throw HostError(message: localized("history.batch_issues.limit"))
+            }
+            bytes += length
+            scanned += 1
+            previous = sequence
+        }
+        try control.check()
+        guard scanned == total else { throw HostError(message: localized("history.batch_issues.invalid")) }
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            try control.check()
+            throw databaseError(database)
+        }
+        return BatchIssues(groups: accumulator.groups, occurrences: accumulator.occurrences,
+            fileFailures: fileFailures, scannedRows: scanned, start: start, upper: end, endSource: entry.outputEndSource)
+    }
+
+    static func diagnosticArtifact(for selected: HistoryEntry) throws -> Data {
+        guard selected.hasStoredOutput, let selectedContext = selected.context,
+              let start = selectedContext.output_sequence, regularFile(selected.audit) else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let path = try databasePath(selected.audit)
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let database = handle else {
+            let error = databaseError(handle)
+            if let handle { sqlite3_close(handle) }
+            throw error
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
+        guard sqlite3_busy_timeout(database, 1_000) == SQLITE_OK,
+              sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        let version = try statement(database, "PRAGMA user_version")
+        defer { sqlite3_finalize(version) }
+        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else { throw databaseError(database, "unsupported output schema") }
+        var bytes = 0
+        var limited = false
+        let audit = try databaseAudit(database, stamp: selected.stamp, url: selected.audit, readBytes: &bytes, limited: &limited)
+        guard !limited else { throw HostError(message: localized("history.export.limit")) }
+        guard let entry = audit.entries.first(where: { $0.id == selected.id && $0.context == selectedContext }),
+               entry.issues.isEmpty, entry.contradictoryFields.isEmpty, !entry.configEvidenceInvalid, !entry.invocationEvidenceInvalid,
+              !entry.legacy, let context = entry.context else { throw HostError(message: localized("history.export.invalid")) }
+        let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
+        defer { sqlite3_finalize(maximum) }
+        guard selected.stamp.withCString({ sqlite3_bind_text(maximum, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(maximum) == SQLITE_ROW, sqlite3_column_type(maximum, 0) == SQLITE_INTEGER else { throw databaseError(database) }
+        let snapshotEnd = sqlite3_column_int64(maximum, 0)
+        let knownEnd = entry.finished?.output_sequence ?? entry.outputUpperSequence
+        let end = knownEnd ?? snapshotEnd
+        guard start >= 0, end >= start, snapshotEnd >= end,
+              entry.outputUpperSequence.map({ $0 >= start && end <= $0 }) ?? true else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let query = try statement(database, "SELECT sequence, ts, pipeline, line FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence LIMIT \(maximumRecordsPerSession + 1)")
+        defer { sqlite3_finalize(query) }
+        guard selected.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else { throw databaseError(database) }
+        var retained: [[String: Any]] = []
+        var total = 0
+        var diagnosticCount = 0
+        var phaseCount = 0
+        var activityCount = 0
+        var fileFailureCount = 0
+        var phases: [String: PhaseLogPresentation] = [:]
+        var activities: [String: GateCheckActivity] = [:]
+        while true {
+            let result = sqlite3_step(query)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw databaseError(database) }
+            guard total < maximumRecordsPerSession else { throw HostError(message: localized("history.export.limit")) }
+            let sequence = sqlite3_column_int64(query, 0)
+            guard sqlite3_column_type(query, 0) == SQLITE_INTEGER, sequence > start, sequence <= end else { throw HostError(message: localized("history.export.invalid")) }
+            let length = (1...3).reduce(0) { $0 + Int(sqlite3_column_bytes(query, Int32($1))) }
+            guard length <= maximumOutputBytes, length <= maximumScanBytes - bytes else { throw HostError(message: localized("history.export.limit")) }
+            bytes += length
+            total += 1
+            let timestamp = try databaseText(query, 1, database: database)
+            let pipeline = try databaseText(query, 2, database: database)
+            let line = try databaseText(query, 3, database: database)
+            guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.export.invalid")) }
+            do {
+                if let failure = try HistoryFileFailure.parse(line, context: context, invocations: entry.invocations, pipeline: pipeline) {
+                    fileFailureCount += 1
+                    retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                        "kind": "file_failure_observation", "observation": try JSONSerialization.jsonObject(with: JSONEncoder().encode(failure))])
+                    continue
+                }
+            } catch { throw HostError(message: localized("history.export.invalid")) }
+            let normalized = LogTone.message(line)
+            var phase = phases[pipeline] ?? PhaseLogPresentation(now: 0)
+            if let update = phase.ingest(normalized, now: 0) {
+                guard update != .invalid else { throw HostError(message: localized("history.export.invalid")) }
+                phases[pipeline] = phase
+                if phase.phase == .processing { activities[pipeline] = nil }
+                phaseCount += 1
+                retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                    "normalized_message": normalized, "kind": "phase", "phase": phase.phase?.rawValue as Any? ?? NSNull()])
+            } else {
+                var activity = activities[pipeline] ?? GateCheckActivity()
+                if activity.ingest(normalized, now: 0) {
+                    guard !activity.invalid else { throw HostError(message: localized("history.export.invalid")) }
+                    activities[pipeline] = activity
+                    activityCount += 1
+                    retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                        "normalized_message": normalized, "kind": "verification_activity",
+                        "phase": phases[pipeline]?.phase?.rawValue as Any? ?? NSNull()])
+                    continue
+                }
+                let tone = LogTone.classify(line)
+                guard tone == .warning || tone == .failure else { continue }
+                diagnosticCount += 1
+                retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                    "normalized_message": normalized, "kind": tone == .warning ? "warning" : "error",
+                    "phase": phases[pipeline]?.phase?.rawValue as Any? ?? NSNull()])
+            }
+        }
+        func nullable<T>(_ value: T?) -> Any { value.map { $0 as Any } ?? NSNull() }
+        func media(_ value: HistoryMedia) -> [String: Any] {
+            ["active": value.active, "succeeded": nullable(value.succeeded), "skipped": nullable(value.skipped),
+             "ignored": nullable(value.ignored), "failed": nullable(value.failed), "unprocessed": nullable(value.unprocessed),
+             "exit_code": nullable(value.exit_code)]
+        }
+        func verification(_ value: HistoryVerification) -> [String: Any] {
+            ["schema_version": value.schema_version, "has_warnings": value.has_warnings, "issue_count": value.issue_count,
+             "source_count": value.source_count, "optimized_count": value.optimized_count, "skipped_count": value.skipped_count,
+             "failed_count": value.failed_count, "source_remaining_count": value.source_remaining_count,
+             "verified_deleted_count": value.verified_deleted_count, "count_status": nullable(value.count_status),
+             "source_path": nullable(value.source_path), "output_path": nullable(value.output_path)]
+        }
+        let contextObject: [String: Any] = ["schema_version": context.schema_version, "inputs": context.inputs,
+            "output": nullable(context.output), "backup": nullable(context.backup), "mode": context.mode,
+            "dry_run": context.dry_run, "in_place": context.in_place, "shortest_path": context.shortest_path,
+            "version": nullable(context.version), "retry": nullable(context.retry), "resume": nullable(context.resume),
+            "no_resume": nullable(context.no_resume), "output_sequence": nullable(context.output_sequence), "run_id": nullable(context.run_id)]
+        let summaryObject: [String: Any]? = entry.summary.map { value in
+            ["schema_version": value.schema_version, "count_scope": value.count_scope, "img": media(value.img), "vid": media(value.vid),
+             "integrity": ["state": nullable(value.integrity.state), "issue_count": nullable(value.integrity.issue_count)],
+             "failed_files": value.failed_files, "skipped_files": value.skipped_files, "size_invalid": value.sizeInvalid,
+             "size": nullable(value.size.map { ["scope": $0.scope, "input_bytes": nullable($0.input_bytes), "output_bytes": nullable($0.output_bytes)] })]
+        }
+        let finishedObject: [String: Any]? = entry.finished.map {
+            ["schema_version": $0.schema_version, "outcome": $0.outcome, "error": nullable($0.error), "output_sequence": nullable($0.output_sequence)]
+        }
+        let configurations: [[String: Any]] = try entry.configSnapshots.map {
+            ["pipeline": $0.pipeline, "package_version": $0.packageVersion,
+             "config": try JSONSerialization.jsonObject(with: Data($0.values.utf8)),
+             "sources": try JSONSerialization.jsonObject(with: Data($0.sources.utf8))]
+        }
+        let launches: [[String: Any]] = try entry.invocations.map { invocation in
+            guard var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(invocation)) as? [String: Any] else {
+                throw HostError(message: localized("history.export.invalid"))
+            }
+            object["program_path"] = nullable(invocation.program_path)
+            object["binary"] = ["scope": invocation.binary.scope, "bytes": nullable(invocation.binary.bytes),
+                "blake3": nullable(invocation.binary.blake3), "diagnostic": nullable(invocation.binary.diagnostic)]
+            if let config = entry.invocationConfigs[invocation.invocation_id] {
+                object["configuration"] = ["pipeline": config.pipeline, "package_version": config.packageVersion,
+                    "config": try JSONSerialization.jsonObject(with: Data(config.values.utf8)),
+                    "sources": try JSONSerialization.jsonObject(with: Data(config.sources.utf8))]
+            } else { object["configuration"] = NSNull() }
+            return object
+        }
+        let plan: [String: Any]? = entry.inputPlan.map {
+            ["schema_version": $0.schema_version, "inputs": $0.inputs.map {
+                ["source": $0.source, "output": nullable($0.output), "in_place": $0.in_place, "requires_verification": $0.requires_verification]
+            }]
+        }
+        let artifact: [String: Any] = ["schema_version": 2, "artifact_kind": "mfb_selected_run_diagnostic",
+            "authoritative_state": false, "full_run_manifest": false,
+            "exported_at": ISO8601DateFormatter().string(from: Date()), "session_id": entry.stamp,
+            "history_entry_id": entry.id, "run_id": nullable(context.run_id),
+            "scope": ["output_start_exclusive": start, "output_end_inclusive": end, "known_end_sequence": nullable(knownEnd),
+                "end_source": entry.outputEndSource,
+                "total_output_rows": total, "retained_output_rows": retained.count, "diagnostic_log_rows": diagnosticCount,
+                "phase_control_rows": phaseCount, "verification_activity_rows": activityCount, "file_failure_observation_rows": fileFailureCount,
+                "omitted_non_diagnostic_output_rows": total - retained.count,
+                "scan_complete": true, "count_scope": "log_records_not_files", "contains_local_paths_and_diagnostics": true],
+            "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
+            "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
+            "worker_launches": launches.isEmpty ? NSNull() : launches,
+            "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
+            "input_verifications": entry.inputVerifications.mapValues(verification), "records": retained]
+        let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
+        guard data.count <= maximumScanBytes else { throw HostError(message: localized("history.export.limit")) }
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        return data
     }
 
     private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
@@ -1089,6 +1635,9 @@ private enum HistoryStore {
                         entry.configSet = []
                         entry.configInvocationCount = 0
                         entry.configMarkerSeen = true
+                        entry.invocations = []
+                        entry.invocationConfigs = [:]
+                        entry.invocationEvidenceInvalid = true
                         entry.finished = nil
                         entry.issues.append(localized("history.issue.conflicting_copies"))
                     }
@@ -1103,6 +1652,116 @@ private enum HistoryStore {
     private enum HistoryParseError: Error { case invalid }
 }
 
+private final class HistoryDiagnosticStaging {
+    private let directory: Int32
+    private let parent: URL
+    private let temporaryName: String
+    private let destinationName: String
+    private var pending = true
+
+    private init(directory: Int32, parent: URL, temporaryName: String, destinationName: String) {
+        self.directory = directory
+        self.parent = parent
+        self.temporaryName = temporaryName
+        self.destinationName = destinationName
+    }
+
+    private static func ioError(_ operation: String) -> NSError {
+        let code = errno
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code),
+            userInfo: [NSLocalizedDescriptionKey: operation + ": " + String(cString: strerror(code))])
+    }
+
+    private static func rejectGitWorkspace(_ parent: URL) throws {
+        var ancestor = parent
+        while true {
+            var info = stat()
+            if lstat(ancestor.appendingPathComponent(".git").path, &info) == 0 {
+                throw HostError(message: localized("history.export.workspace"))
+            }
+            guard errno == ENOENT else { throw ioError("inspect diagnostic export workspace") }
+            if ancestor.path == "/" { return }
+            ancestor.deleteLastPathComponent()
+        }
+    }
+
+    static func prepare(_ data: Data, destination: URL) throws -> HistoryDiagnosticStaging {
+        guard destination.isFileURL, destination.path.hasPrefix("/"), !destination.path.contains("\0"),
+              !["", ".", ".."].contains(destination.lastPathComponent), !data.isEmpty else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let parent = URL(fileURLWithPath: try HistoryStore.databasePath(destination)).deletingLastPathComponent()
+        try rejectGitWorkspace(parent)
+        let directory = Darwin.open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard directory >= 0 else { throw ioError("open export directory") }
+        let name = destination.lastPathComponent
+        var existing = stat()
+        if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+            Darwin.close(directory)
+            throw HostError(message: localized("history.export.exists"))
+        }
+        guard errno == ENOENT else {
+            let error = ioError("inspect export destination")
+            Darwin.close(directory)
+            throw error
+        }
+        let temporaryName = ".mfb-diagnostic-" + UUID().uuidString + ".tmp"
+        var file = openat(directory, temporaryName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        guard file >= 0 else {
+            let error = ioError("create export staging file")
+            Darwin.close(directory)
+            throw error
+        }
+        let staging = HistoryDiagnosticStaging(directory: directory, parent: parent, temporaryName: temporaryName, destinationName: name)
+        defer {
+            if file >= 0, Darwin.close(file) != 0 { fputs("MFB: failed to close diagnostic staging file\n", stderr) }
+        }
+        try data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { throw HostError(message: localized("history.export.invalid")) }
+            var written = 0
+            while written < buffer.count {
+                let count = Darwin.write(file, base.advanced(by: written), buffer.count - written)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { throw ioError("write diagnostic staging file") }
+                written += count
+            }
+        }
+        guard fsync(file) == 0 else { throw ioError("flush diagnostic staging file") }
+        let descriptor = file
+        file = -1
+        guard Darwin.close(descriptor) == 0 else { throw ioError("close diagnostic staging file") }
+        return staging
+    }
+
+    func publish() throws {
+        guard pending else { throw HostError(message: localized("history.export.invalid")) }
+        try Self.rejectGitWorkspace(parent)
+        var opened = stat()
+        var current = stat()
+        guard fstat(directory, &opened) == 0, lstat(parent.path, &current) == 0,
+              current.st_mode & S_IFMT == S_IFDIR, opened.st_dev == current.st_dev, opened.st_ino == current.st_ino else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        guard renameatx_np(directory, temporaryName, directory, destinationName, UInt32(RENAME_EXCL)) == 0 else {
+            if errno == EEXIST { throw HostError(message: localized("history.export.exists")) }
+            throw Self.ioError("publish diagnostic export")
+        }
+        pending = false
+    }
+
+    func discard() throws {
+        guard pending else { return }
+        guard unlinkat(directory, temporaryName, 0) == 0 || errno == ENOENT else { throw Self.ioError("remove diagnostic staging file") }
+        pending = false
+    }
+
+    deinit {
+        do { try discard() }
+        catch { fputs("MFB: diagnostic staging cleanup failed: \(error.localizedDescription)\n", stderr) }
+        if Darwin.close(directory) != 0 { fputs("MFB: failed to close diagnostic export directory\n", stderr) }
+    }
+}
+
 private final class HistoryResultCell: NSTableCellView {
     var resultColor: NSColor = .labelColor {
         didSet { updateTextColor() }
@@ -1115,12 +1774,12 @@ private final class HistoryResultCell: NSTableCellView {
     }
 }
 
-final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
-    private let detailMode = NSSegmentedControl(labels: ["", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let detailMode = NSSegmentedControl(labels: ["", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let failedTable = NSTableView()
     private let failedSearch = NSSearchField()
@@ -1129,12 +1788,21 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var failedCopyButton = NSButton()
     private var failedRevealButton = NSButton()
     private var failedPaths: [String] = []
+    private struct FailureDisplayRow {
+        let path: String
+        let absolutePath: String?
+        let reason: String
+    }
+    private var failureDisplayRows: [FailureDisplayRow] = []
     private var detailScroll = NSScrollView()
     private var outputNavigation = NSStackView()
     private var olderButton = NSButton()
     private var newerButton = NSButton()
     private var outputPage: HistoryStore.Output?
     private var outputLoading = false
+    private var batchIssueResult: HistoryStore.BatchIssues?
+    private var issueScanControl: HistoryStore.IssueScanControl?
+    private var issueGeneration = UUID()
     private let status = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
     private let splitController = NSSplitViewController()
@@ -1143,11 +1811,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var logButton = NSButton()
     private var revealButton = NSButton()
     private var copyButton = NSButton()
+    private var exportButton = NSButton()
     private var entries: [HistoryEntry] = []
     private var displayed: [HistoryEntry] = []
     private var directory: URL
     private var generation = UUID()
     private var outputGeneration = UUID()
+    private var exportGeneration = UUID()
+    private var exportBusy = false
     private var loadIssues: [String] = []
     private var limited = false
     private var initialDividerConfigured = false
@@ -1161,6 +1832,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         super.init(window: window)
         window.minSize = NSSize(width: 780, height: 440)
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setFrameAutosaveName("MFBProcessingHistory")
         buildInterface()
     }
@@ -1184,6 +1856,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func refresh(directory: URL) {
+        exportGeneration = UUID()
+        exportBusy = false
         resetOutput()
         self.directory = directory
         let token = UUID()
@@ -1298,6 +1972,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         listItem.holdingPriority = .defaultLow
         let detailController = NSViewController()
         detailMode.selectedSegment = 0
+        detailMode.controlSize = .small
+        detailMode.font = HistoryLayout.smallFont
         detailMode.target = self
         detailMode.action = #selector(detailModeChanged)
         outputFilter.selectedSegment = 0
@@ -1341,6 +2017,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         logButton = iconButton("doc.text", key: "history.open_log", action: #selector(openLog))
         revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit))
         copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
+        exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -1348,7 +2025,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, progress, status])
+        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -1367,7 +2044,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedTable.allowsEmptySelection = true
         let path = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("failedPath"))
         path.minWidth = 100
+        path.width = 180
         failedTable.addTableColumn(path)
+        let reason = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("failedReason"))
+        reason.minWidth = 130
+        reason.width = 230
+        failedTable.addTableColumn(reason)
         failedTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -1416,17 +2098,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setLabel(localized("history.summary"), forSegment: 0)
         detailMode.setLabel(localized("history.output.title"), forSegment: 1)
         detailMode.setLabel(localized("history.failed_files"), forSegment: 2)
+        detailMode.setLabel(localized("history.batch_issues.tab"), forSegment: 3)
         detailMode.setAccessibilityLabel(localized("history.details"))
         failedSearch.placeholderString = localized("history.failed_files.search")
         failedSearch.setAccessibilityLabel(localized("history.failed_files.search"))
         failedTable.setAccessibilityLabel(localized("history.failed_files"))
         failedTable.tableColumns.first?.title = localized("history.failed_files.path")
+        failedTable.tableColumns.last?.title = localized("history.failed_files.reason")
         outputFilter.setLabel(localized("history.output.all_page"), forSegment: 0)
         outputFilter.setLabel(localized("history.output.diagnostics_page"), forSegment: 1)
         outputFilter.setAccessibilityLabel(localized("history.output.filter_page"))
         for column in table.tableColumns { column.title = localized("history.column.\(column.identifier.rawValue)") }
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
+                              (exportButton, "history.export.title"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
@@ -1483,12 +2168,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if tableView === failedTable {
-            guard failedPaths.indices.contains(row) else { return nil }
-            let label = NSTextField(labelWithString: failedPaths[row])
+            guard failureDisplayRows.indices.contains(row) else { return nil }
+            let isReason = tableColumn?.identifier.rawValue == "failedReason"
+            let value = isReason ? failureDisplayRows[row].reason : failureDisplayRows[row].path
+            let label = NSTextField(labelWithString: value)
             label.font = HistoryLayout.smallFont
-            label.lineBreakMode = .byTruncatingMiddle
-            label.toolTip = failedPaths[row]
-            label.setAccessibilityLabel(failedPaths[row])
+            label.lineBreakMode = isReason ? .byTruncatingTail : .byTruncatingMiddle
+            label.toolTip = value
+            label.setAccessibilityLabel(value)
             let cell = HistoryResultCell()
             cell.textField = label
             cell.addSubview(label)
@@ -1690,6 +2377,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                       row("in_place", localized(context.in_place ? "settings.value.true" : "settings.value.false")),
                       row("shortest_path", localized(context.shortest_path ? "settings.value.true" : "settings.value.false"))]
             lines.append(row("version", context.version ?? unknown))
+        lines.append(row("run_id", context.run_id ?? unknown))
             for (key, value) in [("retry", context.retry), ("resume", context.resume), ("no_resume", context.no_resume)] {
                 lines.append(row(key, value.map { localized($0 ? "settings.value.true" : "settings.value.false") } ?? unknown))
             }
@@ -1705,6 +2393,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                           row("config_package_version", snapshot.packageVersion),
                           row("config_values", snapshot.values),
                           row("config_sources", snapshot.sources)]
+            }
+        }
+        lines += ["", localized("history.worker.title"), localized("history.worker.note")]
+        if entry.invocationEvidenceInvalid {
+            lines.append(localized("history.worker.invalid"))
+        } else if entry.invocations.isEmpty {
+            lines.append(localized("history.worker.not_recorded"))
+        } else {
+            for invocation in entry.invocations {
+                lines += ["", row("invocation_id", invocation.invocation_id), row("config_pipeline", invocation.pipeline),
+                    row("worker_program", invocation.program_requested), row("worker_path", invocation.program_path ?? unknown)]
+                let arguments = try? JSONSerialization.data(withJSONObject: invocation.arguments, options: [.prettyPrinted, .sortedKeys])
+                lines.append(row("worker_arguments", arguments.map { String(decoding: $0, as: UTF8.self) } ?? unknown))
+                if let bytes = invocation.binary.bytes, let hash = invocation.binary.blake3 {
+                    lines.append(row("worker_binary", "\(bytes) B · \(hash)"))
+                } else { lines.append(row("worker_observation_error", invocation.binary.diagnostic ?? unknown)) }
+                lines.append(row("config_package_version", entry.invocationConfigs[invocation.invocation_id]?.packageVersion ?? unknown))
             }
         }
         lines += ["", localized("history.processor_counts")]
@@ -1743,8 +2448,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        let ready = refreshButton.isEnabled
+        let ready = refreshButton.isEnabled && !exportBusy
         let single = ready && selected != nil
+        table.isEnabled = ready
+        search.isEnabled = ready
+        filter.isEnabled = ready
         let failuresVisible = single && detailMode.selectedSegment == 2
         failedContent.isHidden = !failuresVisible
         detailScroll.isHidden = failuresVisible
@@ -1756,14 +2464,78 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single, forSegment: 2)
+        detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
         revealButton.isEnabled = single
         copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
+        exportButton.isEnabled = single && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        cancelIssueScan()
+        exportGeneration = UUID()
+        if exportBusy { finishExport(localized("history.export.cancelled")) }
+    }
+
+    private func finishExport(_ message: String) {
+        exportBusy = false
+        refreshButton.isEnabled = true
+        progress.stopAnimation(nil)
+        status.stringValue = message
+        updateActions()
+    }
+
+    @objc private func exportSelectedRun() {
+        guard exportButton.isEnabled, let entry = selected, let window, window.isVisible else { return }
+        let token = UUID()
+        exportGeneration = token
+        exportBusy = true
+        refreshButton.isEnabled = false
+        updateActions()
+        let chooser = NSSavePanel()
+        chooser.title = localized("history.export.title")
+        chooser.message = localized("history.export.scope")
+        chooser.allowedContentTypes = [.json]
+        chooser.isExtensionHidden = false
+        chooser.nameFieldStringValue = "MFB-diagnostics-" + UUID().uuidString + ".json"
+        chooser.beginSheetModal(for: window) { [weak self] response in
+            guard let self, self.exportGeneration == token else { return }
+            guard response == .OK, let destination = chooser.url else {
+                self.finishExport(localized("history.export.cancelled")); return
+            }
+            guard self.window?.isVisible == true, self.selected?.id == entry.id else {
+                self.finishExport(localized("history.export.cancelled")); return
+            }
+            self.status.stringValue = localized("history.export.running")
+            self.progress.startAnimation(nil)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Swift.Result {
+                    try HistoryDiagnosticStaging.prepare(HistoryStore.diagnosticArtifact(for: entry), destination: destination)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.exportGeneration == token, self.window?.isVisible == true,
+                          self.selected?.id == entry.id else {
+                        if case let .success(staging) = result {
+                            do { try staging.discard() }
+                            catch { fputs("MFB: cancelled diagnostic export cleanup failed: \(error.localizedDescription)\n", stderr) }
+                        }
+                        if let self, self.exportGeneration == token { self.finishExport(localized("history.export.cancelled")) }
+                        return
+                    }
+                    do {
+                        // Publication stays on the main queue so a processed close/selection change cannot race it.
+                        try result.get().publish()
+                        self.finishExport(localized("history.export.completed", destination.path))
+                    } catch { self.finishExport(error.localizedDescription) }
+                }
+            }
+        }
     }
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
+            cancelIssueScan()
             detailMode.selectedSegment = 1
             updateActions()
             loadOutput(entry: entry)
@@ -1775,6 +2547,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func resetOutput() {
+        cancelIssueScan()
+        batchIssueResult = nil
         outputGeneration = UUID()
         outputLoading = false
         outputPage = nil
@@ -1786,11 +2560,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard selected != nil else { showSelected(); return }
         outputGeneration = UUID()
         outputLoading = false
+        if ![2, 3].contains(detailMode.selectedSegment) { cancelIssueScan() }
         if detailMode.selectedSegment == 0 {
             detail.string = selected.map { Self.render($0) } ?? localized("history.select")
             updateHistoryStatus()
         }
-        else if detailMode.selectedSegment == 2 { filterFailedFiles(); updateHistoryStatus() }
+        else if detailMode.selectedSegment == 2 {
+            filterFailedFiles()
+            updateHistoryStatus()
+            if batchIssueResult == nil, issueScanControl == nil, let entry = selected, entry.hasStoredOutput { loadBatchIssues(entry: entry) }
+        }
+        else if detailMode.selectedSegment == 3 {
+            if batchIssueResult != nil { renderBatchIssues() }
+            else if issueScanControl == nil, let entry = selected { loadBatchIssues(entry: entry) }
+        }
         else if outputPage != nil { renderOutput() }
         else if let entry = selected { loadOutput(entry: entry) }
         updateActions()
@@ -1802,7 +2585,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private var selectedFailedURL: URL? {
-        guard let path = selectedFailedPath, path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
+        guard failureDisplayRows.indices.contains(failedTable.selectedRow) else { return nil }
+        let row = failureDisplayRows[failedTable.selectedRow]
+        let path = row.absolutePath ?? row.path
+        guard path.hasPrefix("/"), !path.utf8.contains(0) else { return nil }
         let url = URL(fileURLWithPath: path)
         return HistoryStore.regularFile(url) ? url : nil
     }
@@ -1825,13 +2611,35 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func filterFailedFiles() {
         let paths = selected?.summary?.failed_files ?? []
         let query = failedSearch.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rows = Self.failureRows(paths, query: query)
-        failedPaths = rows.paths
+        var observations = Set<HistoryFileFailure>()
+        var recordedPaths = Set<String>()
+        var candidates: [FailureDisplayRow] = []
+        for observation in batchIssueResult?.fileFailures ?? [] where observations.insert(observation).inserted {
+            recordedPaths.insert(observation.source_path)
+            candidates.append(FailureDisplayRow(path: observation.source_path, absolutePath: observation.absolute_path,
+                reason: observation.message + (observation.reason_code.map { " [\($0)]" } ?? "")))
+        }
+        candidates += paths.filter { !recordedPaths.contains($0) }.map {
+            FailureDisplayRow(path: $0, absolutePath: nil, reason: localized("history.file_failure.not_recorded"))
+        }
+        var matches = 0
+        var bytes = 0
+        failureDisplayRows = []
+        for row in candidates where query.isEmpty || row.path.localizedCaseInsensitiveContains(query) || row.reason.localizedCaseInsensitiveContains(query) {
+            matches += 1
+            let length = row.path.utf8.count + row.reason.utf8.count + (row.absolutePath?.utf8.count ?? 0)
+            if failureDisplayRows.count < HistoryStore.maximumOutputLines, length <= HistoryStore.maximumOutputBytes - bytes {
+                failureDisplayRows.append(row)
+                bytes += length
+            }
+        }
+        failedPaths = failureDisplayRows.map(\.path)
         failedTable.deselectAll(nil)
         failedTable.reloadData()
-        failedStatus.stringValue = (paths.isEmpty ? localized("history.failed_files.empty")
-            : localized("history.failed_files.range", failedPaths.count, rows.matches, paths.count))
-            + "\n" + localized("history.failed_files.note")
+        failedStatus.stringValue = (candidates.isEmpty ? localized("history.failed_files.empty")
+            : localized("history.failed_files.range", failedPaths.count, matches, candidates.count))
+            + "\n" + (batchIssueResult == nil ? localized("history.failed_files.note")
+                : localized("history.file_failure.records", batchIssueResult!.fileFailures.count) + "\n" + localized("history.file_failure.note"))
         updateActions()
     }
 
@@ -1864,11 +2672,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
     private func renderOutput() {
         guard let page = outputPage else { return }
-        let rows = outputFilter.selectedSegment == 1 ? page.rows.filter(\.diagnostic) : page.rows
         let end = page.shown == 0 ? 0 : page.firstOrdinal + Int64(page.shown) - 1
         let label = localized("history.output.range", page.firstOrdinal, end, page.total)
-        detail.string = label + "\n" + localized("history.output.visible_page", rows.count, page.shown)
-            + "\n\n" + rows.map(\.text).joined(separator: "\n")
+        if outputFilter.selectedSegment == 1 {
+            let groups = page.diagnosticGroups
+            let count = groups.reduce(0) { $0 + $1.count }
+            let sections = groups.map { group in
+                localized("history.output.diagnostic_group", group.pipeline ?? localized("result.unknown"),
+                    group.phase.map { localized("log.phase.\($0)") } ?? localized("history.output.phase_unknown"),
+                    localized("history.output.severity.\(group.severity)"), group.count, group.count - 1,
+                    group.firstSequence, group.lastSequence) + "\n" + group.message
+            }
+            detail.string = label + "\n" + localized("history.output.diagnostic_groups", count, groups.count)
+                + "\n" + localized("history.output.diagnostics_note") + "\n\n" + sections.joined(separator: "\n\n")
+        } else {
+            detail.string = label + "\n" + localized("history.output.visible_page", page.shown, page.shown)
+                + "\n\n" + page.rows.map(\.text).joined(separator: "\n")
+        }
         detail.scrollToBeginningOfDocument(nil)
         status.stringValue = label
     }
@@ -1898,6 +2718,74 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             }
         }
     }
+
+    private func cancelIssueScan() {
+        issueGeneration = UUID()
+        issueScanControl?.cancel()
+        issueScanControl = nil
+    }
+
+    private func renderBatchIssues() {
+        guard let result = batchIssueResult else { return }
+        let scope = localized(result.endSource == "snapshot_only" ? "history.batch_issues.scope_snapshot"
+            : "history.batch_issues.scope_closed", result.scannedRows, result.start, result.upper)
+        let totals = localized("history.batch_issues.totals", result.occurrences, result.groups.count)
+        let sections = result.groups.map { group -> String in
+            var section = localized("history.output.diagnostic_group", group.pipeline ?? localized("result.unknown"),
+                group.phase.map { localized("log.phase.\($0)") } ?? localized("history.batch_issues.phase_unknown"),
+                localized("history.output.severity.\(group.severity)"), group.count, group.count - 1,
+                group.firstSequence, group.lastSequence) + "\n" + group.message
+            section += "\n" + localized("history.batch_issues.original_first") + "\n" + group.firstOriginal
+            if group.lastSequence != group.firstSequence {
+                section += "\n" + localized("history.batch_issues.original_last") + "\n" + group.lastOriginal
+            }
+            return section
+        }
+        detail.string = [localized("history.batch_issues.title"), scope, totals,
+            localized("history.batch_issues.note"), "", sections.isEmpty ? localized("history.batch_issues.empty")
+                : sections.joined(separator: "\n\n")].joined(separator: "\n")
+        detail.scrollToBeginningOfDocument(nil)
+        status.stringValue = totals
+    }
+
+    private func loadBatchIssues(entry: HistoryEntry) {
+        cancelIssueScan()
+        let token = UUID()
+        issueGeneration = token
+        let control = HistoryStore.IssueScanControl()
+        issueScanControl = control
+        batchIssueResult = nil
+        detail.string = localized("history.batch_issues.loading")
+        if detailMode.selectedSegment == 2 { failedStatus.stringValue = localized("history.file_failure.loading") }
+        status.stringValue = detail.string
+        updateActions()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try HistoryStore.batchIssues(for: entry, control: control) }
+            DispatchQueue.main.async {
+                guard let self, self.issueGeneration == token, self.selected?.id == entry.id,
+                      [2, 3].contains(self.detailMode.selectedSegment), !control.isCancelled else { return }
+                self.issueScanControl = nil
+                switch result {
+                case let .success(issues):
+                    self.batchIssueResult = issues
+                    if self.detailMode.selectedSegment == 2 {
+                        self.filterFailedFiles()
+                        self.updateHistoryStatus()
+                    }
+                    else { self.renderBatchIssues() }
+                case let .failure(error):
+                    self.batchIssueResult = nil
+                    self.detail.string = error.localizedDescription
+                    if self.detailMode.selectedSegment == 2 {
+                        self.filterFailedFiles()
+                        self.failedStatus.stringValue = error.localizedDescription + "\n" + localized("history.file_failure.not_recorded")
+                    }
+                    self.status.stringValue = error.localizedDescription
+                }
+                self.updateActions()
+            }
+        }
+    }
     @objc private func revealAudit() {
         guard let url = selected?.audit, HistoryStore.regularFile(url) else {
             status.stringValue = localized("history.issue.read"); return
@@ -1911,6 +2799,38 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         status.stringValue = localized("history.copied")
+    }
+
+    fileprivate func validateFileReasonsForSelfTest(_ entry: HistoryEntry, issues: HistoryStore.BatchIssues) throws {
+        entries = [entry]
+        filter.selectedSegment = 0
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        batchIssueResult = issues
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        guard failedTable.numberOfRows == 3, entry.summary?.img.failed == 1,
+              failureDisplayRows[0].reason.contains("synthetic decoder failed"),
+              failureDisplayRows[1].reason == "synthetic metadata failure",
+              failureDisplayRows[2].reason == localized("history.file_failure.not_recorded"),
+              failedStatus.stringValue.contains(localized("history.file_failure.records", 3)) else {
+            throw HostError(message: "File-linked reasons merged distinct observations or invented failed-file counts")
+        }
+        failedTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        updateActions()
+        guard selectedFailedPath == issues.fileFailures[0].source_path,
+              selectedFailedURL == nil, failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
+              (tableView(failedTable, viewFor: failedTable.tableColumns[1], row: 0) as? NSTableCellView)?.textField?.toolTip == failureDisplayRows[0].reason else {
+            throw HostError(message: "Recorded reasons lost exact paths/tooltips or enabled unavailable Finder navigation")
+        }
+        failedSearch.stringValue = "METADATA"
+        filterFailedFiles()
+        guard failedPaths == [issues.fileFailures[0].source_path], failureDisplayRows[0].reason == "synthetic metadata failure",
+              !failedCopyButton.isEnabled else { throw HostError(message: "Failure-reason search retained stale actions") }
+        failedSearch.stringValue = ""
+        detailMode.selectedSegment = 0
+        detailModeChanged()
+        guard detail.string.contains(entry.context!.run_id!) else { throw HostError(message: "History overview lost run identity") }
     }
 
     func validateForSelfTest() throws {
@@ -1946,7 +2866,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
               logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
-               detailMode.segmentCount == 3, !detailMode.isEnabled(forSegment: 2),
+              detailMode.segmentCount == 4, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
                failedContent.isHidden, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
                table.allowsMultipleSelection, table.allowsEmptySelection,
                window?.styleMask.contains(.resizable) == true else {
@@ -1985,7 +2905,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
         showSelected()
         guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled,
-              !detailMode.isEnabled(forSegment: 1), !detailMode.isEnabled(forSegment: 2),
+              !detailMode.isEnabled(forSegment: 1), !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
               !olderButton.isEnabled, !newerButton.isEnabled,
               !outputFilter.isEnabled, detail.string.contains(localized("history.compare")),
               detail.string.contains(other.stamp) else { throw HostError(message: "History comparison retained single-run actions") }
@@ -2130,7 +3050,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         entries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "output" }
             .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
         applyFilter()
-        guard entries.count == 2, logButton.isEnabled else { throw HostError(message: "Stored output action is unavailable") }
+        guard entries.count == 2, logButton.isEnabled, exportButton.isEnabled else { throw HostError(message: "Stored output or diagnostic export action is unavailable") }
+        let oldExportGeneration = exportGeneration
+        exportBusy = true
+        refreshButton.isEnabled = false
+        updateActions()
+        guard !exportButton.isEnabled, !table.isEnabled, !copyButton.isEnabled else {
+            throw HostError(message: "Diagnostic export did not disable conflicting actions")
+        }
+        windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        guard !exportBusy, exportGeneration != oldExportGeneration, exportButton.isEnabled else {
+            throw HostError(message: "Closing history did not cancel diagnostic publication or restore its controls")
+        }
         openLog()
         let deadline = Date().addingTimeInterval(5)
         while !logButton.isEnabled, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
@@ -2172,6 +3103,30 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard !detail.string.contains("synthetic next run"), outputPage?.shown == HistoryStore.maximumOutputLines else {
             throw HostError(message: "Page diagnostics changed pagination or exposed routine records")
         }
+        let previousPage = outputPage
+        let phase = "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"processing\"}"
+        let repeated = "[WARN] /synthetic/file.jpg: repeated warning 1"
+        let groupedRows = [
+            HistoryStore.Output.Row(sequence: 1, text: phase, diagnostic: false, pipeline: "IMG", line: phase),
+            HistoryStore.Output.Row(sequence: 2, text: repeated, diagnostic: true, pipeline: "IMG", line: repeated),
+            HistoryStore.Output.Row(sequence: 3, text: "ERR: " + repeated, diagnostic: true, pipeline: "IMG", line: "ERR: " + repeated),
+        ]
+        outputPage = HistoryStore.Output(rows: groupedRows, total: 100, upper: 100, firstOrdinal: 1, issues: [])
+        outputFilterChanged()
+        guard detail.string.contains(localized("history.output.diagnostic_groups", 2, 1)),
+              detail.string.contains(localized("history.output.diagnostics_note")),
+              detail.string.contains(localized("log.phase.processing")),
+              !detail.string.contains("ERR: " + repeated), outputPage?.total == 100 else {
+            throw HostError(message: "Diagnostic group presentation repeated logs or claimed whole-batch failure counts")
+        }
+        outputFilter.selectedSegment = 0
+        outputFilterChanged()
+        guard detail.string.contains(phase), detail.string.contains("ERR: " + repeated), outputPage?.shown == 3 else {
+            throw HostError(message: "All output did not retain the original diagnostic and phase records")
+        }
+        outputPage = previousPage
+        outputFilter.selectedSegment = 1
+        outputFilterChanged()
         olderOutput()
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         showSelected()
@@ -2187,6 +3142,48 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard outputPage == nil, detailMode.selectedSegment == 0 else {
             throw HostError(message: "History filtering accepted stale output")
         }
+        table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        showSelected()
+        detailMode.selectedSegment = 3
+        detailModeChanged()
+        let issueDeadline = Date().addingTimeInterval(5)
+        while issueScanControl != nil, Date() < issueDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard batchIssueResult?.occurrences == 999, batchIssueResult?.scannedRows == 1_002,
+              detail.string.contains(localized("history.batch_issues.totals", 999, 3)),
+              detail.string.contains(localized("history.batch_issues.original_first")),
+              detail.string.contains("ERR: \u{001B}[33m"), outputNavigation.isHidden,
+              !olderButton.isEnabled, !newerButton.isEnabled, exportButton.isEnabled else {
+            throw HostError(message: "Whole-batch issue view guessed file counts, lost raw evidence, or retained page navigation")
+        }
+        let batchEntry = selected!
+        batchIssueResult = nil
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        let reasonDeadline = Date().addingTimeInterval(5)
+        while issueScanControl != nil, Date() < reasonDeadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        guard batchIssueResult != nil, status.stringValue == localized("history.shown", displayed.count, entries.count),
+              !failedStatus.stringValue.contains(localized("history.file_failure.loading")) else {
+            throw HostError(message: "Completed file-reason read retained a loading status")
+        }
+        detailMode.selectedSegment = 3
+        loadBatchIssues(entry: batchEntry)
+        let selectionControl = issueScanControl!
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        showSelected()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard selectionControl.isCancelled, issueScanControl == nil, batchIssueResult == nil,
+              detailMode.selectedSegment == 0, !detail.string.contains(localized("history.batch_issues.title")) else {
+            throw HostError(message: "Changing selection did not cancel the issue reader or reject stale publication")
+        }
+        detailMode.selectedSegment = 3
+        loadBatchIssues(entry: selected!)
+        let closedControl = issueScanControl!
+        windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard closedControl.isCancelled, issueScanControl == nil, batchIssueResult == nil else {
+            throw HostError(message: "Closing History left an issue reader or published cancelled counts")
+        }
+        resetOutput()
     }
 }
 
@@ -2217,6 +3214,43 @@ func runProcessingHistorySelfTests() throws {
     let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
     func parsed(_ events: [String]) throws -> HistoryAudit { HistoryStore.parse(data: try records(events), stamp: "test", audit: fixtureURL) }
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw HostError(message: message) } }
+    func diagnosticRow(_ sequence: Int64, _ pipeline: String, _ line: String) -> HistoryStore.Output.Row {
+        let tone = LogTone.classify(line)
+        return HistoryStore.Output.Row(sequence: sequence, text: "[synthetic] \(pipeline): \(line)",
+            diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line)
+    }
+    let processingPhase = try payload("MFB_LOG_PHASE", ["schema_version": 1, "phase": "processing"])
+    let verificationPhase = try payload("MFB_LOG_PHASE", ["schema_version": 1, "phase": "verification"])
+    let diagnosticRows = [
+        diagnosticRow(1, "IMG", "[WARN] /synthetic/first.jpg: warning 1"),
+        diagnosticRow(2, "IMG", processingPhase),
+        diagnosticRow(3, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(4, "IMG", "ERR: \u{001B}[31m[FAIL] /synthetic/one.jpg: error 1\u{001B}[0m"),
+        diagnosticRow(5, "IMG", "[FAIL] /synthetic/two.jpg: error 1"),
+        diagnosticRow(6, "VID", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(7, "IMG", "[FAIL] /synthetic/one.jpg: error 2"),
+        diagnosticRow(8, "IMG", verificationPhase),
+        diagnosticRow(9, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        diagnosticRow(10, "IMG", "MFB_LOG_PHASE={invalid}"),
+        diagnosticRow(11, "IMG", "[FAIL] /synthetic/one.jpg: error 1"),
+        HistoryStore.Output.Row(sequence: 12, text: "synthetic unreadable record", diagnostic: true, pipeline: nil, line: nil),
+    ]
+    let diagnosticPage = HistoryStore.Output(rows: diagnosticRows, total: 100, upper: 100, firstOrdinal: 1, issues: [])
+    let groups = diagnosticPage.diagnosticGroups
+    try require(groups.count == 9 && groups.reduce(0, { $0 + $1.count }) == 10
+                && groups[1].pipeline == "IMG" && groups[1].phase == "processing" && groups[1].count == 2
+                && groups[1].firstSequence == 3 && groups[1].lastSequence == 4
+                && groups[2].message.contains("two.jpg") && groups[3].pipeline == "VID" && groups[3].phase == nil
+                && groups[4].message.contains("error 2") && groups[5].phase == "verification"
+                && groups[6].severity == "warning" && groups[6].phase == nil && groups[6].message.contains("{invalid}")
+                && groups[7].phase == nil && groups[8].severity == "unreadable",
+                "Page diagnostic grouping merged paths, numbers, pipelines, phases, or hid invalid evidence")
+    try require(diagnosticPage.total == 100 && diagnosticPage.shown == 12
+                && diagnosticPage.text == diagnosticRows.map(\.text).joined(separator: "\n"),
+                "Diagnostic grouping changed authoritative pagination or discarded original output")
+    let laterPage = HistoryStore.Output(rows: [diagnosticRows[8]], total: 100, upper: 100, firstOrdinal: 9, issues: [])
+    try require(laterPage.diagnosticGroups.first?.phase == nil && laterPage.diagnosticGroups.first?.count == 1,
+                "A new page guessed its phase or carried diagnostic counts from another page")
     let success = try parsed(["SESSION_STARTED", context, summary, completed])
     try require(success.entries.count == 1 && success.entries[0].statusKey == "history.status.completed"
                 && success.entries[0].context?.output == nil && success.entries[0].succeededLabel == "2", "Typed history did not retain nullable paths or active counts")
@@ -2339,6 +3373,59 @@ func runProcessingHistorySelfTests() throws {
     vidConfigValue["config"] = ["config_version": 1, "performance": ["mode": "relaxed"]]
     let imgConfig = try payload("MFB_HISTORY_CONFIG", imgConfigValue)
     let vidConfig = try payload("MFB_HISTORY_CONFIG", vidConfigValue)
+    let launchValue: [String: Any] = ["schema_version": 1, "invocation_id": "synthetic-call-1", "pipeline": "img",
+        "state": "launch_requested", "program_requested": "/synthetic/worker 界面/img", "program_path": "/synthetic/worker 界面/img",
+        "arguments": ["run", "/synthetic/folder with spaces/界面.jpg", "--error-mode", "log-and-continue"],
+        "binary": ["scope": "observed_before_launch", "bytes": 123, "blake3": String(repeating: "a", count: 64), "diagnostic": NSNull()]]
+    let launch = try payload("MFB_HISTORY_INVOCATION", launchValue)
+    var secondLaunchValue = launchValue
+    secondLaunchValue["invocation_id"] = "synthetic-call-2"
+    secondLaunchValue["pipeline"] = "vid"
+    secondLaunchValue["program_requested"] = "/synthetic/vid"
+    secondLaunchValue["program_path"] = NSNull()
+    secondLaunchValue["binary"] = ["scope": "observed_before_launch", "bytes": NSNull(), "blake3": NSNull(), "diagnostic": "synthetic read denied"]
+    let secondLaunch = try payload("MFB_HISTORY_INVOCATION", secondLaunchValue)
+    var boundImageValue = imgConfigValue
+    boundImageValue["invocation_id"] = "synthetic-call-1"
+    var boundVideoValue = vidConfigValue
+    boundVideoValue["invocation_id"] = "synthetic-call-2"
+    let boundImage = try payload("MFB_HISTORY_CONFIG", boundImageValue)
+    let boundVideo = try payload("MFB_HISTORY_CONFIG", boundVideoValue)
+    let launched = try parsed([context, launch, boundImage, secondLaunch, boundVideo, summary, completed]).entries[0]
+    try require(launched.invocations.count == 2 && launched.invocationConfigs.count == 2
+                && launched.invocationConfigs["synthetic-call-1"]?.pipeline == "img"
+                && launched.invocationConfigs["synthetic-call-2"]?.pipeline == "vid"
+                && launched.invocations[0].arguments[1] == "/synthetic/folder with spaces/界面.jpg"
+                && launched.invocations[1].program_path == nil && launched.invocations[1].binary.bytes == nil
+                && launched.invocations[1].binary.diagnostic == "synthetic read denied"
+                && launched.succeededLabel == "2" && launched.statusKey == "history.status.completed"
+                && ProcessingHistoryPanel.render(launched).contains(localized("history.worker.note")),
+                "Worker launch provenance lost exact argv, unknown evidence, configuration binding, or real processing counts")
+    let launchBatches = try parsed([context, launch, boundImage, summary, completed, context, secondLaunch, boundVideo, summary, completed])
+    try require(launchBatches.entries[0].invocations.map(\.invocation_id) == ["synthetic-call-1"]
+                && launchBatches.entries[1].invocations.map(\.invocation_id) == ["synthetic-call-2"],
+                "Worker launch evidence crossed selected-run boundaries")
+    try require(success.entries[0].invocations.isEmpty
+                && ProcessingHistoryPanel.render(success.entries[0]).contains(localized("history.worker.not_recorded")),
+                "Old history fabricated a worker launch receipt")
+    var wrongBindingValue = boundVideoValue
+    wrongBindingValue["invocation_id"] = "synthetic-call-1"
+    for invalidSequence in [[launch, launch], [launch, boundImage, boundImage], [launch, imgConfig],
+                             [launch, try payload("MFB_HISTORY_CONFIG", wrongBindingValue)], [boundImage]] {
+        let invalid = try parsed([context] + invalidSequence + [summary, failed]).entries[0]
+        try require(!invalid.issues.isEmpty && invalid.succeededLabel == "2" && invalid.statusKey == "history.status.failed"
+                    && (invalid.invocationEvidenceInvalid || invalid.configEvidenceInvalid),
+                    "Duplicate, missing or mismatched launch binding replaced real counts or appeared trustworthy")
+    }
+    for (key, value) in [("schema_version", 2 as Any), ("state", "spawned"), ("invocation_id", ""),
+                          ("arguments", Array(repeating: "x", count: 4097)), ("arguments", [String(repeating: "x", count: 256 * 1024 + 1)]),
+                          ("arguments", ["invalid\0argument"]), ("program_path", "relative/img")] {
+        var invalidLaunch = launchValue
+        invalidLaunch[key] = value
+        let invalid = try parsed([context, try payload("MFB_HISTORY_INVOCATION", invalidLaunch), summary, completed]).entries[0]
+        try require(invalid.invocationEvidenceInvalid && invalid.invocations.isEmpty && invalid.succeededLabel == "2",
+                    "Malformed worker provenance was accepted or changed processing counts")
+    }
     let withConfigs = try parsed([context, imgConfig, imgConfig, vidConfig, summary, completed])
     let configEntry = withConfigs.entries[0]
     let shownValues = try JSONSerialization.jsonObject(with: Data(configEntry.configSnapshots[0].values.utf8)) as? [String: Any]
@@ -2815,9 +3902,9 @@ func runProcessingHistorySelfTests() throws {
                 "Named archive was not discovered: \(named.entries.map { $0.audit.path })")
 
     let databaseURL = directory.appendingPathComponent("history.sqlite3")
-    func writeDatabase(_ sessions: [(String, [String])], schema: Int = 1) throws {
+    func writeDatabase(_ sessions: [(String, [String])], schema: Int = 1, destination: URL? = nil) throws {
         var database: OpaquePointer?
-        guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+        guard sqlite3_open_v2((destination ?? databaseURL).path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
               let database else { throw HostError(message: "Unable to create synthetic history database") }
         defer { sqlite3_close(database) }
         let setup = """
@@ -2952,6 +4039,11 @@ func runProcessingHistorySelfTests() throws {
     INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('output', '2026-10-07T01:02:03Z', 'IMG', 'synthetic first failure');
     WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<=\(HistoryStore.maximumOutputLines + 1))
     INSERT INTO history_output(session_id, ts, pipeline, line) SELECT 'output', '2026-10-07T01:02:04Z', 'IMG', 'synthetic next run ' || n FROM rows;
+    UPDATE history_output SET line='\(processingPhase)' WHERE sequence=2;
+    UPDATE history_output SET line='[WARN] /synthetic/item.jpg: warning 42' WHERE sequence BETWEEN 3 AND 1001;
+    UPDATE history_output SET line='ERR: \u{001B}[33m[WARN] /synthetic/item.jpg: warning 42\u{001B}[0m' WHERE sequence=999;
+    UPDATE history_output SET line='\(verificationPhase)' WHERE sequence=1000;
+    UPDATE history_output SET pipeline='VID', line='[FAIL] /synthetic/item.jpg: warning 42' WHERE sequence=1002;
     """
     let inserted = sqlite3_exec(outputDB, outputSQL, nil, nil, nil)
     sqlite3_close(outputDB)
@@ -2962,7 +4054,8 @@ func runProcessingHistorySelfTests() throws {
     try require(outputEntries.count == 2, "Output sessions merged watch-mode batches")
     let firstOutput = try HistoryStore.output(for: outputEntries[0])
     try require(firstOutput.total == 1 && firstOutput.shown == 1 && firstOutput.text.contains("first failure")
-                && !firstOutput.text.contains("next run"), "Output leaked another batch")
+                && !firstOutput.text.contains("next run") && firstOutput.rows[0].pipeline == "IMG"
+                && firstOutput.rows[0].line == "synthetic first failure", "Output leaked another batch or lost diagnostic identity")
     let nextOutput = try HistoryStore.output(for: outputEntries[1])
     try require(nextOutput.total == Int64(HistoryStore.maximumOutputLines + 2)
                 && nextOutput.shown == HistoryStore.maximumOutputLines
@@ -2988,6 +4081,29 @@ func runProcessingHistorySelfTests() throws {
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output view mutated the history database")
     try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateOutputForSelfTest() }
     try require(try Data(contentsOf: databaseURL) == outputBytes, "Output action mutated the history database")
+    let batchIssues = try HistoryStore.batchIssues(for: outputEntries[1])
+    try require(batchIssues.scannedRows == 1_002 && batchIssues.occurrences == 999 && batchIssues.groups.count == 3
+                && batchIssues.start == 1 && batchIssues.upper == 1_003 && batchIssues.endSource == "terminal_boundary"
+                && batchIssues.groups[0].count == 997 && batchIssues.groups[0].phase == "processing"
+                && batchIssues.groups[0].firstSequence == 3 && batchIssues.groups[0].lastSequence == 999
+                && batchIssues.groups[0].firstOriginal.contains("[WARN] /synthetic/item.jpg: warning 42")
+                && batchIssues.groups[0].lastOriginal.contains("ERR: \u{001B}[33m")
+                && batchIssues.groups[1].count == 1 && batchIssues.groups[1].phase == "verification"
+                && batchIssues.groups[2].pipeline == "VID" && batchIssues.groups[2].phase == nil
+                && batchIssues.groups[2].severity == "failure",
+                "Whole batch issues lost earlier-page phases, original rows, exact occurrences, or pipeline/severity boundaries")
+    let firstBatchIssues = try HistoryStore.batchIssues(for: outputEntries[0])
+    try require(firstBatchIssues.scannedRows == 1 && firstBatchIssues.groups.isEmpty && firstBatchIssues.occurrences == 0,
+                "Whole batch issues leaked another batch or guessed failure from ordinary output")
+    let cancelledScan = HistoryStore.IssueScanControl()
+    cancelledScan.cancel()
+    do {
+        _ = try HistoryStore.batchIssues(for: outputEntries[1], control: cancelledScan)
+        throw HostError(message: "Cancelled issue scan returned counts")
+    } catch {
+        try require(error.localizedDescription == localized("history.batch_issues.cancelled"), "Issue cancellation hid its explicit reason")
+    }
+    try require(try Data(contentsOf: databaseURL) == outputBytes, "Whole batch issues mutated the history database")
     var fixtureDB: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &fixtureDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let fixtureDB else {
         throw HostError(message: "Synthetic byte-budget fixture open failed")
@@ -3000,6 +4116,13 @@ func runProcessingHistorySelfTests() throws {
     let byteResult = sqlite3_exec(fixtureDB, byteSQL, nil, nil, nil)
     sqlite3_close(fixtureDB)
     try require(byteResult == SQLITE_OK, "Synthetic byte-budget fixture insert failed")
+    do {
+        _ = try HistoryStore.batchIssues(for: outputEntries[1])
+        throw HostError(message: "Invalid or oversized whole-batch output returned partial counts")
+    } catch {
+        try require(error.localizedDescription != "Invalid or oversized whole-batch output returned partial counts",
+                    "Invalid whole-batch output appeared complete")
+    }
     let byteSnapshot = try Data(contentsOf: databaseURL)
     let bytePage = try HistoryStore.output(for: outputEntries[1])
     try require(bytePage.text.utf8.count <= HistoryStore.maximumOutputBytes && !bytePage.issues.isEmpty
@@ -3036,6 +4159,367 @@ func runProcessingHistorySelfTests() throws {
     try require(emptyPage.rows.isEmpty && emptyPage.total == 0 && emptyPage.firstOrdinal == 0
                 && !emptyPage.hasOlder && !emptyPage.hasNewer && emptyPage.issues.isEmpty,
                 "Empty output invented a range, issue, or navigation")
+    func refuseExport(_ operation: () throws -> Void, _ message: String) throws {
+        do { try operation() } catch { return }
+        throw HostError(message: message)
+    }
+    try writeDatabase([("issue_limit", [firstContext])], schema: 2)
+    var limitDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &limitDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let limitDB else {
+        throw HostError(message: "Synthetic issue limit database open failed")
+    }
+    let issueLimitSQL = """
+    WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<4097)
+    INSERT INTO history_output(session_id, ts, pipeline, line)
+    SELECT 'issue_limit', 'synthetic', 'IMG', '[WARN] /synthetic/item.jpg: exact value ' || n FROM rows;
+    """
+    guard sqlite3_exec(limitDB, issueLimitSQL, nil, nil, nil) == SQLITE_OK else {
+        sqlite3_close(limitDB)
+        throw HostError(message: "Synthetic issue limit fixture insert failed")
+    }
+    let limitEntry = try HistoryStore.load(directory: directory).entries.first { $0.stamp == "issue_limit" }!
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: limitEntry) }, "Excessive issue groups returned partial counts")
+    guard sqlite3_exec(limitDB, "UPDATE history_output SET line='synthetic ordinary line'; WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<\(HistoryStore.maximumRecordsPerSession - 4096)) INSERT INTO history_output(session_id, ts, pipeline, line) SELECT 'issue_limit', 'synthetic', 'IMG', 'synthetic ordinary line' FROM rows", nil, nil, nil) == SQLITE_OK else {
+        sqlite3_close(limitDB)
+        throw HostError(message: "Synthetic issue row limit fixture insert failed")
+    }
+    sqlite3_close(limitDB)
+    let limitBytes = try Data(contentsOf: databaseURL)
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: limitEntry) }, "Excessive ordinary rows appeared as zero complete issues")
+    try require(try Data(contentsOf: databaseURL) == limitBytes, "Refused issue scans mutated their source")
+    let exportConfig = try payload("MFB_HISTORY_CONFIG", ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0", "invocation_id": "synthetic-call-1",
+        "config": ["config_version": 1, "execution": ["error_mode": "log-and-continue"]],
+        "sources": ["config_version": "default", "execution.error_mode": "CLI"]])
+    var exportContextValue = outputContext
+    exportContextValue["output_sequence"] = 2
+    let exportContext = try payload("MFB_HISTORY_CONTEXT", exportContextValue)
+    exportContextValue["output_sequence"] = 6
+    let adjacentContext = try payload("MFB_HISTORY_CONTEXT", exportContextValue)
+    var unknownSummaryValue = summaryValue
+    unknownSummaryValue["img"] = ["active": true, "succeeded": NSNull(), "skipped": NSNull(), "failed": NSNull(),
+        "ignored": NSNull(), "unprocessed": NSNull(), "exit_code": NSNull()]
+    let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
+    let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
+        "error": "synthetic terminal failure", "output_sequence": 6])
+    try writeDatabase([("export", [exportContext, launch, exportConfig, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
+    var exportDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
+        throw HostError(message: "Synthetic export database open failed")
+    }
+    let warningLine = "ERR: \u{001B}[33m[WARN] /synthetic/one.jpg: exact warning 1\u{001B}[0m"
+    let errorLine = "[FAIL] /synthetic/two.jpg: exact error 2"
+    var outputInsert: OpaquePointer?
+    guard sqlite3_prepare_v2(exportDB, "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('export', 'synthetic timestamp', 'IMG', ?)", -1,
+                            &outputInsert, nil) == SQLITE_OK, let insertOutput = outputInsert else {
+        throw HostError(message: "Synthetic export output prepare failed")
+    }
+    for line in ["[FAIL] prior batch must not leak", processingPhase, processingPhase, warningLine,
+                 "MFB_PROGRESS={\"ignored\":true}", errorLine, "[FAIL] adjacent batch must not leak"] {
+        sqlite3_reset(insertOutput)
+        sqlite3_clear_bindings(insertOutput)
+        guard line.withCString({ sqlite3_bind_text(insertOutput, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(insertOutput) == SQLITE_DONE else { throw HostError(message: "Synthetic export output insert failed") }
+    }
+    sqlite3_finalize(insertOutput)
+    sqlite3_close(exportDB)
+    let exportEntries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "export" }
+        .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
+    try require(exportEntries.count == 2, "Synthetic export batches merged")
+    var unknownFinishedBoundary = exportEntries[0]
+    unknownFinishedBoundary.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "synthetic failure", output_sequence: nil)
+    unknownFinishedBoundary.outputUpperSequence = 6
+    try require(unknownFinishedBoundary.outputEndSource == "next_batch_boundary",
+                "A finished record without an output sequence fabricated terminal boundary provenance")
+    unknownFinishedBoundary.outputUpperSequence = nil
+    try require(unknownFinishedBoundary.outputEndSource == "snapshot_only",
+                "An unknown finished boundary was promoted to an authoritative end sequence")
+    let unidentifiedExport = HistoryEntry(id: "export:0", stamp: "export", audit: databaseURL, timestamp: "synthetic")
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: unidentifiedExport) },
+                     "Diagnostic export guessed a batch without stored context and output boundaries")
+    let databaseBeforeExport = try Data(contentsOf: databaseURL)
+    let exportIssues = try HistoryStore.batchIssues(for: exportEntries[0])
+    let ongoingIssues = try HistoryStore.batchIssues(for: exportEntries[1])
+    try require(exportIssues.scannedRows == 4 && exportIssues.occurrences == 2
+                && exportIssues.groups.map(\.phase) == ["processing", "processing"]
+                && exportIssues.start == 2 && exportIssues.upper == 6 && exportIssues.endSource == "terminal_boundary"
+                && ongoingIssues.scannedRows == 1 && ongoingIssues.occurrences == 1
+                && ongoingIssues.endSource == "snapshot_only" && ongoingIssues.groups.first?.phase == nil,
+                "Batch issue snapshots leaked adjacent batches or invented final boundaries and earlier phases")
+    let artifact = try HistoryStore.diagnosticArtifact(for: exportEntries[0])
+    guard let document = try JSONSerialization.jsonObject(with: artifact) as? [String: Any],
+          let scope = document["scope"] as? [String: Any], let exportedSummary = document["summary"] as? [String: Any],
+          let exportedImage = exportedSummary["img"] as? [String: Any],
+          let exportedConfig = document["configuration"] as? [String: Any],
+          let snapshots = exportedConfig["snapshots"] as? [[String: Any]],
+          let workerLaunches = document["worker_launches"] as? [[String: Any]],
+          let exportedRows = document["records"] as? [[String: Any]] else { throw HostError(message: "Diagnostic artifact schema is invalid") }
+    try require(document["schema_version"] as? Int == 2 && document["authoritative_state"] as? Bool == false
+                && document["run_id"] is NSNull && document["history_entry_id"] as? String == exportEntries[0].id
+                && document["full_run_manifest"] as? Bool == false && scope["total_output_rows"] as? Int == 4
+                && scope["retained_output_rows"] as? Int == 3 && scope["diagnostic_log_rows"] as? Int == 2
+                && scope["phase_control_rows"] as? Int == 1 && scope["omitted_non_diagnostic_output_rows"] as? Int == 1
+                && scope["end_source"] as? String == "terminal_boundary"
+                && exportedImage["succeeded"] is NSNull && snapshots.count == 1
+                && workerLaunches.count == 1 && workerLaunches[0]["invocation_id"] as? String == "synthetic-call-1"
+                && workerLaunches[0]["arguments"] as? [String] == launchValue["arguments"] as? [String]
+                && (workerLaunches[0]["configuration"] as? [String: Any])?["package_version"] as? String == "0.12.0"
+                && (snapshots[0]["sources"] as? [String: String])?["execution.error_mode"] == "CLI"
+                && exportedRows.map({ $0["sequence"] as? Int }) == [3, 4, 6]
+                && exportedRows[1]["line"] as? String == warningLine && exportedRows[2]["line"] as? String == errorLine
+                && exportedRows[1]["phase"] as? String == "processing"
+                && !String(decoding: artifact, as: UTF8.self).contains("must not leak"),
+                "Diagnostic export mixed batches, inferred unknown counts, dropped exact messages, or misstated exclusions")
+    let ongoingArtifact = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[1])) as? [String: Any]
+    let ongoingScope = ongoingArtifact?["scope"] as? [String: Any]
+    let ongoingRows = ongoingArtifact?["records"] as? [[String: Any]]
+    let ongoingLaunch = (ongoingArtifact?["worker_launches"] as? [[String: Any]])?.first
+    try require(ongoingArtifact?["summary"] is NSNull && ongoingArtifact?["finished"] is NSNull
+                && ongoingScope?["known_end_sequence"] is NSNull && ongoingScope?["end_source"] as? String == "snapshot_only"
+                && ongoingLaunch?["program_path"] is NSNull && ongoingLaunch?["configuration"] is NSNull
+                && (ongoingLaunch?["binary"] as? [String: Any])?["blake3"] is NSNull
+                && ongoingRows?.first?["phase"] is NSNull,
+                "Ongoing diagnostic export invented a final state, counts, or phase")
+    try require(try Data(contentsOf: databaseURL) == databaseBeforeExport, "Diagnostic export mutated its source database")
+    let destination = directory.appendingPathComponent("diagnostic.json")
+    let staged = try HistoryDiagnosticStaging.prepare(artifact, destination: destination)
+    try require(!FileManager.default.fileExists(atPath: destination.path), "Staging exposed a partial diagnostic artifact")
+    try staged.publish()
+    let exportedPermissions = try FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? NSNumber
+    try require(try Data(contentsOf: destination) == artifact && exportedPermissions?.intValue == 0o600,
+                "Diagnostic publication changed the artifact or exposed it to other users")
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: destination) }, "Diagnostic export replaced an existing file")
+    let linkDestination = directory.appendingPathComponent("diagnostic-link.json")
+    try FileManager.default.createSymbolicLink(at: linkDestination, withDestinationURL: destination)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: linkDestination) }, "Diagnostic export followed an existing link")
+    let raceDestination = directory.appendingPathComponent("diagnostic-race.json")
+    let racing = try HistoryDiagnosticStaging.prepare(artifact, destination: raceDestination)
+    let sentinel = Data("synthetic destination preserved".utf8)
+    try sentinel.write(to: raceDestination)
+    try refuseExport({ try racing.publish() }, "Diagnostic export clobbered a file created after staging")
+    try racing.discard()
+    try require(try Data(contentsOf: raceDestination) == sentinel && Data(contentsOf: destination) == artifact,
+                "Refused publication changed an existing destination")
+    let gitFolder = directory.appendingPathComponent("synthetic-worktree")
+    try FileManager.default.createDirectory(at: gitFolder, withIntermediateDirectories: false)
+    try sentinel.write(to: gitFolder.appendingPathComponent(".git"))
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: gitFolder.appendingPathComponent("private.json")) },
+                     "Diagnostic export wrote private state into a Git worktree")
+    let alias = directory.appendingPathComponent("workspace-alias")
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: gitFolder)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: alias.appendingPathComponent("private.json")) },
+                     "A directory alias bypassed the Git diagnostic export restriction")
+    let lateGitFolder = directory.appendingPathComponent("late-worktree")
+    try FileManager.default.createDirectory(at: lateGitFolder, withIntermediateDirectories: false)
+    let lateGit = try HistoryDiagnosticStaging.prepare(artifact, destination: lateGitFolder.appendingPathComponent("private.json"))
+    try sentinel.write(to: lateGitFolder.appendingPathComponent(".git"))
+    try refuseExport({ try lateGit.publish() }, "A new Git worktree bypassed the final publication check")
+    try lateGit.discard()
+    var overlappingContextValue = exportContextValue
+    overlappingContextValue["output_sequence"] = 4
+    let overlappingContext = try payload("MFB_HISTORY_CONTEXT", overlappingContextValue)
+    var boundaryDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &boundaryDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let boundaryDB else {
+        throw HostError(message: "Synthetic export boundary open failed")
+    }
+    var boundaryUpdate: OpaquePointer?
+    guard sqlite3_prepare_v2(boundaryDB, "UPDATE history_events SET event=? WHERE session_id='export' AND event=?", -1,
+                            &boundaryUpdate, nil) == SQLITE_OK, let boundaryUpdate else {
+        throw HostError(message: "Synthetic export boundary prepare failed")
+    }
+    for (replacement, previous) in [(overlappingContext, adjacentContext), (adjacentContext, overlappingContext)] {
+        sqlite3_reset(boundaryUpdate)
+        sqlite3_clear_bindings(boundaryUpdate)
+        guard replacement.withCString({ sqlite3_bind_text(boundaryUpdate, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              previous.withCString({ sqlite3_bind_text(boundaryUpdate, 2, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(boundaryUpdate) == SQLITE_DONE, sqlite3_changes(boundaryDB) == 1 else {
+            throw HostError(message: "Synthetic export boundary update failed")
+        }
+        if replacement == overlappingContext {
+            let overlapping = try HistoryStore.load(directory: directory).entries.first { $0.id == exportEntries[0].id }
+            try require(overlapping?.issues.isEmpty == true && overlapping?.finished?.output_sequence == 6
+                        && overlapping?.outputUpperSequence == 4,
+                        "Overlapping export fixture did not isolate the contradictory batch boundary")
+            try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) },
+                             "Diagnostic export included output beyond the next batch boundary")
+            try refuseExport({ _ = try HistoryStore.batchIssues(for: exportEntries[0]) },
+                             "Batch issues included output beyond a conflicting next-batch boundary")
+        }
+    }
+    sqlite3_finalize(boundaryUpdate)
+    sqlite3_close(boundaryDB)
+    var activityExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &activityExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let activityExport else {
+        throw HostError(message: "Synthetic Gate activity export open failed")
+    }
+    defer { sqlite3_close(activityExport) }
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-gate","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}' WHERE sequence=5"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic Gate activity export write failed")
+    }
+    let activityDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[0])) as? [String: Any]
+    let activityScope = activityDocument?["scope"] as? [String: Any]
+    let activityRows = activityDocument?["records"] as? [[String: Any]]
+    try require(activityScope?["total_output_rows"] as? Int == 4
+                && activityScope?["retained_output_rows"] as? Int == 4
+                && activityScope?["verification_activity_rows"] as? Int == 1
+                && activityScope?["diagnostic_log_rows"] as? Int == 2
+                && activityScope?["phase_control_rows"] as? Int == 1
+                && activityScope?["omitted_non_diagnostic_output_rows"] as? Int == 0
+                && activityRows?.contains(where: { $0["kind"] as? String == "verification_activity" && $0["sequence"] as? Int == 5 }) == true,
+                "Diagnostic export discarded verification activity or counted it as a failed file")
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-inventory","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}' WHERE sequence=3; UPDATE history_output SET line='MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"export-inventory","gate":"local","check":"inventory","completed":0,"total":6,"state":"failed"}' WHERE sequence=5"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic inventory failure export write failed")
+    }
+    let inventoryDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[0])) as? [String: Any]
+    let inventoryScope = inventoryDocument?["scope"] as? [String: Any]
+    let inventoryRows = inventoryDocument?["records"] as? [[String: Any]]
+    try require(inventoryScope?["total_output_rows"] as? Int == 4
+                && inventoryScope?["retained_output_rows"] as? Int == 4
+                && inventoryScope?["verification_activity_rows"] as? Int == 2
+                && inventoryScope?["diagnostic_log_rows"] as? Int == 2
+                && inventoryScope?["phase_control_rows"] as? Int == 0
+                && inventoryRows?.filter({ $0["kind"] as? String == "verification_activity" }).map({ $0["sequence"] as? Int }) == [3, 5],
+                "Diagnostic export rejected a valid zero-check inventory failure or fabricated file counts")
+    guard sqlite3_exec(activityExport, #"UPDATE history_output SET line='MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}' WHERE sequence=3"#, nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export phase restoration failed")
+    }
+    guard sqlite3_exec(activityExport, "UPDATE history_output SET line='MFB_GATE_ACTIVITY={invalid}' WHERE sequence=5", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic invalid Gate activity write failed")
+    }
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) },
+                     "Invalid Gate activity evidence exported a misleading artifact")
+    guard sqlite3_exec(activityExport, "UPDATE history_output SET line='ordinary output omitted' WHERE sequence=5", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic Gate activity restoration failed")
+    }
+    var corruptExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &corruptExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let corruptExport else {
+        throw HostError(message: "Synthetic export corruption open failed")
+    }
+    guard sqlite3_exec(corruptExport, "UPDATE history_output SET line='MFB_LOG_PHASE={invalid}' WHERE sequence=3", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export corruption write failed")
+    }
+    sqlite3_close(corruptExport)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(HistoryStore.diagnosticArtifact(for: exportEntries[0]), destination: destination) },
+                     "Invalid phase evidence exported a misleading diagnostic artifact")
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: exportEntries[0]) },
+                     "Invalid phase evidence invented warning counts in a complete issue scan")
+    var limitedExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &limitedExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let limitedExport else {
+        throw HostError(message: "Synthetic export limit open failed")
+    }
+    guard sqlite3_exec(limitedExport, "UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes + 1)) AS TEXT) WHERE sequence=3", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export limit write failed")
+    }
+    sqlite3_close(limitedExport)
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) }, "Oversized export evidence was silently omitted")
+    try require(try Data(contentsOf: destination) == artifact
+                && !FileManager.default.contentsOfDirectory(atPath: directory.path).contains(where: { $0.hasPrefix(".mfb-diagnostic-") }),
+                "Failed diagnostic export altered its destination or left staging files")
+    let coldDirectory = directory.appendingPathComponent("cold-wal", isDirectory: true)
+    try FileManager.default.createDirectory(at: coldDirectory, withIntermediateDirectories: true)
+    let coldDatabase = coldDirectory.appendingPathComponent("history.sqlite3")
+    try writeDatabase([("cold-wal", [context, summary, completed])], schema: 2, destination: coldDatabase)
+    var coldHandle: OpaquePointer?
+    guard sqlite3_open_v2(coldDatabase.path, &coldHandle, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let coldHandle else {
+        throw HostError(message: "Cold WAL fixture writer open failed")
+    }
+    var persist: Int32 = 1
+    let preserveResult = sqlite3_file_control(coldHandle, "main", SQLITE_FCNTL_PERSIST_WAL, &persist)
+    let coldWriteResult = sqlite3_exec(coldHandle, "PRAGMA journal_mode=WAL; UPDATE history_sessions SET updated_at='2026-10-12T09:00:00Z'", nil, nil, nil)
+    let coldCloseResult = sqlite3_close(coldHandle)
+    try require(preserveResult == SQLITE_OK && persist == 1 && coldWriteResult == SQLITE_OK && coldCloseResult == SQLITE_OK,
+                "Cold WAL fixture did not retain writer-managed sidecars")
+    let coldWAL = coldDatabase.path + "-wal"
+    try require(FileManager.default.fileExists(atPath: coldWAL) && FileManager.default.fileExists(atPath: coldDatabase.path + "-shm"),
+                "Closed history lost WAL sidecars required by read-only system SQLite")
+    let coldBytes = try Data(contentsOf: coldDatabase)
+    let coldWALBytes = try Data(contentsOf: URL(fileURLWithPath: coldWAL))
+    let coldHistory = try HistoryStore.load(directory: coldDirectory)
+    let coldAfter = try Data(contentsOf: coldDatabase)
+    let coldWALAfter = try Data(contentsOf: URL(fileURLWithPath: coldWAL))
+    try require(coldHistory.entries.count == 1 && coldHistory.entries[0].statusKey == "history.status.completed"
+                && coldAfter == coldBytes && coldWALAfter == coldWALBytes,
+                "Cold WAL read failed, changed outcomes, or wrote database/committed WAL bytes")
+    var identityContext = outputContext
+    identityContext["output_sequence"] = 0
+    identityContext["run_id"] = "run-synthetic-1"
+    let identityContextLine = try payload("MFB_HISTORY_CONTEXT", identityContext)
+    var identityLaunch = launchValue
+    identityLaunch["run_id"] = "run-synthetic-1"
+    let identityLaunchLine = try payload("MFB_HISTORY_INVOCATION", identityLaunch)
+    var identitySummary = summaryValue
+    identitySummary["run_id"] = "run-synthetic-1"
+    var identityMedia = media
+    identityMedia["failed"] = 1
+    identitySummary["img"] = identityMedia
+    let exactPath = "relative/映像 🚀\nfile's.jpg"
+    identitySummary["failed_files"] = [exactPath, "/synthetic/no-reason.jpg"]
+    let identitySummaryLine = try payload("MFB_HISTORY_SUMMARY", identitySummary)
+    let identityFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed", "error": "synthetic",
+        "run_id": "run-synthetic-1", "output_sequence": 3])
+    let identityEvents = [identityContextLine, identityLaunchLine, identitySummaryLine, identityFinished]
+    let identityAudit = try parsed(identityEvents)
+    try require(identityAudit.entries[0].issues.isEmpty && identityAudit.entries[0].context?.run_id == "run-synthetic-1",
+                "Valid run identity did not bind the context, invocation, summary, and finished event")
+    for rejectedSummary in [summary, try payload("MFB_HISTORY_SUMMARY", identitySummary.merging(["run_id": "other-run"]) { _, new in new })] {
+        let invalid = try parsed([identityContextLine, rejectedSummary, identityFinished]).entries[0]
+        try require(invalid.summary == nil && invalid.needsAttention, "Missing or mismatched run identity was accepted")
+    }
+    try require(try parsed(identityEvents + [identityContextLine]).entries.contains(where: { !$0.issues.isEmpty }),
+                "A reused run identity silently opened another batch")
+    var markerValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "source_path": exactPath,
+        "absolute_path": "/synthetic/absent/映像 🚀\nfile's.jpg", "message": "synthetic decoder failed\nno guessed root cause",
+        "reason_code": "decoder_failed", "run_id": "run-synthetic-1", "invocation_id": "synthetic-call-1"]
+    let markerLine = try payload("MFB_FILE_FAILURE", markerValue)
+    markerValue["message"] = "synthetic metadata failure"
+    markerValue["reason_code"] = nil
+    let secondMarkerLine = try payload("MFB_FILE_FAILURE", markerValue)
+    let identityEntry = identityAudit.entries[0]
+    try require(try HistoryFileFailure.parse(markerLine, context: identityEntry.context!, invocations: identityEntry.invocations, pipeline: "IMG")?.source_path == exactPath,
+                "File marker parser lost Unicode, newline, quotes, or the explicit invocation relation")
+    for invalidMarker in [markerValue.merging(["run_id": "other-run"]) { _, new in new },
+                          markerValue.merging(["invocation_id": "unknown-invocation"]) { _, new in new },
+                          markerValue.merging(["pipeline": "vid"]) { _, new in new },
+                          markerValue.merging(["fingerprint": "guessed"]) { _, new in new },
+                          markerValue.merging(["message": String(repeating: "x", count: 64 * 1024)]) { _, new in new }] {
+        try refuseExport({ _ = try HistoryFileFailure.parse(payload("MFB_FILE_FAILURE", invalidMarker), context: identityEntry.context!, invocations: identityEntry.invocations, pipeline: "IMG") },
+            "Malformed or unbound file failure evidence was accepted")
+    }
+    try writeDatabase([("file-reasons", identityEvents)], schema: 2)
+    var reasonDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &reasonDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let reasonDB else {
+        throw HostError(message: "Synthetic file failure database open failed")
+    }
+    func insertFailureLines(_ lines: [String]) throws {
+        var query: OpaquePointer?
+        guard sqlite3_prepare_v2(reasonDB, "INSERT INTO history_output(session_id,ts,pipeline,line) VALUES ('file-reasons','synthetic','IMG',?)", -1, &query, nil) == SQLITE_OK, let query else {
+            throw HostError(message: "Synthetic file failure insert prepare failed")
+        }
+        defer { sqlite3_finalize(query) }
+        for line in lines {
+            sqlite3_reset(query)
+            guard line.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+                  sqlite3_step(query) == SQLITE_DONE else { throw HostError(message: "Synthetic file failure insert failed") }
+        }
+    }
+    try insertFailureLines([markerLine, markerLine, secondMarkerLine])
+    let reasonEntry = try HistoryStore.load(directory: directory).entries.first(where: { $0.stamp == "file-reasons" })!
+    let reasonSnapshot = try Data(contentsOf: databaseURL)
+    let reasonIssues = try HistoryStore.batchIssues(for: reasonEntry)
+    try require(reasonIssues.fileFailures.count == 3 && reasonIssues.scannedRows == 3 && reasonEntry.summary?.img.failed == 1,
+                "File failure log observations changed authoritative media outcome counts")
+    let reasonDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: reasonEntry)) as? [String: Any]
+    try require(reasonDocument?["run_id"] as? String == "run-synthetic-1"
+                && (reasonDocument?["scope"] as? [String: Any])?["file_failure_observation_rows"] as? Int == 3
+                && (reasonDocument?["records"] as? [[String: Any]])?.allSatisfy({ $0["kind"] as? String == "file_failure_observation" }) == true,
+                "Diagnostic export omitted exact failure observations or confused run and entry identity")
+    try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateFileReasonsForSelfTest(reasonEntry, issues: reasonIssues) }
+    try require(try Data(contentsOf: databaseURL) == reasonSnapshot, "File failure scan, export, or GUI mutated history")
+    guard sqlite3_exec(reasonDB, "UPDATE history_output SET line='MFB_FILE_FAILURE={invalid}' WHERE sequence=1", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic file failure corruption failed")
+    }
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: reasonEntry) }, "Malformed file failure evidence appeared as zero observations")
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: reasonEntry) }, "Malformed file failure evidence was silently excluded from export")
+    sqlite3_close(reasonDB)
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

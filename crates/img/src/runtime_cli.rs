@@ -25,6 +25,15 @@ pub(super) struct RuntimeArgs {
     /// Enable optional image-quality inference. Use =false to override a saved preference.
     #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     quality_heuristic: Option<bool>,
+    /// Standard IMG only: enable the configured pure-media growth budget; verification is unchanged.
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    allow_size_tolerance: Option<bool>,
+    /// Standard IMG only: require no pure-media growth, overriding the saved setting.
+    #[arg(long, global = true)]
+    no_allow_size_tolerance: bool,
+    /// Standard IMG only: maximum pure-media growth in bytes when tolerance is enabled.
+    #[arg(long, global = true)]
+    size_tolerance_bytes: Option<u64>,
     /// JPEG retries and intermediate recovery; integrity verification always remains required.
     #[arg(long, global = true, value_enum)]
     fallback_policy: Option<FallbackPolicy>,
@@ -134,6 +143,17 @@ fn apply<T: Copy>(
 }
 
 impl RuntimeArgs {
+    pub(crate) fn validate_size_tolerance_scope(&self, standard_or_config: bool) -> Result<()> {
+        anyhow::ensure!(
+            standard_or_config
+                || (self.allow_size_tolerance.is_none()
+                    && !self.no_allow_size_tolerance
+                    && self.size_tolerance_bytes.is_none()),
+            "size tolerance flags require img run or config; Fast IMG does not use this policy"
+        );
+        Ok(())
+    }
+
     pub(crate) fn resolve(&self, legacy_expert: bool) -> Result<LoadedConfig> {
         let mut loaded = runtime_config::load(self.config.as_deref(), self.no_config)?;
         let config = &mut loaded.config;
@@ -161,6 +181,24 @@ impl RuntimeArgs {
             sources,
             source_chain,
             "img.quality_heuristic",
+        );
+        apply(
+            if self.no_allow_size_tolerance {
+                Some(false)
+            } else {
+                self.allow_size_tolerance
+            },
+            &mut config.img.allow_size_tolerance,
+            sources,
+            source_chain,
+            "img.allow_size_tolerance",
+        );
+        apply(
+            self.size_tolerance_bytes,
+            &mut config.img.size_tolerance_bytes,
+            sources,
+            source_chain,
+            "img.size_tolerance_bytes",
         );
         apply(
             self.fallback_policy,
@@ -266,6 +304,101 @@ mod tests {
             assert_eq!(
                 loaded.source_chain["cache.path_tree_ttl_seconds"],
                 ["default", "CLI"]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn standard_size_tolerance_resolves_files_flags_and_explicit_false() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config = temp.path().join("image.json");
+        std::fs::write(
+            &config,
+            br#"{"config_version":1,"img":{"allow_size_tolerance":true,"size_tolerance_bytes":1234}}"#,
+        )?;
+        let path = config.to_str().context("test configuration path")?;
+        for (tail, expected, source) in [
+            (Vec::new(), true, path),
+            (vec!["--allow-size-tolerance=false"], false, "CLI"),
+            (vec!["--no-allow-size-tolerance"], false, "CLI"),
+            (
+                vec!["--allow-size-tolerance", "--no-allow-size-tolerance"],
+                false,
+                "CLI",
+            ),
+        ] {
+            let argv = [vec!["img", "run", "/unused", "--config", path], tail].concat();
+            let cli = crate::Cli::try_parse_from(argv)?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.img.allow_size_tolerance, expected);
+            assert_eq!(loaded.sources["img.allow_size_tolerance"], source);
+            assert_eq!(loaded.config.img.size_tolerance_bytes, 1234);
+            assert_eq!(loaded.sources["img.size_tolerance_bytes"], path);
+        }
+        for command in ["run", "config", "fast-img"] {
+            let target = if command == "config" {
+                "show"
+            } else {
+                "/unused"
+            };
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                command,
+                target,
+                "--no-config",
+                "--allow-size-tolerance",
+            ])?;
+            assert_eq!(
+                cli.policy
+                    .validate_size_tolerance_scope(command != "fast-img")
+                    .is_ok(),
+                command != "fast-img"
+            );
+        }
+        assert!(
+            !runtime_config::RuntimeConfig::default()
+                .img
+                .allow_size_tolerance
+        );
+        assert!(
+            crate::Cli::try_parse_from(["img", "config", "show", "--allow-size-tolerance=invalid"])
+                .is_err()
+        );
+        for value in ["0", "4096", "18446744073709551615"] {
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                "config",
+                "show",
+                "--config",
+                path,
+                "--size-tolerance-bytes",
+                value,
+                "--no-allow-size-tolerance",
+            ])?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.img.size_tolerance_bytes.to_string(), value);
+            assert_eq!(loaded.sources["img.size_tolerance_bytes"], "CLI");
+            assert!(!loaded.config.img.allow_size_tolerance);
+        }
+        let fast = crate::Cli::try_parse_from([
+            "img",
+            "fast-img",
+            "/unused",
+            "--size-tolerance-bytes",
+            "0",
+        ])?;
+        assert!(fast.policy.validate_size_tolerance_scope(false).is_err());
+        for value in ["-1", "1.5", "18446744073709551616"] {
+            assert!(
+                crate::Cli::try_parse_from([
+                    "img",
+                    "config",
+                    "show",
+                    "--size-tolerance-bytes",
+                    value,
+                ])
+                .is_err()
             );
         }
         Ok(())

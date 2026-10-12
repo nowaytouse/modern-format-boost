@@ -79,6 +79,27 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
+Standard IMG exposes **Allow size growth** and **Growth limit (bytes)** in Images,
+backed by `img.allow_size_tolerance` (default `false`) and `img.size_tolerance_bytes`
+(default `524288`, or 512 KiB). `img run --allow-size-tolerance --size-tolerance-bytes 4096`
+requests at most 4096 bytes of pure-media growth; setting the budget alone does not
+enable it. `=false` or `--no-allow-size-tolerance` overrides saved permission.
+Metadata is excluded, strict-size policy may veto growth, and mandatory verification
+is unchanged. A zero enabled budget permits equal size without growth; disabled or
+strict-size policy still requires a smaller result. Effective config/history retain
+each value and its source; logs report requested and effective bytes. The launcher
+forwards `--img-size-tolerance-bytes`. Fast IMG and VID keep their existing policies;
+inapplicable explicit launcher/worker flags are rejected.
+Photos checkboxes now keep their labels beside the control in a narrower settings
+panel, including after inherited settings load or tab reset.
+
+Within a single JPEG metadata audit, layered XMP and JPEG-only carrier checks reuse
+one exact reconstruction proof when both need it. Reuse rehashes both current files
+and fails if either changed; native metadata, sidecars and contradictions remain
+independently checked. This removes a duplicate decoder invocation on that path,
+not a mandatory safety gate or proof across separate audits. No broad throughput
+increase is claimed without a representative benchmark.
+
 Standard IMG/VID now share the typed `execution.error_mode` preference:
 `log-and-continue` records recoverable file failures and continues, while
 `fail-fast` stops at the first such failure. Failed files retain their sources
@@ -97,6 +118,13 @@ Multiple worker invocations remain distinct from media counts; identical snapsho
 share a display entry. Older records explicitly say configuration was not recorded.
 This captures fields in `RuntimeConfig`, not every command-specific flag, the full
 override chain, tool versions or the backend ultimately selected after a fallback.
+New worker launch requests also record the exact requested program and argument
+array, an invocation ID, and the binary path, byte size and BLAKE3 hash observed
+before launch. Processing History binds the captured configuration to that invocation.
+Missing or unreadable binary evidence remains unknown with a diagnostic; older
+records are not filled from current executables. `launch_requested` is a request,
+not proof of the executed process, loaded binary, PID or build provenance, and does
+not establish a complete Run Manifest.
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
@@ -127,10 +155,41 @@ proof without claiming a unified inventory for the single files. A worker failur
 still stops all post-processing delivery for the batch, even when other workers
 succeeded. Multi-input watch mode is rejected rather than silently watching one path.
 Previews record plans without scanning media or inventing processing/verification counts.
+For a content-based, read-only routing inventory instead, use
+`drag_and_drop_processor --mode auto --plan-json /path/to/input` (also supports
+`images`, `videos`, and multiple inputs). The versioned JSON lists every visible
+regular file, its relative path, content-routed worker, selection, source bytes,
+action and reason, with the already bound requested output. It returns before
+session/database/lock/output creation or worker launch. Sidecars are separate from
+media tasks; non-media copying is explicitly conditional on successful adjacent
+processing. An incomplete or unsafe scan fails rather than returning a partial plan.
+This is a routing snapshot, not an encoder-quality prediction, space/time estimate,
+delivery proof, or a persisted execution/resume plan. Fast and management modes
+are not covered. `--plan-json` and the existing command-only `--dry-run` are distinct.
+Explicit standard `images/videos` modes select the same scope as the corresponding
+filter flags. Adjacent output for a directory must not contain, equal or sit inside
+its source directory; linked aliases are resolved before this check, without creating output.
 Standard pre-scans include legal linked directories before routing workers. Linked
 targets are checked before descent; loops, broken links and unsafe targets fail
-with an incomplete-inventory error. Fast mode link policy is unchanged; this is
-not the complete Unified Preflight or a scan-to-execution identity guarantee.
+with an incomplete-inventory error. Fast mode link policy is unchanged.
+Within the worker queue, standard IMG retains each discovered file's size and
+modification time, plus device/inode/change time on Unix, and checks them before
+conversion or a resume skip. Fast IMG checks the planned source's BLAKE3 before
+encoding or accepting an intentional no-encode result. Changed, replaced or unreadable
+sources are refused and retained as failures, not silently counted as skips.
+Standard metadata evidence is not a content hash; non-Unix evidence remains weaker.
+This admission check does not complete Unified Preflight, bind the launcher's
+inventory across processes or replace verification of the final artifact.
+The standard launcher now retains its own scanned source metadata and resolved
+target paths, checks classification against that snapshot, and rechecks the
+relevant sources immediately before spawning a worker. Changed, missing, replaced
+or retargeted sources refuse launch and remain untouched; missing outcome receipts
+remain unknown, not inferred failures or skips. The shared application worker
+executor owns invocation/config capture, output draining and child-result errors,
+so these contracts no longer live inside the interactive menu implementation.
+The GUI uses the same launcher entry point. This pre-launch guard is not a content
+hash or a complete cross-process inventory protocol, and does not authorize
+batching by rescanning a directory; per-file launch overhead remains to be addressed.
 
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that
@@ -159,12 +218,63 @@ filled with defaults. This does not establish equal tools, inputs or environment
 guess throughput, or explain causality from configuration changes.
 Select one run to return to its captured effective configuration and paged output.
 
-The single-run **Failed files** view filters recorded paths without opening logs.
-It displays at most 1,000 rows and 2 MiB of path text, with separate shown, matched
-and recorded totals. Select a row to copy its exact path or locate an existing
-regular file in Finder. Missing paths remain copyable but cannot be located;
-relative paths and leaf symlinks are not opened. Recorded paths are not proof that
-every failure was captured and never replace the independent processing counts.
+The single-run **Issues** view scans all stored output for the selected batch,
+not just the current page. It groups exact normalized messages by pipeline,
+explicit stage and severity, retaining paths, values and first/last original
+records with their sequence numbers. Occurrences count log records, not files or
+shared root causes. Unfinished batches are labeled snapshot-only. Reads are
+bounded to 100,000 rows/64 MiB, 4,096 groups/2 MiB retained group content and 15
+seconds; invalid boundaries, damaged evidence, cancellation or exceeded limits
+make the result unavailable instead of presenting a partial or zero total.
+Selection changes and closing the window cancel the read; original output paging
+and processing results are unchanged.
+
+The export button saves a versioned **selected-run diagnostic JSON** locally.
+It rereads that batch from one read-only SQLite snapshot, including recorded
+configuration, outcomes, verification and terminal state, plus raw warning/error
+and explicit phase/Gate activity records and recorded worker launch requests with
+their bound configuration. Its scope counts activity rows separately from phase
+and diagnostic rows, and lists retained and intentionally omitted
+ordinary log rows; unknown values stay null. This is neither recovery state nor
+a complete Run Manifest. Invalid critical evidence or size limits stop export;
+closing the window or changing selection cancels publication. Existing files,
+links and Git workspace destinations are never replaced or used for export.
+
+New launcher-managed attempts have independent opaque run IDs, including repeated
+attempts in one session. History binds events, worker launch requests and captured
+configuration to that ID; missing or conflicting identities in an identified run
+are incomplete evidence. Older records remain explicitly unidentified. These IDs
+do not establish file-task identity, crash recovery or the executed binary image.
+
+The single-run **Failed files** view filters paths and explicitly recorded reasons
+without opening logs. Versioned `MFB_FILE_FAILURE` observations bind the exact
+reported path, optional absolute path, reason and optional explicit code to the
+run and worker invocation. It reads the selected SQLite snapshot under the same
+bounded whole-batch scan; malformed, oversized or unbound evidence is unavailable,
+not zero. Equal observations share a display row; different reasons stay separate.
+Observation counts are log records, never authoritative failed-file counts or root
+causes. Earlier path-only records say no file-linked reason was recorded.
+The table is bounded to 1,000 rows and 2 MiB of retained text, with shown/matched
+and recorded-row totals. Copy preserves the reported path; Finder uses an explicit
+absolute observation when available, otherwise an absolute reported path. Missing
+files and leaf symlinks cannot be opened. Selected-run diagnostic JSON retains
+each original observation with separate row accounting and its run ID; this is
+still not a complete Run Manifest or proof that every failure was captured.
+Diagnostic export schema 2 separates `history_entry_id` from the recorded `run_id`;
+unidentified earlier runs export a null run ID. The History database schema is unchanged.
+History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
+read-only system SQLite can open cold WAL histories without initializing them
+writable. Full synchronous writes and checkpoints remain enabled; the reader
+does not use immutable mode, ignore committed WAL, repair or reset a database.
+Existing cold histories missing these files are not silently repaired by the GUI;
+a normal validated writer opening that database manages its sidecar lifecycle.
+
+The live main-window log folds only consecutive, exactly identical warnings and
+errors and labels how many times that same log appeared. Different paths/numbers,
+normal intervening lines, phase controls and new attempts break folding. Latest
+actionable diagnostics and result/progress parsing consume the original stream;
+complete SQLite output is unchanged. Structured file failures are readable messages
+in the ordinary live view, with their raw JSON additionally available in Developer.
 
 ### Live file progress
 
@@ -176,10 +286,26 @@ counts newly pending jobs only after their wave results are persisted, excluding
 resume-reused outputs. Other phases remain indeterminate until reliable totals
 are available; final success still comes from the processing result.
 
-### Cache management
+During Gate 1, the GUI instead shows the latest explicitly reported local check:
+count, size, BLAKE3, metadata, orientation or decode. Inventory preparation starts
+at zero checks; returned check counts include a failed check, and the remaining
+checks are explicitly unrun after failure. Passing all six checks completes that
+local Gate instance, not the batch or Photos delivery. The activity label shows
+how long ago the GUI received its latest update, not a timeout, remaining-time
+estimate or whole-run percentage. Original events remain in History, and processing
+or terminal-state changes clear the live activity without changing result counts.
+
+### Database and cache management
 
 Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
+Each standard IMG/VID directory-cache lookup emits one versioned structured
+`path_tree` decision: hit, miss, invalidated, bypassed or error, with its actual
+reason and opaque cache key when applicable. Reasons distinguish absent records,
+idle expiry, future timestamps, schema/digest/JSON failures and incomplete,
+changed or unreadable filesystem identities. No extra scan, hash or database
+query is added for this reporting; it is not a hit-rate counter, other-cache
+inventory or media verification proof.
 Versioned cache identities preserve native path bytes and normalized scan options.
 Directory freshness uses full-resolution timestamps, requires root evidence, and
 rejects missing or unknown evidence. File metadata is also checked, including
@@ -208,7 +334,7 @@ IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
 retain inherited values, and `config show --effective` reports their source chain.
 Both accept positive integers up to 9223372036854775807. The launcher forwards
 explicit overrides to IMG/VID and fast modes without inserting defaults. Settings >
-Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
+Database & Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
 inherit configuration; resetting this tab removes only cache overrides. If IMG and
 VID inherit different limits, the combined view keeps their separate values until
 an explicit shared override is entered. Developer mode shows each source chain.
@@ -225,7 +351,7 @@ committed but subsequent inspection fails, the error states the committed counts
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
 
-**Settings → Cache → Prune Cache** runs the same operation using the current
+**Settings → Database & Cache → Prune Cache** runs the same operation using the current
 draft's effective cache limits. It resolves relevant image/video configuration
 before any deletion and pins the resulting limits for the maintenance command.
 Different inherited limits must be reconciled with explicit shared overrides;
@@ -240,12 +366,41 @@ shared database or immediately reclaimable space. Age-based maintenance deletes
 records and orphan path indexes atomically; invalid retention or count errors fail
 explicitly. This is separate from SQLite directory-cache TTL/LRU maintenance above.
 
-The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
+The native GUI's **Settings → Database & Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
 confirmed cleanup removes only local path-tree snapshots and obsolete analysis
 cache files. History, checkpoints, processed-file receipts, verification state,
 models and unrecognized namespaces/files remain intact. SQLite reuses deleted
 pages, so database file size is not a promise of immediately reclaimable space.
+
+The same read-only snapshot reports the Core store schema, SQLite version,
+journal mode and allocated/free page counts. Missing evidence stays unknown;
+logical free pages are not a disk-space saving receipt.
+
+**Back Up Database** or `cache_cleaner --local-backup /path/to/new-backup.sqlite --json`
+creates a verified logical snapshot of Core state and cache, including committed
+WAL data but not pending transactions. History, PostgreSQL and media are separate.
+The existing source is opened read-only, without initialization, migration,
+temporary-root fallback or checkpointing. Structure, foreign keys and all stored
+BLAKE3 digests are verified before and after backup; a damaged/unknown store is
+rejected. A new destination outside Git workspaces and the active Core directory
+is required. Publication never overwrites a file or SQLite sidecar and requires
+filesystem hard-link support; Unix backups use mode 0600. Normal errors clean
+staging; a forced termination can leave a private staging directory. This does
+not add automatic restore or retention, and backups can contain private paths.
+
+**Back Up History** in Settings separately snapshots the displayed History
+location. CLI: `cache_cleaner --history-backup /path/to/new-history.sqlite
+--history-directory /absolute/history-directory --json`. The source must already
+exist; there is no implicit fallback, initialization, migration or restore.
+Committed WAL is included and pending transactions are excluded. The copied
+snapshot is checked for supported schema (1 or 2), SQLite integrity and foreign
+keys before private, no-overwrite publication outside the active History
+directory and Git workspaces. The receipt counts sessions, events and output
+rows in that snapshot, not media files. All original stored rows remain intact;
+Core state, media and PostgreSQL are not included. Filesystem hard-link support
+is required and Unix backups use mode 0600; errors remove ordinary staging, while
+forced termination can leave a private staging directory.
 
 **Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
 checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read
@@ -698,8 +853,12 @@ The launcher's captured combined worker output is now buffered into the same
 database, not duplicated into session and verbose text logs. **View processing
 output** opens its latest page, with older/newer navigation and a Summary/Output
 switch. Each page is bounded to 1,000 records and 2 MiB; record ranges and totals
-refer to the captured output snapshot, not files. A Diagnostics filter shows only
-warnings, errors and unreadable-row notices on the current page. Oversized or
+refer to the captured output snapshot, not files. **Diagnostic groups** combines
+exactly repeated messages on the current page by pipeline, recorded phase and
+severity, showing occurrences and record ranges. Paths and numbers remain part of
+the identity; a missing phase is unknown, never inferred from another page. These
+are log-record counts, not failed-file or whole-batch error counts. **All** preserves
+each original record. Oversized or
 invalid records are explicitly marked without blocking navigation. Refresh to
 include output appended since the snapshot. Batch sequence boundaries keep
 watch-mode runs separate; output is not interpreted as authoritative failure counts.
@@ -1344,7 +1503,10 @@ heuristic, fallback, tool-path and Photos naming/backend settings.
   library or any media. Folder/file comparison is deliberately not part of
   MFB; use a dedicated external deduplication tool for that job. The native
   GUI exposes the same **Compare backup** action and rejects non-Photos inputs.
-- `--allow-size-tolerance`: relaxes the default strict output-size gate.
+- `--allow-size-tolerance`: requests the configured pure-media growth budget where
+  the active policy permits it; strict-size and integrity gates remain mandatory.
+- `--size-tolerance-bytes N`: standard IMG byte budget, default 524288; does not
+  enable growth on its own.
 - `--allow-expert-options`: permits explicitly gated fallback/experimental
   encoder paths; it does not weaken final verification.
 - `--in-place`: Replace original files. **WARNING: IRREVERSIBLE.**

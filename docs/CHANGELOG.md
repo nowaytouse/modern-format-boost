@@ -4,6 +4,268 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Run identity, file-linked reasons and live diagnostic folding (2026-10-12)
+
+- Give each launcher-managed attempt an independent opaque run ID, including
+  repeated attempts in one session. Bind captured events, worker requests and
+  effective configuration; override stale inherited child IDs with the observed
+  run/invocation identity. Reject mismatched identified History events rather
+  than reconstructing identities from filenames. Earlier records stay unknown.
+- Fix the actual CLI-to-History cold-WAL read failure observed with system SQLite:
+  validated writers retain SQLite-managed WAL/shared-memory files on close through
+  `SQLITE_FCNTL_PERSIST_WAL`, keeping full synchronization and checkpointing. Readers
+  remain read-only and do not use immutable mode, ignore WAL, repair or reset old
+  databases. Missing-sidecar older cold histories stay explicitly unavailable
+  until a normal validated writer manages their lifecycle. Add Rust and native
+  cold-close/read regressions preserving database and committed-WAL bytes.
+- Emit bounded schema-1 `MFB_FILE_FAILURE` observations only for explicit IMG/VID
+  failed outcomes with a reported file path and valid launch identities. Preserve
+  the exact path, optional lexical absolute path, complete reason and optional
+  explicit classification. Diagnose invalid/oversized/unencodable evidence; do
+  not invent codes, fingerprints, root causes or media counts. Budget the entire
+  control line, including its prefix and newline, within the GUI's 64 KiB transport
+  chunk; regression-test the exact boundary and reject oversized evidence.
+- Extend the native History Failed files table with recorded reasons, reason/path
+  search, full tooltips and safe navigation. Reuse the bounded read-only batch
+  snapshot and reject unbound/damaged evidence. Equal observations share a row;
+  different reasons remain separate and path-only records show missing evidence.
+  Fix the related stale loading footer. Row counts and observation occurrences
+  remain distinct from authoritative processing outcomes.
+- Diagnostic export schema 2 distinguishes `history_entry_id` from the actual
+  nullable `run_id`, retaining raw file observations and separate row accounting.
+  History database schema is unchanged; this is not a complete Run Manifest,
+  file-task identity, crash recovery or proof of the actual executed binary.
+- Fold only consecutive exact warning/error lines in the live window. Preserve
+  the original diagnostic, label log occurrences, reset on intervening lines,
+  phase controls and new attempts, and parse results/progress independently.
+  Keep complete SQLite output and the latest actionable error. Render file
+  observations readably without grouping distinct observations by diagnostic text.
+- Validation: scoped Rust suites passed (111 dev-library, 58 launcher and eight
+  logging-contract cases); child probes are fixtures, not additional product
+  acceptance, and reruns are not counted again. Affected-target strict Clippy,
+  formatting, Swift warnings-as-errors and three-language native self-tests
+  passed. Isolated AppKit dark/light checks covered recorded reasons, search,
+  missing-file navigation, loading completion and three identical log occurrences
+  while synthetic results stayed one success/one failure. A targeted launcher
+  build and synthetic dry-run passed; system SQLite and the native History window
+  read both closed-writer attempts, with distinct run IDs and unknown media counts.
+  No production Photos/media/history, dependency changes, installed-app replacement,
+  full workspace/cross-platform, throughput or new CI verdict is claimed.
+
+### Shared worker execution and read-only routing plans (2026-10-12)
+
+- Extract the reusable worker command, invocation/configuration observation,
+  process streaming and collected-error contracts into `dev::app::worker` behind
+  a narrow session adapter. Keep CLI planning, session lifecycle and menus outside
+  the executor. Preserve child draining, result counts, exit status, configuration
+  rejection and persistence-error propagation; the launcher is not yet a thin
+  headless entry point and the interactive menu is not retired.
+- Retain each standard launcher's discovered source metadata and canonical target
+  through classification and command planning. Reuse Foundation file identity,
+  bind relevant observations to each command and check immediately before spawn.
+  Changed, replaced, retargeted, missing or unreadable inputs refuse launch without
+  inventing file outcomes or touching sources. This is pre-launch metadata evidence,
+  not a content hash, final verification or complete cross-process inventory binding.
+- Add `drag_and_drop_processor --plan-json` for standard auto/images/videos and
+  multiple inputs. Use the same inventory/filter/link/hidden-file policy to report
+  relative paths, selected workers, bytes, actions/reasons and requested outputs.
+  Return before session/database/lock/output creation or processing. Report sidecars
+  independently and non-media copying as conditional, refuse incomplete inventories,
+  and distinguish routing snapshots from command-only dry runs, persisted execution
+  plans, encoder decisions, estimates and delivery proofs. Fast/management modes
+  are explicitly unsupported rather than returning an invented plan.
+- Reconcile `--mode images/videos` with the shared scan filter even without the
+  equivalent `--images-only/--videos-only` flags. Routing inventory, byte totals
+  and post-processing verification now describe the selected standard pipeline.
+  Count media disguised as `.xmp` once by content route, not again as a sidecar.
+  Single-directory adjacent plans also reuse the existing multi-input output
+  resolver to reject source/output overlap, including linked aliases and
+  nonexistent suffixes, before any destination is created.
+- Keep per-file child scheduling: replacing it with directory scans would admit
+  late files or change scan policy without an exact shared inventory protocol.
+  This batch does not establish a processing-throughput gain.
+- Validation: 152 distinct scoped Rust tests passed (57 launcher, 88 dev
+  infrastructure, five shared-worker and two source-identity tests; reruns and the
+  child marker probe are not counted again). Affected-target strict Clippy,
+  workspace formatting and the targeted launcher build passed. Actual CLI checks
+  covered multi-input JSON/category reconciliation, Unicode/newline paths,
+  image/video/in-place selections, help and four explicit refusals. The isolated
+  fixture tree was unchanged, with no history/home/lock/output creation. No new
+  dependencies, production Photos/media/history, full-workspace or cross-platform
+  acceptance, throughput benchmark or new CI verdict is claimed. No GUI source
+  changed and the installed app was not rebuilt or replaced.
+
+### History backup, whole-batch issue review and cache decisions (2026-10-12)
+
+- Add explicit `cache_cleaner --history-backup DEST --history-directory SOURCE`
+  and native Settings backup for the independent History SQLite database. Read
+  the existing source only; preserve schema 1/2 and raw rows without migration.
+  Include committed WAL, exclude pending transactions, verify the copied
+  snapshot's structure/foreign keys/schema and report session/event/output row
+  counts. Publish privately without replacing files/sidecars or writing into the
+  active source directory or Git workspaces. Reuse the Core backup publication
+  helpers and recheck late Git markers before publication. No restore/retention,
+  real media or Core/PostgreSQL copy is implied.
+- Add a compact native History Issues view for all stored output in one selected
+  batch, carrying explicit phase across pages and grouping exact messages by
+  pipeline/phase/severity. Preserve values/paths and first/last original records.
+  Count log occurrences, not failed files or shared root causes. Show active runs
+  as snapshots; reject invalid evidence/boundaries and bounded-read overflow
+  rather than displaying partial zeroes. Selection/refresh/close interrupts the
+  actual reader; existing raw paging, source data and outcome counts are retained.
+- Report one bounded structured path_tree decision per standard IMG/VID lookup,
+  distinguishing hit/miss/invalidated/bypassed/error with actual reason and opaque
+  key. Reuse the existing SQLite row fetch and filesystem validation; do not add
+  queries, scans, content hashes, persistent counters or a weaker verification
+  route. Preserve formal-state corruption and transaction failure behavior.
+- Validation: 65 distinct scoped Rust tests passed; History, cache-manager and
+  path_tree tests also ran with four test threads without counting reruns as new
+  tests. Affected-target strict Clippy, workspace formatting, localization syntax,
+  native Swift warnings-as-errors and three-language self-tests passed. Isolated
+  AppKit checks confirmed 1,002 stored rows aggregate to 1,000 log occurrences in
+  three groups while processing outcomes remain separate. Native History backup
+  saved one session, three events and 1,002 output rows; SQLite integrity/schema/
+  foreign-key checks of the saved file passed. No production Photos/history/media,
+  full workspace, cross-platform, throughput or new CI acceptance is claimed.
+  The installed app was not rebuilt or replaced.
+
+### IMG admission, local Gate activity and worker launch provenance (2026-10-12)
+
+- Retain standard IMG discovery metadata through task admission and check it before
+  conversion or resume skip: size/modification time plus Unix device/inode/change
+  time. Fast IMG checks its planned BLAKE3 before encoding or accepting a no-encode
+  result. Refuse changed, replaced or unreadable sources as failures and retain
+  them; do not mark them completed or skipped. Reuse the existing scan snapshot
+  without adding a second scan. This is worker-queue admission, not complete
+  Unified Preflight, cross-process inventory binding or final delivery evidence;
+  standard metadata identities are not content hashes and non-Unix evidence is weaker.
+- Emit bounded versioned activity records around Gate 1 inventory and its six
+  existing checks, retaining their order and early failure behavior. Show the
+  latest check, returned-check count, unrun checks on failure and time since the GUI
+  received the update in the native progress row, without file or whole-run
+  percentages, elapsed-check claims or timeout inference. Clear live activity on
+  processing/terminal transitions, retain the raw events in History, and reject
+  invalid/regressing activity without rewriting processing outcomes. Local Gate
+  completion does not mean whole-batch or Photos delivery completion.
+- Record versioned worker `launch_requested` evidence before invocation: exact
+  program/arguments, bounded unique invocation identity and the path/size/BLAKE3
+  observed before launch. Bind captured effective configuration to its invocation
+  and display it in native History; unknown or unreadable binary evidence remains
+  unknown with its diagnostic. Selected-run JSON includes worker requests/bound
+  configuration and raw Gate activity with separate activity-row accounting. This
+  is not proof of the executed image, PID, build or a complete Run Manifest.
+- Correct two new launcher test fixtures: initialize the History schema through
+  the official writer before installing a failure trigger, and assert that a dry
+  run leaves the lazily created database absent instead of opening a nonexistent
+  database. Preserve child draining, exit status and processing-count assertions;
+  production lazy initialization and database behavior are unchanged.
+- Preserve the underlying error chain in collected worker failures, so History
+  persistence diagnostics retain the specific SQLite cause without losing child
+  exit status, counts or trailing output. Accept valid inventory `running` to
+  `failed` activity with zero checks completed, including diagnostic export, while
+  still refusing to reopen a terminal Gate.
+- Use the native semantic log background without a fixed alpha transformation,
+  preserving text contrast when changing between light and dark appearances.
+  Cover both appearance resolutions in native self-tests and inspect the actual
+  switched window; no processing behavior is changed.
+- Preserve the concurrent dependency refresh: cc 1.8.0, serde_json 1.0.154,
+  syn 3.0.8 and unicode-ident 1.0.27, plus the pinned OSS-Fuzz builder digest.
+  These updates are not established causes of the test-fixture failures; the
+  Docker image build was not exercised locally.
+- Validation: 86 distinct scoped Rust tests passed with the refreshed lockfile;
+  the same 53 launcher tests also passed with four test threads. Affected-target
+  strict Clippy, workspace formatting, three localization syntax checks, native
+  Swift warnings-as-errors and three-language self-tests passed. Isolated AppKit
+  checks covered light/dark layouts and synthetic History export with three raw
+  rows split into one diagnostic, one phase and one activity record, preserving
+  exact arguments and unknown binary/config evidence. No production Photos/media,
+  full-workspace, cross-platform, throughput or new CI verdict is claimed; the
+  installed application was not rebuilt or replaced.
+
+### Core database management and selected-run diagnostics (2026-10-12)
+
+- Add a read-only Core database overview alongside namespace statistics: current
+  schema, SQLite version, journal mode and allocated/free pages from one snapshot.
+  Extend the native Database & Cache tab without treating free pages as saved space.
+- Add an explicit Core SQLite backup command and native save workflow. Open the
+  existing source read-only, reject implicit root fallback and unsafe/existing
+  destinations, include committed WAL but not pending transactions, verify schema,
+  structure, foreign keys and all stored hashes before/after the logical backup,
+  and publish create-new after synchronization. No History/PostgreSQL/media copy,
+  automatic restore, migration or source checkpoint; hard-link support is required.
+- Export selected-run diagnostic JSON from one read-only History snapshot with
+  batch boundaries, typed config/counts/end state and original warning/error/phase
+  records. Explicitly report retained/omitted log rows and preserve unknowns. Reject
+  overlapping batch boundaries, invalid/oversized critical evidence, existing
+  files/links and Git workspace paths;
+  cancellation or selection changes prevent publication. Not authoritative state
+  or a complete Run Manifest. Keep file preparation off the native main thread.
+- Refresh the About icon's help and accessibility label on language changes.
+- Isolate the metadata logging evidence contract through the existing exact-child
+  test helper, retaining all occurrence and structured-field assertions. Address
+  the matching Shared coverage failures in runs 38153772166 and 38192927969 without
+  changing production log filters; both ran before this test fix. Subscriber/
+  callsite competition remains a causal hypothesis, not a demonstrated production
+  data-loss finding.
+- Validation: 20 cache-manager unit tests, 9 CLI cache integration tests and 21
+  Foundation logging tests with CI features passed. Cache-manager strict Clippy,
+  workspace formatting, localization syntax, native Swift warnings-as-errors and
+  three-language self-tests passed. Isolated AppKit light/dark and three-language
+  checks exercised the Core backup and selected-run JSON save workflows; 5 output
+  rows produced 3 retained diagnostic/phase rows and 2 explicitly omitted ordinary
+  rows, while processor outcomes remained 2 successes and 1 failure. No production
+  library, real media throughput, cross-platform or full-workspace acceptance;
+  installed application was not refreshed.
+
+### Custom IMG byte budgets, history diagnostics and live localization (2026-10-12)
+
+- Add `img.size_tolerance_bytes`, default 524288, through typed configuration,
+  standard IMG CLI, launcher, effective-config sources/history and native Images
+  settings. Explicit options carry the same budget through shared final checks,
+  JXL exploration and eligible AVIF fallbacks; changing the budget alone does not
+  enable growth. Preserve strict-layer veto, metadata independence and integrity
+  gates. Zero allows equal size only with enabled tolerance; disabled remains
+  strictly smaller. Fast IMG/VID retain their existing budgets and policies.
+- Group current-page history diagnostics by pipeline, explicitly recorded phase,
+  severity and complete normalized message. Keep distinct paths/numbers separate,
+  unknown phases explicit, invalid control records visible and all original output
+  available. Show log occurrences/repeats and record ranges without presenting them
+  as failed-file or whole-batch error counts. No schema change or extra batch scan.
+- Keep core readiness as typed state and render it in the currently selected GUI
+  language. Refresh status/help wording without resetting errors, completion,
+  elapsed processing time or command drafts; do not compare translated strings
+  to decide whether the core is ready. Preserve original failure diagnostics.
+- Remove verified completed requirements and duplicated delivery reports from the
+  private task handoff, retaining numbered remaining requirements, reference ideas,
+  durable contract/changelog links and evidence limitations. This does not close
+  partially implemented main tasks or delete their outstanding acceptance work.
+- Verify 85 focused Rust regressions, related strict Clippy, workspace formatting,
+  warnings-as-errors Swift compilation, three-language native self-tests and
+  isolated AppKit views. Exercise budget save/reopen/zero/reset and raw/grouped
+  history switching with synthetic records. This is not production Photos,
+  end-to-end media throughput, full workspace/platform or new CI acceptance;
+  the installed application was not repackaged.
+
+### Bounded IMG gate reuse, size-tolerance settings and native layout (2026-10-12)
+
+- Share exact JPEG reconstruction evidence between layered-XMP and JPEG-only
+  metadata checks within one audit. Rehash source/output before reuse, reject
+  changed or unreadable bytes, and retain native metadata, sidecar provenance and
+  contradictory-field checks. Ordinary one-consumer audits do not add a hash pass;
+  debug diagnostics report proof reuse and its duration. This does not replace
+  independent gates, create a persistent proof cache or establish batch speedup.
+- Add typed `img.allow_size_tolerance`, default false, to standard IMG configuration,
+  effective config, source tracking, history and the Images settings tab. Preserve
+  the existing 512 KiB pure-media growth budget and strict-layer veto. Support
+  explicit true/false and the negative override, forwarding through the launcher;
+  reject explicit flags in unsupported modes. Log requested and effective policy.
+  Fast IMG/VID defaults and gates remain unchanged; arbitrary byte budgets remain
+  outside this change. Synchronize three languages and the example config.
+- Narrow native Settings and place Photos checkbox labels beside their controls,
+  retaining titles on restore, accessibility/help, advanced-field visibility and
+  inherited-value behavior. Verify the real AppKit window as well as self-tests;
+  do not repeatedly rebuild the full app or replace the installed application.
+
 ### Linked-input preflight, file-sensitive cache and history config differences (2026-10-11)
 
 - Include legal linked directories in standard pre-scans, preserving virtual input

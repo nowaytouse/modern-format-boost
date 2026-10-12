@@ -466,6 +466,7 @@ fn fast_gif_convert_options(
     foundation::conversion::ConvertOptions {
         output_dir: Some(output_root.to_path_buf()),
         base_dir: Some(input_root.to_path_buf()),
+        size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
         flags: foundation::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE
             | if apple_compat {
                 foundation::conversion::ConvertFlags::APPLE_COMPAT
@@ -1839,6 +1840,13 @@ mod fast_gif_tests {
                 .flags
                 .contains(foundation::conversion::ConvertFlags::APPLE_COMPAT)
         );
+        for options in [&without_apple, &with_apple] {
+            assert_eq!(
+                options.size_tolerance_bytes,
+                foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+            );
+            assert!(!options.effective_allow_size_tolerance());
+        }
         Ok(())
     }
 

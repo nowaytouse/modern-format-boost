@@ -6,6 +6,8 @@
   "img": {
     "allow_database": false,
     "quality_heuristic": false,
+    "allow_size_tolerance": false,
+    "size_tolerance_bytes": 524288,
     "jpeg_effort": 11,
     "fallback_policy": "strict"
   },

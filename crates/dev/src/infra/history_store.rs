@@ -12,6 +12,185 @@ const OUTPUT_BATCH_LINES: usize = 128;
 const OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const OUTPUT_READ_LIMIT: usize = 64 * 1024 * 1024;
 
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryBackupReceipt {
+    pub schema_version: u32,
+    pub kind: &'static str,
+    pub source: String,
+    pub destination: String,
+    pub history_schema_version: i64,
+    pub bytes: u64,
+    pub sessions: u64,
+    pub events: u64,
+    pub output_rows: u64,
+}
+
+/// Copy a single committed SQLite snapshot, without creating or migrating its source.
+/// Counts describe database rows in the verified copy, never media file outcomes.
+pub fn backup_history_store(log_dir: &Path, destination: &Path) -> Result<HistoryBackupReceipt> {
+    use super::sqlite_backup;
+    ensure!(
+        log_dir.is_absolute(),
+        "history backup directory must be absolute; no fallback selected"
+    );
+    let directory =
+        std::fs::symlink_metadata(log_dir).context("inspect history backup directory")?;
+    ensure!(
+        directory.is_dir() && !directory.file_type().is_symlink(),
+        "history backup source must be an existing regular directory"
+    );
+    let source = log_dir.canonicalize()?.join(HISTORY_DATABASE);
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let path = source.with_file_name(format!("{HISTORY_DATABASE}{suffix}"));
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "history backup source or SQLite sidecar is not a regular file"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !suffix.is_empty() => {}
+            Err(error) => {
+                return Err(error).context("inspect history backup source; no database created");
+            }
+        }
+    }
+    let destination = sqlite_backup::resolve_destination(&source, destination)?;
+    let parent = destination
+        .parent()
+        .context("history backup destination has no parent")?;
+    let source_text = source
+        .to_str()
+        .context("history backup source path is not UTF-8")?
+        .to_owned();
+    let destination_text = destination
+        .to_str()
+        .context("history backup destination path is not UTF-8")?
+        .to_owned();
+    let staged = tempfile::Builder::new()
+        .prefix(".mfb-history-backup-")
+        .tempdir_in(parent)?;
+    let backup = staged.path().join(HISTORY_DATABASE);
+    let connection = Connection::open_with_flags(
+        &source,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    // READ_ONLY protects the main database; query_only would also prohibit the new output database.
+    connection
+        .execute(
+            "VACUUM main INTO ?1",
+            [backup
+                .to_str()
+                .context("history backup staging path is not UTF-8")?],
+        )
+        .context("copy committed history SQLite snapshot; source retained")?;
+    drop(connection);
+
+    let mut verified = Connection::open_with_flags(
+        &backup,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    verified.busy_timeout(Duration::from_secs(5))?;
+    verified.pragma_update(None, "query_only", true)?;
+    let snapshot = verified.transaction()?;
+    let version = schema_version(&snapshot)?;
+    validate_backup_schema(&snapshot, version)?;
+    {
+        let mut statement = snapshot.prepare("PRAGMA integrity_check")?;
+        let mut rows = statement.query([])?;
+        let first = rows
+            .next()?
+            .context("history SQLite integrity check returned no result")?;
+        ensure!(
+            first.get::<_, String>(0)? == "ok" && rows.next()?.is_none(),
+            "history SQLite integrity verification failed; backup not published"
+        );
+        drop(rows);
+        drop(statement);
+        let mut statement = snapshot.prepare("PRAGMA foreign_key_check")?;
+        ensure!(
+            statement.query([])?.next()?.is_none(),
+            "history SQLite foreign key verification failed; backup not published"
+        );
+    }
+    let sessions = backup_row_count(&snapshot, "SELECT COUNT(*) FROM history_sessions")?;
+    let events = backup_row_count(&snapshot, "SELECT COUNT(*) FROM history_events")?;
+    let output_rows = if version == 1 {
+        0
+    } else {
+        backup_row_count(&snapshot, "SELECT COUNT(*) FROM history_output")?
+    };
+    snapshot.commit()?;
+    drop(verified);
+    let bytes = sqlite_backup::synchronize_private_snapshot(&backup)?;
+    let receipt = HistoryBackupReceipt {
+        schema_version: 1,
+        kind: "history_sqlite",
+        source: source_text,
+        destination: destination_text,
+        history_schema_version: version,
+        bytes,
+        sessions,
+        events,
+        output_rows,
+    };
+    sqlite_backup::publish_snapshot(&backup, &destination)?;
+    Ok(receipt)
+}
+
+fn backup_row_count(snapshot: &Transaction<'_>, query: &str) -> Result<u64> {
+    let count: i64 = snapshot.query_row(query, [], |row| row.get(0))?;
+    u64::try_from(count).context("history backup row count is negative")
+}
+
+fn validate_backup_schema(snapshot: &Transaction<'_>, version: i64) -> Result<()> {
+    for table in ["history_sessions", "history_events"]
+        .into_iter()
+        .chain((version == 2).then_some("history_output"))
+    {
+        let kind: String = snapshot.query_row(
+            "SELECT type FROM sqlite_schema WHERE name=?1",
+            [table],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            kind == "table",
+            "history backup schema contains a non-table history object"
+        );
+        if table != "history_sessions" {
+            let mut statement = snapshot.prepare(&format!("PRAGMA foreign_key_list({table})"))?;
+            let keys = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            ensure!(
+                keys == [(
+                    "history_sessions".to_owned(),
+                    "session_id".to_owned(),
+                    "session_id".to_owned()
+                )],
+                "history backup schema has an unsupported session relationship"
+            );
+        }
+    }
+    if version == 1 {
+        let outputs: i64 = snapshot.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name='history_output'",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            outputs == 0,
+            "history schema 1 unexpectedly contains output storage; backup not published"
+        );
+    }
+    Ok(())
+}
+
 struct OutputLine {
     ts: String,
     pipeline: String,
@@ -116,6 +295,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
             "MFB_HISTORY_CONTEXT"
                 | "MFB_HISTORY_INPUT_PLAN"
                 | "MFB_HISTORY_CONFIG"
+                | "MFB_HISTORY_INVOCATION"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_FINISHED"
@@ -227,7 +407,36 @@ fn open_history_write(log_dir: &Path) -> Result<Connection> {
     ensure_schema(&mut connection)?;
     foundation::mfb_sqlite_store::enable_wal(&connection)
         .context("processing history schema retained; failed to enable WAL")?;
+    persist_history_wal_sidecars(&connection)?;
     Ok(connection)
+}
+
+fn persist_history_wal_sidecars(connection: &Connection) -> Result<()> {
+    let mut persist = 1_i32;
+    // Keep cold history readable by read-only system SQLite without reopening it writable.
+    // SAFETY: the live connection owns this handle; SQLite uses the integer only during this call.
+    let result = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
+            std::ptr::from_mut(&mut persist).cast(),
+        )
+    };
+    if result != rusqlite::ffi::SQLITE_OK {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(result),
+            None,
+        ))
+        .context(
+            "processing history retained; failed to preserve WAL sidecars for read-only readers",
+        );
+    }
+    ensure!(
+        persist == 1,
+        "history SQLite VFS did not preserve WAL sidecars"
+    );
+    Ok(())
 }
 
 fn open_history_read(log_dir: &Path) -> Result<Option<Connection>> {
@@ -339,6 +548,293 @@ mod tests {
     use super::*;
 
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
+
+    #[test]
+    fn closed_history_retains_wal_sidecars_for_read_only_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        append_history_event(directory.path(), "cold-history", EVENT).unwrap();
+        let path = directory.path().join(HISTORY_DATABASE);
+        let wal = directory.path().join(format!("{HISTORY_DATABASE}-wal"));
+        let shm = directory.path().join(format!("{HISTORY_DATABASE}-shm"));
+        assert!(wal.is_file() && shm.is_file());
+        let before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(&wal).unwrap();
+        let reader = open_history_read(directory.path()).unwrap().unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT event FROM history_events", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            EVENT
+        );
+        assert!(reader.execute("DELETE FROM history_events", []).is_err());
+        drop(reader);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+    }
+
+    fn backup_fixture(root: &Path, version: i64) -> PathBuf {
+        let directory = root.join("history");
+        std::fs::create_dir(&directory).unwrap();
+        let connection = Connection::open(directory.join(HISTORY_DATABASE)).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE history_sessions(session_id TEXT PRIMARY KEY NOT NULL, updated_at TEXT NOT NULL);
+             CREATE TABLE history_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES history_sessions(session_id), ts TEXT NOT NULL, event TEXT NOT NULL);
+             CREATE INDEX history_sessions_recent ON history_sessions(updated_at DESC);
+             CREATE INDEX history_events_session ON history_events(session_id, sequence);
+             INSERT INTO history_sessions VALUES ('original', 'synthetic timestamp');
+             INSERT INTO history_events(session_id, ts, event) VALUES ('original', 'synthetic timestamp', 'UNRECOGNIZED_RAW_EVENT=not rewritten');
+             CREATE TABLE extra_raw_evidence(payload BLOB);
+             INSERT INTO extra_raw_evidence VALUES (x'000102ff');
+             PRAGMA user_version=1;",
+        ).unwrap();
+        if version == 2 {
+            let mut connection = connection;
+            let transaction = connection.transaction().unwrap();
+            migrate_history_v1(&transaction).unwrap();
+            transaction.execute("INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('original', 'synthetic timestamp', 'img', 'raw synthetic output')", []).unwrap();
+            transaction.commit().unwrap();
+        }
+        directory
+    }
+
+    fn no_staging_remains(root: &Path) {
+        assert!(!std::fs::read_dir(root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mfb-history-backup-")
+        }));
+    }
+
+    #[test]
+    fn history_backup_preserves_schema_one_raw_rows_without_migration() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = backup_fixture(root.path(), 1);
+        let source = directory.join(HISTORY_DATABASE);
+        let before = std::fs::read(&source).unwrap();
+        let destination = root.path().join("backup.sqlite");
+        let receipt = backup_history_store(&directory, &destination).unwrap();
+        assert_eq!(
+            (
+                receipt.schema_version,
+                receipt.kind,
+                receipt.history_schema_version
+            ),
+            (1, "history_sqlite", 1)
+        );
+        assert_eq!(
+            (receipt.sessions, receipt.events, receipt.output_rows),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            receipt.source,
+            source.canonicalize().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            receipt.destination,
+            destination.canonicalize().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            receipt.bytes,
+            std::fs::metadata(&destination).unwrap().len()
+        );
+        let backup = Connection::open(&destination).unwrap();
+        let raw: String = backup
+            .query_row("SELECT event FROM history_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(raw, "UNRECOGNIZED_RAW_EVENT=not rewritten");
+        assert_eq!(
+            backup
+                .query_row("SELECT payload FROM extra_raw_evidence", [], |row| row
+                    .get::<_, Vec<u8>>(0))
+                .unwrap(),
+            [0, 1, 2, 255]
+        );
+        assert_eq!(
+            backup
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(backup.prepare("SELECT * FROM history_output").is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        no_staging_remains(root.path());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&destination)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn history_backup_includes_committed_wal_and_excludes_uncommitted_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = backup_fixture(root.path(), 2);
+        let source = directory.join(HISTORY_DATABASE);
+        let writer = Connection::open(&source).unwrap();
+        writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        writer.execute_batch("PRAGMA foreign_keys=ON;
+            INSERT INTO history_sessions VALUES ('wal', 'synthetic');
+            INSERT INTO history_events(session_id, ts, event) VALUES ('wal', 'synthetic', 'committed');
+            INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('wal', 'synthetic', 'vid', 'committed output');
+            BEGIN;
+            INSERT INTO history_sessions VALUES ('pending', 'synthetic');
+            INSERT INTO history_events(session_id, ts, event) VALUES ('pending', 'synthetic', 'uncommitted');
+            INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('pending', 'synthetic', 'vid', 'uncommitted output');").unwrap();
+        let before = std::fs::read(&source).unwrap();
+        let wal = directory.join(format!("{HISTORY_DATABASE}-wal"));
+        let wal_before = std::fs::read(&wal).unwrap();
+        assert!(!wal_before.is_empty());
+        let destination = root.path().join("backup.sqlite");
+        let receipt = backup_history_store(&directory, &destination).unwrap();
+        assert_eq!(
+            (
+                receipt.history_schema_version,
+                receipt.sessions,
+                receipt.events,
+                receipt.output_rows
+            ),
+            (2, 2, 2, 2)
+        );
+        let backup = Connection::open(&destination).unwrap();
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT COUNT(*) FROM history_sessions WHERE session_id='pending'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT line FROM history_output WHERE session_id='wal'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "committed output"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+        writer.execute_batch("ROLLBACK").unwrap();
+        no_staging_remains(root.path());
+    }
+
+    #[test]
+    fn history_backup_rejects_missing_relative_existing_and_private_workspace_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("backup.sqlite");
+        assert!(backup_history_store(&root.path().join("absent"), &destination).is_err());
+        assert!(backup_history_store(Path::new("relative-history"), &destination).is_err());
+        assert!(backup_history_store(root.path(), &destination).is_err());
+        assert!(!root.path().join(HISTORY_DATABASE).exists() && !destination.exists());
+        let directory = backup_fixture(root.path(), 2);
+        let source = directory.join(HISTORY_DATABASE);
+        let before = std::fs::read(&source).unwrap();
+        std::fs::write(&destination, b"existing destination").unwrap();
+        assert!(backup_history_store(&directory, &destination).is_err());
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"existing destination"
+        );
+        std::fs::remove_file(&destination).unwrap();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = root.path().join(format!("backup.sqlite{suffix}"));
+            std::fs::write(&sidecar, b"existing sidecar").unwrap();
+            assert!(backup_history_store(&directory, &destination).is_err());
+            assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
+            assert!(!destination.exists());
+            std::fs::remove_file(sidecar).unwrap();
+        }
+        assert!(backup_history_store(&directory, &directory.join("inside.sqlite")).is_err());
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::write(workspace.join(".git"), b"synthetic worktree marker").unwrap();
+        assert!(backup_history_store(&directory, &workspace.join("backup.sqlite")).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        no_staging_remains(root.path());
+    }
+
+    #[test]
+    fn history_backup_refuses_unknown_schema_missing_tables_foreign_keys_and_corruption() {
+        for alteration in [
+            "PRAGMA user_version=99;",
+            "DROP TABLE history_output;",
+            "INSERT INTO history_events(session_id, ts, event) VALUES ('missing-session', 'synthetic', 'orphan');",
+            "DROP TABLE history_events; CREATE TABLE history_events(sequence INTEGER PRIMARY KEY, session_id TEXT, ts TEXT, event TEXT);",
+            "PRAGMA user_version=1;",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = backup_fixture(root.path(), 2);
+            let source = directory.join(HISTORY_DATABASE);
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", false)
+                .unwrap();
+            connection.execute_batch(alteration).unwrap();
+            drop(connection);
+            let before = std::fs::read(&source).unwrap();
+            let destination = root.path().join("backup.sqlite");
+            assert!(
+                backup_history_store(&directory, &destination).is_err(),
+                "{alteration}"
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), before);
+            assert!(!destination.exists());
+            no_staging_remains(root.path());
+        }
+        let root = tempfile::tempdir().unwrap();
+        let directory = backup_fixture(root.path(), 2);
+        let source = directory.join(HISTORY_DATABASE);
+        std::fs::write(&source, b"not a database").unwrap();
+        assert!(backup_history_store(&directory, &root.path().join("backup.sqlite")).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), b"not a database");
+        no_staging_remains(root.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_backup_rejects_symlink_directory_source_sidecars_and_destination() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let directory = backup_fixture(root.path(), 2);
+        let source = directory.join(HISTORY_DATABASE);
+        let outside = root.path().join("outside.sqlite");
+        std::fs::copy(&source, &outside).unwrap();
+        let original = std::fs::read(&outside).unwrap();
+        let destination = root.path().join("backup.sqlite");
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = directory.join(format!("{HISTORY_DATABASE}{suffix}"));
+            symlink(&outside, &sidecar).unwrap();
+            assert!(backup_history_store(&directory, &destination).is_err());
+            std::fs::remove_file(sidecar).unwrap();
+        }
+        symlink(&outside, &destination).unwrap();
+        assert!(backup_history_store(&directory, &destination).is_err());
+        std::fs::remove_file(&destination).unwrap();
+        let alias = root.path().join("alias");
+        symlink(&directory, &alias).unwrap();
+        assert!(backup_history_store(&alias, &destination).is_err());
+        std::fs::remove_file(&source).unwrap();
+        symlink(&outside, &source).unwrap();
+        assert!(backup_history_store(&directory, &destination).is_err());
+        assert_eq!(std::fs::read(&outside).unwrap(), original);
+        assert!(!destination.exists());
+        no_staging_remains(root.path());
+    }
 
     #[test]
     fn config_history_marker_is_allowed_without_changing_schema() {

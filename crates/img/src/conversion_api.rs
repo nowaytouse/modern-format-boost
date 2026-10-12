@@ -46,11 +46,23 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ConversionConfig {
     pub output_dir: Option<PathBuf>,
     pub base_dir: Option<PathBuf>,
     pub flags: ConfigFlags,
+    pub size_tolerance_bytes: u64,
+}
+
+impl Default for ConversionConfig {
+    fn default() -> Self {
+        Self {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::default(),
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+        }
+    }
 }
 
 impl ConversionConfig {
@@ -60,7 +72,7 @@ impl ConversionConfig {
             foundation::media_conversion_gate::effective_allow_size_tolerance(
                 self.allow_size_tolerance(),
             ),
-            foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            self.size_tolerance_bytes,
         )
     }
 
@@ -726,6 +738,10 @@ fn jpeg_lossless_options(config: &ConversionConfig) -> foundation::ConvertOption
     flags.set(foundation::ConvertFlags::ULTIMATE, config.ultimate_mode());
     flags.set(foundation::ConvertFlags::ARCHIVE, config.archive_mode());
     flags.set(
+        foundation::ConvertFlags::ALLOW_SIZE_TOLERANCE,
+        config.allow_size_tolerance(),
+    );
+    flags.set(
         foundation::ConvertFlags::ALLOW_EXPERT_OPTIONS,
         config.allow_expert_options(),
     );
@@ -735,6 +751,7 @@ fn jpeg_lossless_options(config: &ConversionConfig) -> foundation::ConvertOption
     );
     foundation::ConvertOptions {
         flags,
+        size_tolerance_bytes: config.size_tolerance_bytes,
         ..Default::default()
     }
 }
@@ -764,6 +781,23 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jpeg_options_keep_configured_growth_budget_and_permission() {
+        let mut config = ConversionConfig::default();
+        assert_eq!(
+            config.size_tolerance_bytes,
+            foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+        );
+        config.size_tolerance_bytes = 17;
+        let options = jpeg_lossless_options(&config);
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(!options.allow_size_tolerance());
+        config.flags.insert(ConfigFlags::ALLOW_SIZE_TOLERANCE);
+        let options = jpeg_lossless_options(&config);
+        assert_eq!(options.size_tolerance_bytes, 17);
+        assert!(options.allow_size_tolerance());
+    }
 
     #[test]
     fn test_jpeg_strategy() -> Result<()> {

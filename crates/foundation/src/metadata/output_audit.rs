@@ -156,6 +156,7 @@ pub fn verify_output_embedded_metadata(
             } else {
                 source_xmp.clear();
             }
+            let mut reconstruction = None;
             if jpeg_archive {
                 verify_jpeg_xmp_layers(
                     src,
@@ -163,9 +164,16 @@ pub fn verify_output_embedded_metadata(
                     src_sidecar.as_deref(),
                     &mut src_tags,
                     &mut dst_tags,
+                    &mut reconstruction,
                 )?;
             }
-            verify_reconstruction_only_metadata(src, dst, &mut src_tags, &dst_tags)?;
+            verify_reconstruction_only_metadata(
+                src,
+                dst,
+                &mut src_tags,
+                &dst_tags,
+                &mut reconstruction,
+            )?;
             let mut mismatches = if matches!(policy, MetadataOutputPolicy::Preserve) {
                 preserve_mismatches(&src_tags, &dst_tags)
             } else {
@@ -255,6 +263,7 @@ fn verify_jpeg_xmp_layers(
     sidecar: Option<&Path>,
     expected: &mut BTreeMap<String, String>,
     actual: &mut BTreeMap<String, String>,
+    reconstruction: &mut Option<(String, String)>,
 ) -> io::Result<()> {
     let (missing, extra) = unmatched_metadata_instances(expected, actual);
     if !missing
@@ -304,7 +313,7 @@ fn verify_jpeg_xmp_layers(
         };
         allowed.remove(index);
     }
-    crate::image::fast_img::verify_jxl_roundtrip_integrity(src, dst).map_err(|error| {
+    verify_current_jpeg_reconstruction(src, dst, reconstruction).map_err(|error| {
         io::Error::other(format!(
             "layered XMP requires exact JPEG reconstruction: {error}"
         ))
@@ -324,6 +333,7 @@ fn verify_reconstruction_only_metadata(
     dst: &Path,
     src_tags: &mut BTreeMap<String, String>,
     dst_tags: &BTreeMap<String, String>,
+    reconstruction: &mut Option<(String, String)>,
 ) -> io::Result<()> {
     use crate::image::format_detect::{FormatKind, detect_true_format};
 
@@ -365,7 +375,7 @@ fn verify_reconstruction_only_metadata(
     }
     // Neither a filename nor an advertised JBRD box is proof. Reconstruct the
     // current delivered file and compare it with the actual paired source.
-    crate::image::fast_img::verify_jxl_roundtrip_integrity(src, dst).map_err(|error| {
+    verify_current_jpeg_reconstruction(src, dst, reconstruction).map_err(|error| {
         io::Error::other(format!(
             "JPEG-only metadata requires exact source reconstruction: {error}"
         ))
@@ -380,6 +390,44 @@ fn verify_reconstruction_only_metadata(
     for key in reconstruction_tags {
         src_tags.remove(&key);
     }
+    Ok(())
+}
+
+fn verify_current_jpeg_reconstruction(
+    src: &Path,
+    dst: &Path,
+    reconstruction: &mut Option<(String, String)>,
+) -> io::Result<()> {
+    use crate::image::fast_img::IntegrityResult;
+
+    let started = std::time::Instant::now();
+    if reconstruction.is_none() {
+        let IntegrityResult::RoundtripMatch {
+            source_hash,
+            output_hash,
+        } = crate::image::fast_img::verify_jxl_roundtrip_integrity(src, dst)
+            .map_err(io::Error::other)?
+        else {
+            return Err(io::Error::other("exact JPEG reconstruction proof required"));
+        };
+        *reconstruction = Some((source_hash, output_hash));
+        tracing::debug!(target: "mfb.metadata", source = %src.display(), output = %dst.display(),
+            reused = false, duration_ms = started.elapsed().as_millis(), "current JPEG reconstruction proof verified");
+        return Ok(());
+    }
+    // Proof is local to this audit; even local reuse must reject changed bytes.
+    let current = (
+        crate::common_utils::calculate_blake3_hash(src).map_err(io::Error::other)?,
+        crate::common_utils::calculate_blake3_hash(dst).map_err(io::Error::other)?,
+    );
+    if reconstruction.as_ref() != Some(&current) {
+        *reconstruction = None;
+        return Err(io::Error::other(
+            "JPEG reconstruction source or output changed during metadata audit",
+        ));
+    }
+    tracing::debug!(target: "mfb.metadata", source = %src.display(), output = %dst.display(),
+        reused = true, duration_ms = started.elapsed().as_millis(), "current JPEG reconstruction proof verified");
     Ok(())
 }
 
@@ -1116,6 +1164,34 @@ mod tests {
     }
 
     #[test]
+    fn reconstruction_proof_reuse_requires_current_source_and_output_bytes() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("source.jpg");
+        let dst = temp.path().join("output.jxl");
+        std::fs::write(&src, b"source").unwrap();
+        std::fs::write(&dst, b"output").unwrap();
+        let hashes = || {
+            (
+                crate::common_utils::calculate_blake3_hash(&src).unwrap(),
+                crate::common_utils::calculate_blake3_hash(&dst).unwrap(),
+            )
+        };
+        let mut proof = Some(hashes());
+        // These are not media files: success proves no decoder was invoked on reuse.
+        verify_current_jpeg_reconstruction(&src, &dst, &mut proof).unwrap();
+        std::fs::write(&dst, b"changed").unwrap();
+        assert!(verify_current_jpeg_reconstruction(&src, &dst, &mut proof).is_err());
+        assert!(proof.is_none());
+        proof = Some(hashes());
+        std::fs::write(&src, b"changed").unwrap();
+        assert!(verify_current_jpeg_reconstruction(&src, &dst, &mut proof).is_err());
+        assert!(proof.is_none());
+        proof = Some(hashes());
+        std::fs::remove_file(&dst).unwrap();
+        assert!(verify_current_jpeg_reconstruction(&src, &dst, &mut proof).is_err());
+    }
+
+    #[test]
     fn metadata_records_reject_empty_duplicate_and_tool_errors() {
         for invalid in [
             b"".as_slice(),
@@ -1654,7 +1730,8 @@ mod tests {
             .filter(|(key, _)| key.starts_with("IPTC2:"))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
-        verify_reconstruction_only_metadata(&src, &dst, &mut repeated_iptc, &dst_tags).unwrap();
+        verify_reconstruction_only_metadata(&src, &dst, &mut repeated_iptc, &dst_tags, &mut None)
+            .unwrap();
         assert!(
             preserve_source_mismatches(&repeated_iptc, &dst_tags).is_empty(),
             "reconstruction-owned second IPTC instance must pass"
@@ -1663,15 +1740,22 @@ mod tests {
         contradictory_iptc.insert("IPTC2:Caption-Abstract".into(), "different".into());
         let mut expected_iptc =
             BTreeMap::from([("IPTC2:Caption-Abstract".into(), "archival caption".into())]);
-        verify_reconstruction_only_metadata(&src, &dst, &mut expected_iptc, &contradictory_iptc)
-            .unwrap();
+        verify_reconstruction_only_metadata(
+            &src,
+            &dst,
+            &mut expected_iptc,
+            &contradictory_iptc,
+            &mut None,
+        )
+        .unwrap();
         assert!(
             preserve_mismatches(&expected_iptc, &contradictory_iptc)
                 .iter()
                 .any(|mismatch| mismatch.contains("wrong-source"))
         );
         let mut invented = BTreeMap::from([("IPTC999:Imaginary".into(), "not in source".into())]);
-        verify_reconstruction_only_metadata(&src, &dst, &mut invented, &dst_tags).unwrap();
+        verify_reconstruction_only_metadata(&src, &dst, &mut invented, &dst_tags, &mut None)
+            .unwrap();
         assert!(invented.contains_key("IPTC999:Imaginary"));
         verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .expect("APP13 retained by exact JPEG reconstruction must pass metadata gate");
@@ -1700,8 +1784,14 @@ mod tests {
         let mut missing_native = src_tags.clone();
         let mut native_output = dst_tags.clone();
         native_output.remove("IFD0:Artist");
-        verify_reconstruction_only_metadata(&src, &dst, &mut missing_native, &native_output)
-            .unwrap();
+        verify_reconstruction_only_metadata(
+            &src,
+            &dst,
+            &mut missing_native,
+            &native_output,
+            &mut None,
+        )
+        .unwrap();
         assert!(
             preserve_mismatches(&missing_native, &native_output)
                 .iter()
@@ -1710,7 +1800,8 @@ mod tests {
         let mut contradictory = dst_tags;
         contradictory.insert("Photoshop:IPTCDigest".into(), "different".into());
         let mut expected = src_tags;
-        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory).unwrap();
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory, &mut None)
+            .unwrap();
         assert!(
             preserve_mismatches(&expected, &contradictory)
                 .iter()
@@ -1908,7 +1999,8 @@ mod tests {
         let mut contradictory = dst_tags.clone();
         contradictory.insert("Samsung:SamsungCaptureInfo".into(), "Other".into());
         let mut expected = src_tags.clone();
-        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory).unwrap();
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &contradictory, &mut None)
+            .unwrap();
         assert!(
             preserve_mismatches(&expected, &contradictory)
                 .iter()
@@ -1922,7 +2014,8 @@ mod tests {
             "Samsung:OtherVendorTag".into(),
             "must remain checked".into(),
         );
-        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &missing_native).unwrap();
+        verify_reconstruction_only_metadata(&src, &dst, &mut expected, &missing_native, &mut None)
+            .unwrap();
         let mismatches = preserve_mismatches(&expected, &missing_native);
         assert!(mismatches.iter().any(|m| m.contains("Artist")));
         assert!(mismatches.iter().any(|m| m.contains("OtherVendorTag")));
