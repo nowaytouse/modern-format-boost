@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Run identity, file-linked reasons and live diagnostic folding (2026-10-12)
+
+- Give each launcher-managed attempt an independent opaque run ID, including
+  repeated attempts in one session. Bind captured events, worker requests and
+  effective configuration; override stale inherited child IDs with the observed
+  run/invocation identity. Reject mismatched identified History events rather
+  than reconstructing identities from filenames. Earlier records stay unknown.
+- Fix the actual CLI-to-History cold-WAL read failure observed with system SQLite:
+  validated writers retain SQLite-managed WAL/shared-memory files on close through
+  `SQLITE_FCNTL_PERSIST_WAL`, keeping full synchronization and checkpointing. Readers
+  remain read-only and do not use immutable mode, ignore WAL, repair or reset old
+  databases. Missing-sidecar older cold histories stay explicitly unavailable
+  until a normal validated writer manages their lifecycle. Add Rust and native
+  cold-close/read regressions preserving database and committed-WAL bytes.
+- Emit bounded schema-1 `MFB_FILE_FAILURE` observations only for explicit IMG/VID
+  failed outcomes with a reported file path and valid launch identities. Preserve
+  the exact path, optional lexical absolute path, complete reason and optional
+  explicit classification. Diagnose invalid/oversized/unencodable evidence; do
+  not invent codes, fingerprints, root causes or media counts. Budget the entire
+  control line, including its prefix and newline, within the GUI's 64 KiB transport
+  chunk; regression-test the exact boundary and reject oversized evidence.
+- Extend the native History Failed files table with recorded reasons, reason/path
+  search, full tooltips and safe navigation. Reuse the bounded read-only batch
+  snapshot and reject unbound/damaged evidence. Equal observations share a row;
+  different reasons remain separate and path-only records show missing evidence.
+  Fix the related stale loading footer. Row counts and observation occurrences
+  remain distinct from authoritative processing outcomes.
+- Diagnostic export schema 2 distinguishes `history_entry_id` from the actual
+  nullable `run_id`, retaining raw file observations and separate row accounting.
+  History database schema is unchanged; this is not a complete Run Manifest,
+  file-task identity, crash recovery or proof of the actual executed binary.
+- Fold only consecutive exact warning/error lines in the live window. Preserve
+  the original diagnostic, label log occurrences, reset on intervening lines,
+  phase controls and new attempts, and parse results/progress independently.
+  Keep complete SQLite output and the latest actionable error. Render file
+  observations readably without grouping distinct observations by diagnostic text.
+- Validation: scoped Rust suites passed (111 dev-library, 58 launcher and eight
+  logging-contract cases); child probes are fixtures, not additional product
+  acceptance, and reruns are not counted again. Affected-target strict Clippy,
+  formatting, Swift warnings-as-errors and three-language native self-tests
+  passed. Isolated AppKit dark/light checks covered recorded reasons, search,
+  missing-file navigation, loading completion and three identical log occurrences
+  while synthetic results stayed one success/one failure. A targeted launcher
+  build and synthetic dry-run passed; system SQLite and the native History window
+  read both closed-writer attempts, with distinct run IDs and unknown media counts.
+  No production Photos/media/history, dependency changes, installed-app replacement,
+  full workspace/cross-platform, throughput or new CI verdict is claimed.
+
 ### Shared worker execution and read-only routing plans (2026-10-12)
 
 - Extract the reusable worker command, invocation/configuration observation,

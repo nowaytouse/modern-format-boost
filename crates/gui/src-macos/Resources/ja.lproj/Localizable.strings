@@ -331,9 +331,9 @@
 "history.attention" = "要確認";
 "history.filter" = "バッチの絞り込み";
 "history.details" = "バッチの詳細";
-"history.failed_files.search" = "記録されたパスを絞り込み";
+"history.failed_files.search" = "パスや失敗理由で絞り込み";
 "history.failed_files.path" = "記録されたパス";
-"history.failed_files.range" = "表示 %d 件 / 一致 %d 件 / 記録 %d 件";
+"history.failed_files.range" = "表示 %d 行 / 一致 %d 行 / 合計 %d 行";
 "history.failed_files.note" = "パス一覧にすべての失敗が含まれるとは限りません。結果の件数は別に集計されます。";
 "history.failed_files.empty" = "失敗したファイルのパスは未記録です。失敗がゼロとは限りません。";
 "history.failed_files.copy" = "選択したパスをコピー";
@@ -458,6 +458,13 @@
 "history.detail.worker_observation_error" = "ファイル観測を取得できません";
 "log.latest_failure" = "直近のエラー: %@";
 "log.latest_warning" = "直近の警告: %@";
+"log.repeated_occurrences" = "同じログが連続 %@ 回出現";
+"history.detail.run_id" = "実行 ID";
+"history.failed_files.reason" = "記録された理由";
+"history.file_failure.not_recorded" = "ファイルに紐づく理由は記録されていません。";
+"history.file_failure.note" = "記録件数は最終的な失敗ファイル数や根本原因を表しません。";
+"history.file_failure.records" = "失敗理由の記録：%d 件";
+"history.file_failure.loading" = "記録された理由を読み込み中…";
 "log.phase.processing" = "ファイル処理";
 "log.phase.verification" = "検証と出力";
 "log.phase.invalid" = "処理段階を認識できないため、現在のログ表示を保持しました。";

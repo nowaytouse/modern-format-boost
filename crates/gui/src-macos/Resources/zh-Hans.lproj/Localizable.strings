@@ -331,9 +331,9 @@
 "history.attention" = "需要关注";
 "history.filter" = "批次筛选";
 "history.details" = "批次详情";
-"history.failed_files.search" = "筛选已记录的文件路径";
+"history.failed_files.search" = "筛选文件路径或失败原因";
 "history.failed_files.path" = "记录中的路径";
-"history.failed_files.range" = "显示 %d 条 / 匹配 %d 条 / 共记录 %d 条";
+"history.failed_files.range" = "显示 %d 行 / 匹配 %d 行 / 共 %d 行";
 "history.failed_files.note" = "路径列表不一定覆盖所有失败，处理结果计数仍按原有口径显示。";
 "history.failed_files.empty" = "没有记录失败文件路径，不代表失败数量为零。";
 "history.failed_files.copy" = "复制选中路径";
@@ -458,6 +458,13 @@
 "history.detail.worker_observation_error" = "无法获取文件证据";
 "log.latest_failure" = "最近错误：%@";
 "log.latest_warning" = "最近警告：%@";
+"log.repeated_occurrences" = "同一日志连续出现 %@ 次";
+"history.detail.run_id" = "运行标识";
+"history.failed_files.reason" = "已记录原因";
+"history.file_failure.not_recorded" = "未记录与该文件绑定的原因。";
+"history.file_failure.note" = "原因记录条数不等于最终失败文件数，也不代表同一根因。";
+"history.file_failure.records" = "失败原因记录：%d 条";
+"history.file_failure.loading" = "正在读取失败原因…";
 "log.phase.processing" = "处理文件";
 "log.phase.verification" = "验证与交付";
 "log.phase.invalid" = "无法识别处理阶段，已保留当前日志视图。";

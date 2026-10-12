@@ -331,9 +331,9 @@
 "history.attention" = "Needs Attention";
 "history.filter" = "Batch filter";
 "history.details" = "Batch details";
-"history.failed_files.search" = "Filter recorded paths";
+"history.failed_files.search" = "Filter paths or reasons";
 "history.failed_files.path" = "Recorded path";
-"history.failed_files.range" = "%d shown / %d matches / %d recorded";
+"history.failed_files.range" = "%d rows shown / %d matched / %d total rows";
 "history.failed_files.note" = "Recorded paths may not cover every failure; result counts are independent.";
 "history.failed_files.empty" = "No failure paths recorded. This does not prove there were zero failures.";
 "history.failed_files.copy" = "Copy selected path";
@@ -458,6 +458,13 @@
 "history.detail.worker_observation_error" = "Observation unavailable";
 "log.latest_failure" = "Latest error: %@";
 "log.latest_warning" = "Latest warning: %@";
+"log.repeated_occurrences" = "same log appeared %@ consecutive times";
+"history.detail.run_id" = "Run ID";
+"history.failed_files.reason" = "Recorded reason";
+"history.file_failure.not_recorded" = "No file-linked reason was recorded.";
+"history.file_failure.note" = "Recorded reasons are not final failed-file counts or root causes.";
+"history.file_failure.records" = "Failure observations: %d";
+"history.file_failure.loading" = "Loading recorded reasons…";
 "log.phase.processing" = "Processing";
 "log.phase.verification" = "Verification and delivery";
 "log.phase.invalid" = "Unrecognized processing phase; the current log view was retained.";

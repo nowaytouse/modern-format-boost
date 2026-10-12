@@ -240,12 +240,41 @@ a complete Run Manifest. Invalid critical evidence or size limits stop export;
 closing the window or changing selection cancels publication. Existing files,
 links and Git workspace destinations are never replaced or used for export.
 
-The single-run **Failed files** view filters recorded paths without opening logs.
-It displays at most 1,000 rows and 2 MiB of path text, with separate shown, matched
-and recorded totals. Select a row to copy its exact path or locate an existing
-regular file in Finder. Missing paths remain copyable but cannot be located;
-relative paths and leaf symlinks are not opened. Recorded paths are not proof that
-every failure was captured and never replace the independent processing counts.
+New launcher-managed attempts have independent opaque run IDs, including repeated
+attempts in one session. History binds events, worker launch requests and captured
+configuration to that ID; missing or conflicting identities in an identified run
+are incomplete evidence. Older records remain explicitly unidentified. These IDs
+do not establish file-task identity, crash recovery or the executed binary image.
+
+The single-run **Failed files** view filters paths and explicitly recorded reasons
+without opening logs. Versioned `MFB_FILE_FAILURE` observations bind the exact
+reported path, optional absolute path, reason and optional explicit code to the
+run and worker invocation. It reads the selected SQLite snapshot under the same
+bounded whole-batch scan; malformed, oversized or unbound evidence is unavailable,
+not zero. Equal observations share a display row; different reasons stay separate.
+Observation counts are log records, never authoritative failed-file counts or root
+causes. Earlier path-only records say no file-linked reason was recorded.
+The table is bounded to 1,000 rows and 2 MiB of retained text, with shown/matched
+and recorded-row totals. Copy preserves the reported path; Finder uses an explicit
+absolute observation when available, otherwise an absolute reported path. Missing
+files and leaf symlinks cannot be opened. Selected-run diagnostic JSON retains
+each original observation with separate row accounting and its run ID; this is
+still not a complete Run Manifest or proof that every failure was captured.
+Diagnostic export schema 2 separates `history_entry_id` from the recorded `run_id`;
+unidentified earlier runs export a null run ID. The History database schema is unchanged.
+History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
+read-only system SQLite can open cold WAL histories without initializing them
+writable. Full synchronous writes and checkpoints remain enabled; the reader
+does not use immutable mode, ignore committed WAL, repair or reset a database.
+Existing cold histories missing these files are not silently repaired by the GUI;
+a normal validated writer opening that database manages its sidecar lifecycle.
+
+The live main-window log folds only consecutive, exactly identical warnings and
+errors and labels how many times that same log appeared. Different paths/numbers,
+normal intervening lines, phase controls and new attempts break folding. Latest
+actionable diagnostics and result/progress parsing consume the original stream;
+complete SQLite output is unchanged. Structured file failures are readable messages
+in the ordinary live view, with their raw JSON additionally available in Developer.
 
 ### Live file progress
 

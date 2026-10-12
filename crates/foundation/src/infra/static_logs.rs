@@ -4,6 +4,7 @@
 //! logging functions to ensure consistent styling across the workspace.
 
 use crate::modern_ui::{TerminalColor, symbols};
+use std::io::Write as _;
 
 const PLAIN_DETAIL_PREFIXES: &[(&str, &str)] = &[
     ("✅ ", "[OK] "),
@@ -638,6 +639,145 @@ pub fn emit_mfb_audit(
             reason = %reason,
             "MFB_AUDIT"
         );
+    }
+
+    if outcome == "failed"
+        && matches!(pipeline, "img" | "vid")
+        && let Some(path) = path
+    {
+        emit_file_failure_marker(pipeline, path, reason, ignore_class);
+    }
+}
+
+// The complete control line, including its prefix and terminator, fits the GUI transport chunk.
+const FILE_FAILURE_MARKER_MAX_BYTES: usize = 64 * 1024 - "MFB_FILE_FAILURE=".len() - 1;
+const FILE_FAILURE_ID_MAX_BYTES: usize = 256;
+
+/// Machine-readable file failure written by a child process to its captured output.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileFailureMarker {
+    pub schema_version: u8,
+    pub pipeline: String,
+    pub source_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub absolute_path: Option<String>,
+    pub message: String,
+    pub run_id: String,
+    pub invocation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+}
+
+impl FileFailureMarker {
+    /// Validate the stable fields without interpreting diagnostic text as a cause.
+    #[must_use]
+    pub fn validate(&self) -> bool {
+        self.schema_version == 1
+            && matches!(self.pipeline.as_str(), "img" | "vid")
+            && valid_file_failure_id(&self.run_id)
+            && valid_file_failure_id(&self.invocation_id)
+            && !self.source_path.is_empty()
+            && !self.source_path.contains('\0')
+            && !self.message.is_empty()
+            && !self.message.contains('\0')
+            && self
+                .absolute_path
+                .as_ref()
+                .is_none_or(|path| path.starts_with('/') && !path.contains('\0'))
+            && self.reason_code.as_ref().is_none_or(|code| {
+                !code.is_empty()
+                    && code.len() <= FILE_FAILURE_ID_MAX_BYTES
+                    && code.bytes().all(|byte| byte.is_ascii_graphic())
+            })
+            && serde_json::to_vec(self)
+                .is_ok_and(|payload| payload.len() <= FILE_FAILURE_MARKER_MAX_BYTES)
+    }
+}
+
+fn valid_file_failure_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= FILE_FAILURE_ID_MAX_BYTES
+        && value.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+fn file_failure_marker(
+    pipeline: &str,
+    path: &std::path::Path,
+    message: &str,
+    reason_code: Option<&str>,
+    run_id: &str,
+    invocation_id: &str,
+) -> Result<String, &'static str> {
+    if !matches!(pipeline, "img" | "vid") {
+        return Err("pipeline is not img or vid");
+    }
+    let source_path = path.to_str().ok_or("source path is not UTF-8")?;
+    if source_path.len().saturating_add(message.len()) > FILE_FAILURE_MARKER_MAX_BYTES {
+        return Err("marker source and message exceed the 64 KiB limit");
+    }
+    let absolute_path = std::path::absolute(path)
+        .ok()
+        .and_then(|absolute| absolute.to_str().map(str::to_owned));
+    let marker = FileFailureMarker {
+        schema_version: 1,
+        pipeline: pipeline.to_owned(),
+        source_path: source_path.to_owned(),
+        absolute_path,
+        message: message.to_owned(),
+        run_id: run_id.to_owned(),
+        invocation_id: invocation_id.to_owned(),
+        reason_code: reason_code.map(str::to_owned),
+    };
+    if !marker.validate() {
+        return Err("marker fields are invalid or exceed the 64 KiB limit");
+    }
+    serde_json::to_string(&marker).map_err(|_| "marker JSON serialization failed")
+}
+
+fn emit_file_failure_marker(
+    pipeline: &str,
+    path: &std::path::Path,
+    message: &str,
+    reason_code: Option<&str>,
+) {
+    let run_id = std::env::var_os("MFB_RUN_ID");
+    let invocation_id = std::env::var_os("MFB_INVOCATION_ID");
+    if run_id.is_none() && invocation_id.is_none() {
+        return;
+    }
+    let (Some(run_id), Some(invocation_id)) = (run_id, invocation_id) else {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "[WARN] MFB_FILE_FAILURE omitted because run and invocation identity are incomplete"
+        );
+        return;
+    };
+    let (Some(run_id), Some(invocation_id)) = (run_id.to_str(), invocation_id.to_str()) else {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "[WARN] MFB_FILE_FAILURE omitted because run or invocation identity is not UTF-8"
+        );
+        return;
+    };
+    match file_failure_marker(pipeline, path, message, reason_code, run_id, invocation_id) {
+        Ok(payload) => {
+            let mut output = std::io::stdout().lock();
+            if let Err(error) =
+                writeln!(output, "MFB_FILE_FAILURE={payload}").and_then(|()| output.flush())
+            {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "[WARN] MFB_FILE_FAILURE marker output failed: {error}"
+                );
+            }
+        }
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "[WARN] MFB_FILE_FAILURE marker omitted: {error}"
+            );
+        }
     }
 }
 
@@ -2060,7 +2200,7 @@ pub fn log_task_start_path(path: Option<&std::path::Path>, label: &str) {
 
 #[cfg(test)]
 mod ui_contract_tests {
-    use super::{ErrorSeverity, get_symbol_by_label, plain_aware_detail};
+    use super::{ErrorSeverity, file_failure_marker, get_symbol_by_label, plain_aware_detail};
     use std::sync::Mutex;
 
     static PLAIN_MODE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -2104,5 +2244,156 @@ mod ui_contract_tests {
         assert_eq!(get_symbol_by_label("Forensic Hint"), "[i]");
         crate::progress_mode::set_plain_mode(false);
         assert_eq!(get_symbol_by_label("Operation Audit: Success"), "✅");
+    }
+
+    #[test]
+    fn file_failure_marker_preserves_exact_unicode_newline_path() {
+        let path = std::path::Path::new("input/媒体\nfailed.jpg");
+        let payload = file_failure_marker(
+            "img",
+            path,
+            "decoder rejected source\nsecond line",
+            Some("img_decode_rejected"),
+            "run_123",
+            "invocation-456",
+        )
+        .unwrap();
+        let marker: super::FileFailureMarker = serde_json::from_str(&payload).unwrap();
+        assert!(marker.validate());
+        assert_eq!(marker.source_path, "input/媒体\nfailed.jpg");
+        assert_eq!(marker.message, "decoder rejected source\nsecond line");
+        assert_eq!(marker.reason_code.as_deref(), Some("img_decode_rejected"));
+    }
+
+    #[test]
+    fn file_failure_marker_transport_budget_includes_prefix_and_newline() {
+        let mut marker = super::FileFailureMarker {
+            schema_version: 1,
+            pipeline: "img".to_owned(),
+            source_path: "synthetic.jpg".to_owned(),
+            absolute_path: None,
+            message: String::new(),
+            run_id: "run".to_owned(),
+            invocation_id: "invocation".to_owned(),
+            reason_code: None,
+        };
+        let overhead = serde_json::to_vec(&marker).unwrap().len();
+        marker.message = "x".repeat(super::FILE_FAILURE_MARKER_MAX_BYTES - overhead);
+        assert!(marker.validate());
+        assert_eq!(
+            format!(
+                "MFB_FILE_FAILURE={}\n",
+                serde_json::to_string(&marker).unwrap()
+            )
+            .len(),
+            64 * 1024
+        );
+        marker.message.push('x');
+        assert!(!marker.validate());
+    }
+
+    #[test]
+    fn file_failure_marker_rejects_invalid_identity_pipeline_and_size() {
+        let path = std::path::Path::new("source.jpg");
+        assert!(file_failure_marker("img", path, "failure", None, "", "invocation").is_err());
+        assert!(file_failure_marker("cmd", path, "failure", None, "run", "invocation").is_err());
+        assert!(
+            file_failure_marker(
+                "vid",
+                path,
+                &"x".repeat(super::FILE_FAILURE_MARKER_MAX_BYTES),
+                None,
+                "run",
+                "invocation",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn file_failure_emitter_probe() {
+        let Ok(outcome) = std::env::var("MFB_TEST_FILE_FAILURE_OUTCOME") else {
+            return;
+        };
+        let pipeline = std::env::var("MFB_TEST_FILE_FAILURE_PIPELINE").unwrap();
+        super::emit_mfb_audit(
+            &outcome,
+            &pipeline,
+            Some(std::path::Path::new("synthetic/媒体\nfile.jpg")),
+            "synthetic reason",
+            None,
+        );
+    }
+
+    #[test]
+    fn file_failure_emitter_preserves_scope_and_reports_invalid_identity() {
+        let probe =
+            |outcome: &str, pipeline: &str, run_id: Option<&str>, invocation_id: Option<&str>| {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+                child
+                    .args([
+                        "--exact",
+                        "infra::static_logs::ui_contract_tests::file_failure_emitter_probe",
+                        "--nocapture",
+                    ])
+                    .env("MFB_TEST_FILE_FAILURE_OUTCOME", outcome)
+                    .env("MFB_TEST_FILE_FAILURE_PIPELINE", pipeline)
+                    .env_remove("MFB_RUN_ID")
+                    .env_remove("MFB_INVOCATION_ID");
+                if let Some(value) = run_id {
+                    child.env("MFB_RUN_ID", value);
+                }
+                if let Some(value) = invocation_id {
+                    child.env("MFB_INVOCATION_ID", value);
+                }
+                let output = child.output().unwrap();
+                assert!(output.status.success());
+                (
+                    String::from_utf8(output.stdout).unwrap(),
+                    String::from_utf8(output.stderr).unwrap(),
+                )
+            };
+        for pipeline in ["img", "vid"] {
+            let (stdout, stderr) = probe(
+                "failed",
+                pipeline,
+                Some("run-test"),
+                Some("invocation-test"),
+            );
+            assert!(stderr.is_empty());
+            assert_eq!(stdout.matches("MFB_FILE_FAILURE=").count(), 1);
+            let payload = stdout
+                .split_once("MFB_FILE_FAILURE=")
+                .unwrap()
+                .1
+                .lines()
+                .next()
+                .unwrap();
+            let marker: super::FileFailureMarker = serde_json::from_str(payload).unwrap();
+            assert!(marker.validate());
+            assert_eq!(marker.pipeline, pipeline);
+            assert_eq!(marker.source_path, "synthetic/媒体\nfile.jpg");
+        }
+        for (outcome, pipeline) in [
+            ("skipped", "img"),
+            ("succeeded", "img"),
+            ("ignored", "vid"),
+            ("failed", "cmd"),
+        ] {
+            let (stdout, stderr) =
+                probe(outcome, pipeline, Some("run-test"), Some("invocation-test"));
+            assert!(!stdout.contains("MFB_FILE_FAILURE="));
+            assert!(stderr.is_empty());
+        }
+        assert!(
+            !probe("failed", "img", None, None)
+                .0
+                .contains("MFB_FILE_FAILURE=")
+        );
+        for identity in [None, Some("run with space"), Some("")] {
+            let (stdout, stderr) = probe("failed", "img", identity, Some("invocation-test"));
+            assert!(!stdout.contains("MFB_FILE_FAILURE="));
+            assert!(stderr.contains("[WARN] MFB_FILE_FAILURE"));
+        }
     }
 }

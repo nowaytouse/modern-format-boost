@@ -24,6 +24,9 @@ static INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// executor to a particular launcher's session implementation.
 pub trait WorkerSession {
     fn stamp(&self) -> &str;
+    fn run_id(&self) -> Option<&str> {
+        None
+    }
     fn log_dir(&self) -> &Path;
     fn session_audit(&self) -> &Path;
     fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()>;
@@ -110,6 +113,7 @@ impl BinaryObservation {
 pub struct LaunchInvocation<'a> {
     pub schema_version: u8,
     pub invocation_id: String,
+    pub run_id: Option<String>,
     pub pipeline: &'static str,
     pub state: &'static str,
     pub program_requested: &'a str,
@@ -207,6 +211,12 @@ pub fn collect_config_leaf_paths(
 
 impl LaunchCommand {
     pub fn invocation(&self, session: &dyn WorkerSession) -> Result<LaunchInvocation<'_>> {
+        anyhow::ensure!(
+            session.run_id().is_none_or(|id| !id.is_empty()
+                && id.len() <= 256
+                && id.bytes().all(|byte| byte.is_ascii_graphic())),
+            "worker run identity is invalid"
+        );
         let program = self
             .program
             .to_str()
@@ -243,6 +253,7 @@ impl LaunchCommand {
                 std::process::id(),
                 blake3::hash(session.stamp().as_bytes()).to_hex()
             ),
+            run_id: session.run_id().map(str::to_owned),
             pipeline: match self.pipeline_label() {
                 "IMG" => "img",
                 "VID" => "vid",
@@ -413,6 +424,8 @@ impl LaunchCommand {
                 cmd.env_remove(name);
             }
         }
+        cmd.env_remove("MFB_RUN_ID");
+        cmd.env_remove("MFB_INVOCATION_ID");
         cmd.env("COLUMNS", "223");
         cmd.env("LINES", "45");
         if let Some(config) = foundation::runtime_config::active() {
@@ -439,6 +452,13 @@ impl LaunchCommand {
                 .map(|(name, value)| (name.as_str(), value.as_deref()))
                 .collect::<Vec<_>>();
             env_overrides.push(("MFB_SESSION_ID", Some(session.stamp())));
+            env_overrides.push((
+                "MFB_RUN_ID",
+                invocation
+                    .as_ref()
+                    .and_then(|value| value.run_id.as_deref()),
+            ));
+            env_overrides.push(("MFB_INVOCATION_ID", invocation_id));
             self.verify_sources_unchanged(invocation_error.as_ref())?;
             set_child_active(true);
             let mut session_log_error = None;
@@ -465,6 +485,7 @@ impl LaunchCommand {
                                         let mut marker = serde_json::to_value(marker)?;
                                         marker["invocation_id"] =
                                             serde_json::to_value(invocation_id)?;
+                                        marker["run_id"] = serde_json::to_value(session.run_id())?;
                                         session.append_history_event("MFB_HISTORY_CONFIG", marker)
                                     })
                             {
@@ -630,6 +651,68 @@ impl LaunchCommand {
 mod tests {
     use super::*;
 
+    struct TestSession {
+        stamp: String,
+        run_id: Option<String>,
+        log_dir: PathBuf,
+        audit: PathBuf,
+        lines: PathBuf,
+        events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    impl WorkerSession for TestSession {
+        fn stamp(&self) -> &str {
+            &self.stamp
+        }
+
+        fn run_id(&self) -> Option<&str> {
+            self.run_id.as_deref()
+        }
+
+        fn log_dir(&self) -> &Path {
+            &self.log_dir
+        }
+
+        fn session_audit(&self) -> &Path {
+            &self.audit
+        }
+
+        fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+            self.events
+                .lock()
+                .map_err(|_| anyhow::anyhow!("test history event lock poisoned"))?
+                .push((name.to_owned(), payload));
+            Ok(())
+        }
+
+        fn append_session_line(&self, event: &str) -> Result<()> {
+            use std::io::Write as _;
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.lines)?,
+                "{event}"
+            )?;
+            Ok(())
+        }
+
+        fn append_verbose_line(&self, event: &str) -> Result<()> {
+            self.append_session_line(event)
+        }
+    }
+
+    fn test_session(directory: &Path, run_id: Option<&str>) -> TestSession {
+        TestSession {
+            stamp: "test-session".to_owned(),
+            run_id: run_id.map(str::to_owned),
+            log_dir: directory.to_owned(),
+            audit: directory.join("session-audit.jsonl"),
+            lines: directory.join("session.log"),
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
     #[test]
     fn worker_child_marker_probe() {
         if let Some(path) = std::env::var_os("MFB_WORKER_TEST_MARKER") {
@@ -656,6 +739,90 @@ mod tests {
         assert_eq!(unknown.bytes, None);
         assert_eq!(unknown.blake3, None);
         assert!(unknown.diagnostic.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_reserved_identity_environment_uses_launch_observation() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path(), Some("run-123"));
+        let receipt = directory.path().join("identity.txt");
+        let mut command = LaunchCommand::from_argv(vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '%s\\n%s' \"${MFB_RUN_ID-}\" \"${MFB_INVOCATION_ID-}\" > \"$1\"".to_owned(),
+            "test".to_owned(),
+            receipt.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        command.env_overrides.extend([
+            ("MFB_RUN_ID".to_owned(), Some("stale-run".to_owned())),
+            (
+                "MFB_INVOCATION_ID".to_owned(),
+                Some("stale-invocation".to_owned()),
+            ),
+        ]);
+
+        command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+
+        let lines = fs::read_to_string(receipt).unwrap();
+        let mut lines = lines.lines();
+        assert_eq!(lines.next(), Some("run-123"));
+        let child_invocation = lines.next().unwrap();
+        assert!(!child_invocation.is_empty());
+        assert_ne!(child_invocation, "stale-invocation");
+        let events = session.events.lock().unwrap();
+        let invocation = events
+            .iter()
+            .find(|(name, _)| name == "MFB_HISTORY_INVOCATION")
+            .map(|(_, payload)| payload)
+            .unwrap();
+        assert_eq!(invocation["run_id"], "run-123");
+        assert_eq!(invocation["invocation_id"], child_invocation);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_reserved_identity_environment_removes_stale_run_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path(), None);
+        let receipt = directory.path().join("identity.txt");
+        let mut command = LaunchCommand::from_argv(vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf '%s\\n%s' \"${MFB_RUN_ID-}\" \"${MFB_INVOCATION_ID-}\" > \"$1\"".to_owned(),
+            "test".to_owned(),
+            receipt.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        command.env_overrides.extend([
+            ("MFB_RUN_ID".to_owned(), Some("stale-run".to_owned())),
+            (
+                "MFB_INVOCATION_ID".to_owned(),
+                Some("stale-invocation".to_owned()),
+            ),
+        ]);
+
+        command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+
+        let lines = fs::read_to_string(receipt).unwrap();
+        let mut lines = lines.lines();
+        assert_eq!(lines.next(), Some(""));
+        let child_invocation = lines.next().unwrap();
+        assert!(!child_invocation.is_empty());
+        assert_ne!(child_invocation, "stale-invocation");
+        let events = session.events.lock().unwrap();
+        let invocation = events
+            .iter()
+            .find(|(name, _)| name == "MFB_HISTORY_INVOCATION")
+            .map(|(_, payload)| payload)
+            .unwrap();
+        assert!(invocation["run_id"].is_null());
+        assert_eq!(invocation["invocation_id"], child_invocation);
     }
 
     #[test]

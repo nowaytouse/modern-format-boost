@@ -53,7 +53,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -223,9 +223,27 @@ struct DragDropSession {
     session_log: PathBuf,
     verbose_log: PathBuf,
     session_audit: PathBuf,
+    run_id: Option<String>,
 }
 
+static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 impl DragDropSession {
+    fn for_run(&self) -> Result<Self> {
+        let sequence = RUN_SEQUENCE
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("run identity sequence exhausted"))?;
+        let mut scoped = self.clone();
+        let stamp_hash = blake3::hash(self.stamp.as_bytes()).to_hex();
+        scoped.run_id = Some(format!(
+            "run-{}-{}-{sequence}",
+            std::process::id(),
+            &stamp_hash[..24]
+        ));
+        Ok(scoped)
+    }
     fn start() -> Result<Self> {
         let log_dir = ensure_unified_log_dir()?;
         Self::start_with_log_dir(&log_dir, true)
@@ -256,6 +274,7 @@ impl DragDropSession {
             session_audit: log_dir.join(format!("session_audit_{stamp}.jsonl")),
             log_dir,
             stamp,
+            run_id: None,
         };
         // A collision must never append another session's events or counters.
         fs::OpenOptions::new()
@@ -291,7 +310,20 @@ impl DragDropSession {
             .with_context(|| format!("write drag/drop log {}", path.display()))
     }
 
-    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+    fn append_history_event(&self, name: &str, mut payload: serde_json::Value) -> Result<()> {
+        if let Some(run_id) = &self.run_id {
+            let fields = payload
+                .as_object_mut()
+                .context("history payload is not an object")?;
+            if let Some(existing) = fields.get("run_id") {
+                anyhow::ensure!(
+                    existing.as_str() == Some(run_id.as_str()),
+                    "history event run identity does not match the active run"
+                );
+            } else {
+                fields.insert("run_id".to_owned(), serde_json::json!(run_id));
+            }
+        }
         let event = format!("{name}={payload}");
         dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
     }
@@ -495,6 +527,9 @@ impl DragDropSession {
 }
 
 impl WorkerSession for DragDropSession {
+    fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
+    }
     fn stamp(&self) -> &str {
         &self.stamp
     }
@@ -2204,6 +2239,8 @@ fn run_drag_drop(
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    let scoped_session = session.map(DragDropSession::for_run).transpose()?;
+    let session = scoped_session.as_ref();
     let plans = match standard_input_plans(args) {
         Ok(plans) => plans,
         Err(error) => return run_with_history(args, session, || Err(error)),
@@ -3671,6 +3708,47 @@ mod tests {
     };
     use foundation::infra::runtime_config::RuntimeConfig;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn run_identity_is_distinct_per_attempt_and_binds_every_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let first = session.for_run().unwrap();
+        let second = session.for_run().unwrap();
+        assert_ne!(first.run_id, second.run_id);
+        assert!(session.run_id.is_none());
+        assert_eq!(first.clone().run_id, first.run_id);
+        let args = Args::try_parse_from(["mfb", "--mode", "images", "--dry-run"]).unwrap();
+        for scoped in [&first, &second] {
+            run_with_history(&args, Some(scoped), || {
+                scoped.append_history_event(
+                    "MFB_HISTORY_INPUT_PLAN",
+                    serde_json::json!({"schema_version":1,"inputs":[]}),
+                )
+            })
+            .unwrap();
+        }
+        for name in [
+            "MFB_HISTORY_CONTEXT",
+            "MFB_HISTORY_INPUT_PLAN",
+            "MFB_HISTORY_FINISHED",
+        ] {
+            let events = history_payloads(&session, name);
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0]["run_id"], first.run_id.as_deref().unwrap());
+            assert_eq!(events[1]["run_id"], second.run_id.as_deref().unwrap());
+        }
+        assert!(
+            first
+                .append_history_event(
+                    "MFB_HISTORY_FINISHED",
+                    serde_json::json!({"schema_version":1,"run_id":second.run_id})
+                )
+                .is_err()
+        );
+        let unchanged = history_payloads(&session, "MFB_HISTORY_FINISHED");
+        assert_eq!(unchanged.len(), 2);
+    }
 
     #[test]
     fn explicit_standard_modes_and_filter_flags_share_scan_scope() {

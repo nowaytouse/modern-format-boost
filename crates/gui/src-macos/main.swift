@@ -3214,6 +3214,7 @@ enum LogTone: Equatable {
 
     static func classify(_ line: String) -> Self {
         let line = message(line)
+        if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
         // The stderr transport prefix is not evidence of an error.
         if let count = countStatusValue(in: line) { return count.uppercased() == "MATCH" ? .result : .failure }
         if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
@@ -3240,6 +3241,58 @@ enum LogTone: Equatable {
     var font: NSFont {
         .monospacedSystemFont(ofSize: 12, weight: self == .normal || self == .muted ? .regular : .semibold)
     }
+}
+
+struct ConsecutiveDiagnosticLogFolder: Equatable {
+    enum Update: Equatable {
+        case append(String)
+        case repeated(String, occurrences: Int)
+    }
+
+    private static let maximumFoldableUTF16Length = 8_192
+    private(set) var previousLine: String? = nil
+    private(set) var occurrences = 0
+
+    mutating func ingest(_ line: String) -> Update {
+        let tone = LogTone.classify(line)
+        guard tone == .warning || tone == .failure,
+              line.utf16.count <= Self.maximumFoldableUTF16Length else {
+            reset()
+            return .append(line)
+        }
+
+        guard previousLine == line else {
+            previousLine = line
+            occurrences = 1
+            return .append(line)
+        }
+
+        let next = occurrences.addingReportingOverflow(1)
+        guard !next.overflow else {
+            previousLine = line
+            occurrences = 1
+            return .append(line)
+        }
+        occurrences = next.partialValue
+        return .repeated(line, occurrences: occurrences)
+    }
+
+    mutating func reset() {
+        previousLine = nil
+        occurrences = 0
+    }
+}
+
+func trailingLogLineRange(_ expected: String, in value: NSString) -> NSRange? {
+    guard !expected.isEmpty, value.length > 0, value.character(at: value.length - 1) != 0x0A else {
+        return nil
+    }
+    let fullRange = NSRange(location: 0, length: value.length)
+    let separator = value.range(of: "\n", options: .backwards, range: fullRange)
+    let start = separator.location == NSNotFound ? 0 : NSMaxRange(separator)
+    let lineRange = NSRange(location: start, length: value.length - start)
+    let line = value.substring(with: lineRange)
+    return line == expected || line.hasPrefix(expected + " · ") ? lineRange : nil
 }
 
 private struct LatestDiagnostics {
@@ -4083,6 +4136,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var fileProgress = FileStageProgress()
     private var gateActivity = GateCheckActivity()
     private var logPhase = PhaseLogPresentation()
+    private var diagnosticLogFolder = ConsecutiveDiagnosticLogFolder()
     private var latestDiagnostics = LatestDiagnostics()
     private let latestFailureLabel = NSTextField(labelWithString: "")
     private let latestWarningLabel = NSTextField(labelWithString: "")
@@ -4721,6 +4775,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func clearBatchLog() {
         logView.string = ""
         logPhase = PhaseLogPresentation()
+        diagnosticLogFolder.reset()
         batchResults = BatchResults()
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
@@ -4977,10 +5032,15 @@ private final class AppController: NSObject, NSWindowDelegate {
                            now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         var latestChanged = false
         var replacePresentation = false
+        var presentationChanged = false
         var displayLines: [String] = []
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
+        var lastBufferedDiagnostic: (line: String, index: Int)?
+        var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
+        for line in rawLines {
             if let phaseUpdate = logPhase.ingest(line, now: now) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
                 switch phaseUpdate {
                 case .changed(let phase, let replace):
                     if phase == .processing { gateActivity = GateCheckActivity() }
@@ -4999,6 +5059,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             if gateActivity.ingest(line, now: now) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
                 refreshFileProgress(now: now)
                 if gateActivity.invalid {
                     let warning = "[WARN] " + localized("gate.activity.invalid")
@@ -5008,15 +5070,57 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             if fileProgress.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
                 refreshFileProgress()
                 continue
             }
             if let summary = batchResults.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
                 displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
                 continue
             }
-            if captureDiagnostics && latestDiagnostics.ingest(line) { latestChanged = true }
-            displayLines.append(line)
+            var visibleLine = line
+            if line.hasPrefix(HistoryFileFailure.prefix) {
+                do {
+                    if let failure = try HistoryFileFailure.decode(line) {
+                        visibleLine = "[FAIL] \(failure.source_path): \(failure.message)"
+                        if developerMode { displayLines.append(line) }
+                    }
+                } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
+                if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
+                displayLines.append(visibleLine)
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
+            if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
+            switch diagnosticLogFolder.ingest(visibleLine) {
+            case .append(let raw):
+                displayLines.append(raw)
+                let index = displayLines.count - 1
+                if LogTone.classify(raw) == .warning || LogTone.classify(raw) == .failure {
+                    lastBufferedDiagnostic = (raw, index)
+                } else {
+                    lastBufferedDiagnostic = nil
+                }
+            case .repeated(let raw, let occurrences):
+                let repeated = raw + " · " + localized("log.repeated_occurrences", String(occurrences))
+                if let buffered = lastBufferedDiagnostic,
+                   buffered.line == raw, buffered.index == displayLines.count - 1 {
+                    displayLines[buffered.index] = repeated
+                } else if !replacePresentation,
+                          let range = trailingLogLineRange(raw, in: logView.string as NSString),
+                          let storage = logView.textStorage {
+                    storage.replaceCharacters(in: range, with: styledLog(repeated))
+                    presentationChanged = true
+                } else {
+                    diagnosticLogFolder.reset()
+                    displayLines.append(raw)
+                    lastBufferedDiagnostic = nil
+                }
+            }
         }
         let displayText = displayLines.joined(separator: "\n")
         if latestChanged { refreshLatestDiagnostics() }
@@ -5040,15 +5144,17 @@ private final class AppController: NSObject, NSWindowDelegate {
                 refreshCountStatus()
             }
         }
-        guard !displayText.isEmpty else { return }
+        guard !displayText.isEmpty || presentationChanged else { return }
         let storage = logView.textStorage!
-        if replacePresentation { storage.setAttributedString(NSAttributedString(string: "")) }
-        if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
-        storage.append(styledLog(displayText))
-        let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
-        if lines.count > 3_000 {
-            let retained = lines.suffix(3_000).joined(separator: "\n")
-            storage.setAttributedString(styledLog(retained))
+        if !displayText.isEmpty {
+            if replacePresentation { storage.setAttributedString(NSAttributedString(string: "")) }
+            if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
+            storage.append(styledLog(displayText))
+            let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
+            if lines.count > 3_000 {
+                let retained = lines.suffix(3_000).joined(separator: "\n")
+                storage.setAttributedString(styledLog(retained))
+            }
         }
         logView.scrollToEndOfDocument(nil)
     }
@@ -5187,6 +5293,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 sawResumeDecision = false
                 batchResults = BatchResults()
                 logPhase = PhaseLogPresentation()
+                diagnosticLogFolder.reset()
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 fileProgress = FileStageProgress()
@@ -5479,6 +5586,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             languageChanged()
         }
         for language in [AppLanguage.english, .simplifiedChinese, .japanese] {
+            changeLanguage(language)
+            let repeatLabel = localized("log.repeated_occurrences", "3")
+            guard repeatLabel != "log.repeated_occurrences", repeatLabel.contains("3") else {
+                throw HostError(message: "Repeated-log count was not localized for every language")
+            }
             for (state, key) in [(ProcessorReadiness.checking, "status.checking_processor"),
                                  (.ready, "status.processor_ready"), (.unavailable, "status.processor_unavailable")] {
                 processorStatus = state
@@ -5520,7 +5632,155 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func validateDiagnosticFoldingForSelfTest() throws {
+        var folder = ConsecutiveDiagnosticLogFolder()
+        let first = "[WARN] /tmp/clip-1.mov frame=17"
+        let otherPath = "[WARN] /tmp/clip-2.mov frame=17"
+        let otherNumber = "[WARN] /tmp/clip-1.mov frame=18"
+        guard folder.ingest(first) == .append(first),
+              folder.ingest(first) == .repeated(first, occurrences: 2),
+              folder.ingest(otherPath) == .append(otherPath),
+              folder.ingest(otherNumber) == .append(otherNumber),
+              folder.ingest("routine detail") == .append("routine detail"),
+              folder.ingest(otherNumber) == .append(otherNumber) else {
+            throw HostError(message: "Diagnostic folding merged distinct lines or crossed a normal log line")
+        }
+        folder.reset()
+        guard folder.ingest(first) == .append(first) else {
+            throw HostError(message: "Diagnostic folding did not reset for a new run")
+        }
+
+        let unicodeLine = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
+        let retained = NSMutableAttributedString(string: "trimmed history 🧪\n" + unicodeLine)
+        guard let range = trailingLogLineRange(unicodeLine, in: retained.string as NSString) else {
+            throw HostError(message: "UTF-16 tail range did not find a retained Unicode diagnostic")
+        }
+        let summary = unicodeLine + " · " + localized("log.repeated_occurrences", "2")
+        retained.replaceCharacters(in: range, with: styledLog(summary))
+        guard retained.string.hasSuffix(summary),
+              trailingLogLineRange(unicodeLine, in: retained.string as NSString) != nil,
+              trailingLogLineRange(unicodeLine, in: NSString(string: "trimmed unrelated tail")) == nil else {
+            throw HostError(message: "Trimmed-log replacement lost its row or matched an unrelated tail")
+        }
+
+        let oldLog = NSAttributedString(attributedString: logView.textStorage!)
+        let oldFolder = diagnosticLogFolder
+        let oldPhase = logPhase
+        let oldLatest = latestDiagnostics
+        let oldBatch = batchResults
+        let oldProgress = fileProgress
+        let oldGate = gateActivity
+        let oldPhotosDiagnostics = photosDiagnostics
+        let oldCountStatus = countStatus
+        let oldCountStatusText = countStatusLabel.stringValue
+        let oldCountStatusHidden = countStatusLabel.isHidden
+        defer {
+            logView.textStorage?.setAttributedString(oldLog)
+            diagnosticLogFolder = oldFolder
+            logPhase = oldPhase
+            latestDiagnostics = oldLatest
+            batchResults = oldBatch
+            fileProgress = oldProgress
+            gateActivity = oldGate
+            photosDiagnostics = oldPhotosDiagnostics
+            countStatus = oldCountStatus
+            countStatusLabel.stringValue = oldCountStatusText
+            countStatusLabel.isHidden = oldCountStatusHidden
+            refreshLatestDiagnostics()
+            refreshFileProgress()
+            refreshDiagnostics()
+        }
+
+        clearBatchLog()
+        appendLog((0..<3_001).map { "detail \($0)" }.joined(separator: "\n"))
+        let error = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
+        appendLog(error + "\n" + error)
+        let repeatedTwo = error + " · " + localized("log.repeated_occurrences", "2")
+        guard logView.string.split(separator: "\n", omittingEmptySubsequences: false).count <= 3_000,
+              logView.string.components(separatedBy: "\n").filter({ $0 == repeatedTwo }).count == 1,
+              latestDiagnostics.failure == LogTone.message(error),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "Consecutive diagnostics were not folded safely after log trimming")
+        }
+        appendLog(error)
+        let repeatedThree = error + " · " + localized("log.repeated_occurrences", "3")
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == repeatedThree }).count == 1,
+              latestDiagnostics.failure == LogTone.message(error),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "Repeated rows across append chunks changed diagnostics or batch counts")
+        }
+        appendLog("ordinary separator")
+        appendLog(error)
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == error }).count == 1 else {
+            throw HostError(message: "A non-diagnostic row did not break consecutive folding")
+        }
+        appendLog("[Summary] succeeded=0 failed=1")
+        guard latestDiagnostics.failure == LogTone.message(error) else {
+            throw HostError(message: "A repeated diagnostic or terminal summary replaced the actionable error")
+        }
+
+        logPhase = PhaseLogPresentation(now: 0)
+        diagnosticLogFolder.reset()
+        logView.string = ""
+        let processing = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
+        let verification = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        appendLog(processing, now: 3)
+        appendLog(error + "\n" + error, now: 3)
+        appendLog(verification, now: 4)
+        appendLog(error, now: 4)
+        let visibleErrors = logView.string.components(separatedBy: "\n").filter {
+            $0 == error || $0 == repeatedTwo
+        }
+        guard visibleErrors == [repeatedTwo, error] else {
+            throw HostError(message: "A phase presentation transition did not reset diagnostic folding")
+        }
+
+        clearBatchLog()
+        appendLog(error)
+        guard !logView.string.contains(localized("log.repeated_occurrences", "2")) else {
+            throw HostError(message: "A new batch retained the previous batch's repeat count")
+        }
+        clearBatchLog()
+        let fileFailure = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/file.jpg",
+            absolute_path: "/synthetic/file.jpg", message: "synthetic decoder failed", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", reason_code: nil)
+        let marker = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(fileFailure), as: UTF8.self)
+        func largeFailure(_ bytes: Int) -> HistoryFileFailure {
+            HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "synthetic.jpg", absolute_path: nil,
+                message: String(repeating: "x", count: bytes), run_id: "run", invocation_id: "invocation", reason_code: nil)
+        }
+        let overhead = try JSONEncoder().encode(largeFailure(0)).count
+        let messageBudget = maxProcessLogChunkBytes - HistoryFileFailure.prefix.utf8.count - 1 - overhead
+        let largest = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(largeFailure(messageBudget)), as: UTF8.self)
+        var transport = Data((largest + "\n").utf8)
+        guard transport.count == maxProcessLogChunkBytes,
+              drainProcessLogChunks(&transport, flush: false) == [largest], transport.isEmpty,
+              try HistoryFileFailure.decode(largest) != nil else {
+            throw HostError(message: "File failure wire budget split a valid JSON observation")
+        }
+        let tooLarge = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(largeFailure(messageBudget + 1)), as: UTF8.self)
+        let oversizedResult = Swift.Result { try HistoryFileFailure.decode(tooLarge) }
+        guard case .failure = oversizedResult else { throw HostError(message: "Oversized file failure wire payload was accepted") }
+        appendLog(marker)
+        let visibleFailure = "[FAIL] /synthetic/file.jpg: synthetic decoder failed"
+        guard latestDiagnostics.failure == visibleFailure,
+              developerMode || !logView.string.contains(HistoryFileFailure.prefix),
+              !batchResults.hasFailure, batchResults.totals.isEmpty else {
+            throw HostError(message: "File failure marker appeared as raw JSON or changed authoritative media counts")
+        }
+        appendLog(marker)
+        guard logView.string.components(separatedBy: "\n").filter({ $0 == visibleFailure }).count == 2 else {
+            throw HostError(message: "File observation presentation was folded by diagnostic text instead of exact observation identity")
+        }
+        appendLog("MFB_FILE_FAILURE={invalid}")
+        guard latestDiagnostics.warning == "[WARN] " + localized("history.batch_issues.invalid"),
+              latestDiagnostics.failure == visibleFailure else {
+            throw HostError(message: "Malformed file failure marker hid the previous actionable error")
+        }
+    }
+
     func validateInterfaceForSelfTest() throws {
+        try validateDiagnosticFoldingForSelfTest()
         try validateStatusLocalizationForSelfTest()
         try validateGateActivityForSelfTest()
         let previousAppearance = NSApp.appearance

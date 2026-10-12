@@ -407,7 +407,36 @@ fn open_history_write(log_dir: &Path) -> Result<Connection> {
     ensure_schema(&mut connection)?;
     foundation::mfb_sqlite_store::enable_wal(&connection)
         .context("processing history schema retained; failed to enable WAL")?;
+    persist_history_wal_sidecars(&connection)?;
     Ok(connection)
+}
+
+fn persist_history_wal_sidecars(connection: &Connection) -> Result<()> {
+    let mut persist = 1_i32;
+    // Keep cold history readable by read-only system SQLite without reopening it writable.
+    // SAFETY: the live connection owns this handle; SQLite uses the integer only during this call.
+    let result = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
+            std::ptr::from_mut(&mut persist).cast(),
+        )
+    };
+    if result != rusqlite::ffi::SQLITE_OK {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(result),
+            None,
+        ))
+        .context(
+            "processing history retained; failed to preserve WAL sidecars for read-only readers",
+        );
+    }
+    ensure!(
+        persist == 1,
+        "history SQLite VFS did not preserve WAL sidecars"
+    );
+    Ok(())
 }
 
 fn open_history_read(log_dir: &Path) -> Result<Option<Connection>> {
@@ -519,6 +548,30 @@ mod tests {
     use super::*;
 
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
+
+    #[test]
+    fn closed_history_retains_wal_sidecars_for_read_only_readers() {
+        let directory = tempfile::tempdir().unwrap();
+        append_history_event(directory.path(), "cold-history", EVENT).unwrap();
+        let path = directory.path().join(HISTORY_DATABASE);
+        let wal = directory.path().join(format!("{HISTORY_DATABASE}-wal"));
+        let shm = directory.path().join(format!("{HISTORY_DATABASE}-shm"));
+        assert!(wal.is_file() && shm.is_file());
+        let before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(&wal).unwrap();
+        let reader = open_history_read(directory.path()).unwrap().unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT event FROM history_events", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            EVENT
+        );
+        assert!(reader.execute("DELETE FROM history_events", []).is_err());
+        drop(reader);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+    }
 
     fn backup_fixture(root: &Path, version: i64) -> PathBuf {
         let directory = root.join("history");
