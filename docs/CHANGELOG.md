@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Core database management and selected-run diagnostics (2026-10-12)
+
+- Add a read-only Core database overview alongside namespace statistics: current
+  schema, SQLite version, journal mode and allocated/free pages from one snapshot.
+  Extend the native Database & Cache tab without treating free pages as saved space.
+- Add an explicit Core SQLite backup command and native save workflow. Open the
+  existing source read-only, reject implicit root fallback and unsafe/existing
+  destinations, include committed WAL but not pending transactions, verify schema,
+  structure, foreign keys and all stored hashes before/after the logical backup,
+  and publish create-new after synchronization. No History/PostgreSQL/media copy,
+  automatic restore, migration or source checkpoint; hard-link support is required.
+- Export selected-run diagnostic JSON from one read-only History snapshot with
+  batch boundaries, typed config/counts/end state and original warning/error/phase
+  records. Explicitly report retained/omitted log rows and preserve unknowns. Reject
+  overlapping batch boundaries, invalid/oversized critical evidence, existing
+  files/links and Git workspace paths;
+  cancellation or selection changes prevent publication. Not authoritative state
+  or a complete Run Manifest. Keep file preparation off the native main thread.
+- Refresh the About icon's help and accessibility label on language changes.
+- Isolate the metadata logging evidence contract through the existing exact-child
+  test helper, retaining all occurrence and structured-field assertions. Address
+  the matching Shared coverage failures in runs 38153772166 and 38192927969 without
+  changing production log filters; both ran before this test fix. Subscriber/
+  callsite competition remains a causal hypothesis, not a demonstrated production
+  data-loss finding.
+- Validation: 20 cache-manager unit tests, 9 CLI cache integration tests and 21
+  Foundation logging tests with CI features passed. Cache-manager strict Clippy,
+  workspace formatting, localization syntax, native Swift warnings-as-errors and
+  three-language self-tests passed. Isolated AppKit light/dark and three-language
+  checks exercised the Core backup and selected-run JSON save workflows; 5 output
+  rows produced 3 retained diagnostic/phase rows and 2 explicitly omitted ordinary
+  rows, while processor outcomes remained 2 successes and 1 failure. No production
+  library, real media throughput, cross-platform or full-workspace acceptance;
+  installed application was not refreshed.
+
 ### Custom IMG byte budgets, history diagnostics and live localization (2026-10-12)
 
 - Add `img.size_tolerance_bytes`, default 524288, through typed configuration,

@@ -1675,6 +1675,10 @@ mod tests {
 
     #[test]
     fn metadata_success_is_visible_once_and_keeps_structured_evidence() {
+        // Keep the subscriber/callsite contract independent of parallel tests.
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let temp = TempDir::new().unwrap();
         let src = temp.path().join("source.jpg");
         let dst = temp.path().join("output.jpg");

@@ -180,6 +180,15 @@ filled with defaults. This does not establish equal tools, inputs or environment
 guess throughput, or explain causality from configuration changes.
 Select one run to return to its captured effective configuration and paged output.
 
+The export button saves a versioned **selected-run diagnostic JSON** locally.
+It rereads that batch from one read-only SQLite snapshot, including recorded
+configuration, outcomes, verification and terminal state, plus raw warning/error
+and explicit phase records. Its scope lists retained and intentionally omitted
+ordinary log rows; unknown values stay null. This is neither recovery state nor
+a complete Run Manifest. Invalid critical evidence or size limits stop export;
+closing the window or changing selection cancels publication. Existing files,
+links and Git workspace destinations are never replaced or used for export.
+
 The single-run **Failed files** view filters recorded paths without opening logs.
 It displays at most 1,000 rows and 2 MiB of path text, with separate shown, matched
 and recorded totals. Select a row to copy its exact path or locate an existing
@@ -197,7 +206,7 @@ counts newly pending jobs only after their wave results are persisted, excluding
 resume-reused outputs. Other phases remain indeterminate until reliable totals
 are available; final success still comes from the processing result.
 
-### Cache management
+### Database and cache management
 
 Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
@@ -229,7 +238,7 @@ IMG (including `fast-img`) and VID accept `--cache-max-bytes` and
 retain inherited values, and `config show --effective` reports their source chain.
 Both accept positive integers up to 9223372036854775807. The launcher forwards
 explicit overrides to IMG/VID and fast modes without inserting defaults. Settings >
-Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
+Database & Cache exposes both overrides alongside cache statistics and maintenance. Empty fields
 inherit configuration; resetting this tab removes only cache overrides. If IMG and
 VID inherit different limits, the combined view keeps their separate values until
 an explicit shared override is entered. Developer mode shows each source chain.
@@ -246,7 +255,7 @@ committed but subsequent inspection fails, the error states the committed counts
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
 
-**Settings → Cache → Prune Cache** runs the same operation using the current
+**Settings → Database & Cache → Prune Cache** runs the same operation using the current
 draft's effective cache limits. It resolves relevant image/video configuration
 before any deletion and pins the resulting limits for the maintenance command.
 Different inherited limits must be reconciled with explicit shared overrides;
@@ -261,12 +270,28 @@ shared database or immediately reclaimable space. Age-based maintenance deletes
 records and orphan path indexes atomically; invalid retention or count errors fail
 explicitly. This is separate from SQLite directory-cache TTL/LRU maintenance above.
 
-The native GUI's **Settings → Cache** tab reads bounded, versioned statistics and
+The native GUI's **Settings → Database & Cache** tab reads bounded, versioned statistics and
 separates rebuildable payloads from retained records and database file size. Its
 confirmed cleanup removes only local path-tree snapshots and obsolete analysis
 cache files. History, checkpoints, processed-file receipts, verification state,
 models and unrecognized namespaces/files remain intact. SQLite reuses deleted
 pages, so database file size is not a promise of immediately reclaimable space.
+
+The same read-only snapshot reports the Core store schema, SQLite version,
+journal mode and allocated/free page counts. Missing evidence stays unknown;
+logical free pages are not a disk-space saving receipt.
+
+**Back Up Database** or `cache_cleaner --local-backup /path/to/new-backup.sqlite --json`
+creates a verified logical snapshot of Core state and cache, including committed
+WAL data but not pending transactions. History, PostgreSQL and media are separate.
+The existing source is opened read-only, without initialization, migration,
+temporary-root fallback or checkpointing. Structure, foreign keys and all stored
+BLAKE3 digests are verified before and after backup; a damaged/unknown store is
+rejected. A new destination outside Git workspaces and the active Core directory
+is required. Publication never overwrites a file or SQLite sidecar and requires
+filesystem hard-link support; Unix backups use mode 0600. Normal errors clean
+staging; a forced termination can leave a private staging directory. This does
+not add automatic restore or retention, and backups can contain private paths.
 
 **Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
 checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read

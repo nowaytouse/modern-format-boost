@@ -682,6 +682,24 @@ private func queryRuntimeSettings(arguments: [String], tool: String = "img") thr
 }
 
 private struct LocalCacheStatus: Decodable {
+    struct Database: Decodable {
+        let storeSchemaVersion: Int
+        let sqliteVersion: String
+        let journalMode: String
+        let pageSize: UInt64
+        let pageCount: UInt64
+        let freePages: UInt64
+
+        func validate() throws {
+            let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
+            guard storeSchemaVersion > 0, !sqliteVersion.isEmpty,
+                  ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
+                  pageSize >= 512, pageSize <= 65536, pageSize.nonzeroBitCount == 1,
+                  pageCount > 0, freePages <= pageCount, !bytes.overflow, bytes.partialValue <= UInt64(Int64.max) else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+    }
     struct Pruning: Decodable {
         struct Policy: Decodable {
             let pathTreeMaxBytes: UInt64
@@ -747,6 +765,7 @@ private struct LocalCacheStatus: Decodable {
     let removedFiles: UInt64
     let integrity: Integrity?
     let pruning: Pruning?
+    let database: Database?
 
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
         var rows: UInt64 = 0, bytes: UInt64 = 0
@@ -783,6 +802,7 @@ private struct LocalCacheStatus: Decodable {
             }
         }
         try status.integrity?.validate()
+        try status.database?.validate()
         if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
             guard integrity.blobScanComplete,
                   integrity.checkedCacheRows == (try status.totals(rebuildable: true).rows),
@@ -792,6 +812,41 @@ private struct LocalCacheStatus: Decodable {
         }
         return status
     }
+}
+
+private struct CoreDatabaseBackup: Decodable {
+    let schemaVersion: Int
+    let source: String
+    let destination: String
+    let storeSchemaVersion: Int
+    let bytes: UInt64
+
+    static func decode(_ data: Data, source: URL, destination: URL, storeSchemaVersion: Int) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let receipt = try decoder.decode(Self.self, from: data)
+        guard receipt.schemaVersion == 1, receipt.storeSchemaVersion == storeSchemaVersion,
+              receipt.source.hasPrefix("/"), receipt.destination.hasPrefix("/"), receipt.bytes > 0,
+              receipt.bytes <= UInt64(Int64.max),
+              URL(fileURLWithPath: receipt.source).standardizedFileURL == source.resolvingSymlinksInPath().standardizedFileURL,
+              URL(fileURLWithPath: receipt.destination).standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL else {
+            throw HostError(message: localized("settings.cache.backup_invalid"))
+        }
+        let values = try destination.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              values.fileSize.flatMap(UInt64.init(exactly:)) == receipt.bytes else {
+            throw HostError(message: localized("settings.cache.backup_invalid"))
+        }
+        return receipt
+    }
+}
+
+private func backupCoreDatabase(to destination: URL, source: URL, schema: Int) throws -> CoreDatabaseBackup {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: ["--local-backup", destination.path, "--json"], timeout: 120)
+    return try CoreDatabaseBackup.decode(data, source: source, destination: destination, storeSchemaVersion: schema)
 }
 
 private enum LocalCacheAction: Equatable { case refresh, clear, check, prune }
@@ -892,6 +947,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let cacheClear = NSButton()
     private let cachePrune = NSButton()
     private let cacheCheck = NSButton()
+    private let cacheBackup = NSButton()
+    private var cacheStore: (url: URL, schema: Int)?
     private var cacheLabels: [String: NSTextField] = [:]
     private let cacheMessage = NSTextField(wrappingLabelWithString: "")
     private var cacheMessageRow: NSGridRow?
@@ -1124,7 +1181,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         let cacheTerms = ["settings.section.cache", "settings.cache.path", "settings.cache.rebuildable",
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
-                          "settings.cache.clear", "settings.cache.check", "settings.cache.prune"].map { localized($0) }.joined(separator: " ")
+                          "settings.cache.clear", "settings.cache.check", "settings.cache.prune",
+                          "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1199,7 +1257,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     private func addCacheRows(to grid: NSGridView) {
-        for key in ["path", "rebuildable", "retained", "store", "obsolete"] {
+        for key in ["path", "database", "journal", "pages", "rebuildable", "retained", "store", "obsolete"] {
             let value = NSTextField(labelWithString: localized("settings.cache.not_loaded"))
             value.isSelectable = true
             value.lineBreakMode = .byTruncatingMiddle
@@ -1236,7 +1294,17 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheCheck.bezelStyle = .rounded
         cacheCheck.target = self
         cacheCheck.action = #selector(checkCacheIntegrity)
-        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cachePrune, cacheClear, cacheCheck])]).yPlacement = .center
+        cacheBackup.title = localized("settings.cache.backup")
+        cacheBackup.image = NSImage(systemSymbolName: "externaldrive", accessibilityDescription: nil)
+        cacheBackup.imagePosition = .imageLeading
+        cacheBackup.bezelStyle = .rounded
+        cacheBackup.toolTip = localized("settings.cache.backup_help")
+        cacheBackup.setAccessibilityLabel(localized("settings.cache.backup"))
+        cacheBackup.target = self
+        cacheBackup.action = #selector(backupStore)
+        cacheBackup.isEnabled = false
+        grid.addRow(with: [NSView(), NSStackView(views: [cacheRefresh, cacheCheck, cacheBackup])]).yPlacement = .center
+        grid.addRow(with: [NSView(), NSStackView(views: [cachePrune, cacheClear])]).yPlacement = .center
         cacheMessage.font = .systemFont(ofSize: 11)
         cacheMessage.maximumNumberOfLines = 4
         cacheMessage.isSelectable = true
@@ -1250,6 +1318,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
         cacheLabels["path"]?.stringValue = snapshot.cacheDirectory
         cacheLabels["path"]?.toolTip = snapshot.cacheDirectory
+        cacheStore = snapshot.database.map {
+            (URL(fileURLWithPath: snapshot.cacheDirectory, isDirectory: true).appendingPathComponent("mfb_store.sqlite"), $0.storeSchemaVersion)
+        }
+        if let database = snapshot.database {
+            cacheLabels["database"]?.stringValue = localized("settings.cache.database_value", database.storeSchemaVersion, database.sqliteVersion)
+            cacheLabels["database"]?.toolTip = cacheStore?.url.path
+            cacheLabels["journal"]?.stringValue = database.journalMode.uppercased()
+            cacheLabels["pages"]?.stringValue = localized("settings.cache.pages_value", String(database.pageCount), String(database.freePages), String(database.pageSize))
+            cacheLabels["pages"]?.toolTip = localized("settings.cache.pages_help")
+        } else {
+            let value = snapshot.storeBytes == 0 ? localized("settings.cache.absent") : localized("result.unknown")
+            for key in ["database", "journal", "pages"] { cacheLabels[key]?.stringValue = value; cacheLabels[key]?.toolTip = nil }
+        }
         cacheLabels["rebuildable"]?.stringValue = localized("settings.cache.records", String(cache.rows), size(cache.bytes))
         cacheLabels["retained"]?.stringValue = localized("settings.cache.records", String(retained.rows), size(retained.bytes))
         cacheLabels["retained"]?.toolTip = snapshot.namespaces.filter { !$0.rebuildable }.map { "\($0.name): \($0.rows)" }.joined(separator: "\n")
@@ -1259,11 +1340,57 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
         cachePrune.isEnabled = !cacheBusy && cache.rows > 0
         cacheCheck.isEnabled = !cacheBusy
+        cacheBackup.isEnabled = !cacheBusy && cacheStore != nil
         cacheLoaded = true
     }
 
     @objc private func refreshCache() { updateCache(action: .refresh) }
     @objc private func checkCacheIntegrity() { updateCache(action: .check) }
+
+    @objc private func backupStore() {
+        guard !cacheBusy, cacheLoaded, cacheBackup.isEnabled, let store = cacheStore else { return }
+        let save = NSSavePanel()
+        save.title = localized("settings.cache.backup")
+        save.message = localized("settings.cache.backup_help")
+        save.nameFieldStringValue = "mfb-core-backup-\(UUID().uuidString.prefix(8)).sqlite"
+        save.canCreateDirectories = true
+        save.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let destination = save.url, !self.cacheBusy,
+                  self.panel.sheetParent != nil else { return }
+            let previousCleanup = (self.cachePrune.isEnabled, self.cacheClear.isEnabled)
+            self.cacheBusy = true
+            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear] { button.isEnabled = false }
+            self.cacheMessage.stringValue = localized("settings.cache.backing_up")
+            self.cacheMessage.textColor = .secondaryLabelColor
+            self.cacheMessage.toolTip = nil
+            self.cacheMessageRow?.isHidden = false
+            self.updatePanelSize()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try backupCoreDatabase(to: destination, source: store.url, schema: store.schema) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.cacheBusy = false
+                    self.cacheRefresh.isEnabled = true
+                    self.cacheCheck.isEnabled = true
+                    self.cacheBackup.isEnabled = self.cacheStore != nil && self.cacheLoaded
+                    self.cachePrune.isEnabled = previousCleanup.0
+                    self.cacheClear.isEnabled = previousCleanup.1
+                    guard self.panel.sheetParent != nil else { return }
+                    do {
+                        let receipt = try result.get()
+                        self.cacheMessage.stringValue = localized("settings.cache.backed_up", destination.lastPathComponent,
+                            ByteCountFormatter.string(fromByteCount: Int64(receipt.bytes), countStyle: .binary))
+                        self.cacheMessage.textColor = .labelColor
+                        self.cacheMessage.toolTip = receipt.destination
+                    } catch {
+                        self.cacheMessage.stringValue = error.localizedDescription
+                        self.cacheMessage.textColor = .systemRed
+                    }
+                    self.updatePanelSize()
+                }
+            }
+        }
+    }
 
     @objc private func pruneCache() {
         guard !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
@@ -1300,6 +1427,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheClear.isEnabled = false
         cachePrune.isEnabled = false
         cacheCheck.isEnabled = false
+        cacheBackup.isEnabled = false
         cacheMessage.toolTip = nil
         cacheMessage.maximumNumberOfLines = 4
         let message: String
@@ -1352,6 +1480,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
                 } catch {
                     self.cacheLoaded = false
+                    self.cacheStore = nil
+                    self.cacheBackup.isEnabled = false
                     for label in self.cacheLabels.values { label.stringValue = localized("settings.cache.unavailable"); label.toolTip = nil }
                     self.cacheMessage.stringValue = error.localizedDescription
                     self.cacheMessage.textColor = .systemRed
@@ -1366,6 +1496,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheMessage.maximumNumberOfLines = 0
         if report.status == .error {
             cacheLoaded = false
+            cacheStore = nil
+            cacheBackup.isEnabled = false
             cacheClear.isEnabled = false
             cachePrune.isEnabled = false
             for (key, label) in cacheLabels where key != "path" {
@@ -2133,20 +2265,75 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 ["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": false],
                 ["name": "future_state", "rows": 4, "payload_bytes": 256, "rebuildable": false]]]
         let snapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: document))
+        let database: [String: Any] = ["store_schema_version": 2, "sqlite_version": "3.53.0",
+            "journal_mode": "wal", "page_size": 4096, "page_count": 12, "free_pages": 3]
+        var withDatabase = document
+        withDatabase["database"] = database
+        let databaseSnapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: withDatabase))
+        guard matchingSettings(localized("settings.cache.backup")).contains(.cache) else {
+            throw HostError(message: "Database backup was omitted from Settings search")
+        }
+        try displayCache(databaseSnapshot)
+        guard cacheBackup.isEnabled, cacheStore?.schema == 2,
+              cacheLabels["journal"]?.stringValue == "WAL",
+              cacheLabels["pages"]?.stringValue == localized("settings.cache.pages_value", "12", "3", "4096") else {
+            throw HostError(message: "Database overview or backup availability lost its recorded values")
+        }
+        for (key, value) in [("store_schema_version", 0 as Any), ("journal_mode", "unknown"),
+                             ("page_size", 513), ("page_count", 0), ("free_pages", 13),
+                             ("page_count", UInt64.max)] {
+            var invalidDatabase = database
+            invalidDatabase[key] = value
+            withDatabase["database"] = invalidDatabase
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: withDatabase)) }
+            catch { continue }
+            throw HostError(message: "Invalid database overview was accepted: \(key)")
+        }
+        let backupDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("mfb-backup-receipt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: backupDirectory) }
+        let destination = backupDirectory.appendingPathComponent("snapshot.sqlite")
+        try Data([0, 1, 2, 3]).write(to: destination)
+        let source = URL(fileURLWithPath: "/synthetic/cache/mfb_store.sqlite")
+        let backup: [String: Any] = ["schema_version": 1, "source": source.path,
+            "destination": destination.resolvingSymlinksInPath().path, "store_schema_version": 2, "bytes": 4]
+        guard try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: backup), source: source,
+            destination: destination, storeSchemaVersion: 2).bytes == 4 else {
+            throw HostError(message: "Valid backup receipt was lost")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("source", "/synthetic/other.sqlite"),
+                             ("destination", "/synthetic/other.sqlite"), ("store_schema_version", 3), ("bytes", 0), ("bytes", 5)] {
+            var invalid = backup
+            invalid[key] = value
+            do { _ = try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: invalid), source: source,
+                destination: destination, storeSchemaVersion: 2) }
+            catch { continue }
+            throw HostError(message: "Contradictory backup receipt was accepted: \(key)")
+        }
+        let link = backupDirectory.appendingPathComponent("link.sqlite")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: destination)
+        do { _ = try CoreDatabaseBackup.decode(JSONSerialization.data(withJSONObject: backup), source: source,
+            destination: link, storeSchemaVersion: 2)
+            throw HostError(message: "Symlinked backup was accepted")
+        } catch let error as HostError where error.message == "Symlinked backup was accepted" { throw error }
+          catch { }
         guard try snapshot.totals(rebuildable: true).rows == 3,
               try snapshot.totals(rebuildable: false).rows == 6 else {
             throw HostError(message: "Cache and retained state counts were mixed")
         }
         try displayCache(snapshot)
+        guard !cacheBackup.isEnabled, cacheLabels["database"]?.stringValue == localized("result.unknown") else {
+            throw HostError(message: "Missing database evidence was guessed or allowed a backup")
+        }
         tabs.selectTabViewItem(withIdentifier: "cache")
         guard cacheClear.isEnabled, cachePrune.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
               cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
         }
         cacheBusy = true
-        try displayCache(snapshot)
+        try displayCache(databaseSnapshot)
         updatePanelSize()
-        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cancelButton.isEnabled else {
+        guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cacheBackup.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false
@@ -3634,6 +3821,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let preferences: UserDefaults
     private let window: NSWindow
     private let titleLabel = NSTextField(labelWithString: "Modern Format Boost")
+    private let aboutIcon = NSButton()
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let mediaLabel = NSTextField(labelWithString: "")
     private let operationLabel = NSTextField(labelWithString: "")
@@ -3863,7 +4051,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         root.onDrop = { [weak self] path in self?.acceptTarget(path) }
         window.contentView = root
 
-        let icon = NSButton()
+        let icon = aboutIcon
         icon.isBordered = false
         icon.target = self
         icon.action = #selector(showAbout)
@@ -4836,6 +5024,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func applyLocalization() {
+        aboutIcon.toolTip = localized("menu.about")
+        aboutIcon.setAccessibilityLabel(localized("menu.about"))
         subtitleLabel.stringValue = localized("app.subtitle")
         targetField.placeholderString = localized("field.target.placeholder")
         backupField.placeholderString = localized("field.backup.placeholder")
@@ -4995,7 +5185,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 processorStatus = state
                 statusDisplay = .processor
                 changeLanguage(language)
-                guard statusLabel.stringValue == localized(key), processorStatus == state else {
+                guard statusLabel.stringValue == localized(key), processorStatus == state,
+                      aboutIcon.toolTip == localized("menu.about"), aboutIcon.accessibilityLabel() == localized("menu.about") else {
                     throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
                 }
             }

@@ -3,6 +3,7 @@ import Foundation
 import SQLite3
 import Darwin
 import CoreFoundation
+import UniformTypeIdentifiers
 
 private enum HistoryLayout {
     static let margin: CGFloat = 16
@@ -264,6 +265,10 @@ private struct HistoryEntry {
     var outputUpperSequence: Int64?
 
     var hasStoredOutput: Bool { audit.lastPathComponent == "history.sqlite3" && context?.output_sequence != nil }
+    var outputEndSource: String {
+        if finished?.output_sequence != nil { return "terminal_boundary" }
+        return outputUpperSequence != nil ? "next_batch_boundary" : "snapshot_only"
+    }
     var isRestoreJpeg: Bool { context?.mode == "restore-jpeg" }
     var modeLabel: String? { isRestoreJpeg ? localized("operation.restore_jpeg") : context?.mode }
 
@@ -777,7 +782,7 @@ private enum HistoryStore {
         return text
     }
 
-    private static func databasePath(_ url: URL) throws -> String {
+    fileprivate static func databasePath(_ url: URL) throws -> String {
         // Foundation preserves the /var alias; SQLite NOFOLLOW needs the real parent.
         let parent = url.deletingLastPathComponent().withUnsafeFileSystemRepresentation { path -> String? in
             guard let path, let resolved = realpath(path, nil) else { return nil }
@@ -884,6 +889,140 @@ private enum HistoryStore {
         }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
         return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
+    }
+
+    static func diagnosticArtifact(for selected: HistoryEntry) throws -> Data {
+        guard selected.hasStoredOutput, let selectedContext = selected.context,
+              let start = selectedContext.output_sequence, regularFile(selected.audit) else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let path = try databasePath(selected.audit)
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let database = handle else {
+            let error = databaseError(handle)
+            if let handle { sqlite3_close(handle) }
+            throw error
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_limit(database, SQLITE_LIMIT_LENGTH, Int32(maximumAuditBytes))
+        guard sqlite3_busy_timeout(database, 1_000) == SQLITE_OK,
+              sqlite3_exec(database, "PRAGMA query_only=ON; BEGIN", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        let version = try statement(database, "PRAGMA user_version")
+        defer { sqlite3_finalize(version) }
+        guard sqlite3_step(version) == SQLITE_ROW, sqlite3_column_int(version, 0) == 2 else { throw databaseError(database, "unsupported output schema") }
+        var bytes = 0
+        var limited = false
+        let audit = try databaseAudit(database, stamp: selected.stamp, url: selected.audit, readBytes: &bytes, limited: &limited)
+        guard !limited else { throw HostError(message: localized("history.export.limit")) }
+        guard let entry = audit.entries.first(where: { $0.id == selected.id && $0.context == selectedContext }),
+              entry.issues.isEmpty, entry.contradictoryFields.isEmpty, !entry.configEvidenceInvalid,
+              !entry.legacy, let context = entry.context else { throw HostError(message: localized("history.export.invalid")) }
+        let maximum = try statement(database, "SELECT COALESCE(MAX(sequence), 0) FROM history_output WHERE session_id=?")
+        defer { sqlite3_finalize(maximum) }
+        guard selected.stamp.withCString({ sqlite3_bind_text(maximum, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(maximum) == SQLITE_ROW, sqlite3_column_type(maximum, 0) == SQLITE_INTEGER else { throw databaseError(database) }
+        let snapshotEnd = sqlite3_column_int64(maximum, 0)
+        let knownEnd = entry.finished?.output_sequence ?? entry.outputUpperSequence
+        let end = knownEnd ?? snapshotEnd
+        guard start >= 0, end >= start, snapshotEnd >= end,
+              entry.outputUpperSequence.map({ $0 >= start && end <= $0 }) ?? true else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let query = try statement(database, "SELECT sequence, ts, pipeline, line FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence LIMIT \(maximumRecordsPerSession + 1)")
+        defer { sqlite3_finalize(query) }
+        guard selected.stamp.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else { throw databaseError(database) }
+        var retained: [[String: Any]] = []
+        var total = 0
+        var diagnosticCount = 0
+        var phaseCount = 0
+        var phases: [String: PhaseLogPresentation] = [:]
+        while true {
+            let result = sqlite3_step(query)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw databaseError(database) }
+            guard total < maximumRecordsPerSession else { throw HostError(message: localized("history.export.limit")) }
+            let sequence = sqlite3_column_int64(query, 0)
+            guard sqlite3_column_type(query, 0) == SQLITE_INTEGER, sequence > start, sequence <= end else { throw HostError(message: localized("history.export.invalid")) }
+            let length = (1...3).reduce(0) { $0 + Int(sqlite3_column_bytes(query, Int32($1))) }
+            guard length <= maximumOutputBytes, length <= maximumScanBytes - bytes else { throw HostError(message: localized("history.export.limit")) }
+            bytes += length
+            total += 1
+            let timestamp = try databaseText(query, 1, database: database)
+            let pipeline = try databaseText(query, 2, database: database)
+            let line = try databaseText(query, 3, database: database)
+            guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.export.invalid")) }
+            let normalized = LogTone.message(line)
+            var phase = phases[pipeline] ?? PhaseLogPresentation(now: 0)
+            if let update = phase.ingest(normalized, now: 0) {
+                guard update != .invalid else { throw HostError(message: localized("history.export.invalid")) }
+                phases[pipeline] = phase
+                phaseCount += 1
+                retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                    "normalized_message": normalized, "kind": "phase", "phase": phase.phase?.rawValue as Any? ?? NSNull()])
+            } else {
+                let tone = LogTone.classify(line)
+                guard tone == .warning || tone == .failure else { continue }
+                diagnosticCount += 1
+                retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                    "normalized_message": normalized, "kind": tone == .warning ? "warning" : "error",
+                    "phase": phases[pipeline]?.phase?.rawValue as Any? ?? NSNull()])
+            }
+        }
+        func nullable<T>(_ value: T?) -> Any { value.map { $0 as Any } ?? NSNull() }
+        func media(_ value: HistoryMedia) -> [String: Any] {
+            ["active": value.active, "succeeded": nullable(value.succeeded), "skipped": nullable(value.skipped),
+             "ignored": nullable(value.ignored), "failed": nullable(value.failed), "unprocessed": nullable(value.unprocessed),
+             "exit_code": nullable(value.exit_code)]
+        }
+        func verification(_ value: HistoryVerification) -> [String: Any] {
+            ["schema_version": value.schema_version, "has_warnings": value.has_warnings, "issue_count": value.issue_count,
+             "source_count": value.source_count, "optimized_count": value.optimized_count, "skipped_count": value.skipped_count,
+             "failed_count": value.failed_count, "source_remaining_count": value.source_remaining_count,
+             "verified_deleted_count": value.verified_deleted_count, "count_status": nullable(value.count_status),
+             "source_path": nullable(value.source_path), "output_path": nullable(value.output_path)]
+        }
+        let contextObject: [String: Any] = ["schema_version": context.schema_version, "inputs": context.inputs,
+            "output": nullable(context.output), "backup": nullable(context.backup), "mode": context.mode,
+            "dry_run": context.dry_run, "in_place": context.in_place, "shortest_path": context.shortest_path,
+            "version": nullable(context.version), "retry": nullable(context.retry), "resume": nullable(context.resume),
+            "no_resume": nullable(context.no_resume), "output_sequence": nullable(context.output_sequence)]
+        let summaryObject: [String: Any]? = entry.summary.map { value in
+            ["schema_version": value.schema_version, "count_scope": value.count_scope, "img": media(value.img), "vid": media(value.vid),
+             "integrity": ["state": nullable(value.integrity.state), "issue_count": nullable(value.integrity.issue_count)],
+             "failed_files": value.failed_files, "skipped_files": value.skipped_files, "size_invalid": value.sizeInvalid,
+             "size": nullable(value.size.map { ["scope": $0.scope, "input_bytes": nullable($0.input_bytes), "output_bytes": nullable($0.output_bytes)] })]
+        }
+        let finishedObject: [String: Any]? = entry.finished.map {
+            ["schema_version": $0.schema_version, "outcome": $0.outcome, "error": nullable($0.error), "output_sequence": nullable($0.output_sequence)]
+        }
+        let configurations: [[String: Any]] = try entry.configSnapshots.map {
+            ["pipeline": $0.pipeline, "package_version": $0.packageVersion,
+             "config": try JSONSerialization.jsonObject(with: Data($0.values.utf8)),
+             "sources": try JSONSerialization.jsonObject(with: Data($0.sources.utf8))]
+        }
+        let plan: [String: Any]? = entry.inputPlan.map {
+            ["schema_version": $0.schema_version, "inputs": $0.inputs.map {
+                ["source": $0.source, "output": nullable($0.output), "in_place": $0.in_place, "requires_verification": $0.requires_verification]
+            }]
+        }
+        let artifact: [String: Any] = ["schema_version": 1, "artifact_kind": "mfb_selected_run_diagnostic",
+            "authoritative_state": false, "full_run_manifest": false,
+            "exported_at": ISO8601DateFormatter().string(from: Date()), "session_id": entry.stamp, "run_id": entry.id,
+            "scope": ["output_start_exclusive": start, "output_end_inclusive": end, "known_end_sequence": nullable(knownEnd),
+                "end_source": entry.outputEndSource,
+                "total_output_rows": total, "retained_output_rows": retained.count, "diagnostic_log_rows": diagnosticCount,
+                "phase_control_rows": phaseCount, "omitted_non_diagnostic_output_rows": total - retained.count,
+                "scan_complete": true, "count_scope": "log_records_not_files", "contains_local_paths_and_diagnostics": true],
+            "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
+            "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
+            "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
+            "input_verifications": entry.inputVerifications.mapValues(verification), "records": retained]
+        let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
+        guard data.count <= maximumScanBytes else { throw HostError(message: localized("history.export.limit")) }
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
+        return data
     }
 
     private static func databaseAudit(_ database: OpaquePointer, stamp: String, url: URL,
@@ -1164,6 +1303,116 @@ private enum HistoryStore {
     private enum HistoryParseError: Error { case invalid }
 }
 
+private final class HistoryDiagnosticStaging {
+    private let directory: Int32
+    private let parent: URL
+    private let temporaryName: String
+    private let destinationName: String
+    private var pending = true
+
+    private init(directory: Int32, parent: URL, temporaryName: String, destinationName: String) {
+        self.directory = directory
+        self.parent = parent
+        self.temporaryName = temporaryName
+        self.destinationName = destinationName
+    }
+
+    private static func ioError(_ operation: String) -> NSError {
+        let code = errno
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code),
+            userInfo: [NSLocalizedDescriptionKey: operation + ": " + String(cString: strerror(code))])
+    }
+
+    private static func rejectGitWorkspace(_ parent: URL) throws {
+        var ancestor = parent
+        while true {
+            var info = stat()
+            if lstat(ancestor.appendingPathComponent(".git").path, &info) == 0 {
+                throw HostError(message: localized("history.export.workspace"))
+            }
+            guard errno == ENOENT else { throw ioError("inspect diagnostic export workspace") }
+            if ancestor.path == "/" { return }
+            ancestor.deleteLastPathComponent()
+        }
+    }
+
+    static func prepare(_ data: Data, destination: URL) throws -> HistoryDiagnosticStaging {
+        guard destination.isFileURL, destination.path.hasPrefix("/"), !destination.path.contains("\0"),
+              !["", ".", ".."].contains(destination.lastPathComponent), !data.isEmpty else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        let parent = URL(fileURLWithPath: try HistoryStore.databasePath(destination)).deletingLastPathComponent()
+        try rejectGitWorkspace(parent)
+        let directory = Darwin.open(parent.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard directory >= 0 else { throw ioError("open export directory") }
+        let name = destination.lastPathComponent
+        var existing = stat()
+        if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+            Darwin.close(directory)
+            throw HostError(message: localized("history.export.exists"))
+        }
+        guard errno == ENOENT else {
+            let error = ioError("inspect export destination")
+            Darwin.close(directory)
+            throw error
+        }
+        let temporaryName = ".mfb-diagnostic-" + UUID().uuidString + ".tmp"
+        var file = openat(directory, temporaryName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        guard file >= 0 else {
+            let error = ioError("create export staging file")
+            Darwin.close(directory)
+            throw error
+        }
+        let staging = HistoryDiagnosticStaging(directory: directory, parent: parent, temporaryName: temporaryName, destinationName: name)
+        defer {
+            if file >= 0, Darwin.close(file) != 0 { fputs("MFB: failed to close diagnostic staging file\n", stderr) }
+        }
+        try data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { throw HostError(message: localized("history.export.invalid")) }
+            var written = 0
+            while written < buffer.count {
+                let count = Darwin.write(file, base.advanced(by: written), buffer.count - written)
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { throw ioError("write diagnostic staging file") }
+                written += count
+            }
+        }
+        guard fsync(file) == 0 else { throw ioError("flush diagnostic staging file") }
+        let descriptor = file
+        file = -1
+        guard Darwin.close(descriptor) == 0 else { throw ioError("close diagnostic staging file") }
+        return staging
+    }
+
+    func publish() throws {
+        guard pending else { throw HostError(message: localized("history.export.invalid")) }
+        try Self.rejectGitWorkspace(parent)
+        var opened = stat()
+        var current = stat()
+        guard fstat(directory, &opened) == 0, lstat(parent.path, &current) == 0,
+              current.st_mode & S_IFMT == S_IFDIR, opened.st_dev == current.st_dev, opened.st_ino == current.st_ino else {
+            throw HostError(message: localized("history.export.invalid"))
+        }
+        guard renameatx_np(directory, temporaryName, directory, destinationName, UInt32(RENAME_EXCL)) == 0 else {
+            if errno == EEXIST { throw HostError(message: localized("history.export.exists")) }
+            throw Self.ioError("publish diagnostic export")
+        }
+        pending = false
+    }
+
+    func discard() throws {
+        guard pending else { return }
+        guard unlinkat(directory, temporaryName, 0) == 0 || errno == ENOENT else { throw Self.ioError("remove diagnostic staging file") }
+        pending = false
+    }
+
+    deinit {
+        do { try discard() }
+        catch { fputs("MFB: diagnostic staging cleanup failed: \(error.localizedDescription)\n", stderr) }
+        if Darwin.close(directory) != 0 { fputs("MFB: failed to close diagnostic export directory\n", stderr) }
+    }
+}
+
 private final class HistoryResultCell: NSTableCellView {
     var resultColor: NSColor = .labelColor {
         didSet { updateTextColor() }
@@ -1176,7 +1425,7 @@ private final class HistoryResultCell: NSTableCellView {
     }
 }
 
-final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
@@ -1204,11 +1453,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var logButton = NSButton()
     private var revealButton = NSButton()
     private var copyButton = NSButton()
+    private var exportButton = NSButton()
     private var entries: [HistoryEntry] = []
     private var displayed: [HistoryEntry] = []
     private var directory: URL
     private var generation = UUID()
     private var outputGeneration = UUID()
+    private var exportGeneration = UUID()
+    private var exportBusy = false
     private var loadIssues: [String] = []
     private var limited = false
     private var initialDividerConfigured = false
@@ -1222,6 +1474,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         super.init(window: window)
         window.minSize = NSSize(width: 780, height: 440)
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setFrameAutosaveName("MFBProcessingHistory")
         buildInterface()
     }
@@ -1245,6 +1498,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func refresh(directory: URL) {
+        exportGeneration = UUID()
+        exportBusy = false
         resetOutput()
         self.directory = directory
         let token = UUID()
@@ -1402,6 +1657,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         logButton = iconButton("doc.text", key: "history.open_log", action: #selector(openLog))
         revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit))
         copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
+        exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -1409,7 +1665,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, progress, status])
+        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -1488,6 +1744,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         for column in table.tableColumns { column.title = localized("history.column.\(column.identifier.rawValue)") }
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
+                              (exportButton, "history.export.title"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
@@ -1804,8 +2061,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        let ready = refreshButton.isEnabled
+        let ready = refreshButton.isEnabled && !exportBusy
         let single = ready && selected != nil
+        table.isEnabled = ready
+        search.isEnabled = ready
+        filter.isEnabled = ready
         let failuresVisible = single && detailMode.selectedSegment == 2
         failedContent.isHidden = !failuresVisible
         detailScroll.isHidden = failuresVisible
@@ -1822,6 +2082,67 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
         revealButton.isEnabled = single
         copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
+        exportButton.isEnabled = single && !outputLoading && selected?.hasStoredOutput == true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        exportGeneration = UUID()
+        if exportBusy { finishExport(localized("history.export.cancelled")) }
+    }
+
+    private func finishExport(_ message: String) {
+        exportBusy = false
+        refreshButton.isEnabled = true
+        progress.stopAnimation(nil)
+        status.stringValue = message
+        updateActions()
+    }
+
+    @objc private func exportSelectedRun() {
+        guard exportButton.isEnabled, let entry = selected, let window, window.isVisible else { return }
+        let token = UUID()
+        exportGeneration = token
+        exportBusy = true
+        refreshButton.isEnabled = false
+        updateActions()
+        let chooser = NSSavePanel()
+        chooser.title = localized("history.export.title")
+        chooser.message = localized("history.export.scope")
+        chooser.allowedContentTypes = [.json]
+        chooser.isExtensionHidden = false
+        chooser.nameFieldStringValue = "MFB-diagnostics-" + UUID().uuidString + ".json"
+        chooser.beginSheetModal(for: window) { [weak self] response in
+            guard let self, self.exportGeneration == token else { return }
+            guard response == .OK, let destination = chooser.url else {
+                self.finishExport(localized("history.export.cancelled")); return
+            }
+            guard self.window?.isVisible == true, self.selected?.id == entry.id else {
+                self.finishExport(localized("history.export.cancelled")); return
+            }
+            self.status.stringValue = localized("history.export.running")
+            self.progress.startAnimation(nil)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Swift.Result {
+                    try HistoryDiagnosticStaging.prepare(HistoryStore.diagnosticArtifact(for: entry), destination: destination)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.exportGeneration == token, self.window?.isVisible == true,
+                          self.selected?.id == entry.id else {
+                        if case let .success(staging) = result {
+                            do { try staging.discard() }
+                            catch { fputs("MFB: cancelled diagnostic export cleanup failed: \(error.localizedDescription)\n", stderr) }
+                        }
+                        if let self, self.exportGeneration == token { self.finishExport(localized("history.export.cancelled")) }
+                        return
+                    }
+                    do {
+                        // Publication stays on the main queue so a processed close/selection change cannot race it.
+                        try result.get().publish()
+                        self.finishExport(localized("history.export.completed", destination.path))
+                    } catch { self.finishExport(error.localizedDescription) }
+                }
+            }
+        }
     }
     @objc private func openLog() {
         if let entry = selected, entry.hasStoredOutput {
@@ -2203,7 +2524,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         entries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "output" }
             .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
         applyFilter()
-        guard entries.count == 2, logButton.isEnabled else { throw HostError(message: "Stored output action is unavailable") }
+        guard entries.count == 2, logButton.isEnabled, exportButton.isEnabled else { throw HostError(message: "Stored output or diagnostic export action is unavailable") }
+        let oldExportGeneration = exportGeneration
+        exportBusy = true
+        refreshButton.isEnabled = false
+        updateActions()
+        guard !exportButton.isEnabled, !table.isEnabled, !copyButton.isEnabled else {
+            throw HostError(message: "Diagnostic export did not disable conflicting actions")
+        }
+        windowWillClose(Notification(name: NSWindow.willCloseNotification, object: window))
+        guard !exportBusy, exportGeneration != oldExportGeneration, exportButton.isEnabled else {
+            throw HostError(message: "Closing history did not cancel diagnostic publication or restore its controls")
+        }
         openLog()
         let deadline = Date().addingTimeInterval(5)
         while !logButton.isEnabled, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
@@ -3171,6 +3503,174 @@ func runProcessingHistorySelfTests() throws {
     try require(emptyPage.rows.isEmpty && emptyPage.total == 0 && emptyPage.firstOrdinal == 0
                 && !emptyPage.hasOlder && !emptyPage.hasNewer && emptyPage.issues.isEmpty,
                 "Empty output invented a range, issue, or navigation")
+    func refuseExport(_ operation: () throws -> Void, _ message: String) throws {
+        do { try operation() } catch { return }
+        throw HostError(message: message)
+    }
+    let exportConfig = try payload("MFB_HISTORY_CONFIG", ["schema_version": 1, "pipeline": "img", "package_version": "0.12.0",
+        "config": ["config_version": 1, "execution": ["error_mode": "log-and-continue"]],
+        "sources": ["config_version": "default", "execution.error_mode": "CLI"]])
+    var exportContextValue = outputContext
+    exportContextValue["output_sequence"] = 2
+    let exportContext = try payload("MFB_HISTORY_CONTEXT", exportContextValue)
+    exportContextValue["output_sequence"] = 6
+    let adjacentContext = try payload("MFB_HISTORY_CONTEXT", exportContextValue)
+    var unknownSummaryValue = summaryValue
+    unknownSummaryValue["img"] = ["active": true, "succeeded": NSNull(), "skipped": NSNull(), "failed": NSNull(),
+        "ignored": NSNull(), "unprocessed": NSNull(), "exit_code": NSNull()]
+    let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
+    let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
+        "error": "synthetic terminal failure", "output_sequence": 6])
+    try writeDatabase([("export", [exportContext, exportConfig, unknownSummary, exportFinished, adjacentContext])], schema: 2)
+    var exportDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
+        throw HostError(message: "Synthetic export database open failed")
+    }
+    let warningLine = "ERR: \u{001B}[33m[WARN] /synthetic/one.jpg: exact warning 1\u{001B}[0m"
+    let errorLine = "[FAIL] /synthetic/two.jpg: exact error 2"
+    var outputInsert: OpaquePointer?
+    guard sqlite3_prepare_v2(exportDB, "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('export', 'synthetic timestamp', 'IMG', ?)", -1,
+                            &outputInsert, nil) == SQLITE_OK, let insertOutput = outputInsert else {
+        throw HostError(message: "Synthetic export output prepare failed")
+    }
+    for line in ["[FAIL] prior batch must not leak", processingPhase, processingPhase, warningLine,
+                 "MFB_PROGRESS={\"ignored\":true}", errorLine, "[FAIL] adjacent batch must not leak"] {
+        sqlite3_reset(insertOutput)
+        sqlite3_clear_bindings(insertOutput)
+        guard line.withCString({ sqlite3_bind_text(insertOutput, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(insertOutput) == SQLITE_DONE else { throw HostError(message: "Synthetic export output insert failed") }
+    }
+    sqlite3_finalize(insertOutput)
+    sqlite3_close(exportDB)
+    let exportEntries = try HistoryStore.load(directory: directory).entries.filter { $0.stamp == "export" }
+        .sorted { ($0.context?.output_sequence ?? -1) < ($1.context?.output_sequence ?? -1) }
+    try require(exportEntries.count == 2, "Synthetic export batches merged")
+    var unknownFinishedBoundary = exportEntries[0]
+    unknownFinishedBoundary.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "synthetic failure", output_sequence: nil)
+    unknownFinishedBoundary.outputUpperSequence = 6
+    try require(unknownFinishedBoundary.outputEndSource == "next_batch_boundary",
+                "A finished record without an output sequence fabricated terminal boundary provenance")
+    unknownFinishedBoundary.outputUpperSequence = nil
+    try require(unknownFinishedBoundary.outputEndSource == "snapshot_only",
+                "An unknown finished boundary was promoted to an authoritative end sequence")
+    let unidentifiedExport = HistoryEntry(id: "export:0", stamp: "export", audit: databaseURL, timestamp: "synthetic")
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: unidentifiedExport) },
+                     "Diagnostic export guessed a batch without stored context and output boundaries")
+    let databaseBeforeExport = try Data(contentsOf: databaseURL)
+    let artifact = try HistoryStore.diagnosticArtifact(for: exportEntries[0])
+    guard let document = try JSONSerialization.jsonObject(with: artifact) as? [String: Any],
+          let scope = document["scope"] as? [String: Any], let exportedSummary = document["summary"] as? [String: Any],
+          let exportedImage = exportedSummary["img"] as? [String: Any],
+          let exportedConfig = document["configuration"] as? [String: Any],
+          let snapshots = exportedConfig["snapshots"] as? [[String: Any]],
+          let exportedRows = document["records"] as? [[String: Any]] else { throw HostError(message: "Diagnostic artifact schema is invalid") }
+    try require(document["schema_version"] as? Int == 1 && document["authoritative_state"] as? Bool == false
+                && document["full_run_manifest"] as? Bool == false && scope["total_output_rows"] as? Int == 4
+                && scope["retained_output_rows"] as? Int == 3 && scope["diagnostic_log_rows"] as? Int == 2
+                && scope["phase_control_rows"] as? Int == 1 && scope["omitted_non_diagnostic_output_rows"] as? Int == 1
+                && scope["end_source"] as? String == "terminal_boundary"
+                && exportedImage["succeeded"] is NSNull && snapshots.count == 1
+                && (snapshots[0]["sources"] as? [String: String])?["execution.error_mode"] == "CLI"
+                && exportedRows.map({ $0["sequence"] as? Int }) == [3, 4, 6]
+                && exportedRows[1]["line"] as? String == warningLine && exportedRows[2]["line"] as? String == errorLine
+                && exportedRows[1]["phase"] as? String == "processing"
+                && !String(decoding: artifact, as: UTF8.self).contains("must not leak"),
+                "Diagnostic export mixed batches, inferred unknown counts, dropped exact messages, or misstated exclusions")
+    let ongoingArtifact = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: exportEntries[1])) as? [String: Any]
+    let ongoingScope = ongoingArtifact?["scope"] as? [String: Any]
+    let ongoingRows = ongoingArtifact?["records"] as? [[String: Any]]
+    try require(ongoingArtifact?["summary"] is NSNull && ongoingArtifact?["finished"] is NSNull
+                && ongoingScope?["known_end_sequence"] is NSNull && ongoingScope?["end_source"] as? String == "snapshot_only"
+                && ongoingRows?.first?["phase"] is NSNull,
+                "Ongoing diagnostic export invented a final state, counts, or phase")
+    try require(try Data(contentsOf: databaseURL) == databaseBeforeExport, "Diagnostic export mutated its source database")
+    let destination = directory.appendingPathComponent("diagnostic.json")
+    let staged = try HistoryDiagnosticStaging.prepare(artifact, destination: destination)
+    try require(!FileManager.default.fileExists(atPath: destination.path), "Staging exposed a partial diagnostic artifact")
+    try staged.publish()
+    let exportedPermissions = try FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? NSNumber
+    try require(try Data(contentsOf: destination) == artifact && exportedPermissions?.intValue == 0o600,
+                "Diagnostic publication changed the artifact or exposed it to other users")
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: destination) }, "Diagnostic export replaced an existing file")
+    let linkDestination = directory.appendingPathComponent("diagnostic-link.json")
+    try FileManager.default.createSymbolicLink(at: linkDestination, withDestinationURL: destination)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: linkDestination) }, "Diagnostic export followed an existing link")
+    let raceDestination = directory.appendingPathComponent("diagnostic-race.json")
+    let racing = try HistoryDiagnosticStaging.prepare(artifact, destination: raceDestination)
+    let sentinel = Data("synthetic destination preserved".utf8)
+    try sentinel.write(to: raceDestination)
+    try refuseExport({ try racing.publish() }, "Diagnostic export clobbered a file created after staging")
+    try racing.discard()
+    try require(try Data(contentsOf: raceDestination) == sentinel && Data(contentsOf: destination) == artifact,
+                "Refused publication changed an existing destination")
+    let gitFolder = directory.appendingPathComponent("synthetic-worktree")
+    try FileManager.default.createDirectory(at: gitFolder, withIntermediateDirectories: false)
+    try sentinel.write(to: gitFolder.appendingPathComponent(".git"))
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: gitFolder.appendingPathComponent("private.json")) },
+                     "Diagnostic export wrote private state into a Git worktree")
+    let alias = directory.appendingPathComponent("workspace-alias")
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: gitFolder)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(artifact, destination: alias.appendingPathComponent("private.json")) },
+                     "A directory alias bypassed the Git diagnostic export restriction")
+    let lateGitFolder = directory.appendingPathComponent("late-worktree")
+    try FileManager.default.createDirectory(at: lateGitFolder, withIntermediateDirectories: false)
+    let lateGit = try HistoryDiagnosticStaging.prepare(artifact, destination: lateGitFolder.appendingPathComponent("private.json"))
+    try sentinel.write(to: lateGitFolder.appendingPathComponent(".git"))
+    try refuseExport({ try lateGit.publish() }, "A new Git worktree bypassed the final publication check")
+    try lateGit.discard()
+    var overlappingContextValue = exportContextValue
+    overlappingContextValue["output_sequence"] = 4
+    let overlappingContext = try payload("MFB_HISTORY_CONTEXT", overlappingContextValue)
+    var boundaryDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &boundaryDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let boundaryDB else {
+        throw HostError(message: "Synthetic export boundary open failed")
+    }
+    var boundaryUpdate: OpaquePointer?
+    guard sqlite3_prepare_v2(boundaryDB, "UPDATE history_events SET event=? WHERE session_id='export' AND event=?", -1,
+                            &boundaryUpdate, nil) == SQLITE_OK, let boundaryUpdate else {
+        throw HostError(message: "Synthetic export boundary prepare failed")
+    }
+    for (replacement, previous) in [(overlappingContext, adjacentContext), (adjacentContext, overlappingContext)] {
+        sqlite3_reset(boundaryUpdate)
+        sqlite3_clear_bindings(boundaryUpdate)
+        guard replacement.withCString({ sqlite3_bind_text(boundaryUpdate, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              previous.withCString({ sqlite3_bind_text(boundaryUpdate, 2, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(boundaryUpdate) == SQLITE_DONE, sqlite3_changes(boundaryDB) == 1 else {
+            throw HostError(message: "Synthetic export boundary update failed")
+        }
+        if replacement == overlappingContext {
+            let overlapping = try HistoryStore.load(directory: directory).entries.first { $0.id == exportEntries[0].id }
+            try require(overlapping?.issues.isEmpty == true && overlapping?.finished?.output_sequence == 6
+                        && overlapping?.outputUpperSequence == 4,
+                        "Overlapping export fixture did not isolate the contradictory batch boundary")
+            try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) },
+                             "Diagnostic export included output beyond the next batch boundary")
+        }
+    }
+    sqlite3_finalize(boundaryUpdate)
+    sqlite3_close(boundaryDB)
+    var corruptExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &corruptExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let corruptExport else {
+        throw HostError(message: "Synthetic export corruption open failed")
+    }
+    guard sqlite3_exec(corruptExport, "UPDATE history_output SET line='MFB_LOG_PHASE={invalid}' WHERE sequence=3", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export corruption write failed")
+    }
+    sqlite3_close(corruptExport)
+    try refuseExport({ _ = try HistoryDiagnosticStaging.prepare(HistoryStore.diagnosticArtifact(for: exportEntries[0]), destination: destination) },
+                     "Invalid phase evidence exported a misleading diagnostic artifact")
+    var limitedExport: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &limitedExport, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let limitedExport else {
+        throw HostError(message: "Synthetic export limit open failed")
+    }
+    guard sqlite3_exec(limitedExport, "UPDATE history_output SET line=CAST(zeroblob(\(HistoryStore.maximumOutputBytes + 1)) AS TEXT) WHERE sequence=3", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic export limit write failed")
+    }
+    sqlite3_close(limitedExport)
+    try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: exportEntries[0]) }, "Oversized export evidence was silently omitted")
+    try require(try Data(contentsOf: destination) == artifact
+                && !FileManager.default.contentsOfDirectory(atPath: directory.path).contains(where: { $0.hasPrefix(".mfb-diagnostic-") }),
+                "Failed diagnostic export altered its destination or left staging files")
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

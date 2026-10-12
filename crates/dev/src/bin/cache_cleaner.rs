@@ -58,6 +58,9 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     about = "Modern Format Boost Cache Cleaner"
 )]
 struct Args {
+    #[arg(long, conflicts_with_all = ["stats", "prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Create a verified snapshot of Core SQLite state and cache at a new local destination; History and PostgreSQL are not included")]
+    local_backup: Option<PathBuf>,
+
     #[arg(long, conflicts_with_all = ["stats", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Remove only expired or over-budget directory snapshots, retaining useful cache and all formal state")]
     prune: bool,
 
@@ -85,7 +88,7 @@ struct Args {
     #[arg(long, requires = "stats", conflicts_with_all = ["yes", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Check SQLite and stored payload hashes without repairing or deleting data")]
     check_integrity: bool,
 
-    #[arg(long, conflicts_with_all = ["postgres", "purge_animation_cache", "purge_session_state"], help = "Return versioned local cache statistics as JSON")]
+    #[arg(long, conflicts_with_all = ["postgres", "purge_animation_cache", "purge_session_state"], help = "Return versioned local inspection results or a backup receipt as JSON")]
     json: bool,
 
     #[arg(long, conflicts_with_all = ["purge_animation_cache", "purge_session_state"], help = "Also purge advanced PostgreSQL analysis and inference caches (requires PostgreSQL)")]
@@ -113,6 +116,38 @@ struct Args {
 
 fn get_mfb_state_root() -> Result<PathBuf> {
     foundation::process_lock::get_mfb_root().map_err(|e| anyhow!("Failed to resolve MFB root: {e}"))
+}
+
+fn backup_cache_directory() -> Result<PathBuf> {
+    // Backup reads an existing root; runtime's directory-creating fallback is intentionally not used.
+    let root = match std::env::var(foundation::constants::ENV_MFB_HOME_ROOT) {
+        Ok(root) => PathBuf::from(root),
+        Err(std::env::VarError::NotPresent) => {
+            let home = match std::env::var(foundation::constants::ENV_HOME) {
+                Ok(home) => home,
+                Err(std::env::VarError::NotPresent) => {
+                    std::env::var(foundation::constants::ENV_USERPROFILE)
+                        .context("backup source requires HOME or USERPROFILE")?
+                }
+                Err(error) => return Err(error).context("read HOME for backup source"),
+            };
+            let home = PathBuf::from(home);
+            anyhow::ensure!(
+                home.is_absolute(),
+                "backup source home must be absolute; no fallback selected"
+            );
+            home.join(".modern_format_boost")
+        }
+        Err(error) => {
+            return Err(error)
+                .context("read MFB_HOME_ROOT for backup source; no fallback selected");
+        }
+    };
+    anyhow::ensure!(
+        root.is_absolute(),
+        "backup source root must be absolute; no fallback selected"
+    );
+    Ok(root.join("cache"))
 }
 
 fn get_mfb_progress_root() -> Result<PathBuf> {
@@ -444,6 +479,27 @@ struct CacheStatus {
     integrity: Option<CacheIntegrity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pruning: Option<CachePruning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<DatabaseOverview>,
+}
+
+#[derive(Debug, Serialize)]
+struct DatabaseOverview {
+    store_schema_version: i32,
+    sqlite_version: String,
+    journal_mode: String,
+    page_size: u64,
+    page_count: u64,
+    free_pages: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupReceipt {
+    schema_version: u8,
+    source: String,
+    destination: String,
+    store_schema_version: i32,
+    bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -567,6 +623,219 @@ fn validate_cache_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn database_overview(conn: &Connection) -> Result<DatabaseOverview> {
+    let overview = DatabaseOverview {
+        store_schema_version: foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION,
+        sqlite_version: conn.query_row("SELECT sqlite_version()", [], |row| row.get(0))?,
+        journal_mode: conn.query_row("PRAGMA main.journal_mode", [], |row| row.get(0))?,
+        page_size: conn.query_row("PRAGMA main.page_size", [], |row| {
+            nonnegative_column(row, 0)
+        })?,
+        page_count: conn.query_row("PRAGMA main.page_count", [], |row| {
+            nonnegative_column(row, 0)
+        })?,
+        free_pages: conn.query_row("PRAGMA main.freelist_count", [], |row| {
+            nonnegative_column(row, 0)
+        })?,
+    };
+    anyhow::ensure!(
+        !overview.sqlite_version.is_empty()
+            && matches!(
+                overview.journal_mode.as_str(),
+                "delete" | "truncate" | "persist" | "memory" | "wal" | "off"
+            )
+            && (512..=65_536).contains(&overview.page_size)
+            && overview.page_size.is_power_of_two()
+            && overview.page_count > 0
+            && overview.free_pages <= overview.page_count,
+        "invalid SQLite database overview; database retained"
+    );
+    Ok(overview)
+}
+
+fn inspect_store_integrity(
+    conn: &Connection,
+    integrity: &mut CacheIntegrity,
+    phase: &mut &'static str,
+) -> Result<()> {
+    *phase = "sqlite_integrity";
+    let mut statement = conn.prepare("PRAGMA integrity_check")?;
+    let mut rows = statement.query([])?;
+    integrity.sqlite_integrity = "ok";
+    while let Some(row) = rows.next()? {
+        if row.get::<_, String>(0)? != "ok" {
+            integrity.sqlite_integrity = "failed";
+            integrity.issue(
+                "sqlite_integrity",
+                "SQLite reported a structural integrity failure.",
+            );
+        }
+    }
+    *phase = "foreign_keys";
+    let mut statement = conn.prepare("PRAGMA foreign_key_check")?;
+    let mut rows = statement.query([])?;
+    integrity.foreign_keys = "ok";
+    while rows.next()?.is_some() {
+        integrity.foreign_keys = "failed";
+        integrity.issue("foreign_key", "SQLite reported a foreign key violation.");
+    }
+    *phase = "blob_hashes";
+    let mut statement =
+        conn.prepare("SELECT namespace = ?1, payload, payload_blake3 FROM blob_store")?;
+    let mut rows = statement.query([foundation::mfb_sqlite_store::NS_PATH_TREE])?;
+    while let Some(row) = rows.next()? {
+        let rebuildable = row.get::<_, Option<bool>>(0)?.unwrap_or(false);
+        if rebuildable {
+            integrity.checked_cache_rows += 1;
+        } else {
+            integrity.checked_protected_rows += 1;
+        }
+        let payload = row.get_ref(1)?;
+        let expected = row.get_ref(2)?;
+        let valid = match (payload.as_blob(), expected.as_blob()) {
+            (Ok(payload), Ok(expected)) => blake3::hash(payload).as_bytes() == expected,
+            _ => false,
+        };
+        if !valid {
+            if rebuildable {
+                integrity.corrupt_cache_rows += 1;
+                integrity.issue(
+                    "cache_payload",
+                    "A rebuildable cache payload has an invalid BLAKE3 digest or storage type.",
+                );
+            } else {
+                integrity.corrupt_protected_rows += 1;
+                integrity.issue(
+                    "protected_payload",
+                    "A protected state payload has an invalid BLAKE3 digest or storage type.",
+                );
+            }
+        }
+    }
+    integrity.blob_scan_complete = true;
+    integrity.status = if integrity.issue_count == 0 {
+        "healthy"
+    } else {
+        "unhealthy"
+    };
+    Ok(())
+}
+
+fn require_healthy_store(conn: &mut Connection) -> Result<()> {
+    let snapshot = conn.transaction()?;
+    validate_cache_schema(&snapshot)?;
+    database_overview(&snapshot)?;
+    let mut integrity = CacheIntegrity::new();
+    inspect_store_integrity(&snapshot, &mut integrity, &mut "sqlite_integrity")?;
+    anyhow::ensure!(
+        integrity.status == "healthy" && integrity.blob_scan_complete,
+        "Core database integrity verification failed; backup not published"
+    );
+    snapshot.commit()?;
+    Ok(())
+}
+
+fn require_new_backup_destination(destination: &Path) -> Result<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut path = destination.as_os_str().to_os_string();
+        path.push(suffix);
+        match fs::symlink_metadata(Path::new(&path)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspect backup destination"),
+            Ok(_) => anyhow::bail!(
+                "backup destination or SQLite sidecar already exists; nothing overwritten"
+            ),
+        }
+    }
+    Ok(())
+}
+
+fn backup_local_store(cache_dir: &Path, destination: &Path) -> Result<BackupReceipt> {
+    ensure_cache_directory(cache_dir)?;
+    let source = cache_dir.join("mfb_store.sqlite");
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        regular_file_size(&cache_dir.join(format!("mfb_store.sqlite{suffix}")))?;
+    }
+    anyhow::ensure!(
+        regular_file_size(&source)?.is_some(),
+        "Core database is absent; no backup created"
+    );
+    let source = cache_dir.canonicalize()?.join("mfb_store.sqlite");
+    let absolute = std::path::absolute(destination)?;
+    let parent = absolute
+        .parent()
+        .context("backup destination has no parent")?
+        .canonicalize()?;
+    let name = absolute
+        .file_name()
+        .context("backup destination has no filename")?;
+    let destination = parent.join(name);
+    anyhow::ensure!(
+        !parent.starts_with(source.parent().context("Core database has no parent")?),
+        "backup destination must be outside the active Core database directory"
+    );
+    for ancestor in parent.ancestors() {
+        anyhow::ensure!(
+            !ancestor.join(".git").try_exists()?,
+            "backup destination must be outside Git workspaces to protect private state"
+        );
+    }
+    require_new_backup_destination(&destination)?;
+    let mut conn = open_cache_store(&source, true)?;
+    require_healthy_store(&mut conn)?;
+    let staged = tempfile::Builder::new()
+        .prefix(".mfb-core-backup-")
+        .tempdir_in(&parent)?;
+    let backup = staged.path().join("mfb_store.sqlite");
+    // The main database remains READ_ONLY; query_only would also block SQLite's new output database.
+    conn.pragma_update(None, "query_only", false)?;
+    conn.execute(
+        "VACUUM main INTO ?1",
+        [backup
+            .to_str()
+            .context("backup staging path is not UTF-8")?],
+    )?;
+    drop(conn);
+    let mut verified = open_cache_store(&backup, true)?;
+    require_healthy_store(&mut verified)?;
+    drop(verified);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backup, fs::Permissions::from_mode(0o600))?;
+    }
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&backup)?;
+    let bytes = file.metadata()?.len();
+    anyhow::ensure!(bytes > 0, "SQLite backup is empty; not published");
+    file.sync_all()?;
+    drop(file);
+    let receipt = BackupReceipt {
+        schema_version: 1,
+        source: source
+            .to_str()
+            .context("Core database path is not UTF-8")?
+            .to_owned(),
+        destination: destination
+            .to_str()
+            .context("backup destination path is not UTF-8")?
+            .to_owned(),
+        store_schema_version: foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION,
+        bytes,
+    };
+    require_new_backup_destination(&destination)?;
+    // shortcut: atomic publication requires hard-link support, add native no-replace rename if supported filesystems require it.
+    fs::hard_link(&backup, &destination)
+        .context("publish verified backup without overwriting an existing destination")?;
+    #[cfg(unix)]
+    fs::File::open(&parent)?
+        .sync_all()
+        .context("backup published but destination directory could not be synchronized")?;
+    Ok(receipt)
+}
+
 fn legacy_analysis_sqlite_paths(cache_dir: &Path) -> Vec<PathBuf> {
     ["image_analysis_v2.db", "image_analysis_v2_main.db"]
         .into_iter()
@@ -600,6 +869,7 @@ fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Resul
         removed_files: 0,
         integrity: check_integrity.then(CacheIntegrity::new),
         pruning: None,
+        database: None,
     };
     let mut phase = "managed_paths";
     let inspection = (|| -> Result<()> {
@@ -621,62 +891,10 @@ fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Resul
             let snapshot = conn.transaction()?;
             phase = "schema";
             validate_cache_schema(&snapshot)?;
+            phase = "database_overview";
+            status.database = Some(database_overview(&snapshot)?);
             if let Some(integrity) = &mut status.integrity {
-                phase = "sqlite_integrity";
-                let mut statement = snapshot.prepare("PRAGMA integrity_check")?;
-                let mut rows = statement.query([])?;
-                integrity.sqlite_integrity = "ok";
-                while let Some(row) = rows.next()? {
-                    if row.get::<_, String>(0)? != "ok" {
-                        integrity.sqlite_integrity = "failed";
-                        // SQLite diagnostics can contain stored values; publish only fixed messages.
-                        integrity.issue(
-                            "sqlite_integrity",
-                            "SQLite reported a structural integrity failure.",
-                        );
-                    }
-                }
-                phase = "foreign_keys";
-                let mut statement = snapshot.prepare("PRAGMA foreign_key_check")?;
-                let mut rows = statement.query([])?;
-                integrity.foreign_keys = "ok";
-                while rows.next()?.is_some() {
-                    integrity.foreign_keys = "failed";
-                    integrity.issue("foreign_key", "SQLite reported a foreign key violation.");
-                }
-                phase = "blob_hashes";
-                let mut statement = snapshot
-                    .prepare("SELECT namespace = ?1, payload, payload_blake3 FROM blob_store")?;
-                let mut rows = statement.query([foundation::mfb_sqlite_store::NS_PATH_TREE])?;
-                while let Some(row) = rows.next()? {
-                    let rebuildable = row.get::<_, Option<bool>>(0)?.unwrap_or(false);
-                    if rebuildable {
-                        integrity.checked_cache_rows += 1;
-                    } else {
-                        integrity.checked_protected_rows += 1;
-                    }
-                    let payload = row.get_ref(1)?;
-                    let expected = row.get_ref(2)?;
-                    let valid = match (payload.as_blob(), expected.as_blob()) {
-                        (Ok(payload), Ok(expected)) => blake3::hash(payload).as_bytes() == expected,
-                        _ => false,
-                    };
-                    if !valid {
-                        if rebuildable {
-                            integrity.corrupt_cache_rows += 1;
-                            integrity.issue("cache_payload", "A rebuildable cache payload has an invalid BLAKE3 digest or storage type.");
-                        } else {
-                            integrity.corrupt_protected_rows += 1;
-                            integrity.issue("protected_payload", "A protected state payload has an invalid BLAKE3 digest or storage type.");
-                        }
-                    }
-                }
-                integrity.blob_scan_complete = true;
-                integrity.status = if integrity.issue_count == 0 {
-                    "healthy"
-                } else {
-                    "unhealthy"
-                };
+                inspect_store_integrity(&snapshot, integrity, &mut phase)?;
             }
             phase = "namespace_statistics";
             {
@@ -1203,6 +1421,17 @@ fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
             "Store on disk (includes retained state): {}",
             format_size(status.store_bytes)
         );
+        if let Some(database) = &status.database {
+            println!(
+                "Core SQLite: schema {}, SQLite {}, journal {}; {} pages of {} bytes ({} free)",
+                database.store_schema_version,
+                database.sqlite_version,
+                database.journal_mode,
+                database.page_count,
+                database.page_size,
+                database.free_pages
+            );
+        }
         for namespace in &status.namespaces {
             println!(
                 "  {}: {} rows, {} payload [{}]",
@@ -1270,6 +1499,19 @@ fn main() -> Result<()> {
         args.prune || args.cache.is_empty(),
         "cache policy flags require --prune; no action taken"
     );
+    if let Some(destination) = &args.local_backup {
+        let receipt = backup_local_store(&backup_cache_directory()?, destination)?;
+        if args.json {
+            println!("{}", serde_json::to_string(&receipt)?);
+        } else {
+            println!(
+                "Core SQLite backup: {} -> {} ({} bytes, store schema {}). History and PostgreSQL are not included.",
+                receipt.source, receipt.destination, receipt.bytes, receipt.store_schema_version
+            );
+        }
+        io::stdout().flush()?;
+        return Ok(());
+    }
 
     if args.prune {
         let mut loaded = foundation::runtime_config::load(args.config.as_deref(), args.no_config)?;
@@ -1389,6 +1631,350 @@ mod tests {
             .unwrap();
         }
         cache
+    }
+
+    fn healthy_cache_fixture(root: &Path) -> PathBuf {
+        let cache = cache_fixture(root);
+        let conn = Connection::open(cache.join("mfb_store.sqlite")).unwrap();
+        conn.execute(
+            "UPDATE blob_store SET payload_blake3 = ?1",
+            params![blake3::hash(b"payload").as_bytes()],
+        )
+        .unwrap();
+        cache
+    }
+
+    #[test]
+    fn backup_source_root_resolution_is_strict_and_read_only() {
+        const CHILD: &str = "MFB_TEST_BACKUP_ROOT_CHILD";
+        if let Ok(case) = std::env::var(CHILD) {
+            if case == "absent" {
+                let cache = backup_cache_directory().unwrap();
+                let root = cache.parent().unwrap();
+                assert!(!root.exists());
+                assert!(backup_local_store(&cache, &root.with_extension("backup.sqlite")).is_err());
+                assert!(!root.exists());
+            } else if case == "home" {
+                let home = PathBuf::from(std::env::var(foundation::constants::ENV_HOME).unwrap());
+                assert_eq!(
+                    backup_cache_directory().unwrap(),
+                    home.join(".modern_format_boost/cache")
+                );
+                assert!(!home.exists());
+            } else {
+                assert!(
+                    backup_cache_directory().is_err(),
+                    "invalid source must not select HOME or a temporary fallback"
+                );
+            }
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let name = format!(
+            "{}::backup_source_root_resolution_is_strict_and_read_only",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").unwrap();
+        let cases = ["absent", "relative", "empty", "home", "no-home"];
+        #[cfg(unix)]
+        let cases = cases.into_iter().chain(["invalid-root", "invalid-home"]);
+        for case in cases {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", name])
+                .env(CHILD, case)
+                .env_remove(foundation::constants::ENV_MFB_HOME_ROOT)
+                .env_remove(foundation::constants::ENV_HOME)
+                .env_remove(foundation::constants::ENV_USERPROFILE);
+            match case {
+                "absent" => {
+                    command.env(
+                        foundation::constants::ENV_MFB_HOME_ROOT,
+                        root.path().join("absent-root"),
+                    );
+                }
+                "relative" => {
+                    command
+                        .env(foundation::constants::ENV_MFB_HOME_ROOT, "relative-root")
+                        .env(foundation::constants::ENV_HOME, root.path());
+                }
+                "empty" => {
+                    command
+                        .env(foundation::constants::ENV_MFB_HOME_ROOT, "")
+                        .env(foundation::constants::ENV_HOME, root.path());
+                }
+                "home" => {
+                    command.env(
+                        foundation::constants::ENV_HOME,
+                        root.path().join("absent-home"),
+                    );
+                }
+                #[cfg(unix)]
+                "invalid-root" | "invalid-home" => {
+                    use std::os::unix::ffi::OsStringExt;
+                    let key = if case == "invalid-root" {
+                        foundation::constants::ENV_MFB_HOME_ROOT
+                    } else {
+                        foundation::constants::ENV_HOME
+                    };
+                    command
+                        .env(key, std::ffi::OsString::from_vec(vec![0xff]))
+                        .env(foundation::constants::ENV_USERPROFILE, root.path());
+                    if case == "invalid-root" {
+                        command.env(foundation::constants::ENV_HOME, root.path());
+                    }
+                }
+                _ => {}
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+        }
+    }
+
+    #[test]
+    fn database_overview_is_read_only_complete_and_absent_without_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing-cache");
+        let absent = cache_status(&missing).unwrap();
+        assert!(absent.database.is_none());
+        assert!(!missing.exists());
+        let cache = healthy_cache_fixture(root.path());
+        let source = cache.join("mfb_store.sqlite");
+        let before = fs::read(&source).unwrap();
+        let status = cache_status(&cache).unwrap();
+        let overview = status.database.as_ref().unwrap();
+        assert_eq!(
+            overview.store_schema_version,
+            foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION
+        );
+        assert_eq!(overview.sqlite_version, rusqlite::version());
+        assert_eq!(overview.journal_mode, "delete");
+        assert!(
+            overview.page_size.is_power_of_two()
+                && overview.page_count > 0
+                && overview.free_pages <= overview.page_count
+        );
+        assert_eq!(status.namespaces.len(), 4);
+        let value = serde_json::to_value(status).unwrap();
+        assert!(value["database"]["page_size"].as_u64().unwrap() >= 512);
+        assert_eq!(fs::read(source).unwrap(), before);
+        assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn local_backup_includes_committed_wal_without_changing_source_or_pending_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = healthy_cache_fixture(root.path());
+        let source = cache.join("mfb_store.sqlite");
+        let writer = Connection::open(&source).unwrap();
+        writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        writer.execute("INSERT INTO blob_store VALUES ('checkpoint', 'committed-wal', 2, NULL, ?1, ?2, 123)", params![b"wal state", blake3::hash(b"wal state").as_bytes()]).unwrap();
+        writer.execute_batch("BEGIN").unwrap();
+        writer
+            .execute(
+                "INSERT INTO blob_store VALUES ('checkpoint', 'uncommitted', 2, NULL, ?1, ?2, 123)",
+                params![b"pending state", blake3::hash(b"pending state").as_bytes()],
+            )
+            .unwrap();
+        let wal = cache.join("mfb_store.sqlite-wal");
+        let before = fs::read(&source).unwrap();
+        let wal_before = fs::read(&wal).unwrap();
+        assert!(
+            !wal_before.is_empty(),
+            "fixture must retain committed WAL with the writer still open"
+        );
+        let destination = root.path().join("core-backup.sqlite");
+        let receipt = backup_local_store(&cache, &destination).unwrap();
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.bytes, fs::metadata(&destination).unwrap().len());
+        assert_eq!(
+            receipt.source,
+            source.canonicalize().unwrap().to_str().unwrap()
+        );
+        assert_eq!(
+            receipt.destination,
+            destination.canonicalize().unwrap().to_str().unwrap()
+        );
+        let backup = open_cache_store(&destination, true).unwrap();
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT COUNT(*) FROM blob_store WHERE cache_key='committed-wal'",
+                    [],
+                    |row| nonnegative_column(row, 0)
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT COUNT(*) FROM blob_store WHERE cache_key='uncommitted'",
+                    [],
+                    |row| nonnegative_column(row, 0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            backup
+                .query_row("SELECT COUNT(*) FROM blob_store", [], |row| {
+                    nonnegative_column(row, 0)
+                })
+                .unwrap(),
+            5
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert_eq!(fs::read(&wal).unwrap(), wal_before);
+        let saved = fs::read(&destination).unwrap();
+        assert!(backup_local_store(&cache, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), saved);
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mfb-core-backup-")
+        }));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        writer.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn local_backup_rejects_missing_existing_sidecar_workspace_and_unhealthy_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("backup.sqlite");
+        let missing = root.path().join("missing-cache");
+        assert!(backup_local_store(&missing, &destination).is_err());
+        assert!(!missing.exists() && !destination.exists());
+        let cache = healthy_cache_fixture(root.path());
+        let source = cache.join("mfb_store.sqlite");
+        let before = fs::read(&source).unwrap();
+        for content in [b"".as_slice(), b"existing backup".as_slice()] {
+            fs::write(&destination, content).unwrap();
+            assert!(backup_local_store(&cache, &destination).is_err());
+            assert_eq!(fs::read(&destination).unwrap(), content);
+            fs::remove_file(&destination).unwrap();
+        }
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = root.path().join(format!("backup.sqlite{suffix}"));
+            fs::write(&sidecar, b"retain sidecar").unwrap();
+            assert!(backup_local_store(&cache, &destination).is_err());
+            assert!(!destination.exists());
+            assert_eq!(fs::read(&sidecar).unwrap(), b"retain sidecar");
+            fs::remove_file(sidecar).unwrap();
+        }
+        assert!(backup_local_store(&cache, &cache.join("new.sqlite")).is_err());
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        fs::write(workspace.join(".git"), b"synthetic worktree marker").unwrap();
+        assert!(backup_local_store(&cache, &workspace.join("backup.sqlite")).is_err());
+        assert_eq!(fs::read(&source).unwrap(), before);
+        let conn = Connection::open(&source).unwrap();
+        conn.execute(
+            "UPDATE blob_store SET payload_blake3 = zeroblob(32) WHERE namespace='checkpoint'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let corrupt = fs::read(&source).unwrap();
+        assert!(backup_local_store(&cache, &destination).is_err());
+        assert_eq!(fs::read(&source).unwrap(), corrupt);
+        assert!(!destination.exists());
+        let conn = Connection::open(&source).unwrap();
+        conn.execute("UPDATE store_metadata SET value = 99", [])
+            .unwrap();
+        drop(conn);
+        assert!(backup_local_store(&cache, &destination).is_err());
+        fs::write(&source, b"not a database").unwrap();
+        assert!(backup_local_store(&cache, &destination).is_err());
+        assert_eq!(fs::read(source).unwrap(), b"not a database");
+        assert!(!destination.exists());
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".mfb-core-backup-")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_backup_rejects_symlink_source_sidecars_and_destination() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let cache = healthy_cache_fixture(root.path());
+        let source = cache.join("mfb_store.sqlite");
+        let outside = root.path().join("outside.sqlite");
+        fs::copy(&source, &outside).unwrap();
+        let destination = root.path().join("backup.sqlite");
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = cache.join(format!("mfb_store.sqlite{suffix}"));
+            symlink(&outside, &sidecar).unwrap();
+            assert!(backup_local_store(&cache, &destination).is_err());
+            fs::remove_file(sidecar).unwrap();
+        }
+        symlink(&outside, &destination).unwrap();
+        assert!(backup_local_store(&cache, &destination).is_err());
+        fs::remove_file(&destination).unwrap();
+        let alias = root.path().join("cache-alias");
+        symlink(&cache, &alias).unwrap();
+        assert!(backup_local_store(&alias, &destination).is_err());
+        fs::remove_file(&source).unwrap();
+        symlink(&outside, &source).unwrap();
+        assert!(backup_local_store(&cache, &destination).is_err());
+        assert!(!destination.exists());
+        assert_eq!(fs::read(outside).unwrap(), fs::read(source).unwrap());
+    }
+
+    #[test]
+    fn local_backup_cli_is_independent_of_cleanup_and_inspection() {
+        let args = Args::try_parse_from([
+            "cache_cleaner",
+            "--local-backup",
+            "/synthetic/backup.sqlite",
+            "--json",
+        ])
+        .unwrap();
+        assert!(
+            args.local_backup.is_some() && args.json && !args.stats && !args.prune && !args.yes
+        );
+        for incompatible in [
+            "--stats",
+            "--prune",
+            "--check-integrity",
+            "--postgres",
+            "--purge-animation-cache",
+            "--purge-session-state",
+            "--yes",
+            "--no-config",
+            "/synthetic/input",
+        ] {
+            assert!(
+                Args::try_parse_from([
+                    "cache_cleaner",
+                    "--local-backup",
+                    "/synthetic/backup.sqlite",
+                    incompatible
+                ])
+                .is_err()
+            );
+        }
+        assert!(Args::try_parse_from(["cache_cleaner", "--local-backup"]).is_err());
     }
 
     #[test]
