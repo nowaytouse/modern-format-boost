@@ -1,6 +1,7 @@
 //! Dev-only utilities and regression testing backend.
 #![allow(clippy::too_many_lines)]
 
+pub mod app;
 pub mod media;
 pub mod run_training;
 pub mod training_pipeline;
@@ -18,6 +19,7 @@ pub mod infra {
     pub mod logger;
     pub mod mfb_cargo_env;
     pub mod performance;
+    pub mod preflight_plan;
     pub mod process_stream;
     pub mod recovery_collection;
     pub mod rich_panel;

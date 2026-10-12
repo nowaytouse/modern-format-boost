@@ -155,6 +155,20 @@ proof without claiming a unified inventory for the single files. A worker failur
 still stops all post-processing delivery for the batch, even when other workers
 succeeded. Multi-input watch mode is rejected rather than silently watching one path.
 Previews record plans without scanning media or inventing processing/verification counts.
+For a content-based, read-only routing inventory instead, use
+`drag_and_drop_processor --mode auto --plan-json /path/to/input` (also supports
+`images`, `videos`, and multiple inputs). The versioned JSON lists every visible
+regular file, its relative path, content-routed worker, selection, source bytes,
+action and reason, with the already bound requested output. It returns before
+session/database/lock/output creation or worker launch. Sidecars are separate from
+media tasks; non-media copying is explicitly conditional on successful adjacent
+processing. An incomplete or unsafe scan fails rather than returning a partial plan.
+This is a routing snapshot, not an encoder-quality prediction, space/time estimate,
+delivery proof, or a persisted execution/resume plan. Fast and management modes
+are not covered. `--plan-json` and the existing command-only `--dry-run` are distinct.
+Explicit standard `images/videos` modes select the same scope as the corresponding
+filter flags. Adjacent output for a directory must not contain, equal or sit inside
+its source directory; linked aliases are resolved before this check, without creating output.
 Standard pre-scans include legal linked directories before routing workers. Linked
 targets are checked before descent; loops, broken links and unsafe targets fail
 with an incomplete-inventory error. Fast mode link policy is unchanged.
@@ -166,6 +180,16 @@ sources are refused and retained as failures, not silently counted as skips.
 Standard metadata evidence is not a content hash; non-Unix evidence remains weaker.
 This admission check does not complete Unified Preflight, bind the launcher's
 inventory across processes or replace verification of the final artifact.
+The standard launcher now retains its own scanned source metadata and resolved
+target paths, checks classification against that snapshot, and rechecks the
+relevant sources immediately before spawning a worker. Changed, missing, replaced
+or retargeted sources refuse launch and remain untouched; missing outcome receipts
+remain unknown, not inferred failures or skips. The shared application worker
+executor owns invocation/config capture, output draining and child-result errors,
+so these contracts no longer live inside the interactive menu implementation.
+The GUI uses the same launcher entry point. This pre-launch guard is not a content
+hash or a complete cross-process inventory protocol, and does not authorize
+batching by rescanning a directory; per-file launch overhead remains to be addressed.
 
 Processing History highlights recorded Fast IMG and standard IMG/VID batch size
 changes, with exact input and output byte counts for files newly converted in that

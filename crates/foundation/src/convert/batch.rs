@@ -52,6 +52,49 @@ impl CachedFileIdentity {
     }
 }
 
+/// Launcher discovery evidence, not a content hash or a delivery receipt.
+/// The logical path and its resolved target are both retained until launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredSource {
+    path: PathBuf,
+    resolved: PathBuf,
+    identity: CachedFileIdentity,
+}
+
+impl DiscoveredSource {
+    pub fn from_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<Self> {
+        Ok(Self {
+            path: path.to_path_buf(),
+            resolved: fs::canonicalize(path)?,
+            identity: CachedFileIdentity::from_metadata(metadata)?,
+        })
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub const fn bytes(&self) -> u64 {
+        self.identity.size
+    }
+
+    /// Refuse a changed, replaced, retargeted, missing, or unreadable input.
+    /// Non-Unix evidence is limited to the target path, length, and mtime.
+    pub fn verify_unchanged(&self) -> io::Result<()> {
+        if fs::canonicalize(&self.path)? != self.resolved
+            || CachedFileIdentity::from_metadata(&fs::metadata(&self.path)?)? != self.identity
+        {
+            return Err(io::Error::other(format!(
+                "Source changed after preflight: {}; launch refused and source retained",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Discovery identity retained until standard IMG task admission, not a content or delivery proof.
 #[derive(Debug, Clone)]
 pub struct AdmittedImageFile {
@@ -1996,6 +2039,55 @@ mod tests {
                 .map(|entry| (entry.path.as_path(), &entry.identity)),
         ));
         assert_eq!(file_freshness_for_both(&refreshed), (false, false));
+        Ok(())
+    }
+
+    #[test]
+    fn discovered_source_refuses_changed_missing_and_non_file_inputs() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("synthetic.dat");
+        fs::write(&path, b"synthetic source")?;
+        let source = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
+        assert_eq!(source.path(), path);
+        assert_eq!(source.bytes(), 16);
+        source.verify_unchanged()?;
+        fs::write(&path, b"changed synthetic source")?;
+        assert!(source.verify_unchanged().is_err());
+        fs::remove_file(&path)?;
+        assert_eq!(
+            source.verify_unchanged().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(DiscoveredSource::from_metadata(root.path(), &fs::metadata(root.path())?).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovered_source_refuses_replacement_and_retargeted_links() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new()?;
+        let path = root.path().join("synthetic.dat");
+        let other = root.path().join("other.dat");
+        let link = root.path().join("linked.dat");
+        fs::write(&path, b"same bytes")?;
+        fs::write(&other, b"same bytes")?;
+        let mtime = FileTime::from_unix_time(1_700_000_000, 123_456_789);
+        filetime::set_file_mtime(&path, mtime)?;
+        filetime::set_file_mtime(&other, mtime)?;
+        symlink(&path, &link)?;
+        let source = DiscoveredSource::from_metadata(&link, &fs::metadata(&link)?)?;
+        source.verify_unchanged()?;
+        fs::remove_file(&link)?;
+        symlink(&other, &link)?;
+        assert!(source.verify_unchanged().is_err());
+        let direct = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
+        fs::rename(&other, &path)?;
+        assert!(direct.verify_unchanged().is_err());
+        let rewritten = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
+        fs::write(&path, b"new! bytes")?;
+        filetime::set_file_mtime(&path, mtime)?;
+        assert!(rewritten.verify_unchanged().is_err());
         Ok(())
     }
 

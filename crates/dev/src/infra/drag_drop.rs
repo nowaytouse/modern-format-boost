@@ -75,6 +75,35 @@ pub struct ContentScan {
     pub media_total_size: u64,
     pub routed_images: Vec<String>,
     pub routed_videos: Vec<String>,
+    pub entries: Vec<ScanEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanRoute {
+    Image,
+    Video,
+    Sidecar,
+    CopyOnly,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanEntry {
+    pub relative_path: PathBuf,
+    pub route: ScanRoute,
+    pub selected: bool,
+    pub source: foundation::batch::DiscoveredSource,
+}
+
+impl ContentScan {
+    #[must_use]
+    pub fn selected_sources(&self, route: ScanRoute) -> Vec<foundation::batch::DiscoveredSource> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.selected && entry.route == route)
+            .map(|entry| entry.source.clone())
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -247,16 +276,36 @@ pub fn scan_content(
     })
 }
 
+/// The same inventory policy without progress output, audit writes, or processing.
+pub fn inspect_content(target: &Path, filter: ProcessingFilter) -> Result<ContentScan> {
+    scan_content_with_options(target, filter, None, false, |resolved| {
+        safety_check(resolved)?;
+        foundation::safety::check_dangerous_directory(resolved).map_err(anyhow::Error::msg)
+    })
+}
+
 fn scan_content_with_link_check(
     target: &Path,
     filter: ProcessingFilter,
     session_audit: Option<&Path>,
     check_link: impl Fn(&Path) -> Result<()>,
 ) -> Result<ContentScan> {
-    draw_separator("Scanning Content");
+    scan_content_with_options(target, filter, session_audit, true, check_link)
+}
+
+fn scan_content_with_options(
+    target: &Path,
+    filter: ProcessingFilter,
+    session_audit: Option<&Path>,
+    display_summary: bool,
+    check_link: impl Fn(&Path) -> Result<()>,
+) -> Result<ContentScan> {
     let dim = if colors_enabled() { "\x1b[2m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
-    println!("{dim}   Analyzing directory structure...{reset}");
+    if display_summary {
+        draw_separator("Scanning Content");
+        println!("{dim}   Analyzing directory structure...{reset}");
+    }
 
     let mut scan = ContentScan::default();
     let mut routed_images = std::collections::HashSet::new();
@@ -342,13 +391,13 @@ fn scan_content_with_link_check(
             continue;
         }
         let path = path.as_path();
-        let name = path.file_name().and_then(|n| n.to_str()).with_context(|| {
+        path.file_name().and_then(|n| n.to_str()).with_context(|| {
             format!(
                 "Cannot represent content scan path {}; inventory is incomplete",
                 path.display()
             )
         })?;
-        if name.starts_with('.') {
+        if foundation::is_hidden_file(path) {
             continue;
         }
         if path.to_str().is_none() {
@@ -369,9 +418,22 @@ fn scan_content_with_link_check(
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        let observed = foundation::batch::DiscoveredSource::from_metadata(path, &metadata)
+            .with_context(|| {
+                format!(
+                    "observe content scan source {}; inventory is incomplete",
+                    path.display()
+                )
+            })?;
         let route = classify_media_owner(path).with_context(|| {
             format!(
                 "Cannot classify content scan path {}; inventory is incomplete",
+                path.display()
+            )
+        })?;
+        observed.verify_unchanged().with_context(|| {
+            format!(
+                "source changed during content scan {}; inventory is incomplete",
                 path.display()
             )
         })?;
@@ -401,7 +463,7 @@ fn scan_content_with_link_check(
                     .to_string(),
             );
         }
-        if ext == "xmp" {
+        if ext == "xmp" && !is_img && !is_vid {
             scan.xmp_count = scan
                 .xmp_count
                 .checked_add(1)
@@ -413,6 +475,28 @@ fn scan_content_with_link_check(
                 .context("content scan other file count overflow")?;
         }
         let include_size = (filter.accepts_image() && is_img) || (filter.accepts_video() && is_vid);
+        let relative = path
+            .strip_prefix(target)
+            .context("content scan source is outside its root")?;
+        let relative_path = if relative.as_os_str().is_empty() {
+            PathBuf::from(path.file_name().context("content scan file has no name")?)
+        } else {
+            relative.to_path_buf()
+        };
+        scan.entries.push(ScanEntry {
+            relative_path,
+            route: if is_img {
+                ScanRoute::Image
+            } else if is_vid {
+                ScanRoute::Video
+            } else if ext == "xmp" {
+                ScanRoute::Sidecar
+            } else {
+                ScanRoute::CopyOnly
+            },
+            selected: include_size,
+            source: observed,
+        });
         if include_size {
             scan.media_total_size = scan
                 .media_total_size
@@ -434,35 +518,39 @@ fn scan_content_with_link_check(
     scan.routed_videos = routed_videos.into_iter().collect();
     scan.routed_images.sort();
     scan.routed_videos.sort();
+    scan.entries
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
 
-    let bold = if colors_enabled() { "\x1b[1m" } else { "" };
-    let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
-    let magenta = if colors_enabled() { "\x1b[35m" } else { "" };
-    println!(
-        "   {} Total Files: {bold}{}{reset}",
-        pick_symbol("📁", "[DIR]"),
-        scan.total_files
-    );
-    println!(
-        "   {}  Images:      {bold}{cyan}{}{reset}",
-        pick_symbol("🖼️", "[IMG]"),
-        scan.img_count
-    );
-    println!(
-        "   {} Videos:      {bold}{magenta}{}{reset}",
-        pick_symbol("🎬", "[VID]"),
-        scan.vid_count
-    );
-    println!(
-        "   {} Metadata:    {bold}{dim}{}{reset}",
-        pick_symbol("📋", "[XMP]"),
-        scan.xmp_count
-    );
-    println!(
-        "   {} Others:      {bold}{dim}{}{reset} (Copy only)\n",
-        pick_symbol("📦", "[OTH]"),
-        scan.other_count
-    );
+    if display_summary {
+        let bold = if colors_enabled() { "\x1b[1m" } else { "" };
+        let cyan = if colors_enabled() { "\x1b[36m" } else { "" };
+        let magenta = if colors_enabled() { "\x1b[35m" } else { "" };
+        println!(
+            "   {} Total Files: {bold}{}{reset}",
+            pick_symbol("📁", "[DIR]"),
+            scan.total_files
+        );
+        println!(
+            "   {}  Images:      {bold}{cyan}{}{reset}",
+            pick_symbol("🖼️", "[IMG]"),
+            scan.img_count
+        );
+        println!(
+            "   {} Videos:      {bold}{magenta}{}{reset}",
+            pick_symbol("🎬", "[VID]"),
+            scan.vid_count
+        );
+        println!(
+            "   {} Metadata:    {bold}{dim}{}{reset}",
+            pick_symbol("📋", "[XMP]"),
+            scan.xmp_count
+        );
+        println!(
+            "   {} Others:      {bold}{dim}{}{reset} (Copy only)\n",
+            pick_symbol("📦", "[OTH]"),
+            scan.other_count
+        );
+    }
 
     audit_line(
         session_audit,
@@ -1286,6 +1374,86 @@ fn read_line(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_inventory_retains_every_visible_entry_and_selected_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("nested")).unwrap();
+        fs::write(
+            tmp.path().join("nested/spoofed.bin"),
+            b"\xff\xd8\xff\xe0synthetic",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("notes.txt"), "synthetic notes").unwrap();
+        fs::write(tmp.path().join("metadata.xmp"), "synthetic sidecar").unwrap();
+        fs::write(tmp.path().join(".hidden.jpg"), b"\xff\xd8\xff\xe0synthetic").unwrap();
+        let before = fs::read(tmp.path().join("nested/spoofed.bin")).unwrap();
+        let scan = inspect_content(tmp.path(), ProcessingFilter::Both).unwrap();
+        assert_eq!(
+            (
+                scan.total_files,
+                scan.img_count,
+                scan.xmp_count,
+                scan.other_count
+            ),
+            (3, 1, 1, 1)
+        );
+        assert_eq!(scan.entries.len(), scan.total_files);
+        assert_eq!(scan.entries[0].route, ScanRoute::Sidecar);
+        assert_eq!(
+            scan.entries[1].relative_path,
+            Path::new("nested/spoofed.bin")
+        );
+        assert!(scan.entries[1].selected);
+        assert_eq!(scan.selected_sources(ScanRoute::Image).len(), 1);
+        assert!(scan.selected_sources(ScanRoute::Video).is_empty());
+        for source in scan.selected_sources(ScanRoute::Image) {
+            source.verify_unchanged().unwrap();
+        }
+        assert_eq!(
+            fs::read(tmp.path().join("nested/spoofed.bin")).unwrap(),
+            before
+        );
+        assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 4);
+
+        let filtered = inspect_content(tmp.path(), ProcessingFilter::VideosOnly).unwrap();
+        assert_eq!(filtered.entries.len(), 3);
+        assert!(filtered.entries.iter().all(|entry| !entry.selected));
+        assert_eq!(filtered.media_total_size, 0);
+        let single = inspect_content(
+            &tmp.path().join("nested/spoofed.bin"),
+            ProcessingFilter::ImagesOnly,
+        )
+        .unwrap();
+        assert_eq!(single.entries[0].relative_path, Path::new("spoofed.bin"));
+        fs::write(tmp.path().join("nested/spoofed.bin"), b"changed source").unwrap();
+        assert!(
+            scan.selected_sources(ScanRoute::Image)[0]
+                .verify_unchanged()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn media_disguised_as_sidecar_is_counted_once_as_media() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("disguised.xmp"),
+            b"\xff\xd8\xff\xe0synthetic",
+        )
+        .unwrap();
+        let scan = inspect_content(tmp.path(), ProcessingFilter::Both).unwrap();
+        assert_eq!(
+            (
+                scan.total_files,
+                scan.img_count,
+                scan.xmp_count,
+                scan.other_count
+            ),
+            (1, 1, 0, 0)
+        );
+        assert_eq!(scan.entries[0].route, ScanRoute::Image);
+    }
 
     #[test]
     fn scan_content_rejects_incomplete_inventory() {

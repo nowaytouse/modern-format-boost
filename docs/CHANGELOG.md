@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Shared worker execution and read-only routing plans (2026-10-12)
+
+- Extract the reusable worker command, invocation/configuration observation,
+  process streaming and collected-error contracts into `dev::app::worker` behind
+  a narrow session adapter. Keep CLI planning, session lifecycle and menus outside
+  the executor. Preserve child draining, result counts, exit status, configuration
+  rejection and persistence-error propagation; the launcher is not yet a thin
+  headless entry point and the interactive menu is not retired.
+- Retain each standard launcher's discovered source metadata and canonical target
+  through classification and command planning. Reuse Foundation file identity,
+  bind relevant observations to each command and check immediately before spawn.
+  Changed, replaced, retargeted, missing or unreadable inputs refuse launch without
+  inventing file outcomes or touching sources. This is pre-launch metadata evidence,
+  not a content hash, final verification or complete cross-process inventory binding.
+- Add `drag_and_drop_processor --plan-json` for standard auto/images/videos and
+  multiple inputs. Use the same inventory/filter/link/hidden-file policy to report
+  relative paths, selected workers, bytes, actions/reasons and requested outputs.
+  Return before session/database/lock/output creation or processing. Report sidecars
+  independently and non-media copying as conditional, refuse incomplete inventories,
+  and distinguish routing snapshots from command-only dry runs, persisted execution
+  plans, encoder decisions, estimates and delivery proofs. Fast/management modes
+  are explicitly unsupported rather than returning an invented plan.
+- Reconcile `--mode images/videos` with the shared scan filter even without the
+  equivalent `--images-only/--videos-only` flags. Routing inventory, byte totals
+  and post-processing verification now describe the selected standard pipeline.
+  Count media disguised as `.xmp` once by content route, not again as a sidecar.
+  Single-directory adjacent plans also reuse the existing multi-input output
+  resolver to reject source/output overlap, including linked aliases and
+  nonexistent suffixes, before any destination is created.
+- Keep per-file child scheduling: replacing it with directory scans would admit
+  late files or change scan policy without an exact shared inventory protocol.
+  This batch does not establish a processing-throughput gain.
+- Validation: 152 distinct scoped Rust tests passed (57 launcher, 88 dev
+  infrastructure, five shared-worker and two source-identity tests; reruns and the
+  child marker probe are not counted again). Affected-target strict Clippy,
+  workspace formatting and the targeted launcher build passed. Actual CLI checks
+  covered multi-input JSON/category reconciliation, Unicode/newline paths,
+  image/video/in-place selections, help and four explicit refusals. The isolated
+  fixture tree was unchanged, with no history/home/lock/output creation. No new
+  dependencies, production Photos/media/history, full-workspace or cross-platform
+  acceptance, throughput benchmark or new CI verdict is claimed. No GUI source
+  changed and the installed app was not rebuilt or replaced.
+
 ### History backup, whole-batch issue review and cache decisions (2026-10-12)
 
 - Add explicit `cache_cleaner --history-backup DEST --history-directory SOURCE`
