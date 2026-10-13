@@ -239,8 +239,21 @@ impl LaunchCommand {
             argument_bytes <= INVOCATION_MAX_ARGUMENT_BYTES,
             "worker arguments exceed the history byte limit"
         );
-        let program_path = self.observed_program_path();
-        let binary = BinaryObservation::observe(program_path.as_deref());
+        let (program_path, binary) = match self.observed_program_path() {
+            Ok(path) => {
+                let binary = BinaryObservation::observe(Some(&path));
+                (Some(path), binary)
+            }
+            Err(error) => (
+                None,
+                BinaryObservation {
+                    scope: "observed_before_launch",
+                    bytes: None,
+                    blake3: None,
+                    diagnostic: Some(format!("{error:#}")),
+                },
+            ),
+        };
         let sequence = INVOCATION_SEQUENCE
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
@@ -267,9 +280,10 @@ impl LaunchCommand {
         })
     }
 
-    fn observed_program_path(&self) -> Option<PathBuf> {
+    fn observed_program_path(&self) -> Result<PathBuf> {
         if self.program.components().count() > 1 || self.program.is_absolute() {
-            return std::path::absolute(&self.program).ok();
+            return std::path::absolute(&self.program)
+                .context("resolve requested worker executable absolute path");
         }
         #[cfg(unix)]
         {
@@ -281,24 +295,22 @@ impl LaunchCommand {
                 .map_or_else(
                     || std::env::var_os("PATH"),
                     |(_, value)| value.as_ref().map(std::ffi::OsString::from),
-                )?;
+                )
+                .context("PATH is absent from the child launch environment")?;
             for directory in std::env::split_paths(&path) {
                 let candidate = directory.join(&self.program);
-                let Ok(candidate) = std::path::absolute(candidate) else {
-                    continue;
-                };
-                let Ok(encoded) = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes())
-                else {
-                    continue;
-                };
+                let candidate = std::path::absolute(candidate)
+                    .context("resolve child PATH executable candidate")?;
+                let encoded = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes())
+                    .context("child PATH executable candidate contains a NUL")?;
                 // Observe the exact PATH candidate; execution retains the requested program.
                 if candidate.is_file() && unsafe { libc::access(encoded.as_ptr(), libc::X_OK) } == 0
                 {
-                    return Some(candidate);
+                    return Ok(candidate);
                 }
             }
         }
-        None
+        anyhow::bail!("requested executable was not resolved from the child launch environment")
     }
 
     fn verify_sources_unchanged(&self, invocation_error: Option<&anyhow::Error>) -> Result<()> {
@@ -739,6 +751,30 @@ mod tests {
         assert_eq!(unknown.bytes, None);
         assert_eq!(unknown.blake3, None);
         assert!(unknown.diagnostic.is_some());
+
+        #[cfg(unix)]
+        {
+            let session = test_session(directory.path(), Some("run-test"));
+            let mut command = LaunchCommand::from_argv(vec!["worker".to_owned()]).unwrap();
+            for (path, diagnostic) in [
+                (None, "PATH is absent"),
+                (Some("invalid\0PATH".to_owned()), "contains a NUL"),
+            ] {
+                command.env_overrides.push(("PATH".to_owned(), path));
+                let unresolved = command.invocation(&session).unwrap();
+                assert_eq!(unresolved.program_path, None);
+                assert_eq!(unresolved.binary.bytes, None);
+                assert_eq!(unresolved.binary.blake3, None);
+                assert!(
+                    unresolved
+                        .binary
+                        .diagnostic
+                        .as_ref()
+                        .unwrap()
+                        .contains(diagnostic)
+                );
+            }
+        }
     }
 
     #[cfg(unix)]

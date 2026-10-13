@@ -258,24 +258,189 @@ struct CachedGpuAccel {
     accel: GpuAccel,
     diagnostics: Vec<String>,
     last_probe: std::time::Instant,
+    last_selection_check: std::time::Instant,
+    context: Option<GpuProbeContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GpuProbeEnvironment {
+    working_directory: std::path::PathBuf,
+    configured_tool: Option<std::path::PathBuf>,
+    priority_tool: Option<(std::path::PathBuf, crate::common_utils::ToolIdentity)>,
+    variables: Vec<Option<std::ffi::OsString>>,
+}
+
+impl GpuProbeEnvironment {
+    fn capture() -> Result<Self, String> {
+        let configured_tool = crate::runtime_config::active()
+            .and_then(|config| config.tools.paths.get(crate::constants::TOOL_FFMPEG))
+            .cloned();
+        let priority_path = match configured_tool
+            .clone()
+            .or_else(|| std::env::var_os("MFB_TOOL_FFMPEG").map(std::path::PathBuf::from))
+        {
+            Some(path) => Some(path),
+            None => match which::which(crate::constants::TOOL_FFMPEG) {
+                Ok(path) => Some(path),
+                Err(which::Error::CannotFindBinaryPath) => None,
+                Err(error) => return Err(format!("ffmpeg PATH observation failed: {error}")),
+            },
+        };
+        let priority_tool = match priority_path {
+            Some(path) => {
+                let identity = crate::common_utils::tool_identity(&path).map_err(|error| {
+                    format!("GPU preferred ffmpeg identity unavailable: {error}")
+                })?;
+                Some((path, identity))
+            }
+            None => None,
+        };
+        Ok(Self {
+            working_directory: std::env::current_dir()
+                .map_err(|error| format!("GPU probe working directory unavailable: {error}"))?,
+            configured_tool,
+            priority_tool,
+            variables: [
+                "PATH",
+                "MFB_TOOL_FFMPEG",
+                "PATHEXT",
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+                "DYLD_LIBRARY_PATH",
+                "DYLD_FALLBACK_LIBRARY_PATH",
+                "DYLD_INSERT_LIBRARIES",
+                "CUDA_VISIBLE_DEVICES",
+                "CUDA_DEVICE_ORDER",
+                "NVIDIA_VISIBLE_DEVICES",
+                "LIBVA_DRIVER_NAME",
+                "LIBVA_DRIVERS_PATH",
+                "DRI_PRIME",
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                crate::constants::ENV_VAAPI_DEVICE,
+                crate::constants::ENV_VAAPI_DEVICE_FALLBACK,
+            ]
+            .into_iter()
+            .map(std::env::var_os)
+            .collect(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GpuProbeContext {
+    environment: GpuProbeEnvironment,
+    ffmpeg_path: std::path::PathBuf,
+    identity: crate::common_utils::ToolIdentity,
+}
+
+impl GpuProbeContext {
+    fn capture(environment: GpuProbeEnvironment) -> Result<Self, String> {
+        let ffmpeg_path = crate::common_utils::resolve_tool_path(crate::constants::TOOL_FFMPEG)
+            .ok_or_else(|| {
+                "GPU probe requires a resolved, healthy ffmpeg executable".to_string()
+            })?;
+        let identity = crate::common_utils::tool_identity(&ffmpeg_path)
+            .map_err(|error| format!("GPU probe ffmpeg identity unavailable: {error}"))?;
+        Ok(Self {
+            environment,
+            ffmpeg_path,
+            identity,
+        })
+    }
 }
 
 impl CachedGpuAccel {
-    fn probe_now() -> Self {
-        let (accel, diagnostics) = GpuAccel::detect_internal();
+    fn unavailable(message: String) -> Self {
         Self {
-            accel,
-            diagnostics,
+            accel: GpuAccel::default(),
+            diagnostics: vec![message],
             last_probe: std::time::Instant::now(),
+            last_selection_check: std::time::Instant::now(),
+            context: None,
         }
     }
 
-    fn should_refresh(&self) -> bool {
-        !self.accel.enabled && self.last_probe.elapsed() >= GPU_NEGATIVE_CACHE_TTL
+    fn probe_now(environment: GpuProbeEnvironment) -> Self {
+        let context = match GpuProbeContext::capture(environment) {
+            Ok(context) => context,
+            Err(error) => return Self::unavailable(error),
+        };
+        let (accel, mut diagnostics) = GpuAccel::detect_internal();
+        let after = GpuProbeEnvironment::capture().and_then(GpuProbeContext::capture);
+        match after {
+            Ok(after) if after == context => Self {
+                accel,
+                diagnostics,
+                last_probe: std::time::Instant::now(),
+                last_selection_check: std::time::Instant::now(),
+                context: Some(context),
+            },
+            result => {
+                diagnostics.push(match result {
+                    Ok(_) => "GPU probe environment changed during detection; result not reused"
+                        .to_string(),
+                    Err(error) => error,
+                });
+                Self {
+                    accel: GpuAccel::default(),
+                    diagnostics,
+                    last_probe: std::time::Instant::now(),
+                    last_selection_check: std::time::Instant::now(),
+                    context: None,
+                }
+            }
+        }
+    }
+
+    fn refresh_reason(
+        &self,
+        environment: &GpuProbeEnvironment,
+        retry_unavailable: bool,
+    ) -> Result<Option<&'static str>, String> {
+        let Some(context) = &self.context else {
+            return Ok(Some("identity_unavailable"));
+        };
+        if context.environment != *environment {
+            return Ok(Some("environment_changed"));
+        }
+        let identity = crate::common_utils::tool_identity(&context.ffmpeg_path)
+            .map_err(|error| format!("cached GPU ffmpeg identity unavailable: {error}"))?;
+        if identity != context.identity {
+            return Ok(Some("tool_identity_changed"));
+        }
+        let selected_priority_tool = environment
+            .priority_tool
+            .as_ref()
+            .is_some_and(|(_, identity)| *identity == context.identity);
+        if !self.accel.enabled
+            && (retry_unavailable || self.last_probe.elapsed() >= GPU_NEGATIVE_CACHE_TTL)
+        {
+            return Ok(Some("negative_retry"));
+        }
+        if self.accel.enabled
+            && !selected_priority_tool
+            && self.last_selection_check.elapsed() >= GPU_NEGATIVE_CACHE_TTL
+        {
+            return Ok(Some("fallback_selection_retry"));
+        }
+        Ok(None)
     }
 }
 
-static GPU_ACCEL: OnceLock<Mutex<CachedGpuAccel>> = OnceLock::new();
+fn record_gpu_cache_decision(outcome: &'static str, reason: &str) {
+    tracing::info!(
+        target: "static_log",
+        schema_version = 1,
+        namespace = "gpu_capability",
+        media_kind = "video",
+        outcome,
+        reason,
+        message = "GPU capability cache decision"
+    );
+}
+
+static GPU_ACCEL: OnceLock<Mutex<Option<CachedGpuAccel>>> = OnceLock::new();
 
 /// Maximum concurrent GPU encode tasks (probe/encode); follows
 /// `performance_schedule` when env unset.
@@ -329,11 +494,8 @@ impl Drop for GpuSlotGuard {
 }
 
 #[cfg(target_os = "linux")]
-fn vaapi_device_path() -> &'static str {
-    static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE
-        .get_or_init(crate::media_conversion_gate::gpu_vaapi_device_path_or_default)
-        .as_str()
+fn vaapi_device_path() -> String {
+    crate::media_conversion_gate::gpu_vaapi_device_path_or_default()
 }
 
 /// Creates a temporary extension string for GPU processing files.
@@ -406,7 +568,7 @@ pub struct GpuEncoder {
     pub crf_param: &'static str,
     /// The valid CRF range as (min, max) inclusive.
     pub crf_range: (u8, u8),
-    /// Additional `FFmpeg` arguments passed to this encoder.
+    /// Static additional arguments; use `extra_args()` to resolve device settings.
     pub extra_args: Vec<&'static str>,
 }
 
@@ -443,10 +605,25 @@ impl GpuEncoder {
         }
     }
 
-    /// Returns the extra arguments for this encoder as a slice.
+    /// Returns extra arguments with the current device settings resolved.
     #[must_use]
-    pub fn extra_args(&self) -> &[&'static str] {
-        &self.extra_args
+    pub fn extra_args(&self) -> Vec<String> {
+        let arguments: Vec<String> = self
+            .extra_args
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        #[cfg(target_os = "linux")]
+        let mut arguments = arguments;
+        #[cfg(target_os = "linux")]
+        if self.gpu_type == GpuType::Vaapi {
+            for index in 1..arguments.len() {
+                if arguments[index - 1] == "-vaapi_device" {
+                    arguments[index] = vaapi_device_path();
+                }
+            }
+        }
+        arguments
     }
 }
 
@@ -480,44 +657,33 @@ impl Default for GpuAccel {
 impl GpuAccel {
     /// Detects available GPU acceleration and returns a cached snapshot.
     ///
-    /// Successful probes stay cached. Failed probes are soft-cached and
+    /// Successful probes stay cached for the same executable and environment.
+    /// Failed probes are soft-cached and
     /// automatically retried after a short TTL so transient startup or
     /// device-busy failures do not latch CPU mode for the lifetime of the
     /// process.
     #[must_use]
     pub fn detect() -> Self {
-        let cached = Self::cached_state();
-        if cached.should_refresh() {
-            return Self::detect_fresh();
-        }
-        cached.accel
+        Self::cached_state(false, false).accel
     }
 
     /// Detects available GPU acceleration and forces an immediate re-probe if
     /// the cached state is currently unavailable.
     #[must_use]
     pub fn detect_with_retry() -> Self {
-        let cached = Self::cached_state();
-        if cached.accel.enabled {
-            cached.accel
-        } else {
-            Self::detect_fresh()
-        }
+        Self::cached_state(false, true).accel
     }
 
     /// Performs a fresh GPU detection, bypassing the singleton cache.
     #[must_use]
     pub fn detect_fresh() -> Self {
-        let probed = CachedGpuAccel::probe_now();
-        let accel = probed.accel.clone();
-        Self::store_cached_state(probed);
-        accel
+        Self::cached_state(true, false).accel
     }
 
     /// Returns diagnostics from the last GPU probe attempt.
     #[must_use]
     pub fn last_probe_diagnostics() -> Vec<String> {
-        Self::cached_state().diagnostics
+        Self::cached_state(false, false).diagnostics
     }
 
     /// Prints GPU detection information to stderr.
@@ -589,19 +755,55 @@ impl GpuAccel {
         }
     }
 
-    fn cached_state() -> CachedGpuAccel {
-        let cache = GPU_ACCEL.get_or_init(|| Mutex::new(CachedGpuAccel::probe_now()));
-        return crate::media_conversion_gate::mutex_guard_or_recover(
-            "gpu_accel_cache",
-            cache.lock(),
-        )
-        .clone();
-    }
-
-    fn store_cached_state(state: CachedGpuAccel) {
-        let cache = GPU_ACCEL.get_or_init(|| Mutex::new(state.clone()));
-        *crate::media_conversion_gate::mutex_guard_or_recover("gpu_accel_cache", cache.lock()) =
-            state;
+    fn cached_state(force: bool, retry_unavailable: bool) -> CachedGpuAccel {
+        let cache = GPU_ACCEL.get_or_init(|| Mutex::new(None));
+        let mut cached =
+            crate::media_conversion_gate::mutex_guard_or_recover("gpu_accel_cache", cache.lock());
+        let environment = match GpuProbeEnvironment::capture() {
+            Ok(environment) => environment,
+            Err(error) => {
+                record_gpu_cache_decision("invalid", &error);
+                let unavailable = CachedGpuAccel::unavailable(error);
+                *cached = Some(unavailable.clone());
+                return unavailable;
+            }
+        };
+        if force {
+            record_gpu_cache_decision("miss", "explicit_refresh");
+        } else if let Some(state) = cached.as_ref() {
+            match state.refresh_reason(&environment, retry_unavailable) {
+                Ok(None) => {
+                    record_gpu_cache_decision("hit", "same_executable_and_environment");
+                    return state.clone();
+                }
+                Ok(Some("fallback_selection_retry")) => {
+                    record_gpu_cache_decision("revalidate", "fallback_selection_retry");
+                    match GpuProbeContext::capture(environment.clone()) {
+                        Ok(context) if state.context.as_ref() == Some(&context) => {
+                            if let Some(state) = cached.as_mut() {
+                                state.last_selection_check = std::time::Instant::now();
+                                record_gpu_cache_decision("hit", "fallback_selection_unchanged");
+                                return state.clone();
+                            }
+                        }
+                        Ok(_) => record_gpu_cache_decision("miss", "selected_tool_changed"),
+                        Err(error) => record_gpu_cache_decision("invalid", &error),
+                    }
+                }
+                Ok(Some(reason)) => record_gpu_cache_decision("miss", reason),
+                Err(error) => record_gpu_cache_decision("invalid", &error),
+            }
+        } else {
+            record_gpu_cache_decision("miss", "not_recorded");
+        }
+        let state = CachedGpuAccel::probe_now(environment);
+        if state.context.is_none() {
+            for diagnostic in &state.diagnostics {
+                record_gpu_cache_decision("invalid", diagnostic);
+            }
+        }
+        *cached = Some(state.clone());
+        state
     }
 
     fn detect_internal() -> (Self, Vec<String>) {
@@ -914,7 +1116,7 @@ impl GpuAccel {
                 supports_crf: true,
                 crf_param: "qp",
                 crf_range: (0, 52),
-                extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "main"],
+                extra_args: vec!["-vaapi_device", "/dev/dri/renderD128", "-profile:v", "main"],
             },
             diagnostics,
         );
@@ -927,7 +1129,7 @@ impl GpuAccel {
                 supports_crf: true,
                 crf_param: "qp",
                 crf_range: (0, 63),
-                extra_args: vec!["-vaapi_device", vaapi_device_path()],
+                extra_args: vec!["-vaapi_device", "/dev/dri/renderD128"],
             },
             diagnostics,
         );
@@ -940,7 +1142,7 @@ impl GpuAccel {
                 supports_crf: true,
                 crf_param: "qp",
                 crf_range: (0, 52),
-                extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "high"],
+                extra_args: vec!["-vaapi_device", "/dev/dri/renderD128", "-profile:v", "high"],
             },
             diagnostics,
         );
@@ -2964,11 +3166,7 @@ fn encode_gpu_parallel_probe(
                 Ok(args) => args,
                 Err(err) => return Err((crf, err)),
             };
-            let extra_args: Vec<String> = gpu_encoder
-                .extra_args()
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            let extra_args = gpu_encoder.extra_args();
             let input_path = input.to_path_buf();
             let output_path = output.with_extension(format!("tmp{i}.mp4"));
             let encoder_name = gpu_encoder.name.to_string();
@@ -4512,15 +4710,35 @@ mod tests {
 
     #[test]
     fn test_negative_gpu_cache_refresh_policy() {
+        let tool = tempfile::NamedTempFile::new().expect("create tool identity fixture");
+        let environment = GpuProbeEnvironment {
+            working_directory: tool.path().parent().expect("fixture parent").to_path_buf(),
+            configured_tool: Some(tool.path().to_path_buf()),
+            priority_tool: Some((
+                tool.path().to_path_buf(),
+                crate::common_utils::tool_identity(tool.path()).expect("fixture identity"),
+            )),
+            variables: Vec::new(),
+        };
+        let context = GpuProbeContext {
+            environment: environment.clone(),
+            ffmpeg_path: tool.path().to_path_buf(),
+            identity: crate::common_utils::tool_identity(tool.path()).expect("fixture identity"),
+        };
         let stale_negative = CachedGpuAccel {
             accel: GpuAccel::default(),
             diagnostics: vec![],
             last_probe: std::time::Instant::now()
                 .checked_sub(GPU_NEGATIVE_CACHE_TTL)
                 .unwrap_or_else(|| panic!("Time went backwards")),
+            last_selection_check: std::time::Instant::now(),
+            context: Some(context.clone()),
         };
-        assert!(
-            stale_negative.should_refresh(),
+        assert_eq!(
+            stale_negative
+                .refresh_reason(&environment, false)
+                .expect("observe cache"),
+            Some("negative_retry"),
             "negative cache entries should refresh after the retry TTL"
         );
 
@@ -4544,11 +4762,148 @@ mod tests {
             last_probe: std::time::Instant::now()
                 .checked_sub(GPU_NEGATIVE_CACHE_TTL)
                 .unwrap_or_else(|| panic!("Time went backwards")),
+            last_selection_check: std::time::Instant::now()
+                .checked_sub(GPU_NEGATIVE_CACHE_TTL)
+                .unwrap_or_else(|| panic!("Time went backwards")),
+            context: Some(context),
         };
-        assert!(
-            !fresh_positive.should_refresh(),
+        assert_eq!(
+            fresh_positive
+                .refresh_reason(&environment, true)
+                .expect("observe cache"),
+            None,
             "successful detections should not be re-probed by the negative-cache policy"
         );
+        let mut fallback = fresh_positive.clone();
+        let mut fallback_environment = environment.clone();
+        fallback_environment.priority_tool = None;
+        fallback
+            .context
+            .as_mut()
+            .expect("fixture context")
+            .environment = fallback_environment.clone();
+        assert_eq!(
+            fallback
+                .refresh_reason(&fallback_environment, false)
+                .unwrap(),
+            Some("fallback_selection_retry")
+        );
+        let mut negative = fresh_positive.clone();
+        negative.accel = GpuAccel::default();
+        negative.last_probe = std::time::Instant::now();
+        assert_eq!(negative.refresh_reason(&environment, false).unwrap(), None);
+        assert_eq!(
+            negative.refresh_reason(&environment, true).unwrap(),
+            Some("negative_retry")
+        );
+
+        let mut changed = environment.clone();
+        changed
+            .variables
+            .push(Some("changed PATH or device setting".into()));
+        assert_eq!(
+            fresh_positive.refresh_reason(&changed, false).unwrap(),
+            Some("environment_changed")
+        );
+        std::fs::write(tool.path(), b"changed executable").expect("replace fixture contents");
+        assert_eq!(
+            fresh_positive.refresh_reason(&environment, false).unwrap(),
+            Some("tool_identity_changed")
+        );
+        std::fs::remove_file(tool.path()).expect("remove executable fixture");
+        assert!(fresh_positive.refresh_reason(&environment, false).is_err());
+        negative.context = None;
+        assert_eq!(
+            negative.refresh_reason(&environment, false).unwrap(),
+            Some("identity_unavailable")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn gpu_capability_cache_tracks_tool_replacement_without_reprobing_hits() {
+        const CHILD: &str = "MFB_GPU_CACHE_CHILD_FIXTURE";
+        if let Some(counter) = std::env::var_os(CHILD) {
+            let count = || {
+                std::fs::read(&counter)
+                    .expect("read encoder listing counter")
+                    .len()
+            };
+            assert!(
+                GpuAccel::detect_fresh().enabled,
+                "synthetic encoder accepts probe"
+            );
+            assert_eq!(count(), 1);
+            assert!(GpuAccel::detect().enabled);
+            assert!(GpuAccel::detect_with_retry().enabled);
+            assert_eq!(count(), 1, "cache hits must not list or probe encoders");
+            let tool = std::env::var_os("MFB_TOOL_FFMPEG").expect("owned fake tool");
+            let mut contents = std::fs::read(&tool).expect("read owned fake tool");
+            contents.extend_from_slice(b"\n# replacement\n");
+            std::fs::write(&tool, contents).expect("replace fake executable");
+            assert!(GpuAccel::detect_with_retry().enabled);
+            assert_eq!(count(), 2, "replacement must invalidate a successful probe");
+            let _loader = crate::common_utils::EnvGuard::set("LIBVA_DRIVER_NAME", "fixture-driver");
+            assert!(GpuAccel::detect().enabled);
+            assert_eq!(count(), 3, "driver environment must invalidate the probe");
+            assert!(GpuAccel::detect().enabled);
+            assert_eq!(count(), 3);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("owned GPU cache test root");
+        let tool = root.path().join("ffmpeg");
+        let counter = root.path().join("encoder-list-count");
+        std::fs::write(&counter, b"").expect("create counter");
+        std::fs::write(&tool, "#!/bin/sh\ncase \"$*\" in\n*-encoders*) printf x >> \"$MFB_GPU_CACHE_CHILD_FIXTURE\"; printf ' V..... h264_videotoolbox\\n V..... h264_nvenc\\n V..... h264_qsv\\n V..... h264_vaapi\\n' ;;\nesac\nexit 0\n").expect("create inert synthetic ffmpeg");
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))
+            .expect("executable fixture");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "videopipe::gpu_accel::tests::gpu_capability_cache_tracks_tool_replacement_without_reprobing_hits", "--nocapture"])
+            .env(CHILD, &counter)
+            .env("MFB_TOOL_FFMPEG", &tool)
+            .env("MFB_HOME_ROOT", root.path().join("home"))
+            .env("MFB_LOG_DIR", root.path().join("logs"))
+            .output()
+            .expect("run isolated GPU cache fixture");
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(counter)
+                .expect("child ran listing probes")
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[serial_test::serial]
+    fn vaapi_encoder_arguments_follow_the_current_device_setting() {
+        let encoder = GpuEncoder {
+            gpu_type: GpuType::Vaapi,
+            name: "h264_vaapi",
+            codec: "h264",
+            supports_crf: true,
+            crf_param: "qp",
+            crf_range: (0, 52),
+            extra_args: vec!["-vaapi_device", "/dev/dri/renderD128"],
+        };
+        let first = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_VAAPI_DEVICE,
+            "/dev/dri/fixture-first",
+        );
+        assert_eq!(encoder.extra_args()[1], "/dev/dri/fixture-first");
+        drop(first);
+        let _second = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_VAAPI_DEVICE,
+            "/dev/dri/fixture-second",
+        );
+        assert_eq!(encoder.extra_args()[1], "/dev/dri/fixture-second");
     }
 
     #[test]

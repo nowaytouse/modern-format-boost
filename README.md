@@ -269,6 +269,15 @@ does not use immutable mode, ignore committed WAL, repair or reset a database.
 Existing cold histories missing these files are not silently repaired by the GUI;
 a normal validated writer opening that database manages its sidecar lifecycle.
 
+Select two batches to open **Reason comparison** in the existing details tabs.
+It compares exact recorded paths, optional absolute paths, pipeline, reason and
+code, with groups shared by both snapshots or present in only one. Each snapshot
+keeps its batch/run identity, output boundary and observation counts. The view
+reuses the bounded read-only scan and cancels when selection changes; damaged,
+unreadable or oversized evidence makes the comparison unavailable. Matching
+records do not prove equal file contents or root causes; absence does not prove
+success or repair. This is not a cross-run failure fingerprint or media count.
+
 The live main-window log folds only consecutive, exactly identical warnings and
 errors and labels how many times that same log appeared. Different paths/numbers,
 normal intervening lines, phase controls and new attempts break folding. Latest
@@ -296,6 +305,21 @@ estimate or whole-run percentage. Original events remain in History, and process
 or terminal-state changes clear the live activity without changing result counts.
 
 ### Database and cache management
+
+Process-local multimedia tool health observations follow the resolved executable's
+metadata identity, including canonical target and Unix device/inode/status-change
+time. Same-size replacements with preserved modification time and symlink changes
+invalidate remembered failures; unchanged failures are retried after five seconds
+so repaired dependencies are not suppressed indefinitely. Resolution does not
+revive an earlier cached path after current configuration/PATH candidates fail.
+GPU capability reuse also binds the selected FFmpeg and probe environment, checks
+for drift before/after detection and reports its cache decision. Normal hits do
+not repeat hardware probes; fallback selection is periodically revalidated, with
+the positive proof retained when the selected context is unchanged. Linux VAAPI
+device arguments follow the current setting rather than the first process lookup.
+These are metadata-scoped in-process observations, not content hashes, persisted
+cache keys or proof that hardware/driver state cannot change. Other caches and
+State/Cache separation retain their independent requirements.
 
 Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.

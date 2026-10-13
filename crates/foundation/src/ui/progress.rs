@@ -2185,9 +2185,9 @@ mod tests {
         disabled.emit("inventory", 0, 6, GateActivityState::Running);
 
         let _enabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "synthetic-gate");
-        let reporters: Vec<_> = (0..16)
-            .map(|_| std::thread::spawn(|| LocalGateActivity::new().stage_id.unwrap()))
-            .collect();
+        let reporters: [_; 16] = std::array::from_fn(|_| {
+            std::thread::spawn(|| LocalGateActivity::new().stage_id.unwrap())
+        });
         let ids: std::collections::BTreeSet<_> = reporters
             .into_iter()
             .map(|thread| thread.join().expect("gate reporter thread"))

@@ -465,6 +465,16 @@
 "history.file_failure.note" = "原因记录条数不等于最终失败文件数，也不代表同一根因。";
 "history.file_failure.records" = "失败原因记录：%d 条";
 "history.file_failure.loading" = "正在读取失败原因…";
+"history.compare.failures" = "原因对照";
+"history.compare.failures.note" = "仅按已记录路径、绝对路径、管线、原因和原因码完全一致对照。相同记录不证明文件内容或根因相同；某份快照未记录，也不证明处理成功或问题已修复。下方次数仅指原因记录，不是失败文件数。";
+"history.compare.failures.totals" = "共有 %d 组 · 仅第一个快照 %d 组 · 仅第二个快照 %d 组";
+"history.compare.failures.shared" = "两个快照均记录";
+"history.compare.failures.first_only" = "仅第一个快照记录";
+"history.compare.failures.second_only" = "仅第二个快照记录";
+"history.compare.failures.observations" = "记录次数：第一个 %d / 第二个 %d";
+"history.compare.failures.empty" = "未记录符合此分组的原因。";
+"history.compare.failures.loading" = "正在读取两个批次的失败原因…";
+"history.compare.failures.unavailable" = "无法完成对照；缺失、不完整或无法读取的证据不代表失败为零。";
 "log.phase.processing" = "处理文件";
 "log.phase.verification" = "验证与交付";
 "log.phase.invalid" = "无法识别处理阶段，已保留当前日志视图。";

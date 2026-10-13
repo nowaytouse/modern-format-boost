@@ -1631,7 +1631,8 @@ mod tests {
     #[test]
     fn backup_source_root_resolution_is_strict_and_read_only() {
         const CHILD: &str = "MFB_TEST_BACKUP_ROOT_CHILD";
-        if let Ok(case) = std::env::var(CHILD) {
+        if let Some(case) = std::env::var_os(CHILD) {
+            let case = case.into_string().expect("backup test case is not UTF-8");
             if case == "absent" {
                 let cache = backup_cache_directory().unwrap();
                 let root = cache.parent().unwrap();

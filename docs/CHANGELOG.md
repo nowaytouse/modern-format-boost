@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Tool-cache freshness and two-batch reason comparison (2026-10-13)
+
+- Scope multimedia tool-health failures to the current canonical executable
+  metadata, including Unix device/inode/ctime; invalidate same-size preserved-mtime
+  replacements and symlink changes, expire failures after five seconds, and prune
+  expired observations on lookup. Remove the obsolete path fallback that could
+  revive an earlier candidate after current selection failed. Loader/launch smoke
+  semantics are unchanged; this is not persisted content-hash identity.
+- Scope GPU capability reuse to the selected FFmpeg, preferred candidate and probe
+  environment. Verify identity before/after probing, serialize refresh, preserve
+  unavailable diagnostics and record actual cache decisions. Normal hits avoid
+  repeated hardware probes; bounded fallback re-selection retains a positive proof
+  when context is unchanged. Linux VAAPI device arguments read the current setting.
+  Physical hardware/driver acceptance and full cache architecture are separate.
+- Add native two-batch recorded-reason comparison in the existing History detail
+  tabs. Preserve snapshot/batch/run identity, exact path/absolute path/pipeline/
+  message/code, separate observation occurrences and authoritative outcome counts.
+  Show shared and snapshot-only groups, retain Unicode/newline paths, bound rows/
+  text and cancel actual reads on selection changes. Missing/damaged/oversized
+  evidence is unavailable, not zero; record differences are not repair, file-content
+  equality, root-cause fingerprints or automatic retry evidence.
+- Fix the prior `62830fdf` CI failures without weakening its residue or lint rules:
+  propagate file-marker serialization/absolute-path errors, retain worker-path
+  observation diagnostics, reject non-UTF-8 child-fixture selectors explicitly,
+  and correct five test-code Clippy findings while keeping concurrent spawn/join
+  semantics. The completed prior run was failed; no new CI verdict is claimed.
+- Preserve and validate the pre-existing lockfile patch updates `sha2 0.11.1` and
+  `syn 3.0.9`; no additional dependency update was performed in this batch.
+- Validation: scoped Rust runs passed (51 cache/GPU/admission/Gate cases, six
+  file-failure/log cases, seven shared-worker cases, one backup-root case and the
+  original CI residue-contract case). Runner cases include child fixtures; nested
+  probes and reruns are not additional acceptance. Same-CI lint policy passed for
+  Foundation library/tests and the dev library/cache cleaner/launcher, including
+  all features. Formatting, Swift warnings-as-errors and all three native-language
+  self-tests passed. Isolated AppKit light/dark inspection covered two-batch reason
+  counts, Unicode/newline paths and final batch/run labels. No production media,
+  Photos, actual History database, installed-app replacement, full workspace,
+  physical GPU/cross-platform, throughput or new CI verdict is claimed.
+
 ### Run identity, file-linked reasons and live diagnostic folding (2026-10-12)
 
 - Give each launcher-managed attempt an independent opaque run ID, including

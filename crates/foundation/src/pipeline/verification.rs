@@ -1321,7 +1321,7 @@ mod tests {
             )
             .passed
         );
-        assert!(events.is_empty());
+        assert_eq!(events, Vec::new());
     }
 
     #[test]

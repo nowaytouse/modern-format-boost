@@ -1871,7 +1871,14 @@ mod tests {
     fn admitted_image_collection_keeps_identity_in_database_and_filesystem_modes()
     -> anyhow::Result<()> {
         const CHILD: &str = "MFB_TEST_ADMITTED_IMAGE_COLLECTION_CHILD";
-        if let Ok(mode) = std::env::var(CHILD) {
+        if let Some(mode) = std::env::var_os(CHILD) {
+            let mode = mode
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("admitted image test mode is not UTF-8"))?;
+            anyhow::ensure!(
+                matches!(mode.as_str(), "filesystem" | "cache"),
+                "unknown admitted image test mode"
+            );
             let root = TempDir::new()?;
             let media = root.path().join("media");
             fs::create_dir(&media)?;

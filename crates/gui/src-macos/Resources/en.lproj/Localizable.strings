@@ -465,6 +465,16 @@
 "history.file_failure.note" = "Recorded reasons are not final failed-file counts or root causes.";
 "history.file_failure.records" = "Failure observations: %d";
 "history.file_failure.loading" = "Loading recorded reasons…";
+"history.compare.failures" = "Reason comparison";
+"history.compare.failures.note" = "Exact recorded path, absolute path, pipeline, reason and code only. Matching records do not prove the same file contents or root cause. Absence from one snapshot does not prove success or repair. Counts below are observations, not failed files.";
+"history.compare.failures.totals" = "Shared groups: %d · first snapshot only: %d · second snapshot only: %d";
+"history.compare.failures.shared" = "Recorded in both snapshots";
+"history.compare.failures.first_only" = "Recorded only in the first snapshot";
+"history.compare.failures.second_only" = "Recorded only in the second snapshot";
+"history.compare.failures.observations" = "Observations: first %d / second %d";
+"history.compare.failures.empty" = "No matching reason groups recorded.";
+"history.compare.failures.loading" = "Reading both batches’ recorded reasons…";
+"history.compare.failures.unavailable" = "The comparison is unavailable; missing, incomplete or unreadable evidence is not zero failures.";
 "log.phase.processing" = "Processing";
 "log.phase.verification" = "Verification and delivery";
 "log.phase.invalid" = "Unrecognized processing phase; the current log view was retained.";
