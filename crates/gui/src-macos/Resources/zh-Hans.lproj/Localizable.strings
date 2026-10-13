@@ -58,6 +58,11 @@
 "button.history" = "处理记录…";
 "button.photos_diagnostics" = "照片导入诊断";
 "diagnostics.unknown" = "未知";
+"preflight.title" = "检查输入";
+"preflight.standard_only" = "输入检查仅适用于标准处理";
+"preflight.changed" = "选择已更改，请重新检查当前输入。";
+"preflight.cancelled" = "输入检查已取消或超时。";
+"preflight.too_large" = "报告超出界面显示上限，请通过 CLI 的 --plan-json 检查此输入。";
 "diagnostics.failed" = "失败";
 "diagnostics.completed" = "已完成";
 "diagnostics.in_progress" = "进行中";

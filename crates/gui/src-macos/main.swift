@@ -673,6 +673,68 @@ private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: Tim
     return capture.data
 }
 
+private final class PreflightQuery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        // The schema-2 launcher isolates its read-only probes in this process group.
+        if let process, process.isRunning {
+            kill(-process.processIdentifier, SIGKILL)
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    func run(_ binary: URL, arguments: [String], timeout: TimeInterval = 30) throws -> Data {
+        let child = Process()
+        child.executableURL = binary
+        child.arguments = arguments
+        let pipe = Pipe()
+        child.standardOutput = pipe
+        child.standardError = pipe
+        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            throw HostError(message: localized("preflight.cancelled"))
+        }
+        do { try child.run() } catch { lock.unlock(); throw error }
+        process = child
+        lock.unlock()
+        let watchdog = DispatchWorkItem { self.cancel() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        defer {
+            watchdog.cancel()
+            lock.lock()
+            process = nil
+            lock.unlock()
+        }
+        let capture: (data: Data, exceeded: Bool)
+        do {
+            capture = try readBoundedProcessOutput(pipe.fileHandleForReading, limit: 1024 * 1024)
+        } catch {
+            cancel()
+            child.waitUntilExit()
+            throw error
+        }
+        child.waitUntilExit()
+        lock.lock()
+        let wasCancelled = cancelled
+        lock.unlock()
+        guard !wasCancelled else { throw HostError(message: localized("preflight.cancelled")) }
+        guard !capture.exceeded else { throw HostError(message: localized("preflight.too_large")) }
+        guard child.terminationReason == .exit, child.terminationStatus == 0 else {
+            let detail = String(decoding: capture.data.prefix(8192), as: UTF8.self)
+            throw HostError(message: detail.isEmpty ? localized("settings.backend_failed", child.terminationStatus) : detail)
+        }
+        return capture.data
+    }
+}
+
 private func queryRuntimeSettings(arguments: [String], tool: String = "img") throws -> EffectiveRuntimeSettings {
     guard let binary = ProcessorLocator.resolveTool(named: tool) else {
         throw HostError(message: localized(tool == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
@@ -4157,6 +4219,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let helpButton = NSButton(title: "", target: nil, action: nil)
     private var settingsPanel: MediaSettingsPanel?
     private var historyPanel: ProcessingHistoryPanel?
+    private let preflightButton = NSButton(title: "", target: nil, action: nil)
+    private var preflightPanel: PreflightInspectorPanel?
+    private var preflightQuery: PreflightQuery?
+    private var preflightGeneration = UUID()
     private let diagnosticsButton = NSButton(title: "", target: nil, action: nil)
     private let diagnosticsTextView = NSTextView()
     private var diagnosticsPanel: NSPanel?
@@ -4261,6 +4327,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func requestClose() -> Bool {
+        invalidatePreflight()
         guard !host.isRunning else {
             closeWhenFinished = true
             stopProcessing()
@@ -4497,6 +4564,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         settingsButton.imagePosition = .imageOnly
         settingsButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        preflightButton.target = self
+        preflightButton.action = #selector(inspectInput)
+        preflightButton.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: nil)
+        preflightButton.imagePosition = .imageOnly
+        preflightButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         helpButton.target = self
         helpButton.action = #selector(openHelp)
         helpButton.bezelStyle = .helpButton
@@ -4515,7 +4587,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stopButton.isEnabled = false
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actionRow = NSStackView(views: [settingsButton, helpButton, historyButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
+        let actionRow = NSStackView(views: [settingsButton, helpButton, historyButton, preflightButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -4700,6 +4772,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func configurationChanged() {
+        invalidatePreflight()
         applyCapabilityState()
         updateMetadataSafetyNotice()
         guard configurationControlsEnabled else { return }
@@ -4884,8 +4957,60 @@ private final class AppController: NSObject, NSWindowDelegate {
         } catch { present(error) }
     }
 
+    private func invalidatePreflight() {
+        preflightGeneration = UUID()
+        preflightQuery?.cancel()
+        preflightQuery = nil
+        preflightPanel?.showError(localized("preflight.changed"))
+    }
+
+    @objc private func inspectInput() {
+        guard configurationControlsEnabled, !host.isRunning, selectedOperation == .adjacent else { return }
+        do {
+            let request = try request()
+            guard let binary = ProcessorLocator.resolve() else {
+                throw HostError(message: localized("status.processor_unavailable"))
+            }
+            invalidatePreflight()
+            let language = LocalizationCatalog.shared.language.resourceName
+                ?? Bundle.main.preferredLocalizations.first ?? "en"
+            preflightPanel?.close()
+            let panel = PreflightInspectorPanel(language: language)
+            preflightPanel = panel
+            let generation = preflightGeneration
+            panel.onClose = { [weak self] in
+                guard self?.preflightGeneration == generation else { return }
+                self?.invalidatePreflight()
+            }
+            panel.showLoading(input: request.targetPath)
+            let query = PreflightQuery()
+            preflightQuery = query
+            let mode: String
+            switch request.processingMode {
+            case .both: mode = "auto"
+            case .imagesOnly: mode = "images"
+            case .videosOnly: mode = "videos"
+            }
+            let arguments = ["--plan-json", "--mode", mode]
+                + (request.inPlace ? ["--in-place"] : []) + ["--", request.targetPath]
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let result = Result { try query.run(binary, arguments: arguments) }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.preflightGeneration == generation else { return }
+                    self.preflightQuery = nil
+                    do {
+                        try panel.showReport(data: result.get(), expectedInput: request.targetPath)
+                    } catch {
+                        panel.showError(error.localizedDescription)
+                    }
+                }
+            }
+        } catch { present(error) }
+    }
+
     @objc private func runHere() {
         guard !host.isRunning else { return }
+        invalidatePreflight()
         do {
             let request = try request()
             lastRequest = request
@@ -4908,6 +5033,9 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func applyCapabilityState() {
         let capabilities = selectedOperation.capabilities
+        preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
+            && !targetField.stringValue.isEmpty
+        preflightButton.toolTip = localized(selectedOperation == .adjacent ? "preflight.title" : "preflight.standard_only")
         settingsButton.isEnabled = configurationControlsEnabled
         settingsButton.toolTip = localized("settings.title")
         if let fixed = capabilities.fixedProcessingMode {
@@ -5348,6 +5476,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func languageChanged() {
+        invalidatePreflight()
+        preflightPanel?.close()
+        preflightPanel = nil
         let language = AppLanguage.allCases[safe: languagePopup.indexOfSelectedItem] ?? .system
         LocalizationCatalog.shared.select(language)
         applyLocalization()
@@ -5401,6 +5532,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         historyButton.title = localized("button.history")
         settingsButton.toolTip = localized("settings.title")
         settingsButton.setAccessibilityLabel(localized("settings.title"))
+        preflightButton.toolTip = localized("preflight.title")
+        preflightButton.setAccessibilityLabel(localized("preflight.title"))
         helpButton.toolTip = localized("button.help")
         helpButton.setAccessibilityLabel(localized("button.help"))
         diagnosticsButton.toolTip = localized("button.photos_diagnostics")
@@ -5471,6 +5604,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func setProcessing(_ processing: Bool) {
+        if processing { invalidatePreflight() }
         configurationControlsEnabled = !processing
         (window.contentView as? NativeDropView)?.acceptsDrops = !processing
         for control in [
@@ -6252,6 +6386,32 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        let cancelledQuery = PreflightQuery()
+        cancelledQuery.cancel()
+        do {
+            _ = try cancelledQuery.run(URL(fileURLWithPath: "/bin/echo"), arguments: ["must not run"])
+            throw HostError(message: "Cancelled preflight launched a child")
+        } catch {
+            guard error.localizedDescription == localized("preflight.cancelled") else { throw error }
+        }
+        let echo = try PreflightQuery().run(URL(fileURLWithPath: "/bin/echo"), arguments: ["synthetic report"])
+        guard String(data: echo, encoding: .utf8) == "synthetic report\n" else {
+            throw HostError(message: "Preflight capture lost child output")
+        }
+        let deadlineStart = ProcessInfo.processInfo.systemUptime
+        do {
+            _ = try PreflightQuery().run(URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.05)
+            throw HostError(message: "Preflight timeout returned a successful report")
+        } catch {
+            guard error.localizedDescription == localized("preflight.cancelled"),
+                  ProcessInfo.processInfo.systemUptime - deadlineStart < 2 else { throw error }
+        }
+        do {
+            _ = try PreflightQuery().run(URL(fileURLWithPath: "/usr/bin/printf"), arguments: ["%1100000s", "x"])
+            throw HostError(message: "Oversized preflight returned a partial report")
+        } catch {
+            guard error.localizedDescription == localized("preflight.too_large") else { throw error }
+        }
         try runProcessingHistorySelfTests()
         let sourceDocument: [String: Any] = [
             "config": ["img": ["jpeg_effort": 9]],
@@ -6871,6 +7031,10 @@ private func runSelfTest() -> Int32 {
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
+            let preflightFailures = PreflightInspectorPanel.selfTest()
+            guard preflightFailures.isEmpty else {
+                throw HostError(message: preflightFailures.joined(separator: "\n"))
+            }
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/tmp/history-self-test")).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
@@ -6891,6 +7055,22 @@ private func runSelfTest() -> Int32 {
 }
 
 if CommandLine.arguments.contains("--self-test") { exit(runSelfTest()) }
+
+if CommandLine.arguments.contains("--preflight-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let language = LocalizationCatalog.shared.language.resourceName
+            ?? Bundle.main.preferredLocalizations.first ?? "en"
+        AppAppearance(rawValue: UserDefaults.standard.string(forKey: appearancePreferenceKey) ?? "system")?.apply()
+        let panel = PreflightInspectorPanel(language: language)
+        panel.onClose = { application.terminate(nil) }
+        panel.showTestFixture()
+        application.activate(ignoringOtherApps: true)
+        application.run()
+    }
+    exit(0)
+}
 
 MainActor.assumeIsolated {
     let application = NSApplication.shared

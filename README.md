@@ -166,6 +166,21 @@ processing. An incomplete or unsafe scan fails rather than returning a partial p
 This is a routing snapshot, not an encoder-quality prediction, space/time estimate,
 delivery proof, or a persisted execution/resume plan. Fast and management modes
 are not covered. `--plan-json` and the existing command-only `--dry-run` are distinct.
+Schema 2 additionally reports same-directory XMP and image/video filename candidates
+from that exact inventory, including ambiguous/unmatched cases. Candidate paths are
+limited to 64 per observation with the complete count and an explicit truncation flag.
+These unverified names do not establish a Live Photo relationship or authorize cleanup.
+Selected IMG/VID worker paths are observed without starting them or building missing
+tools. Readable regular-file metadata and Unix execute bits are not codec capability
+or full dependency readiness; unsupported executable checks remain unknown.
+The native GUI's input-inspection icon opens this report for standard processing,
+with searchable paths/actions/reasons, exact totals, output scope and candidate details.
+It rejects invalid/incomplete reports and reports over 1 MiB or 2,000 entries rather
+than displaying partial success; the CLI remains available for larger inventories.
+Changing selection or starting processing invalidates the snapshot. Closing it or
+reaching the 30-second limit cancels the isolated query and its read-only probes on
+Unix. Inspection may use existing format probes such as `jxlinfo`; it never starts
+the encoding/delivery workers, writes processing state or weakens final verification.
 Explicit standard `images/videos` modes select the same scope as the corresponding
 filter flags. Adjacent output for a directory must not contain, equal or sit inside
 its source directory; linked aliases are resolved before this check, without creating output.

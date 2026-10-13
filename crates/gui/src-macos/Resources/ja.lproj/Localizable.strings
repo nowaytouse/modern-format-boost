@@ -58,6 +58,11 @@
 "button.history" = "処理履歴…";
 "button.photos_diagnostics" = "写真読み込みの診断";
 "diagnostics.unknown" = "不明";
+"preflight.title" = "入力を確認";
+"preflight.standard_only" = "入力確認は標準処理のみ利用できます";
+"preflight.changed" = "選択が変更されました。現在の入力を再確認してください。";
+"preflight.cancelled" = "入力確認がキャンセルされたか、制限時間を超えました。";
+"preflight.too_large" = "レポートが画面の上限を超えています。CLI の --plan-json を利用してください。";
 "diagnostics.failed" = "失敗";
 "diagnostics.completed" = "完了";
 "diagnostics.in_progress" = "実行中";

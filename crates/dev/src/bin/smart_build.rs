@@ -1501,6 +1501,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         ])
         .arg(&swift_src)
         .arg(native_dir.join("ProcessingHistory.swift"))
+        .arg(native_dir.join("PreflightInspector.swift"))
         .arg("-o")
         .arg(&host_binary)
         .status()
@@ -2398,8 +2399,8 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(20));
         fs::write(
-            root.join("crates/gui/src-macos/ProcessingHistory.swift"),
-            "import AppKit\n// updated history inspector",
+            root.join("crates/gui/src-macos/PreflightInspector.swift"),
+            "import AppKit\n// updated routing inspector",
         )?;
         assert!(gui_needs_rebuild(root));
         Ok(())

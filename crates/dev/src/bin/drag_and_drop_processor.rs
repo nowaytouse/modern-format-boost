@@ -3608,13 +3608,47 @@ fn inspect_routing_plan(args: &Args) -> Result<dev::infra::preflight_plan::Prefl
             )
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(dev::infra::preflight_plan::PreflightReport::new(plans))
+    let required = [
+        ("img", plans.iter().any(|plan| plan.selected_images > 0)),
+        ("vid", plans.iter().any(|plan| plan.selected_videos > 0)),
+    ];
+    let workers = if required.iter().any(|(_, selected)| *selected) {
+        let root = resolve_runtime_root()?;
+        required
+            .into_iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(name, _)| {
+                dev::infra::preflight_plan::WorkerObservation::inspect(
+                    name,
+                    cli_binary(&root, name),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(dev::infra::preflight_plan::PreflightReport::new(
+        plans, workers,
+    ))
+}
+
+#[cfg(unix)]
+fn isolate_preflight_process_group() -> Result<()> {
+    // Read-only probes inherit this group, allowing GUI cancellation to reap them together.
+    let already_isolated = unsafe { libc::getpgrp() == libc::getpid() };
+    if !already_isolated && unsafe { libc::setpgid(0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("isolate read-only preflight process group");
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
     let args = apply_mode_overrides(Args::parse());
     if args.plan_json {
+        #[cfg(unix)]
+        isolate_preflight_process_group()?;
         let plan = inspect_routing_plan(&args)?;
         println!("{}", serde_json::to_string_pretty(&plan)?);
         return Ok(());
@@ -3819,6 +3853,9 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "auto"]).unwrap();
         args.inputs = vec![first.clone(), second.clone()];
         let plan = inspect_routing_plan(&args).unwrap();
+        assert_eq!(plan.schema_version, 2);
+        assert_eq!(plan.workers.len(), 1);
+        assert_eq!(plan.workers[0].name, "img");
         assert_eq!(plan.plans.len(), 2);
         assert_eq!(plan.plans[0].entries[0].action, "submit_img");
         assert_eq!(plan.plans[1].entries[0].action, "copy_after_success");
@@ -3828,6 +3865,10 @@ mod tests {
                 .all(|plan| !plan.output_requested.as_ref().unwrap().exists())
         );
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+        args.mode = LaunchMode::Videos;
+        let filtered = inspect_routing_plan(&args).unwrap();
+        assert!(filtered.workers.is_empty());
+        assert_eq!(filtered.plans[0].filtered_media, 1);
         args.mode = LaunchMode::FastImg;
         assert!(inspect_routing_plan(&args).is_err());
         args.mode = LaunchMode::Images;
@@ -3835,6 +3876,62 @@ mod tests {
         assert!(inspect_routing_plan(&args).is_err());
         assert!(Args::try_parse_from(["mfb", "--plan-json", "--dry-run"]).is_err());
         assert!(Args::try_parse_from(["mfb", "--plan-json", "--watch"]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_plan_group_child_fixture() {
+        let Some(path) = std::env::var_os("MFB_PREFLIGHT_GROUP_FIXTURE") else {
+            return;
+        };
+        isolate_preflight_process_group().unwrap();
+        let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        fs::write(path, child.id().to_string()).unwrap();
+        child.wait().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_plan_group_cancellation_removes_probe_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt = temp.path().join("probe-pid");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::read_only_plan_group_child_fixture"])
+            .env("MFB_PREFLIGHT_GROUP_FIXTURE", &receipt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut probe_pid = None;
+        while std::time::Instant::now() < deadline {
+            probe_pid = fs::read_to_string(&receipt)
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok());
+            if probe_pid.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pid = i32::try_from(child.id()).unwrap();
+        // These PIDs belong exclusively to the fixture process group we just started.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+            libc::kill(pid, libc::SIGKILL);
+        }
+        child.wait().unwrap();
+        let probe_pid = probe_pid.expect("fixture probe did not start before the deadline");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while unsafe { libc::kill(probe_pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let remained = unsafe { libc::kill(probe_pid, 0) };
+        if remained == 0 {
+            unsafe {
+                libc::kill(probe_pid, libc::SIGKILL);
+            }
+        }
+        assert_ne!(remained, 0, "cancelled preflight left a live probe");
     }
 
     #[test]

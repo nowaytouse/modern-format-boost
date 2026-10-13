@@ -58,6 +58,11 @@
 "button.history" = "Processing History…";
 "button.photos_diagnostics" = "Photos Diagnostics";
 "diagnostics.unknown" = "Unknown";
+"preflight.title" = "Input inspection";
+"preflight.standard_only" = "Input inspection is available for standard processing only";
+"preflight.changed" = "Selection changed. Inspect the current input again.";
+"preflight.cancelled" = "Input inspection was cancelled or exceeded its time limit.";
+"preflight.too_large" = "The report exceeds the GUI limit. Use --plan-json in the CLI for this input.";
 "diagnostics.failed" = "Failed";
 "diagnostics.completed" = "Completed";
 "diagnostics.in_progress" = "In progress";

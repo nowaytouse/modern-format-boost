@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Native routing inspection and bounded preflight observations (2026-10-13)
+
+- Extend the read-only standard routing JSON to schema 2 with XMP exact-filename
+  and same-directory stem candidates, plus possible image/video filename pairs.
+  Preserve native path identity, unmatched/ambiguous status and exact candidate
+  totals; bound displayed references to 64 with explicit truncation. Do not change
+  media counts, actions or claim verified relationships from names.
+- Observe only the selected IMG/VID worker paths using readable regular-file
+  metadata and Unix execute bits. Missing/unreadable/non-regular/non-executable and
+  unsupported checks remain explicit. Do not start workers, auto-build, hash media
+  again or claim complete codec/backend/dependency readiness.
+- Add a compact native input-inspection window for standard processing, with
+  searchable routing rows, counts/bytes/output scope and candidate details. Validate
+  producer/consumer schema, paths, counts, byte totals and relationships; reject
+  oversized/incomplete evidence, cancel pending scans and invalidate stale results.
+  Display filename control characters visibly. Unix read-only query process groups
+  ensure existing nested format probes are terminated together on GUI cancellation.
+- Validation: six preflight library cases, three launcher cases (including one
+  child-fixture entry), one build-source regression, scoped dev Clippy with
+  `-D warnings`, format/diff checks, Swift warnings-as-errors compilation, three
+  localized native self-tests and isolated light/dark AppKit window checks passed.
+  Actual CLI reports decoded in the native window; synthetic input bytes/mtime/
+  inode stayed unchanged, with no output/session/log directory creation. No new CI,
+  production-media/Photos, full workspace, throughput or cross-platform acceptance
+  is claimed; the installed application was not replaced.
+
 ### Tool-cache freshness and two-batch reason comparison (2026-10-13)
 
 - Scope multimedia tool-health failures to the current canonical executable
