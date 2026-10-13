@@ -453,6 +453,15 @@
 "gate.check.decode" = "解码核验";
 "history.worker.title" = "工作进程启动证据";
 "history.worker.note" = "启动请求与启动前文件观察，不等于进程已运行或完整构建记录。";
+"history.worker.execution.pid" = "已观察到的子进程 PID：%@";
+"history.worker.execution.spawned" = "已记录启动，未记录退出；不表示进程现在仍在运行。";
+"history.worker.execution.exited" = "已记录退出码：%@。进程退出不代表媒体核验通过。";
+"history.worker.execution.signal" = "已记录终止信号：%@";
+"history.worker.execution.unknown" = "未记录实际进程的启动与退出。";
+"history.worker.execution.invalid" = "实际进程记录存在冲突或无法核实。";
+"gate.activity.files" = "已完成解码检查：%@ / %@ 个文件";
+"settings.vidForceMsSsimLong" = "长视频也执行完整质量检查";
+"settings.vidForceMsSsimLong.help" = "仅用于标准 VID。长视频也执行融合质量检查，可能增加耗时；不改变编码格式，也不绕过核验。未修改时继承处理程序的配置。";
 "history.worker.not_recorded" = "未记录工作进程启动证据。";
 "history.worker.invalid" = "工作进程启动证据不完整或无效。";
 "history.detail.invocation_id" = "调用标识";

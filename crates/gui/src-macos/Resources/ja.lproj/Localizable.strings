@@ -453,6 +453,15 @@
 "gate.check.decode" = "デコードの検証";
 "history.worker.title" = "ワーカー起動の記録";
 "history.worker.note" = "起動要求と起動前のファイル観測であり、実行済みプロセスや完全なビルド記録の証明ではありません。";
+"history.worker.execution.pid" = "観測した子プロセス PID：%@";
+"history.worker.execution.spawned" = "起動を記録済み、終了の観測なし。現在の稼働を示すものではありません。";
+"history.worker.execution.exited" = "観測した終了コード：%@。プロセス終了はメディア検証の成功を意味しません。";
+"history.worker.execution.signal" = "観測した終了シグナル：%@";
+"history.worker.execution.unknown" = "実プロセスの起動と終了は記録されていません。";
+"history.worker.execution.invalid" = "実プロセスの観測が矛盾しているか無効です。";
+"gate.activity.files" = "完了したデコード検査：%@ / %@ ファイル";
+"settings.vidForceMsSsimLong" = "長い動画も完全な品質検査を実行";
+"settings.vidForceMsSsimLong.help" = "標準 VID のみ。長い動画も融合品質検査を実行します。時間がかかる場合がありますが、コーデック選択を変えたり検証を省略したりしません。変更しなければ処理側の設定を継承します。";
 "history.worker.not_recorded" = "ワーカー起動の記録はありません。";
 "history.worker.invalid" = "ワーカー起動の記録が不完全または無効です。";
 "history.detail.invocation_id" = "呼び出し ID";

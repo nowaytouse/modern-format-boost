@@ -69,6 +69,12 @@ Settings now has a dedicated **Videos** tab. Standard VID supports independent
 `--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
 The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
 delivery, while an explicitly conflicting Apple-compatibility request is rejected.
+Developer settings also expose long-video fusion quality checks through typed
+`vid.force_ms_ssim_long` (default `false`). Standard VID accepts
+`--force-ms-ssim-long[=true|false]`; omission inherits configuration, and explicit
+`false` overrides an enabled file setting. The launcher uses the independent
+`--vid-force-ms-ssim-long` override. This can increase validation time; it does not
+change codec routing or reduce other checks, and is not a Fast GIF option.
 Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
@@ -125,6 +131,13 @@ Missing or unreadable binary evidence remains unknown with a diagnostic; older
 records are not filled from current executables. `launch_requested` is a request,
 not proof of the executed process, loaded binary, PID or build provenance, and does
 not establish a complete Run Manifest.
+New session-bound executions separately record the actual OS child PID at spawn
+and the observed wait result, bound to the same invocation/run and pipeline.
+History displays and diagnostic exports preserve these observations. Normal exit
+codes and Unix termination signals are distinct; missing exits remain unknown,
+not a claim that a process is currently alive. This observation does not prove
+the loaded binary's identity, media fidelity or completed delivery. Conflicting
+observations are rejected without replacing independent media outcome counts.
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
@@ -318,6 +331,12 @@ local Gate instance, not the batch or Photos delivery. The activity label shows
 how long ago the GUI received its latest update, not a timeout, remaining-time
 estimate or whole-run percentage. Original events remain in History, and processing
 or terminal-state changes clear the live activity without changing result counts.
+Decode checks additionally report attempted files against the same inventory's
+exact total, on the same Gate ID. The file bar counts returned probes, including
+failures, not successful media; running checks never display 100%, and a failed
+Gate remains failed even when every probe was attempted. Early format/tool failure
+does not fabricate file progress. No extra scan, decode or weaker validation is
+introduced; updates are coalesced while retaining the first and final counts.
 
 ### Database and cache management
 

@@ -452,6 +452,15 @@
 "gate.check.orient" = "orientation";
 "gate.check.decode" = "decode validation";
 "history.worker.title" = "Worker launch evidence";
+"history.worker.execution.pid" = "Observed child PID: %@";
+"history.worker.execution.spawned" = "Start observed; no exit observation. This is not current liveness.";
+"history.worker.execution.exited" = "Observed exit code: %@. A process exit is not media verification.";
+"history.worker.execution.signal" = "Observed termination signal: %@";
+"history.worker.execution.unknown" = "Actual process start and exit were not recorded.";
+"history.worker.execution.invalid" = "Actual process observations are conflicting or invalid.";
+"gate.activity.files" = "Decode checks attempted: %@ / %@ files";
+"settings.vidForceMsSsimLong" = "Full quality checks for long videos";
+"settings.vidForceMsSsimLong.help" = "Standard VID only. Include fusion quality checks even for long videos. This can take longer; it does not change codec selection or bypass verification. An unchanged setting inherits the worker configuration.";
 "history.worker.note" = "Launch requests and pre-launch file observations are not proof of a running process or a complete build manifest.";
 "history.worker.not_recorded" = "Worker launch evidence was not recorded.";
 "history.worker.invalid" = "Worker launch evidence is incomplete or invalid.";

@@ -26,6 +26,9 @@ struct Cli {
     /// Output codec for video runs.
     #[arg(long, global = true, value_enum)]
     codec: Option<foundation::runtime_config::VidCodec>,
+    /// Standard VID only: include fusion quality checks for long videos; omission inherits configuration.
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    force_ms_ssim_long: Option<bool>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
     #[command(flatten)]
@@ -67,8 +70,6 @@ enum Commands {
         no_apple_compat: bool,
         #[arg(long, default_value_t = true)]
         compress: bool,
-        #[arg(long, default_value_t = false)]
-        force_ms_ssim_long: bool,
         #[arg(long, default_value_t = false)]
         ultimate: bool,
         #[arg(long, default_value_t = false)]
@@ -153,6 +154,11 @@ enum ConfigCommand {
 }
 
 fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::LoadedConfig> {
+    anyhow::ensure!(
+        cli.force_ms_ssim_long.is_none()
+            || matches!(cli.command, Commands::Run { .. } | Commands::Config { .. }),
+        "--force-ms-ssim-long is available only for standard video runs and configuration inspection"
+    );
     let mut loaded = foundation::runtime_config::load(cli.config.as_deref(), cli.no_config)?;
     cli.performance.apply_to(&mut loaded);
     cli.execution.apply_to(&mut loaded);
@@ -163,6 +169,15 @@ fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::Load
             &mut loaded.sources,
             &mut loaded.source_chain,
             "vid.codec",
+            "CLI",
+        );
+    }
+    if let Some(force) = cli.force_ms_ssim_long {
+        loaded.config.vid.force_ms_ssim_long = force;
+        foundation::runtime_config::record_source(
+            &mut loaded.sources,
+            &mut loaded.source_chain,
+            "vid.force_ms_ssim_long",
             "CLI",
         );
     }
@@ -916,6 +931,7 @@ fn main() -> anyhow::Result<()> {
     validate_command_strategy(&cli.command)?;
     let runtime = resolve_runtime(&cli)?;
     let configured_codec = runtime.config.vid.codec;
+    let force_ms_ssim_long = runtime.config.vid.force_ms_ssim_long;
     if matches!(
         &cli.command,
         Commands::Run { .. } | Commands::FastGif { .. }
@@ -991,7 +1007,6 @@ fn main() -> anyhow::Result<()> {
             apple_compat,
             no_apple_compat,
             compress,
-            force_ms_ssim_long,
             ultimate,
             archive,
             base_dir,
@@ -1689,6 +1704,80 @@ mod fast_gif_tests {
             Cli::try_parse_from(["vid", "config", "show", "--config", &path, "--no-config",])
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn long_video_quality_policy_inherits_and_accepts_explicit_false() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("quality.json");
+        std::fs::write(
+            &path,
+            br#"{"config_version":1,"vid":{"force_ms_ssim_long":true}}"#,
+        )?;
+        let path = path.to_str().unwrap();
+        let inherited = Cli::try_parse_from(["vid", "config", "show", "--config", path])?;
+        let loaded = resolve_runtime(&inherited)?;
+        assert!(loaded.config.vid.force_ms_ssim_long);
+        assert_eq!(loaded.sources["vid.force_ms_ssim_long"], path);
+        let explicit = Cli::try_parse_from([
+            "vid",
+            "run",
+            "/synthetic",
+            "--config",
+            path,
+            "--force-ms-ssim-long=false",
+        ])?;
+        let loaded = resolve_runtime(&explicit)?;
+        assert!(!loaded.config.vid.force_ms_ssim_long);
+        assert_eq!(
+            loaded.source_chain["vid.force_ms_ssim_long"],
+            ["default", path, "CLI"]
+        );
+        let enabled = Cli::try_parse_from([
+            "vid",
+            "run",
+            "/synthetic",
+            "--no-config",
+            "--force-ms-ssim-long",
+        ])?;
+        assert!(resolve_runtime(&enabled)?.config.vid.force_ms_ssim_long);
+        let default = Cli::try_parse_from(["vid", "config", "show", "--no-config"])?;
+        assert!(!resolve_runtime(&default)?.config.vid.force_ms_ssim_long);
+        let fast = Cli::try_parse_from([
+            "vid",
+            "fast-gif",
+            "/synthetic",
+            "--force-ms-ssim-long=false",
+        ])?;
+        assert!(resolve_runtime(&fast).is_err());
+        for enabled in [true, false] {
+            let config = super::build_conversion_config(
+                None,
+                None,
+                false,
+                false,
+                true,
+                true,
+                false,
+                true,
+                true,
+                enabled,
+                false,
+                false,
+                false,
+                false,
+                false,
+                "",
+                foundation::conversion_types::SelectedCodec::Hevc,
+            );
+            assert_eq!(
+                config
+                    .flags
+                    .contains(super::ConfigFlags::FORCE_MS_SSIM_LONG),
+                enabled
+            );
+        }
         Ok(())
     }
 

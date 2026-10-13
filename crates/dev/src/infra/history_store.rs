@@ -526,6 +526,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_INPUT_PLAN"
                 | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_INVOCATION"
+                | "MFB_HISTORY_WORKER_EXECUTION"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_FINISHED"

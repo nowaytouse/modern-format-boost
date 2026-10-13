@@ -167,6 +167,8 @@ impl VidCodec {
 #[serde(default, deny_unknown_fields)]
 pub struct VidPolicy {
     pub codec: VidCodec,
+    /// Standard VID only: run fusion quality verification even for long videos.
+    pub force_ms_ssim_long: bool,
 }
 
 impl Default for ImgPolicy {

@@ -3,7 +3,9 @@
 use crate::infra::hardening::delegated_exit_code;
 use crate::infra::history_store::HistoryOutputWriter;
 use crate::infra::log_paths::append_jsonl_audit_record;
-use crate::infra::process_stream::{ProcessorStats, stream_process_with_pty_with_env};
+use crate::infra::process_stream::{
+    ChildProcessObservation, ProcessorStats, stream_process_with_pty_observed,
+};
 use crate::infra::signal_handlers::set_child_active;
 use anyhow::{Context, Result, bail};
 use foundation::infra::runtime_config::RuntimeConfig;
@@ -120,6 +122,49 @@ pub struct LaunchInvocation<'a> {
     pub program_path: Option<PathBuf>,
     pub arguments: &'a [String],
     pub binary: BinaryObservation,
+}
+
+#[derive(Serialize)]
+struct WorkerExecution<'a> {
+    schema_version: u8,
+    scope: &'static str,
+    invocation_id: &'a str,
+    run_id: Option<&'a str>,
+    pipeline: &'static str,
+    state: &'static str,
+    pid: u32,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+}
+
+impl<'a> WorkerExecution<'a> {
+    fn observed(
+        invocation: &'a LaunchInvocation<'_>,
+        observation: ChildProcessObservation,
+    ) -> Self {
+        let (state, pid, status) = match observation {
+            ChildProcessObservation::Spawned { pid } => ("spawned", pid, None),
+            ChildProcessObservation::Exited { pid, status } => ("exited", pid, Some(status)),
+        };
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            status.and_then(|value| value.signal())
+        };
+        #[cfg(not(unix))]
+        let signal = None;
+        Self {
+            schema_version: 1,
+            scope: "os_child_process",
+            invocation_id: &invocation.invocation_id,
+            run_id: invocation.run_id.as_deref(),
+            pipeline: invocation.pipeline,
+            state,
+            pid,
+            exit_code: status.and_then(|value| value.code()),
+            signal,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -475,8 +520,9 @@ impl LaunchCommand {
             set_child_active(true);
             let mut session_log_error = None;
             let mut config_marker_error = None;
+            let mut execution_marker_error = None;
             let mut seen_config_marker = false;
-            let result = stream_process_with_pty_with_env(
+            let result = stream_process_with_pty_observed(
                 &argv,
                 None,
                 &env_overrides,
@@ -526,6 +572,24 @@ impl LaunchCommand {
                         last_heartbeat = Instant::now();
                     }
                 },
+                |observation| {
+                    if let Some(invocation) = invocation.as_ref() {
+                        let result = serde_json::to_value(WorkerExecution::observed(
+                            invocation,
+                            observation,
+                        ))
+                        .context("serialize worker execution observation")
+                        .and_then(|payload| {
+                            session.append_history_event("MFB_HISTORY_WORKER_EXECUTION", payload)
+                        })
+                        .context("worker execution history write failed");
+                        if let Err(error) = result
+                            && execution_marker_error.is_none()
+                        {
+                            execution_marker_error = Some(error);
+                        }
+                    }
+                },
             );
             set_child_active(false);
             if let Err(error) = output.flush()
@@ -533,7 +597,7 @@ impl LaunchCommand {
             {
                 session_log_error = Some(error);
             }
-            match result {
+            let stats = match result {
                 Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
                     collected_error = match (session_log_error, config_marker_error) {
                         (Some(output_error), Some(config_error)) => Some(anyhow::anyhow!(
@@ -560,12 +624,22 @@ impl LaunchCommand {
                     if let Some(config_error) = config_marker_error {
                         eprintln!("[LOG] child configuration marker failed: {config_error:#}");
                     }
+                    if let Some(execution_error) = execution_marker_error {
+                        eprintln!("[LOG] {execution_error:#}");
+                    }
                     if let Err(log_error) = session.append_session_line(&event) {
                         eprintln!("[LOG] session stream error write failed: {log_error:#}");
                     }
                     return Err(error);
                 }
+            };
+            if let Some(error) = execution_marker_error {
+                collected_error = Some(match collected_error {
+                    Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
+                    None => error,
+                });
             }
+            stats
         } else {
             self.verify_sources_unchanged(invocation_error.as_ref())?;
             let mut child = cmd
@@ -670,6 +744,7 @@ mod tests {
         audit: PathBuf,
         lines: PathBuf,
         events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+        fail_execution: bool,
     }
 
     impl WorkerSession for TestSession {
@@ -690,6 +765,9 @@ mod tests {
         }
 
         fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
+            if self.fail_execution && name == "MFB_HISTORY_WORKER_EXECUTION" {
+                bail!("synthetic execution observation storage failure");
+            }
             self.events
                 .lock()
                 .map_err(|_| anyhow::anyhow!("test history event lock poisoned"))?
@@ -722,6 +800,7 @@ mod tests {
             audit: directory.join("session-audit.jsonl"),
             lines: directory.join("session.log"),
             events: std::sync::Mutex::new(Vec::new()),
+            fail_execution: false,
         }
     }
 
@@ -730,6 +809,97 @@ mod tests {
         if let Some(path) = std::env::var_os("MFB_WORKER_TEST_MARKER") {
             fs::write(path, b"launched").unwrap();
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worker_execution_records_os_pid_exit_and_preserves_failed_counts() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path(), Some("run-execution"));
+        let command = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf 'Succeeded: 2\\nSkipped: 0\\nIgnored: 0\\nFailed: 1\\n'; exit 7".into(),
+        ])
+        .unwrap();
+        let stats = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+        assert_eq!(stats.exit_code, 7);
+        assert_eq!((stats.succeeded, stats.failed), (2, 1));
+        let events = session.events.lock().unwrap();
+        let observations = events
+            .iter()
+            .filter(|(name, _)| name == "MFB_HISTORY_WORKER_EXECUTION")
+            .map(|(_, payload)| payload)
+            .collect::<Vec<_>>();
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0]["state"], "spawned");
+        assert_eq!(observations[1]["state"], "exited");
+        assert_eq!(observations[0]["pid"], observations[1]["pid"]);
+        assert_ne!(
+            observations[0]["pid"].as_u64(),
+            Some(u64::from(std::process::id()))
+        );
+        assert_eq!(observations[1]["exit_code"], 7);
+        assert!(observations[1]["signal"].is_null());
+        assert_eq!(observations[0]["run_id"], "run-execution");
+        assert_eq!(
+            observations[0]["invocation_id"],
+            events[0].1["invocation_id"]
+        );
+        drop(events);
+        let mut failing = test_session(directory.path(), None);
+        failing.fail_execution = true;
+        let error = command
+            .run_collecting(false, Some(&failing), false)
+            .unwrap_err();
+        let observed = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(observed.stats.exit_code, 7);
+        assert_eq!((observed.stats.succeeded, observed.stats.failed), (2, 1));
+        assert!(
+            observed
+                .cause
+                .to_string()
+                .contains("worker execution history write failed")
+        );
+        let dry = test_session(directory.path(), None);
+        command.run_collecting(true, Some(&dry), false).unwrap();
+        assert!(dry.events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worker_execution_separates_signal_from_exit_code_and_spawn_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path(), None);
+        let command =
+            LaunchCommand::from_argv(vec!["/bin/sh".into(), "-c".into(), "kill -TERM $$".into()])
+                .unwrap();
+        command
+            .run_collecting(false, Some(&session), false)
+            .unwrap();
+        let events = session.events.lock().unwrap();
+        let last = events
+            .iter()
+            .rfind(|(name, _)| name == "MFB_HISTORY_WORKER_EXECUTION")
+            .unwrap();
+        assert_eq!(last.1["signal"], libc::SIGTERM);
+        assert!(last.1["exit_code"].is_null());
+        drop(events);
+        let failed = test_session(directory.path(), None);
+        let command =
+            LaunchCommand::from_argv(vec![directory.path().to_string_lossy().into_owned()])
+                .unwrap();
+        assert!(command.run_collecting(false, Some(&failed), false).is_err());
+        assert!(
+            !failed
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(name, _)| name == "MFB_HISTORY_WORKER_EXECUTION")
+        );
     }
 
     #[test]

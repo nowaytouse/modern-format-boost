@@ -275,7 +275,7 @@ private struct ProcessorRequest {
 
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
-    case vidCodec, vidErrorMode, vidConfig
+    case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
     case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
@@ -290,7 +290,7 @@ private enum MediaSetting: String, CaseIterable {
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
-    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy].contains(self) }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy, .vidForceMsSsimLong].contains(self) }
     var section: String {
         if self == .performance { return "performance" }
         if isCache { return "cache" }
@@ -316,6 +316,7 @@ private enum MediaSetting: String, CaseIterable {
         case .vidCodec: "--vid-codec"
         case .vidErrorMode: "--vid-error-mode"
         case .vidConfig: "--vid-config"
+        case .vidForceMsSsimLong: "--vid-force-ms-ssim-long"
         case .photosBackend: "--photos-backend"
         case .photosNativeBatch: "--photos-native-batch-size"
         case .photosAppleScriptBatch: "--photos-import-batch-size"
@@ -334,7 +335,7 @@ private enum MediaSetting: String, CaseIterable {
         case .performance: ["adaptive", "relaxed", "balanced", "tight"]
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
-             .photosAdaptive, .photosPreserveTree: ["true", "false"]
+             .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
         case .vidCodec: ["hevc", "av1"]
         case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
@@ -367,6 +368,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
         case .imgErrorMode, .vidErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
+        case .vidForceMsSsimLong: "vid.force_ms_ssim_long"
         case .photosBackend: "photos.backend"
         case .photosNativeBatch: "photos.native_batch_size"
         case .photosAppleScriptBatch: "photos.import_batch_size"
@@ -438,6 +440,7 @@ private struct MediaSettings {
     var imageSizeToleranceBytes: Int?
     var videoFailure: FileFailurePolicy?
     var videoCodec: VideoCodec?
+    var videoForceMsSsimLong: Bool?
     var videoConfigurationFile: String?
     var performance: String?
     var cacheMaxBytes: Int?
@@ -461,6 +464,7 @@ private struct MediaSettings {
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
+                .vidForceMsSsimLong: videoForceMsSsimLong.map(String.init),
                 .photosNativeBatch: photos.nativeBatchSize.map(String.init),
                 .photosAppleScriptBatch: photos.appleScriptBatchSize.map(String.init),
                 .photosVerificationBatch: photos.verificationBatchSize.map(String.init),
@@ -503,6 +507,7 @@ private struct MediaSettings {
                 case .vidCodec: videoCodec = VideoCodec(rawValue: value)
                 case .vidConfig: videoConfigurationFile = value
                 case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
+                case .vidForceMsSsimLong: videoForceMsSsimLong = Bool(value)
                 case .photosBackend: photos.backend = PhotosImportBackend(rawValue: value)
                 case .photosNativeBatch: photos.nativeBatchSize = Int(value)
                 case .photosAppleScriptBatch: photos.appleScriptBatchSize = Int(value)
@@ -600,6 +605,7 @@ private struct MediaSettings {
             if let cacheTtlSeconds { arguments += ["--cache-ttl-seconds", String(cacheTtlSeconds)] }
             if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
             if let videoFailure { arguments += ["--error-mode", videoFailure.rawValue] }
+            if let videoForceMsSsimLong { arguments += ["--force-ms-ssim-long=\(videoForceMsSsimLong)"] }
         }
         return arguments
     }
@@ -3292,6 +3298,10 @@ private struct FileStageProgress {
 
 struct GateCheckActivity {
     struct Event: Decodable, Equatable {
+        struct Files: Decodable, Equatable {
+            let processed: UInt64
+            let total: UInt64
+        }
         let schema_version: Int
         let stage_id: String
         let gate: String
@@ -3299,10 +3309,16 @@ struct GateCheckActivity {
         let completed: UInt64
         let total: UInt64
         let state: String
+        let file_progress: Files?
 
         var valid: Bool {
             guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64,
                   gate == "local", total == 6 else { return false }
+            if let files = file_progress {
+                guard check == "decode", files.total > 0, files.total <= UInt64(Int64.max),
+                      files.processed <= files.total,
+                      state == "running" || files.processed == files.total else { return false }
+            }
             if check == "inventory" { return completed == 0 && ["running", "failed"].contains(state) }
             guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else { return false }
             switch state {
@@ -3329,11 +3345,16 @@ struct GateCheckActivity {
             return true
         }
         if let previous = event, previous.stage_id == next.stage_id {
+            if let files = previous.file_progress {
+                guard let nextFiles = next.file_progress, nextFiles.total == files.total,
+                      nextFiles.processed >= files.processed else { invalidate(); return true }
+            }
             guard next.completed >= previous.completed,
                   previous.state == "running" || previous == next,
                   next.completed != previous.completed || previous == next
                     || (previous.check == "inventory" && next.check == "count" && next.state == "running")
-                    || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed") else {
+                    || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed")
+                    || (previous.check == "decode" && next.check == "decode" && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
             }
@@ -3352,13 +3373,16 @@ struct GateCheckActivity {
 
     func label(now: TimeInterval) -> String {
         guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
-        let text: String
+        var text: String
         switch event.state {
         case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
         case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
                                         String(event.completed), String(event.total), String(event.total - event.completed))
         default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
                                   String(event.completed), String(event.total))
+        }
+        if let files = event.file_progress {
+            text += " · " + localized("gate.activity.files", String(files.processed), String(files.total))
         }
         guard event.state == "running", let updatedAt, now.isFinite else { return text }
         let age = UInt64(min(Double(Int64.max), max(0, now - updatedAt)))
@@ -5735,6 +5759,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             fileProgressLabel.toolTip = label
             fileProgressLabel.setAccessibilityLabel(label)
             fileProgressLabel.textColor = gateActivity.event?.state == "failed" ? .systemRed : .secondaryLabelColor
+            if let event = gateActivity.event, let files = event.file_progress {
+                fileProgressIndicator.isHidden = false
+                fileProgressIndicator.isIndeterminate = false
+                let percentage = Double(files.processed) / Double(files.total) * 100
+                fileProgressIndicator.doubleValue = event.state == "running" ? min(99.99, percentage) : percentage
+                fileProgressIndicator.setAccessibilityLabel(label)
+            }
             return
         }
         fileProgressIndicator.isHidden = false
@@ -6089,6 +6120,29 @@ private final class AppController: NSObject, NSWindowDelegate {
         appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#, now: 90)
         guard gateActivity.event == nil, !gateActivity.invalid else {
             throw HostError(message: "A new processing phase retained obsolete verification activity")
+        }
+        let decode = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"decode-unit","gate":"local","check":"decode","completed":5,"total":6,"state":"running","file_progress":{"processed":0,"total":2}}"#
+        appendLog(phase + "\n" + decode, now: 91)
+        let one = decode.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":1")
+        appendLog(one, now: 92)
+        guard !fileProgressIndicator.isHidden, !fileProgressIndicator.isIndeterminate,
+              fileProgressIndicator.doubleValue == 50, gateActivity.event?.file_progress?.processed == 1 else {
+            throw HostError(message: "Decode progress did not use its real check denominator")
+        }
+        appendLog(decode, now: 93)
+        guard gateActivity.invalid, fileProgressIndicator.isHidden else {
+            throw HostError(message: "Decode check progress moved backwards")
+        }
+        gateActivity = GateCheckActivity()
+        appendLog(decode, now: 94)
+        let all = decode.replacingOccurrences(of: "\"processed\":0", with: "\"processed\":2")
+        appendLog(all, now: 95)
+        guard fileProgressIndicator.doubleValue < 100 else { throw HostError(message: "Running decode checks claimed terminal completion") }
+        appendLog(all.replacingOccurrences(of: "\"completed\":5", with: "\"completed\":6")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""), now: 96)
+        guard gateActivity.event?.state == "failed", fileProgressLabel.textColor == .systemRed,
+              fileProgressLabel.stringValue.contains(localized("gate.activity.files", "2", "2")) else {
+            throw HostError(message: "Completed probe attempts hid a failed Gate")
         }
         gateActivity = GateCheckActivity()
         _ = gateActivity.ingest(activity, now: 100)
@@ -6883,7 +6937,7 @@ private func runSelfTest() -> Int32 {
                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
-                                           .vidCodec: "av1", .vidErrorMode: "fail-fast"]
+                                           .vidCodec: "av1", .vidErrorMode: "fail-fast", .vidForceMsSsimLong: "false"]
         let configuredArguments = try ProcessorCommand.arguments(from: configured)
         guard configuredArguments.contains("--img-fallback-policy"),
               configuredArguments.contains("strict"), !configuredArguments.contains("same-semantics"),
@@ -6895,7 +6949,7 @@ private func runSelfTest() -> Int32 {
                !configuredArguments.contains("--img-size-tolerance-bytes"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
-                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"],
+                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast", "--vid-force-ms-ssim-long=false"],
               try configured.mediaSettings.arguments(operation: .fastVid, processing: .videosOnly).isEmpty,
               try configured.mediaSettings.arguments(operation: .restoreJpeg, processing: .imagesOnly).isEmpty
         else { throw HostError(message: "Media settings leaked across processing modes") }
@@ -6912,6 +6966,8 @@ private func runSelfTest() -> Int32 {
         let videoEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.videoRuntimeArguments(inheritedOnly: false), tool: "vid")
         guard videoEffective["vid.codec"] == "av1", videoEffective.sources["vid.codec"] == "CLI",
+              videoEffective["vid.force_ms_ssim_long"] == "false",
+              videoEffective.sourceChain["vid.force_ms_ssim_long"] == ["default", "CLI"],
               videoEffective.sourceChain["vid.codec"] == ["default", "CLI"],
               videoEffective["execution.error_mode"] == "fail-fast",
               videoEffective.sourceChain["execution.error_mode"]?.last == "CLI",
@@ -6939,7 +6995,7 @@ private func runSelfTest() -> Int32 {
             + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
         guard toolEffective["tools.policy"] == "single", toolEffective.sources["tools.policy"] == "CLI",
               try configured.mediaSettings.arguments(operation: .adjacent, processing: .videosOnly)
-                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast"] else {
+                == ["--vid-codec", "av1", "--vid-error-mode", "fail-fast", "--vid-force-ms-ssim-long=false"] else {
             throw HostError(message: "Tool selection was not resolved or leaked into video settings")
         }
         var cacheSettings = MediaSettings()

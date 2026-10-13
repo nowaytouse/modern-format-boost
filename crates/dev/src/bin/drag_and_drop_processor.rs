@@ -206,6 +206,10 @@ struct Args {
     #[arg(long, value_enum)]
     vid_codec: Option<VidCodec>,
 
+    /// Standard VID only: override full quality verification for long videos.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    vid_force_ms_ssim_long: Option<bool>,
+
     /// Restrict restore-jpeg to one native Photos album UUID.
     #[arg(long, conflicts_with = "photos_folder_id")]
     photos_album_id: Option<String>,
@@ -1018,7 +1022,9 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "image settings require --mode auto, images, or fast-img"
     );
     anyhow::ensure!(
-        (args.vid_error_mode.is_none() && args.vid_codec.is_none())
+        (args.vid_error_mode.is_none()
+            && args.vid_codec.is_none()
+            && args.vid_force_ms_ssim_long.is_none())
             || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
         "video settings require --mode auto or videos"
     );
@@ -1945,6 +1951,9 @@ fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -
                 if codec == VidCodec::Av1 {
                     command.push("--no-apple-compat".to_owned());
                 }
+            }
+            if let Some(force) = args.vid_force_ms_ssim_long {
+                command.push(format!("--force-ms-ssim-long={force}"));
             }
         }
         _ => {}
@@ -3284,6 +3293,7 @@ fn build_run_args(
         img_error_mode: None,
         vid_error_mode: None,
         vid_codec: None,
+        vid_force_ms_ssim_long: None,
     }
 }
 
@@ -4908,6 +4918,7 @@ mod tests {
                 "/tmp/vid.json",
                 "--vid-error-mode",
                 "fail-fast",
+                "--vid-force-ms-ssim-long=false",
                 "/tmp/media",
             ])
             .unwrap(),
@@ -4921,6 +4932,18 @@ mod tests {
                 .any(|pair| pair == ["--codec", "av1"])
         );
         assert!(command.args.contains(&"--no-apple-compat".to_owned()));
+        assert!(
+            command
+                .args
+                .contains(&"--force-ms-ssim-long=false".to_owned())
+        );
+        let image = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        assert!(
+            !image
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("--force-ms-ssim-long"))
+        );
         assert!(
             command
                 .args
@@ -4954,6 +4977,8 @@ mod tests {
             ],
             vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
             vec!["mfb", "--images-only", "--vid-codec", "av1"],
+            vec!["mfb", "--images-only", "--vid-force-ms-ssim-long=false"],
+            vec!["mfb", "--mode", "fast-vid", "--vid-force-ms-ssim-long"],
             vec!["mfb", "--images-only", "--vid-config", "/tmp/vid.json"],
             vec!["mfb", "--videos-only", "--img-tool-policy", "single"],
             vec!["mfb", "--mode", "fast-vid", "--vid-codec", "av1"],
@@ -5918,6 +5943,7 @@ mod tests {
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
+            vid_force_ms_ssim_long: None,
         };
 
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
@@ -6026,6 +6052,7 @@ mod tests {
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,
+                vid_force_ms_ssim_long: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);
@@ -6075,6 +6102,7 @@ mod tests {
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
+            vid_force_ms_ssim_long: None,
         };
         let error = plan_cli_invocations(&args, Path::new("/repo"), None)
             .expect_err("folder comparison must be rejected before spawning a worker");
@@ -6146,6 +6174,7 @@ mod tests {
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,
+                vid_force_ms_ssim_long: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);

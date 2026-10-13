@@ -5,8 +5,14 @@ use crate::infra::hardening::delegated_exit_code;
 use anyhow::{Context, Result, bail};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChildProcessObservation {
+    Spawned { pid: u32 },
+    Exited { pid: u32, status: ExitStatus },
+}
 
 /// Statistics collected from process output.
 #[derive(Debug, Clone, Default)]
@@ -324,12 +330,26 @@ pub fn parse_stats_from_output(output: &str) -> ProcessorStats {
 
 /// Stream child output line-by-line with callback; accumulate ProcessorStats.
 pub fn stream_child_output_collecting<F>(
-    mut child: std::process::Child,
-    mut line_handler: F,
+    child: std::process::Child,
+    line_handler: F,
 ) -> Result<ProcessorStats>
 where
     F: FnMut(&str),
 {
+    stream_child_output_observed(child, line_handler, |_| {})
+}
+
+fn stream_child_output_observed<F, P>(
+    mut child: std::process::Child,
+    mut line_handler: F,
+    mut observer: P,
+) -> Result<ProcessorStats>
+where
+    F: FnMut(&str),
+    P: FnMut(ChildProcessObservation),
+{
+    let pid = child.id();
+    observer(ChildProcessObservation::Spawned { pid });
     let mut stats = ProcessorStats::default();
     let mut read_error = None;
     // Drain both pipes concurrently: a full stderr pipe must not block stdout's EOF.
@@ -355,6 +375,7 @@ where
         }
     });
     let status = child.wait().context("wait for child")?;
+    observer(ChildProcessObservation::Exited { pid, status });
     stats.exit_code = delegated_exit_code(status, "child", "stream_child_output_collecting");
     finish_log_writes(read_error, "read child output")?;
     Ok(stats)
@@ -473,16 +494,18 @@ fn pty_read_error_is_end_of_stream(error: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn stream_process_with_pty_unix<F, H>(
+fn stream_process_with_pty_unix<F, H, P>(
     cmd: &[String],
     log_path: Option<&Path>,
     env_overrides: &[(&str, Option<&str>)],
     mut line_handler: F,
     mut heartbeat_cb: H,
+    mut observer: P,
 ) -> Result<ProcessorStats>
 where
     F: FnMut(&str),
     H: FnMut(),
+    P: FnMut(ChildProcessObservation),
 {
     use std::io;
     use std::os::unix::io::FromRawFd;
@@ -524,6 +547,8 @@ where
         .stderr(stderr)
         .spawn()
         .with_context(|| format!("spawn {}", cmd.join(" ")))?;
+    let pid = child.id();
+    observer(ChildProcessObservation::Spawned { pid });
 
     let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
     let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFL) };
@@ -595,7 +620,8 @@ where
                 {
                     return Err(kill_error).context("terminate child after PTY read error");
                 }
-                child.wait().context("reap child after PTY read error")?;
+                let status = child.wait().context("reap child after PTY read error")?;
+                observer(ChildProcessObservation::Exited { pid, status });
                 return Err(err).context("read pty child output");
             }
         }
@@ -610,22 +636,25 @@ where
     }
 
     let status = child.wait().context("wait for pty child")?;
+    observer(ChildProcessObservation::Exited { pid, status });
     stats.exit_code = delegated_exit_code(status, &cmd[0], "stream_process_with_pty");
     finish_log_writes(log_write_error, "write PTY child output log")?;
     Ok(stats)
 }
 
 #[cfg(not(unix))]
-fn stream_process_with_pty_unix<F, H>(
+fn stream_process_with_pty_unix<F, H, P>(
     cmd: &[String],
     _log_path: Option<&Path>,
     _env_overrides: &[(&str, Option<&str>)],
     _line_handler: F,
     _heartbeat_cb: H,
+    _observer: P,
 ) -> Result<ProcessorStats>
 where
     F: FnMut(&str),
     H: FnMut(),
+    P: FnMut(ChildProcessObservation),
 {
     bail!(
         "PTY streaming unavailable on this platform: {}",
@@ -663,13 +692,38 @@ pub fn stream_process_with_pty_with_env<F, H>(
     cmd: &[String],
     log_path: Option<&Path>,
     env_overrides: &[(&str, Option<&str>)],
-    mut line_handler: F,
+    line_handler: F,
     heartbeat_cb: H,
 ) -> Result<ProcessorStats>
 where
     F: FnMut(&str),
     H: FnMut(),
 {
+    stream_process_with_pty_observed(
+        cmd,
+        log_path,
+        env_overrides,
+        line_handler,
+        heartbeat_cb,
+        |_| {},
+    )
+}
+
+/// Observe the actual spawned child and wait status, without trusting its output.
+pub fn stream_process_with_pty_observed<F, H, P>(
+    cmd: &[String],
+    log_path: Option<&Path>,
+    env_overrides: &[(&str, Option<&str>)],
+    mut line_handler: F,
+    heartbeat_cb: H,
+    observer: P,
+) -> Result<ProcessorStats>
+where
+    F: FnMut(&str),
+    H: FnMut(),
+    P: FnMut(ChildProcessObservation),
+{
+    anyhow::ensure!(!cmd.is_empty(), "streaming command is empty");
     if pty_available() {
         return stream_process_with_pty_unix(
             cmd,
@@ -677,6 +731,7 @@ where
             env_overrides,
             line_handler,
             heartbeat_cb,
+            observer,
         );
     }
     let mut log_file = open_stream_log(log_path, "open process stream log")?;
@@ -689,12 +744,16 @@ where
         .spawn()
         .context("spawn process for streaming")?;
     let mut log_write_error = None;
-    let stats = stream_child_output_collecting(child, |line| {
-        if let Some(file) = log_file.as_mut() {
-            remember_log_write_error(writeln!(file, "{line}"), &mut log_write_error);
-        }
-        line_handler(line);
-    })?;
+    let stats = stream_child_output_observed(
+        child,
+        |line| {
+            if let Some(file) = log_file.as_mut() {
+                remember_log_write_error(writeln!(file, "{line}"), &mut log_write_error);
+            }
+            line_handler(line);
+        },
+        observer,
+    )?;
     finish_log_writes(log_write_error, "write child output log")?;
     Ok(stats)
 }
@@ -981,11 +1040,16 @@ mod tests {
             }
         });
         let mut diagnostics = 0;
-        let result = stream_child_output_collecting(child, |line| {
-            if line.starts_with("diagnostic") {
-                diagnostics += 1;
-            }
-        });
+        let mut observations = Vec::new();
+        let result = stream_child_output_observed(
+            child,
+            |line| {
+                if line.starts_with("diagnostic") {
+                    diagnostics += 1;
+                }
+            },
+            |event| observations.push(event),
+        );
         let _ = done.send(());
         watchdog.join().expect("watchdog must join");
         let stats = result?;
@@ -993,6 +1057,13 @@ mod tests {
         assert_eq!(diagnostics, 12000);
         assert!(stats.reported[0]);
         assert_eq!(stats.succeeded, 1);
+        assert_eq!(observations.len(), 2);
+        assert!(
+            matches!(observations[0], ChildProcessObservation::Spawned { pid: observed } if observed == u32::try_from(pid)?)
+        );
+        assert!(
+            matches!(observations[1], ChildProcessObservation::Exited { pid: observed, status } if observed == u32::try_from(pid)? && status.code() == Some(0))
+        );
         Ok(())
     }
 }

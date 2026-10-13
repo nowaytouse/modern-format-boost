@@ -92,19 +92,23 @@ pub struct Gate1Local;
 pub struct Gate2Import;
 pub struct Gate3Deep;
 
-type LocalCheckProbe = fn(&PipelineCtx, &[PathBuf]) -> CheckDetail;
+type LocalCheckProbe = fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail;
 
 const LOCAL_REQUIRED_CHECKS: [(&str, LocalCheckProbe); 6] = [
-    ("count", |ctx, files| {
+    ("count", |ctx, files, _| {
         check_count(ctx.expected_count, files.len(), files)
     }),
-    ("size", |ctx, files| {
+    ("size", |ctx, files, _| {
         check_nonzero_size(ctx.expected_count, files)
     }),
-    ("blake3", |ctx, _| check_blake3_logged_outputs(ctx)),
-    ("metadata", |ctx, _| check_metadata_policy(ctx)),
-    ("orient", check_orientation_policy),
-    ("decode", |_, files| check_decode_probe(files)),
+    ("blake3", |ctx, _, _| check_blake3_logged_outputs(ctx)),
+    ("metadata", |ctx, _, _| check_metadata_policy(ctx)),
+    ("orient", |ctx, files, _| {
+        check_orientation_policy(ctx, files)
+    }),
+    ("decode", |_, files, progress| {
+        check_decode_probe_observed(files, progress)
+    }),
 ];
 
 impl VerificationGate for Gate1Local {
@@ -118,7 +122,9 @@ impl VerificationGate for Gate1Local {
         run_local_checks(
             ctx,
             || collect_delivery_output_files(&ctx.working_copy, None),
-            |check, completed, total, state| activity.emit(check, completed, total, state),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files)
+            },
         )
     }
 }
@@ -126,14 +132,20 @@ impl VerificationGate for Gate1Local {
 fn run_local_checks(
     ctx: &PipelineCtx,
     inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
-    mut emit: impl FnMut(&'static str, usize, usize, GateActivityState),
+    mut emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
 ) -> GateResult {
     let total = LOCAL_REQUIRED_CHECKS.len();
-    emit("inventory", 0, total, GateActivityState::Running);
+    emit("inventory", 0, total, GateActivityState::Running, None);
     let jxl_files = match inventory() {
         Ok(files) => files,
         Err(err) => {
-            emit("inventory", 0, total, GateActivityState::Failed);
+            emit("inventory", 0, total, GateActivityState::Failed, None);
             return gate_result(vec![detail(
                 "count",
                 false,
@@ -151,29 +163,73 @@ fn run_required_checks<F>(
     probes: &[(&'static str, F)],
     ctx: &PipelineCtx,
     files: &[PathBuf],
-    mut emit: impl FnMut(&'static str, usize, usize, GateActivityState),
+    mut emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
 ) -> GateResult
 where
-    F: Fn(&PipelineCtx, &[PathBuf]) -> CheckDetail,
+    F: Fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail,
 {
     let mut checks = Vec::with_capacity(probes.len());
     for (name, probe) in probes {
-        emit(name, checks.len(), probes.len(), GateActivityState::Running);
+        emit(
+            name,
+            checks.len(),
+            probes.len(),
+            GateActivityState::Running,
+            None,
+        );
         let started = std::time::Instant::now();
-        let check = probe(ctx, files);
+        let mut file_progress = None;
+        let mut last_emit = None;
+        let check = probe(ctx, files, &mut |processed, total| {
+            file_progress = Some(crate::ui::progress::GateFileProgress { processed, total });
+            let now = std::time::Instant::now();
+            if processed == 0
+                || processed == total
+                || last_emit.is_none_or(|previous: std::time::Instant| {
+                    now.duration_since(previous) >= std::time::Duration::from_millis(250)
+                })
+            {
+                emit(
+                    name,
+                    checks.len(),
+                    probes.len(),
+                    GateActivityState::Running,
+                    file_progress,
+                );
+                last_emit = Some(now);
+            }
+        });
         tracing::info!(target: "verification_gate", gate = "local", check = check.name,
             duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
             "required check completed");
         let passed = check.passed;
         checks.push(check);
         if !passed {
-            emit(name, checks.len(), probes.len(), GateActivityState::Failed);
+            emit(
+                name,
+                checks.len(),
+                probes.len(),
+                GateActivityState::Failed,
+                file_progress,
+            );
             tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
                 "remaining checks not run after mandatory failure; import and cleanup blocked");
             break;
         }
         if checks.len() == probes.len() {
-            emit(name, checks.len(), probes.len(), GateActivityState::Passed);
+            emit(
+                name,
+                checks.len(),
+                probes.len(),
+                GateActivityState::Passed,
+                file_progress,
+            );
         }
     }
     gate_result(checks)
@@ -859,7 +915,15 @@ where
     )
 }
 
+#[cfg(test)]
 fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
+    check_decode_probe_observed(files, &mut |_, _| {})
+}
+
+fn check_decode_probe_observed(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     let mut detected = Vec::with_capacity(files.len());
     for path in files {
         match crate::image::format_detect::detect_true_format(path) {
@@ -901,14 +965,17 @@ fn check_decode_probe(files: &[PathBuf]) -> CheckDetail {
         );
     }
 
+    progress(0, detected.len());
     let failures = detected
         .into_iter()
-        .filter_map(|(path, format)| {
+        .enumerate()
+        .filter_map(|(index, (path, format))| {
             let error = match format {
                 crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(&path),
                 crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(&path),
                 _ => Err(format!("unsupported delivery output format: {format:?}")),
             };
+            progress(index + 1, files.len());
             error.err().map(|err| (path, err))
         })
         .collect::<Vec<_>>();
@@ -1264,21 +1331,25 @@ mod tests {
     #[test]
     fn required_checks_stop_on_failure_and_run_all_on_success() {
         let calls = std::cell::Cell::new(0);
-        let probe = |_: &PipelineCtx, _: &[PathBuf]| {
+        let probe = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
             calls.set(calls.get() + 1);
             super::detail("probe", true, "pass".into(), "pass".into(), vec![])
         };
-        let fail = |_: &PipelineCtx, _: &[PathBuf]| {
+        let fail = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
             super::detail("failed", false, "pass".into(), "failed".into(), vec![])
         };
         type TestProbe<'a> = (
             &'static str,
-            &'a dyn Fn(&PipelineCtx, &[PathBuf]) -> super::CheckDetail,
+            &'a dyn Fn(
+                &PipelineCtx,
+                &[PathBuf],
+                &mut dyn FnMut(usize, usize),
+            ) -> super::CheckDetail,
         );
         let probes: [TestProbe<'_>; 3] = [("count", &probe), ("size", &fail), ("blake3", &probe)];
         let ctx = ctx_with_library(1, vec![]);
         let mut events = vec![];
-        let result = super::run_required_checks(&probes, &ctx, &[], |name, n, total, state| {
+        let result = super::run_required_checks(&probes, &ctx, &[], |name, n, total, state, _| {
             events.push((name, n, total, state));
         });
         assert!(!result.passed);
@@ -1298,7 +1369,7 @@ mod tests {
                 &[("count", &probe), ("size", &probe)],
                 &ctx,
                 &[],
-                |name, n, total, state| events.push((name, n, total, state)),
+                |name, n, total, state, _| events.push((name, n, total, state)),
             )
             .passed
         );
@@ -1317,11 +1388,56 @@ mod tests {
                 &[],
                 &ctx,
                 &[],
-                |name, n, total, state| events.push((name, n, total, state)),
+                |name, n, total, state, _| events.push((name, n, total, state)),
             )
             .passed
         );
         assert_eq!(events, Vec::new());
+    }
+
+    #[test]
+    fn decode_file_progress_is_bound_to_check_attempts_not_success() {
+        let ctx = ctx_with_library(2, vec![]);
+        let probe = |_: &PipelineCtx, _: &[PathBuf], progress: &mut dyn FnMut(usize, usize)| {
+            progress(0, 2);
+            progress(1, 2);
+            progress(2, 2);
+            super::detail(
+                "decode",
+                false,
+                "2 probes pass".into(),
+                "one failure".into(),
+                vec![],
+            )
+        };
+        let mut events = Vec::new();
+        let result = super::run_required_checks(
+            &[("decode", probe)],
+            &ctx,
+            &[],
+            |check, _, _, state, files| {
+                events.push((check, state, files));
+            },
+        );
+        assert!(!result.passed);
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "decode");
+        assert_eq!(last.1, super::GateActivityState::Failed);
+        assert_eq!(
+            last.2,
+            Some(crate::ui::progress::GateFileProgress {
+                processed: 2,
+                total: 2
+            })
+        );
+        assert_eq!(events[0].2, None);
+        let mut attempts = Vec::new();
+        let failed = super::check_decode_probe_observed(
+            &[PathBuf::from("/synthetic/missing-output")],
+            &mut |n, total| attempts.push((n, total)),
+        );
+        assert!(!failed.passed);
+        assert!(attempts.is_empty());
     }
 
     #[test]
@@ -1339,7 +1455,7 @@ mod tests {
                 )
                 .into())
             },
-            |name, n, total, state| events.push((name, n, total, state)),
+            |name, n, total, state, _| events.push((name, n, total, state)),
         );
         assert!(!result.passed);
         assert_eq!(result.checks.len(), 1);
@@ -1363,7 +1479,7 @@ mod tests {
             let result = super::run_local_checks(
                 &ctx,
                 || super::collect_delivery_output_files(&ctx.working_copy, None),
-                |name, n, total, state| events.push((name, n, total, state)),
+                |name, n, total, state, _| events.push((name, n, total, state)),
             );
             assert!(!result.passed);
             assert_eq!(result.checks.len(), 1);

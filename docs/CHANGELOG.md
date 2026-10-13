@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Decode-check progress, video policy and process observations (2026-10-13)
+
+- Report Gate 1 decode attempts against the existing inventory on the same Gate
+  identity, without adding scans/decodes or weakening checks. Coalesce updates,
+  preserve initial/final counts, cap running progress below 100% and keep failure
+  separate from attempted-file completion. Native GUI, stored output and selected
+  diagnostic export consume the same optional file-progress evidence; earlier
+  format/tool failures do not fabricate file counts.
+- Add typed `vid.force_ms_ssim_long` (default false), inheritable standard VID
+  CLI overrides including explicit false, independent launcher forwarding and
+  Developer Settings with real effective values and source chains. Reject explicit
+  use outside standard runs/config inspection. The existing fusion-quality flag
+  is consumed unchanged; enabling it can cost time, not change codec defaults.
+- Persist actual OS child spawn PID and wait observations independently from
+  launch requests, bound to invocation/run/pipeline. Distinguish normal exit code
+  and Unix signal, reject conflicting History sequences, expose observations in
+  native History details and diagnostic exports. Missing exits do not establish
+  current liveness, and process exit does not establish media fidelity/delivery
+  or loaded-binary identity. Persistence failure drains the child and retains
+  independent media counters and exit status while returning the write error.
+- Validation: 121 dev-library cases, five scoped Foundation progress cases, the
+  launcher scope/forwarding case and the VID inheritance/override/flag case passed;
+  pipe observations were rechecked with the 16 stream cases. Scoped dev/VID Clippy,
+  formatting, Swift warnings-as-errors and three-language native self-tests passed.
+  Isolated dark Settings checked real effective config/source changes; light native
+  windows exercised synthetic 1/2 progress, retained errors and synthetic process
+  History without inferring unknown media counts. No production-media/Photos/real
+  History operation, dependency update, CI query, installed-app replacement or
+  encoding-speed/long-video fidelity benchmark was performed.
+
 ### History storage inspection and cache impact preview (2026-10-13)
 
 - Add explicit read-only History storage inspection in CLI and native Settings:

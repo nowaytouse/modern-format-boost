@@ -86,6 +86,14 @@ struct GateActivityEvent<'a> {
     completed: usize,
     total: usize,
     state: GateActivityState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_progress: Option<GateFileProgress>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct GateFileProgress {
+    pub(crate) processed: usize,
+    pub(crate) total: usize,
 }
 
 pub(crate) struct LocalGateActivity {
@@ -113,6 +121,7 @@ impl LocalGateActivity {
         completed: usize,
         total: usize,
         state: GateActivityState,
+        file_progress: Option<GateFileProgress>,
     ) {
         let Some(stage_id) = &self.stage_id else {
             return;
@@ -125,6 +134,7 @@ impl LocalGateActivity {
             completed,
             total,
             state,
+            file_progress,
         };
         let result = serde_json::to_vec(&event)
             .map_err(io::Error::other)
@@ -2159,6 +2169,7 @@ mod tests {
                 completed,
                 total: 6,
                 state,
+                file_progress: None,
             })
             .expect("serialize gate activity");
             let expected_json = format!(
@@ -2182,7 +2193,7 @@ mod tests {
         let _disabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "");
         let disabled = LocalGateActivity::new();
         assert!(disabled.stage_id.is_none());
-        disabled.emit("inventory", 0, 6, GateActivityState::Running);
+        disabled.emit("inventory", 0, 6, GateActivityState::Running, None);
 
         let _enabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "synthetic-gate");
         let reporters: [_; 16] = std::array::from_fn(|_| {
