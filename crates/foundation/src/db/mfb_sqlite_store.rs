@@ -391,6 +391,148 @@ pub struct CachePruneResult {
     pub evicted_rows: u64,
 }
 
+/// Logical payload eligibility in one read snapshot; not committed removals or disk savings.
+#[derive(Debug, serde::Serialize)]
+pub struct CachePrunePreview {
+    pub schema_version: u8,
+    pub snapshot_unix_secs: i64,
+    pub cutoff_unix_secs: i64,
+    pub policy: CachePolicy,
+    pub total_rows: u64,
+    pub total_payload_bytes: u64,
+    /// Includes idle timestamps at/before the cutoff and timestamps after the snapshot clock.
+    pub expired_rows: u64,
+    pub expired_payload_bytes: u64,
+    pub evicted_rows: u64,
+    pub evicted_payload_bytes: u64,
+    pub retained_rows: u64,
+    pub retained_payload_bytes: u64,
+}
+
+/// Inspect reconstructable path-tree pruning without creating storage or changing any row.
+/// Later pruning takes a fresh snapshot; concurrent writers may change its actual receipt.
+///
+/// # Errors
+/// Returns policy, clock, schema, malformed row, SQLite or aggregate overflow errors.
+pub fn preview_path_tree_pruning(
+    snapshot: &Transaction<'_>,
+    policy: CachePolicy,
+) -> Result<CachePrunePreview> {
+    preview_path_tree_at(snapshot, policy, now_unix_secs)
+}
+
+fn preview_path_tree_at(
+    snapshot: &Transaction<'_>,
+    policy: CachePolicy,
+    clock: impl FnOnce() -> Result<i64>,
+) -> Result<CachePrunePreview> {
+    policy.validate()?;
+    anyhow::ensure!(
+        schema_version(snapshot)? == Some(STORE_SCHEMA_VERSION),
+        "cache pruning preview requires the current store schema; database retained without migration"
+    );
+    let now = clock()?;
+    anyhow::ensure!(now >= 0, "cache pruning preview clock is before UNIX epoch");
+    let cutoff = now.saturating_sub(i64::try_from(policy.path_tree_ttl_seconds)?);
+    let invalid: i64 = snapshot.query_row(
+        "SELECT COUNT(*) FROM blob_store WHERE namespace = ?1 AND
+         (typeof(cache_key) != 'text' OR typeof(updated_at) != 'integer' OR typeof(payload) != 'blob')",
+        [NS_PATH_TREE],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        invalid == 0,
+        "cache pruning preview found malformed path-tree rows; database retained"
+    );
+    let counts = snapshot.query_row(
+        "WITH records AS (
+             SELECT cache_key, updated_at, length(payload) AS payload_bytes,
+                    updated_at <= ?2 OR updated_at > ?3 AS expired
+             FROM blob_store WHERE namespace = ?1
+         ), ranked AS (
+             SELECT cache_key, SUM(payload_bytes) OVER (
+                 ORDER BY updated_at DESC, cache_key DESC ROWS UNBOUNDED PRECEDING
+             ) AS retained_bytes FROM records WHERE NOT expired
+         ), classified AS (
+             SELECT records.payload_bytes,
+                    CASE WHEN records.expired THEN 0
+                         WHEN ranked.retained_bytes > ?4 THEN 1 ELSE 2 END AS category
+             FROM records LEFT JOIN ranked USING (cache_key)
+         )
+         SELECT COUNT(*), COALESCE(SUM(payload_bytes), 0),
+                COUNT(CASE WHEN category = 0 THEN 1 END),
+                COALESCE(SUM(CASE WHEN category = 0 THEN payload_bytes ELSE 0 END), 0),
+                COUNT(CASE WHEN category = 1 THEN 1 END),
+                COALESCE(SUM(CASE WHEN category = 1 THEN payload_bytes ELSE 0 END), 0),
+                COUNT(CASE WHEN category = 2 THEN 1 END),
+                COALESCE(SUM(CASE WHEN category = 2 THEN payload_bytes ELSE 0 END), 0)
+         FROM classified",
+        params![
+            NS_PATH_TREE,
+            cutoff,
+            now,
+            i64::try_from(policy.path_tree_max_bytes)?
+        ],
+        |row| {
+            Ok([
+                row.get::<_, i64>(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ])
+        },
+    )?;
+    let mut totals = [0_u64; 8];
+    for (total, count) in totals.iter_mut().zip(counts) {
+        *total = u64::try_from(count).context("negative cache pruning preview aggregate")?;
+    }
+    let [
+        total_rows,
+        total_payload_bytes,
+        expired_rows,
+        expired_payload_bytes,
+        evicted_rows,
+        evicted_payload_bytes,
+        retained_rows,
+        retained_payload_bytes,
+    ] = totals;
+    let sum = |values: [u64; 3]| {
+        values
+            .into_iter()
+            .try_fold(0_u64, u64::checked_add)
+            .context("cache pruning preview aggregate overflow")
+    };
+    anyhow::ensure!(
+        total_rows == sum([expired_rows, evicted_rows, retained_rows])?
+            && total_payload_bytes
+                == sum([
+                    expired_payload_bytes,
+                    evicted_payload_bytes,
+                    retained_payload_bytes
+                ])?
+            && retained_payload_bytes <= policy.path_tree_max_bytes,
+        "cache pruning preview aggregates do not reconcile"
+    );
+    Ok(CachePrunePreview {
+        schema_version: 1,
+        snapshot_unix_secs: now,
+        cutoff_unix_secs: cutoff,
+        policy,
+        total_rows,
+        total_payload_bytes,
+        expired_rows,
+        expired_payload_bytes,
+        evicted_rows,
+        evicted_payload_bytes,
+        retained_rows,
+        retained_payload_bytes,
+    })
+}
+
 /// Apply the idle TTL and payload budget to an already validated store.
 /// Does not create/migrate storage or touch formal state and unknown namespaces.
 ///
@@ -795,6 +937,212 @@ pub fn set_test_store_path_for_tests(path: PathBuf) -> TestStoreGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pruning_preview_is_read_only_and_matches_the_actual_ttl_and_lru_receipt() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join(STORE_FILE_NAME);
+        let _guard = set_test_store_path_for_tests(path.clone());
+        let conn = open_connection()?;
+        for (key, timestamp, payload) in [
+            ("expired", 90, b"ee".as_slice()),
+            ("future", 101, b"fff".as_slice()),
+            ("older", 91, b"oooo".as_slice()),
+            ("newest", 100, b"nnnnn".as_slice()),
+            ("tie-a", 99, b"ta".as_slice()),
+            ("tie-z", 99, b"tz".as_slice()),
+        ] {
+            upsert_blob(&conn, NS_PATH_TREE, key, 3, None, payload, timestamp)?;
+        }
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "unknown"] {
+            upsert_blob(&conn, namespace, "protected", 2, None, b"proof", 0)?;
+        }
+        conn.pragma_update(None, "journal_mode", "delete")?;
+        drop(conn);
+        let before = std::fs::read(&path)?;
+        let reader =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        reader.pragma_update(None, "query_only", true)?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 7,
+            path_tree_ttl_seconds: 10,
+        };
+        let snapshot = reader.unchecked_transaction()?;
+        let preview = preview_path_tree_at(&snapshot, policy, || Ok(100))?;
+        assert_eq!((preview.total_rows, preview.total_payload_bytes), (6, 18));
+        assert_eq!(
+            (preview.expired_rows, preview.expired_payload_bytes),
+            (2, 5)
+        );
+        assert_eq!(
+            (preview.evicted_rows, preview.evicted_payload_bytes),
+            (2, 6)
+        );
+        assert_eq!(
+            (preview.retained_rows, preview.retained_payload_bytes),
+            (2, 7)
+        );
+        assert_eq!(
+            (preview.snapshot_unix_secs, preview.cutoff_unix_secs),
+            (100, 90)
+        );
+        assert!(snapshot.execute("DELETE FROM blob_store", []).is_err());
+        snapshot.commit()?;
+        drop(reader);
+        assert_eq!(std::fs::read(&path)?, before);
+        let mut writer = Connection::open(&path)?;
+        let removed = prune_path_tree_at(&mut writer, policy, || Ok(100))?;
+        assert_eq!(
+            (removed.expired_rows, removed.evicted_rows),
+            (preview.expired_rows, preview.evicted_rows)
+        );
+        assert_eq!(
+            read_blob(&writer, NS_PATH_TREE, "tie-z", 3)?,
+            Some(b"tz".to_vec())
+        );
+        assert_eq!(read_blob(&writer, NS_PATH_TREE, "tie-a", 3)?, None);
+        for namespace in [NS_CHECKPOINT, NS_PROCESSED, "unknown"] {
+            assert_eq!(
+                read_blob(&writer, namespace, "protected", 2)?,
+                Some(b"proof".to_vec())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pruning_preview_empty_clock_and_zero_payload_boundaries_do_not_refresh_rows() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut conn = Connection::open(directory.path().join(STORE_FILE_NAME))?;
+        init_schema(&mut conn)?;
+        let policy = CachePolicy {
+            path_tree_max_bytes: 1,
+            path_tree_ttl_seconds: 10,
+        };
+        let snapshot = conn.unchecked_transaction()?;
+        let empty = preview_path_tree_at(&snapshot, policy, || Ok(1))?;
+        assert_eq!(
+            (
+                empty.total_rows,
+                empty.total_payload_bytes,
+                empty.cutoff_unix_secs
+            ),
+            (0, 0, -9)
+        );
+        snapshot.commit()?;
+        for (key, timestamp, payload) in [
+            ("empty", 1, b"".as_slice()),
+            ("future", 2, b"f".as_slice()),
+            ("oversized", 0, b"xx".as_slice()),
+        ] {
+            upsert_blob(&conn, NS_PATH_TREE, key, 3, None, payload, timestamp)?;
+        }
+        conn.pragma_update(None, "query_only", true)?;
+        let snapshot = conn.unchecked_transaction()?;
+        let preview = preview_path_tree_at(&snapshot, policy, || Ok(1))?;
+        assert_eq!((preview.total_rows, preview.total_payload_bytes), (3, 3));
+        assert_eq!(
+            (preview.expired_rows, preview.expired_payload_bytes),
+            (1, 1)
+        );
+        assert_eq!(
+            (preview.evicted_rows, preview.evicted_payload_bytes),
+            (1, 2)
+        );
+        assert_eq!(
+            (preview.retained_rows, preview.retained_payload_bytes),
+            (1, 0)
+        );
+        assert_eq!(
+            snapshot.query_row(
+                "SELECT updated_at FROM blob_store WHERE cache_key='empty'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert!(
+            preview_path_tree_at(
+                &snapshot,
+                CachePolicy {
+                    path_tree_ttl_seconds: 0,
+                    ..policy
+                },
+                || Ok(1)
+            )
+            .is_err()
+        );
+        assert!(preview_path_tree_at(&snapshot, policy, || Ok(-1)).is_err());
+        assert!(
+            preview_path_tree_at(&snapshot, policy, || anyhow::bail!(
+                "injected clock failure"
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            snapshot.query_row("SELECT COUNT(*) FROM blob_store", [], |row| row
+                .get::<_, i64>(0))?,
+            3
+        );
+        snapshot.commit()?;
+        Ok(())
+    }
+
+    #[test]
+    fn pruning_preview_rejects_unknown_schema_and_malformed_rows_without_repair() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut conn = Connection::open(directory.path().join(STORE_FILE_NAME))?;
+        init_schema(&mut conn)?;
+        upsert_blob(&conn, NS_PATH_TREE, "malformed", 3, None, b"keep", 100)?;
+        conn.execute("UPDATE blob_store SET payload='not a blob'", [])?;
+        conn.pragma_update(None, "query_only", true)?;
+        let snapshot = conn.unchecked_transaction()?;
+        assert!(preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100)).is_err());
+        assert_eq!(
+            snapshot.query_row("SELECT payload FROM blob_store", [], |row| row
+                .get::<_, String>(0))?,
+            "not a blob"
+        );
+        snapshot.commit()?;
+        conn.pragma_update(None, "query_only", false)?;
+        conn.execute(
+            "UPDATE blob_store SET payload=X'0102', updated_at='not an integer'",
+            [],
+        )?;
+        let snapshot = conn.unchecked_transaction()?;
+        assert!(preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100)).is_err());
+        snapshot.commit()?;
+        conn.execute(
+            "UPDATE store_metadata SET value=999 WHERE key='schema_version'",
+            [],
+        )?;
+        let snapshot = conn.unchecked_transaction()?;
+        assert!(preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100)).is_err());
+        assert_eq!(
+            snapshot.query_row(
+                "SELECT value FROM store_metadata WHERE key='schema_version'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            999
+        );
+        assert_eq!(
+            snapshot.query_row("SELECT COUNT(*) FROM blob_store", [], |row| row
+                .get::<_, i64>(0))?,
+            1
+        );
+        snapshot.commit()?;
+        let empty = Connection::open_in_memory()?;
+        let snapshot = empty.unchecked_transaction()?;
+        assert!(preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100)).is_err());
+        assert_eq!(
+            snapshot.query_row("SELECT COUNT(*) FROM sqlite_schema", [], |row| row
+                .get::<_, i64>(0))?,
+            0
+        );
+        snapshot.commit()?;
+        Ok(())
+    }
 
     #[test]
     fn path_tree_lookup_reports_exact_miss_reasons_and_failed_mutations() -> Result<()> {

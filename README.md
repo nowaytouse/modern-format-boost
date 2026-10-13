@@ -390,11 +390,22 @@ committed but subsequent inspection fails, the error states the committed counts
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
 
+`cache_cleaner --preview-prune --json` with the same configuration/cache flags
+provides a read-only snapshot of expired/time-invalid, capacity-evicted and retained
+path-tree rows and logical payload bytes. It uses the exact pruning predicates and
+newest-prefix ordering, checks category totals and excludes all formal state. It
+does not create storage, migrate, refresh timestamps, delete rows or silently choose
+a temporary fallback root. Missing storage has no preview; malformed or unknown
+storage is an error. Payload bytes are not immediately reclaimable disk space.
+
 **Settings → Database & Cache → Prune Cache** runs the same operation using the current
 draft's effective cache limits. It resolves relevant image/video configuration
 before any deletion and pins the resulting limits for the maintenance command.
 Different inherited limits must be reconciled with explicit shared overrides;
-the GUI does not choose one pipeline silently. Confirmation, category counts and
+the GUI does not choose one pipeline silently. A read-only impact preview precedes
+confirmation; changed drafts require a fresh preview. Later pruning re-evaluates
+current data under the pinned policy, so concurrent writes can change its actual
+receipt. Confirmation, category counts and
 the applied byte/idle limits remain visible. **Clear Cache** remains a separate
 action that removes all managed rebuildable cache, rather than only excess cache.
 
@@ -440,6 +451,25 @@ rows in that snapshot, not media files. All original stored rows remain intact;
 Core state, media and PostgreSQL are not included. Filesystem hard-link support
 is required and Unix backups use mode 0600; errors remove ordinary staging, while
 forced termination can leave a private staging directory.
+
+**Storage Overview** beside the History backup controls reads one committed snapshot
+of the explicitly displayed History location, without loading log rows into the
+GUI. It reports schema/SQLite/page metadata, session/event/output-row counts and
+logical stored byte lengths. These are database records, not processed media or
+completed-run counts. Schema 1 lacks captured-output storage: its output counters
+are unavailable, not fabricated zero. A missing database remains absent and is not
+created. CLI: `cache_cleaner --history-stats --history-directory
+/absolute/history-directory --json`.
+
+**Check Structure**, or the same command with `--check-integrity`, adds read-only
+SQLite integrity, canonical identity/sequence primary-key, foreign-key and stored
+column-type checks. Diagnostics are bounded while the full issue count is retained.
+Unhealthy structural evidence returns valid JSON with exit code 2; unsupported,
+malformed or unreadable storage fails explicitly without reset or migration.
+This does not decode event JSON, verify media, prove completed runs or establish
+recovery readiness. Committed WAL is visible; SQLite may coordinate readers through
+shared memory, without changing database/WAL contents. Reads never fall back to
+another History location, and the GUI does not start these checks automatically.
 
 **Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
 checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read

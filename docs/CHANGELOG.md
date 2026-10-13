@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### History storage inspection and cache impact preview (2026-10-13)
+
+- Add explicit read-only History storage inspection in CLI and native Settings:
+  database metadata, exact committed session/event/output-row counts, logical byte
+  lengths and recorded update bounds. Do not load logs into the GUI, migrate the
+  source or interpret storage rows as media outcomes. Missing databases and schema-1
+  output counters remain absent/unavailable rather than guessed zero.
+- Add manual History structural checks for SQLite integrity, canonical identity/
+  sequence primary keys, foreign keys and row storage types, with bounded diagnostics
+  and complete issue counts. Unhealthy JSON returns exit code 2; unknown, malformed
+  and unreadable storage fails without repair/reset. Reuse the canonical key check
+  for backup validation. Event JSON semantics, media fidelity and recovery readiness
+  are not part of this structural result.
+- Add a read-only path-tree pruning preview in the shared SQLite snapshot, using
+  the actual TTL/time-invalid and capacity/LRU predicates. Reconcile expired/evicted/
+  retained rows and logical payload bytes, preserve formal namespaces, refuse malformed
+  evidence and avoid creating/fallback root resolution. Native Settings confirms the
+  preview under pinned effective limits and rejects changed drafts; the subsequent
+  mutation has its own fresh receipt, not a promise of preview counts or disk savings.
+- Validation: three shared preview cases, 19 History cases and 23 cache-cleaner cases
+  passed; dev scoped Clippy, formatting, Swift warnings-as-errors and three-language
+  native self-tests passed. Isolated dark/light Settings checks exercised CLI-backed
+  storage overview, structural status and pruning preview/cancel; synthetic SQLite
+  bytes/rows remained unchanged by reads and cancellation. A broader standalone
+  Foundation lint check still reports existing common-utils/XMP/GPU findings outside
+  these files; no all-workspace lint or CI verdict is claimed. No dependency update,
+  production database/media/Photos access or installed-application replacement.
+
 ### Native routing inspection and bounded preflight observations (2026-10-13)
 
 - Extend the read-only standard routing JSON to schema 2 with XMP exact-filename

@@ -25,6 +25,211 @@ pub struct HistoryBackupReceipt {
     pub output_rows: u64,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryStorageOverview {
+    pub history_schema_version: i64,
+    pub sqlite_version: String,
+    pub journal_mode: String,
+    pub page_size: u64,
+    pub page_count: u64,
+    pub free_pages: u64,
+    pub sessions: u64,
+    pub events: u64,
+    pub event_bytes: u64,
+    pub output_rows: Option<u64>,
+    pub output_bytes: Option<u64>,
+    pub oldest_session_update: Option<String>,
+    pub newest_session_update: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryStorageIssue {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryStorageIntegrity {
+    pub status: &'static str,
+    pub checks_complete: bool,
+    pub sqlite_integrity: &'static str,
+    pub foreign_keys: &'static str,
+    pub record_types: &'static str,
+    pub issue_count: u64,
+    pub issues: Vec<HistoryStorageIssue>,
+}
+
+impl HistoryStorageIntegrity {
+    fn issue(&mut self, code: &'static str, message: &'static str) -> Result<()> {
+        self.issue_count = self
+            .issue_count
+            .checked_add(1)
+            .context("history issue count overflow")?;
+        if self.issues.len() < 20 {
+            self.issues.push(HistoryStorageIssue { code, message });
+        }
+        self.status = "unhealthy";
+        Ok(())
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryStorageInspection {
+    pub schema_version: u8,
+    pub kind: &'static str,
+    pub source: String,
+    pub exists: bool,
+    pub overview: Option<HistoryStorageOverview>,
+    pub integrity: Option<HistoryStorageIntegrity>,
+}
+
+/// Inspect one committed snapshot without migration, repair, or payload decoding.
+/// Counts and byte lengths describe storage, not media outcomes or completed runs.
+pub fn inspect_history_store(
+    log_dir: &Path,
+    check_integrity: bool,
+) -> Result<HistoryStorageInspection> {
+    ensure!(
+        log_dir.is_absolute(),
+        "history inspection directory must be absolute"
+    );
+    let source = log_dir.join(HISTORY_DATABASE);
+    let mut report = HistoryStorageInspection {
+        schema_version: 1,
+        kind: "history_sqlite_inspection",
+        source: source
+            .to_str()
+            .context("history inspection path is not UTF-8")?
+            .to_owned(),
+        exists: false,
+        overview: None,
+        integrity: None,
+    };
+    match std::fs::symlink_metadata(log_dir) {
+        Ok(metadata) => ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "history inspection directory is not a regular directory"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(error).context("inspect history directory"),
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        match std::fs::symlink_metadata(
+            source.with_file_name(format!("{HISTORY_DATABASE}{suffix}")),
+        ) {
+            Ok(metadata) => ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "history inspection sidecar is not a regular file"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspect history sidecar"),
+        }
+    }
+    let Some(mut connection) = open_history_read(log_dir)? else {
+        return Ok(report);
+    };
+    let snapshot = connection.transaction()?;
+    let version = schema_version(&snapshot)?;
+    validate_backup_schema(&snapshot, version)?;
+    let mut overview = HistoryStorageOverview {
+        history_schema_version: version,
+        sqlite_version: snapshot.query_row("SELECT sqlite_version()", [], |row| row.get(0))?,
+        journal_mode: snapshot.pragma_query_value(None, "journal_mode", |row| row.get(0))?,
+        page_size: backup_row_count(&snapshot, "PRAGMA page_size")?,
+        page_count: backup_row_count(&snapshot, "PRAGMA page_count")?,
+        free_pages: backup_row_count(&snapshot, "PRAGMA freelist_count")?,
+        sessions: backup_row_count(&snapshot, "SELECT COUNT(*) FROM history_sessions")?,
+        events: backup_row_count(&snapshot, "SELECT COUNT(*) FROM history_events")?,
+        event_bytes: backup_row_count(
+            &snapshot,
+            "SELECT COALESCE(SUM(length(CAST(event AS BLOB))), 0) FROM history_events",
+        )?,
+        output_rows: None,
+        output_bytes: None,
+        oldest_session_update: snapshot.query_row(
+            "SELECT MIN(updated_at) FROM history_sessions",
+            [],
+            |row| row.get(0),
+        )?,
+        newest_session_update: snapshot.query_row(
+            "SELECT MAX(updated_at) FROM history_sessions",
+            [],
+            |row| row.get(0),
+        )?,
+    };
+    ensure!(
+        !overview.sqlite_version.is_empty()
+            && overview.page_size.is_power_of_two()
+            && (512..=65_536).contains(&overview.page_size)
+            && overview.page_count > 0
+            && overview.free_pages <= overview.page_count,
+        "invalid history storage overview"
+    );
+    if version == 2 {
+        overview.output_rows = Some(backup_row_count(
+            &snapshot,
+            "SELECT COUNT(*) FROM history_output",
+        )?);
+        overview.output_bytes = Some(backup_row_count(
+            &snapshot,
+            "SELECT COALESCE(SUM(length(CAST(line AS BLOB))), 0) FROM history_output",
+        )?);
+    }
+    if check_integrity {
+        let mut integrity = HistoryStorageIntegrity {
+            status: "healthy",
+            checks_complete: false,
+            sqlite_integrity: "ok",
+            foreign_keys: "ok",
+            record_types: "ok",
+            issue_count: 0,
+            issues: Vec::new(),
+        };
+        {
+            let mut statement = snapshot.prepare("PRAGMA integrity_check")?;
+            let mut rows = statement.query([])?;
+            let mut returned = false;
+            while let Some(row) = rows.next()? {
+                returned = true;
+                if row.get::<_, String>(0)? != "ok" {
+                    integrity.sqlite_integrity = "failed";
+                    integrity.issue(
+                        "sqlite_integrity",
+                        "SQLite reported a structural integrity failure.",
+                    )?;
+                }
+            }
+            ensure!(returned, "history integrity check returned no result");
+            let mut statement = snapshot.prepare("PRAGMA foreign_key_check")?;
+            let mut rows = statement.query([])?;
+            while rows.next()?.is_some() {
+                integrity.foreign_keys = "failed";
+                integrity.issue(
+                    "foreign_key",
+                    "A history record has an invalid session relationship.",
+                )?;
+            }
+        }
+        for query in [
+            "SELECT COUNT(*) FROM history_sessions WHERE typeof(session_id) != 'text' OR session_id = '' OR typeof(updated_at) != 'text' OR updated_at = ''",
+            "SELECT COUNT(*) FROM history_events WHERE typeof(sequence) != 'integer' OR sequence <= 0 OR typeof(session_id) != 'text' OR session_id = '' OR typeof(ts) != 'text' OR ts = '' OR typeof(event) != 'text'",
+        ].into_iter().chain((version == 2).then_some(
+            "SELECT COUNT(*) FROM history_output WHERE typeof(sequence) != 'integer' OR sequence <= 0 OR typeof(session_id) != 'text' OR session_id = '' OR typeof(ts) != 'text' OR ts = '' OR typeof(pipeline) != 'text' OR pipeline = '' OR typeof(line) != 'text'")) {
+            let invalid = backup_row_count(&snapshot, query)?;
+            if invalid > 0 {
+                integrity.record_types = "failed";
+                integrity.issue("record_types", "History rows have invalid storage types or empty identities.")?;
+            }
+        }
+        integrity.checks_complete = true;
+        report.integrity = Some(integrity);
+    }
+    snapshot.commit()?;
+    report.exists = true;
+    report.overview = Some(overview);
+    Ok(report)
+}
+
 /// Copy a single committed SQLite snapshot, without creating or migrating its source.
 /// Counts describe database rows in the verified copy, never media file outcomes.
 pub fn backup_history_store(log_dir: &Path, destination: &Path) -> Result<HistoryBackupReceipt> {
@@ -139,7 +344,7 @@ pub fn backup_history_store(log_dir: &Path, destination: &Path) -> Result<Histor
 
 fn backup_row_count(snapshot: &Transaction<'_>, query: &str) -> Result<u64> {
     let count: i64 = snapshot.query_row(query, [], |row| row.get(0))?;
-    u64::try_from(count).context("history backup row count is negative")
+    u64::try_from(count).context("history storage row count or byte length is negative")
 }
 
 fn validate_backup_schema(snapshot: &Transaction<'_>, version: i64) -> Result<()> {
@@ -155,6 +360,31 @@ fn validate_backup_schema(snapshot: &Transaction<'_>, version: i64) -> Result<()
         ensure!(
             kind == "table",
             "history backup schema contains a non-table history object"
+        );
+        let mut columns = snapshot.prepare(&format!("PRAGMA table_info({table})"))?;
+        let primary_keys = columns
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|(_, _, ordinal)| *ordinal > 0)
+            .collect::<Vec<_>>();
+        let (key_name, key_type) = if table == "history_sessions" {
+            ("session_id", "TEXT")
+        } else {
+            ("sequence", "INTEGER")
+        };
+        ensure!(
+            primary_keys.len() == 1
+                && primary_keys[0].0 == key_name
+                && primary_keys[0].1.eq_ignore_ascii_case(key_type)
+                && primary_keys[0].2 == 1,
+            "history schema has an unsupported identity or sequence primary key"
         );
         if table != "history_sessions" {
             let mut statement = snapshot.prepare(&format!("PRAGMA foreign_key_list({table})"))?;
@@ -546,6 +776,153 @@ fn validate_schema(transaction: &Transaction<'_>, version: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storage_inspection_counts_committed_utf8_rows_without_creating_or_migrating() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let missing = root.path().join("missing");
+        let absent = inspect_history_store(&missing, true)?;
+        assert!(!absent.exists && absent.overview.is_none() && absent.integrity.is_none());
+        assert!(!missing.exists());
+        append_history_event(root.path(), "one", EVENT)?;
+        let mut writer = HistoryOutputWriter::open(root.path(), "one")?;
+        writer.push_line("IMG", "\u{56fe}\n\"\u{1f680}")?;
+        writer.push_line("VID", "")?;
+        writer.flush()?;
+        drop(writer);
+        let source = root.path().join(HISTORY_DATABASE);
+        let before = std::fs::read(&source)?;
+        let mut concurrent = open_history_write(root.path())?;
+        let uncommitted = concurrent.transaction()?;
+        uncommitted.execute(
+            "INSERT INTO history_sessions VALUES ('not-committed', 'later')",
+            [],
+        )?;
+        let inspected = inspect_history_store(root.path(), true)?;
+        let overview = inspected.overview.context("missing overview")?;
+        assert_eq!(
+            (overview.sessions, overview.events, overview.output_rows),
+            (1, 1, Some(2))
+        );
+        assert_eq!(overview.event_bytes, u64::try_from(EVENT.len())?);
+        assert_eq!(
+            overview.output_bytes,
+            Some(u64::try_from("\u{56fe}\n\"\u{1f680}".len())?)
+        );
+        assert!(overview.oldest_session_update.is_some());
+        assert_eq!(
+            inspected.integrity.context("missing integrity")?.status,
+            "healthy"
+        );
+        assert_eq!(std::fs::read(&source)?, before);
+        uncommitted.rollback()?;
+        drop(concurrent);
+        let legacy_dir = backup_fixture(root.path(), 1);
+        let legacy_path = legacy_dir.join(HISTORY_DATABASE);
+        let legacy_before = std::fs::read(&legacy_path)?;
+        let legacy = inspect_history_store(&legacy_dir, true)?
+            .overview
+            .context("legacy overview")?;
+        assert_eq!(legacy.history_schema_version, 1);
+        assert!(legacy.output_rows.is_none() && legacy.output_bytes.is_none());
+        assert_eq!(std::fs::read(&legacy_path)?, legacy_before);
+        Ok(())
+    }
+
+    #[test]
+    fn storage_integrity_reports_relationship_and_type_issues_without_payload_claims() -> Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        append_history_event(root.path(), "one", EVENT)?;
+        let conn = open_history_write(root.path())?;
+        conn.pragma_update(None, "foreign_keys", false)?;
+        for _ in 0..25 {
+            conn.execute("INSERT INTO history_events(session_id,ts,event) VALUES ('orphan','now','not JSON')", [])?;
+        }
+        conn.execute(
+            "INSERT INTO history_output(session_id,ts,pipeline,line) VALUES ('one','now','',X'00')",
+            [],
+        )?;
+        let inspected = inspect_history_store(root.path(), true)?;
+        let integrity = inspected.integrity.context("missing integrity")?;
+        assert_eq!(integrity.status, "unhealthy");
+        assert!(integrity.checks_complete);
+        assert_eq!(integrity.sqlite_integrity, "ok");
+        assert_eq!(integrity.foreign_keys, "failed");
+        assert_eq!(integrity.record_types, "failed");
+        assert_eq!(integrity.issue_count, 26);
+        assert_eq!(integrity.issues.len(), 20);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM history_events", [], |row| row
+                .get::<_, i64>(0))?,
+            26
+        );
+        // A text event is not JSON-validated by the structural checker.
+        conn.execute("DELETE FROM history_events WHERE session_id='orphan'", [])?;
+        conn.execute("DELETE FROM history_output", [])?;
+        conn.execute("UPDATE history_events SET event='not JSON'", [])?;
+        assert_eq!(
+            inspect_history_store(root.path(), true)?
+                .integrity
+                .context("missing integrity")?
+                .status,
+            "healthy"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn storage_inspection_refuses_unknown_corrupt_and_linked_sources() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        assert!(inspect_history_store(Path::new("relative"), false).is_err());
+        append_history_event(root.path(), "one", EVENT)?;
+        let conn = open_history_write(root.path())?;
+        conn.pragma_update(None, "user_version", 999)?;
+        drop(conn);
+        let source = root.path().join(HISTORY_DATABASE);
+        let before = std::fs::read(&source)?;
+        assert!(inspect_history_store(root.path(), true).is_err());
+        assert_eq!(std::fs::read(&source)?, before);
+        let bad = root.path().join("bad");
+        std::fs::create_dir(&bad)?;
+        std::fs::write(bad.join(HISTORY_DATABASE), b"not SQLite")?;
+        assert!(inspect_history_store(&bad, true).is_err());
+        assert_eq!(std::fs::read(bad.join(HISTORY_DATABASE))?, b"not SQLite");
+        #[cfg(unix)]
+        {
+            let linked = root.path().join("linked");
+            std::os::unix::fs::symlink(&bad, &linked)?;
+            assert!(inspect_history_store(&linked, false).is_err());
+            let sidecar = bad.join(format!("{HISTORY_DATABASE}-wal"));
+            std::os::unix::fs::symlink(&source, &sidecar)?;
+            assert!(inspect_history_store(&bad, false).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn storage_inspection_rejects_duplicate_sequence_schema_without_repair() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        append_history_event(root.path(), "one", EVENT)?;
+        let conn = open_history_write(root.path())?;
+        conn.pragma_update(None, "foreign_keys", false)?;
+        conn.execute_batch("DROP TABLE history_events;
+            CREATE TABLE history_events(sequence INTEGER NOT NULL,session_id TEXT NOT NULL REFERENCES history_sessions(session_id),ts TEXT NOT NULL,event TEXT NOT NULL);
+            INSERT INTO history_events VALUES(1,'one','now','first'),(1,'one','now','second');")?;
+        assert!(inspect_history_store(root.path(), true).is_err());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM history_events", [], |row| row
+                .get::<_, i64>(0))?,
+            2
+        );
+        let destination_directory = tempfile::tempdir()?;
+        let destination = destination_directory
+            .path()
+            .join("should-not-publish.sqlite");
+        assert!(backup_history_store(root.path(), &destination).is_err());
+        assert!(!destination.exists());
+        Ok(())
+    }
 
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
 

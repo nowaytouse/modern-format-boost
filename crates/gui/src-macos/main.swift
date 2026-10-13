@@ -771,6 +771,42 @@ private struct LocalCacheStatus: Decodable {
         let expiredRows: UInt64
         let evictedRows: UInt64
     }
+    struct PruningPreview: Decodable {
+        let schemaVersion: Int
+        let snapshotUnixSecs: Int64
+        let cutoffUnixSecs: Int64
+        let policy: Pruning.Policy
+        let totalRows: UInt64
+        let totalPayloadBytes: UInt64
+        let expiredRows: UInt64
+        let expiredPayloadBytes: UInt64
+        let evictedRows: UInt64
+        let evictedPayloadBytes: UInt64
+        let retainedRows: UInt64
+        let retainedPayloadBytes: UInt64
+
+        func validate(rows: UInt64, bytes: UInt64) throws {
+            func sum(_ values: [UInt64]) throws -> UInt64 {
+                try values.reduce(0) { total, value in
+                    let addition = total.addingReportingOverflow(value)
+                    guard !addition.overflow, addition.partialValue <= UInt64(Int64.max) else {
+                        throw HostError(message: localized("settings.cache.invalid"))
+                    }
+                    return addition.partialValue
+                }
+            }
+            guard schemaVersion == 1, snapshotUnixSecs >= 0, cutoffUnixSecs <= snapshotUnixSecs,
+                  policy.pathTreeMaxBytes > 0, policy.pathTreeMaxBytes <= UInt64(Int64.max),
+                  policy.pathTreeTtlSeconds > 0, policy.pathTreeTtlSeconds <= UInt64(Int64.max),
+                  cutoffUnixSecs == snapshotUnixSecs - Int64(policy.pathTreeTtlSeconds),
+                  retainedPayloadBytes <= policy.pathTreeMaxBytes,
+                  totalRows == rows, totalPayloadBytes == bytes,
+                  try sum([expiredRows, evictedRows, retainedRows]) == totalRows,
+                  try sum([expiredPayloadBytes, evictedPayloadBytes, retainedPayloadBytes]) == totalPayloadBytes else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
+        }
+    }
     struct Integrity: Decodable {
         struct Issue: Decodable { let code: String; let message: String }
         enum Status: String, Decodable { case healthy, unhealthy, error, absent }
@@ -827,6 +863,7 @@ private struct LocalCacheStatus: Decodable {
     let removedFiles: UInt64
     let integrity: Integrity?
     let pruning: Pruning?
+    let pruningPreview: PruningPreview?
     let database: Database?
 
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
@@ -865,6 +902,12 @@ private struct LocalCacheStatus: Decodable {
         }
         try status.integrity?.validate()
         try status.database?.validate()
+        if let preview = status.pruningPreview {
+            let totals = try status.totals(rebuildable: true)
+            guard status.database != nil, status.removedRows == 0, status.removedFiles == 0,
+                  status.pruning == nil else { throw HostError(message: localized("settings.cache.invalid")) }
+            try preview.validate(rows: totals.rows, bytes: totals.bytes)
+        }
         if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
             guard integrity.blobScanComplete,
                   integrity.checkedCacheRows == (try status.totals(rebuildable: true).rows),
@@ -955,7 +998,100 @@ private func backupHistoryDatabase(to destination: URL, directory: URL) throws -
     return try HistoryDatabaseBackup.decode(data, source: directory.appendingPathComponent("history.sqlite3"), destination: destination)
 }
 
-private enum LocalCacheAction: Equatable { case refresh, clear, check, prune }
+private struct HistoryDatabaseInspection: Decodable {
+    struct Overview: Decodable {
+        let historySchemaVersion: Int
+        let sqliteVersion: String
+        let journalMode: String
+        let pageSize: UInt64
+        let pageCount: UInt64
+        let freePages: UInt64
+        let sessions: UInt64
+        let events: UInt64
+        let eventBytes: UInt64
+        let outputRows: UInt64?
+        let outputBytes: UInt64?
+        let oldestSessionUpdate: String?
+        let newestSessionUpdate: String?
+
+        func validate() throws {
+            let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
+            guard [1, 2].contains(historySchemaVersion), !sqliteVersion.isEmpty,
+                  ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
+                  pageSize >= 512, pageSize <= 65536, pageSize.nonzeroBitCount == 1,
+                  pageCount > 0, freePages <= pageCount, !bytes.overflow,
+                  [bytes.partialValue, sessions, events, eventBytes].allSatisfy({ $0 <= UInt64(Int64.max) }),
+                  outputRows.map({ $0 <= UInt64(Int64.max) }) ?? true,
+                  outputBytes.map({ $0 <= UInt64(Int64.max) }) ?? true,
+                  (historySchemaVersion == 1 ? outputRows == nil && outputBytes == nil : outputRows != nil && outputBytes != nil),
+                  oldestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true,
+                  newestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true else {
+                throw HostError(message: localized("settings.history.inspection_invalid"))
+            }
+        }
+    }
+    struct Integrity: Decodable {
+        enum Status: String, Decodable { case healthy, unhealthy }
+        enum Check: String, Decodable { case ok, failed }
+        let status: Status
+        let checksComplete: Bool
+        let sqliteIntegrity: Check
+        let foreignKeys: Check
+        let recordTypes: Check
+        let issueCount: UInt64
+        let issues: [LocalCacheStatus.Integrity.Issue]
+
+        func validate() throws {
+            let healthy = sqliteIntegrity == .ok && foreignKeys == .ok && recordTypes == .ok
+            guard checksComplete, issues.count <= 20, UInt64(issues.count) <= issueCount,
+                  issueCount <= UInt64(Int64.max), issues.allSatisfy({ !$0.code.isEmpty && !$0.message.isEmpty }),
+                  (status == .healthy ? healthy && issueCount == 0 : !healthy && issueCount > 0 && !issues.isEmpty) else {
+                throw HostError(message: localized("settings.history.inspection_invalid"))
+            }
+        }
+    }
+    let schemaVersion: Int
+    let kind: String
+    let source: String
+    let exists: Bool
+    let overview: Overview?
+    let integrity: Integrity?
+
+    static func decode(_ data: Data, source: URL, checked: Bool) throws -> Self {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let result = try decoder.decode(Self.self, from: data)
+        guard result.schemaVersion == 1, result.kind == "history_sqlite_inspection",
+              result.source.hasPrefix("/"), !result.source.contains("\0"),
+              Data(result.source.utf8) == Data(source.path.utf8),
+              (result.exists ? result.overview != nil && (checked ? result.integrity != nil : result.integrity == nil)
+                  : result.overview == nil && result.integrity == nil) else {
+            throw HostError(message: localized("settings.history.inspection_invalid"))
+        }
+        try result.overview?.validate()
+        try result.integrity?.validate()
+        return result
+    }
+}
+
+private func historyInspectionArguments(directory: URL, checked: Bool) -> [String] {
+    ["--history-stats", "--history-directory", directory.path, "--json"] + (checked ? ["--check-integrity"] : [])
+}
+
+private func queryHistoryDatabase(directory: URL, checked: Bool) throws -> HistoryDatabaseInspection {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let data = try settingsToolOutput(binary, arguments: historyInspectionArguments(directory: directory, checked: checked),
+        timeout: checked ? 120 : 30, acceptedExitCodes: checked ? [0, 2] : [0])
+    return try HistoryDatabaseInspection.decode(data, source: directory.appendingPathComponent("history.sqlite3"), checked: checked)
+}
+
+private enum LocalCacheAction: Equatable { case refresh, clear, check, preview, prune }
+
+private func cachePruningDraftMatches(_ left: MediaSettings, _ right: MediaSettings) -> Bool {
+    left.values.mapValues { Data($0.utf8) } == right.values.mapValues { Data($0.utf8) }
+}
 
 private func cachePruningArguments(_ policies: [EffectiveRuntimeSettings]) throws -> [String] {
     let keys = ["cache.path_tree_max_bytes", "cache.path_tree_ttl_seconds"]
@@ -985,9 +1121,9 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
     case .refresh: arguments = ["--stats", "--json"]
     case .clear: arguments = ["--yes", "--json"]
     case .check: arguments = ["--stats", "--check-integrity", "--json"]
-    case .prune:
+    case .prune, .preview:
         guard policyArguments.count == 5 else { throw HostError(message: localized("settings.config_invalid")) }
-        arguments = ["--prune", "--yes", "--json"] + policyArguments
+        arguments = (action == .prune ? ["--prune", "--yes", "--json"] : ["--preview-prune", "--json"]) + policyArguments
     }
     let status = try LocalCacheStatus.decode(settingsToolOutput(binary, arguments: arguments,
         timeout: action == .check ? 120 : 30, acceptedExitCodes: action == .check ? [0, 1] : [0]))
@@ -999,6 +1135,18 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
               String(pruning.policy.pathTreeMaxBytes) == policyArguments[2],
               String(pruning.policy.pathTreeTtlSeconds) == policyArguments[4] else {
             throw HostError(message: localized("settings.cache.invalid"))
+        }
+    }
+    if action == .preview {
+        guard (status.database == nil ? status.pruningPreview == nil : status.pruningPreview != nil),
+              status.removedRows == 0, status.removedFiles == 0 else {
+            throw HostError(message: localized("settings.cache.invalid"))
+        }
+        if let preview = status.pruningPreview {
+            guard String(preview.policy.pathTreeMaxBytes) == policyArguments[2],
+                  String(preview.policy.pathTreeTtlSeconds) == policyArguments[4] else {
+                throw HostError(message: localized("settings.cache.invalid"))
+            }
         }
     }
     return status
@@ -1055,6 +1203,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let cacheCheck = NSButton()
     private let cacheBackup = NSButton()
     private let historyBackup = NSButton()
+    private let historyRefresh = NSButton()
+    private let historyCheck = NSButton()
+    private let historyOverview = NSTextField(wrappingLabelWithString: "")
+    private let historyIntegrity = NSTextField(wrappingLabelWithString: "")
     private var historyBackupDirectory: URL {
         initialHistoryDirectory(preferences: preferences)
     }
@@ -1293,7 +1445,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                           "settings.cache.retained", "settings.cache.store", "settings.cache.obsolete",
                           "settings.cache.clear", "settings.cache.check", "settings.cache.prune",
                           "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup",
-                          "settings.history.path", "settings.history.backup", "settings.history.backup_help"].map { localized($0) }.joined(separator: " ")
+                          "settings.history.path", "settings.history.backup", "settings.history.backup_help",
+                          "settings.history.overview", "settings.history.check", "settings.history.check_help"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
         return result
     }
@@ -1431,7 +1584,29 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         historyBackup.setAccessibilityLabel(localized("settings.history.backup"))
         historyBackup.target = self
         historyBackup.action = #selector(backupHistory)
-        grid.addRow(with: [NSView(), NSStackView(views: [historyBackup])]).yPlacement = .center
+        for (button, key, symbol, selector) in [
+            (historyRefresh, "settings.history.overview", "chart.bar.doc.horizontal", #selector(refreshHistory)),
+            (historyCheck, "settings.history.check", "checkmark.shield", #selector(checkHistory))
+        ] {
+            button.title = localized(key)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.bezelStyle = .rounded
+            button.toolTip = localized(key == "settings.history.check" ? "settings.history.check_help" : "settings.history.overview_help")
+            button.setAccessibilityLabel(localized(key))
+            button.target = self
+            button.action = selector
+        }
+        grid.addRow(with: [NSView(), NSStackView(views: [historyRefresh, historyCheck, historyBackup])]).yPlacement = .center
+        for (label, key) in [(historyOverview, "settings.history.overview"), (historyIntegrity, "settings.history.check")] {
+            label.stringValue = localized("settings.cache.not_loaded")
+            label.font = .systemFont(ofSize: 11)
+            label.maximumNumberOfLines = label === historyOverview ? 3 : 2
+            label.isSelectable = true
+            label.lineBreakMode = .byTruncatingTail
+            label.setAccessibilityLabel(localized(key))
+            grid.addRow(with: [NSTextField(labelWithString: localized(key)), label]).yPlacement = .center
+        }
         cacheMessage.font = .systemFont(ofSize: 11)
         cacheMessage.maximumNumberOfLines = 4
         cacheMessage.isSelectable = true
@@ -1473,6 +1648,78 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     @objc private func refreshCache() { updateCache(action: .refresh) }
     @objc private func checkCacheIntegrity() { updateCache(action: .check) }
+
+    @objc private func refreshHistory() { inspectHistory(checked: false) }
+    @objc private func checkHistory() { inspectHistory(checked: true) }
+
+    private func displayHistoryInspection(_ inspection: HistoryDatabaseInspection) {
+        guard let overview = inspection.overview else {
+            historyOverview.stringValue = localized("settings.history.absent")
+            historyIntegrity.stringValue = localized("settings.history.not_checked")
+            historyOverview.toolTip = inspection.source
+            historyIntegrity.toolTip = nil
+            historyIntegrity.textColor = .secondaryLabelColor
+            return
+        }
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        let outputs = overview.outputRows.map { String($0) } ?? localized("settings.history.unsupported")
+        historyOverview.stringValue = localized("settings.history.overview_value", String(overview.sessions),
+            String(overview.events), size(overview.eventBytes), outputs,
+            overview.outputBytes.map(size) ?? localized("settings.history.unsupported"))
+        historyOverview.toolTip = inspection.source + "\n"
+            + localized("settings.cache.database_value", overview.historySchemaVersion, overview.sqliteVersion)
+            + " · \(overview.journalMode.uppercased())\n"
+            + localized("settings.cache.pages_value", String(overview.pageCount), String(overview.freePages), String(overview.pageSize))
+            + "\n" + localized("settings.history.update_range", overview.oldestSessionUpdate ?? localized("result.unknown"),
+                overview.newestSessionUpdate ?? localized("result.unknown"))
+        if let integrity = inspection.integrity {
+            historyIntegrity.stringValue = localized("settings.history.structure.\(integrity.status.rawValue)", String(integrity.issueCount))
+            historyIntegrity.textColor = integrity.status == .healthy ? .labelColor : .systemRed
+            historyIntegrity.toolTip = localized("settings.history.check_help") + "\n"
+                + integrity.issues.map { "\($0.code): \($0.message)" }.joined(separator: "\n")
+        } else {
+            historyIntegrity.stringValue = localized("settings.history.not_checked")
+            historyIntegrity.textColor = .secondaryLabelColor
+            historyIntegrity.toolTip = localized("settings.history.check_help")
+        }
+    }
+
+    private func inspectHistory(checked: Bool) {
+        guard !cacheBusy else { return }
+        let directory = historyBackupDirectory
+        let previous = [cacheRefresh, cacheCheck, cacheBackup, cachePrune, cacheClear].map { ($0, $0.isEnabled) }
+        cacheBusy = true
+        for (button, _) in previous { button.isEnabled = false }
+        cacheMessage.stringValue = localized(checked ? "settings.history.checking" : "settings.history.loading")
+        cacheMessage.textColor = .secondaryLabelColor
+        cacheMessage.toolTip = nil
+        cacheMessageRow?.isHidden = false
+        updatePanelSize()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Result { try queryHistoryDatabase(directory: directory, checked: checked) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.cacheBusy = false
+                for (button, enabled) in previous { button.isEnabled = enabled }
+                guard self.panel.sheetParent != nil else { return }
+                do {
+                    guard Data(self.historyBackupDirectory.path.utf8) == Data(directory.path.utf8) else {
+                        throw HostError(message: localized("settings.cache.preview_changed"))
+                    }
+                    self.displayHistoryInspection(try result.get())
+                    self.cacheMessageRow?.isHidden = true
+                } catch {
+                    self.historyOverview.stringValue = localized("settings.cache.unavailable")
+                    self.historyIntegrity.stringValue = localized("settings.history.not_checked")
+                    self.historyOverview.toolTip = nil
+                    self.historyIntegrity.toolTip = nil
+                    self.cacheMessage.stringValue = error.localizedDescription
+                    self.cacheMessage.textColor = .systemRed
+                }
+                self.updatePanelSize()
+            }
+        }
+    }
 
     @objc private func backupHistory() {
         guard !cacheBusy, historyBackup.isEnabled else { return }
@@ -1528,7 +1775,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                   self.panel.sheetParent != nil else { return }
             let previousCleanup = (self.cachePrune.isEnabled, self.cacheClear.isEnabled)
             self.cacheBusy = true
-            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear, self.historyBackup] { button.isEnabled = false }
+            for button in [self.cacheRefresh, self.cacheCheck, self.cacheBackup, self.cachePrune, self.cacheClear, self.historyBackup, self.historyRefresh, self.historyCheck] { button.isEnabled = false }
             self.cacheMessage.stringValue = localized("settings.cache.backing_up")
             self.cacheMessage.textColor = .secondaryLabelColor
             self.cacheMessage.toolTip = nil
@@ -1563,14 +1810,29 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     @objc private func pruneCache() {
         guard !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
+        updateCache(action: .preview)
+    }
+
+    private func confirmCachePruning(_ preview: LocalCacheStatus.PruningPreview, settings: MediaSettings, arguments: [String]) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = localized("settings.cache.prune_confirm")
-        alert.informativeText = localized("settings.cache.prune_detail")
+        func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
+        alert.informativeText = localized("settings.cache.preview_value", String(preview.expiredRows), size(preview.expiredPayloadBytes),
+            String(preview.evictedRows), size(preview.evictedPayloadBytes), String(preview.retainedRows), size(preview.retainedPayloadBytes))
+            + "\n\n" + localized("settings.cache.preview_note")
         alert.addButton(withTitle: localized("settings.cache.prune"))
         alert.addButton(withTitle: localized("alert.cancel"))
         alert.beginSheetModal(for: panel) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.updateCache(action: .prune) }
+            guard let self, response == .alertFirstButtonReturn, self.panel.sheetParent != nil, !self.cacheBusy else { return }
+            guard cachePruningDraftMatches(self.draft(), settings) else {
+                self.cacheMessage.stringValue = localized("settings.cache.preview_changed")
+                self.cacheMessage.textColor = .systemRed
+                self.cacheMessageRow?.isHidden = false
+                self.updatePanelSize()
+                return
+            }
+            self.updateCache(action: .prune, policyArguments: arguments)
         }
     }
 
@@ -1587,7 +1849,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
     }
 
-    private func updateCache(action: LocalCacheAction) {
+    private func updateCache(action: LocalCacheAction, policyArguments: [String]? = nil) {
         guard !cacheBusy else { return }
         let settings = draft()
         let fast = self.fast, videos = self.videos
@@ -1605,6 +1867,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         case .check: message = "settings.cache.checking"
         case .clear: message = "settings.cache.clearing"
         case .prune: message = "settings.cache.pruning"
+        case .preview: message = "settings.cache.preview_loading"
         }
         cacheMessage.stringValue = localized(message)
         cacheMessage.textColor = .secondaryLabelColor
@@ -1612,8 +1875,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         updatePanelSize()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Result {
-                var arguments: [String] = []
-                if action == .prune {
+                var arguments = policyArguments ?? []
+                if action == .preview || (action == .prune && policyArguments == nil) {
                     let fields: [MediaSetting] = [.cacheMaxBytes, .cacheTtlSeconds]
                         + (fast ? [.fastConfig] : (videos ? [.vidConfig] : [.imgConfig, .vidConfig]))
                     try settings.validate(fields)
@@ -1629,15 +1892,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     }
                     arguments = try cachePruningArguments(policies)
                 }
-                return try queryLocalCache(action: action, policyArguments: arguments)
+                return (try queryLocalCache(action: action, policyArguments: arguments), arguments)
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.cacheBusy = false
                 self.cacheRefresh.isEnabled = true
                 self.cacheCheck.isEnabled = true
+                guard self.panel.sheetParent != nil else { return }
                 do {
-                    let snapshot = try result.get()
+                    let (snapshot, arguments) = try result.get()
+                    if action == .preview && !cachePruningDraftMatches(self.draft(), settings) {
+                        throw HostError(message: localized("settings.cache.preview_changed"))
+                    }
                     try self.displayCache(snapshot)
                     self.cacheMessage.stringValue = action == .clear
                         ? localized("settings.cache.cleared", String(snapshot.removedRows), String(snapshot.removedFiles)) : ""
@@ -1647,6 +1914,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     }
                     self.cacheMessageRow?.isHidden = self.cacheMessage.stringValue.isEmpty
                     if let report = snapshot.integrity { self.displayCacheIntegrity(report) }
+                    if action == .preview {
+                        if let preview = snapshot.pruningPreview {
+                            self.confirmCachePruning(preview, settings: settings, arguments: arguments)
+                        } else {
+                            self.cacheMessage.stringValue = localized("settings.cache.absent")
+                            self.cacheMessageRow?.isHidden = false
+                        }
+                    }
                 } catch {
                     self.cacheLoaded = false
                     self.cacheStore = nil
@@ -1705,6 +1980,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         resetButton.isEnabled = !cacheBusy
         applyButton.isEnabled = !cacheBusy && !applying
         historyBackup.isEnabled = !cacheBusy
+        historyRefresh.isEnabled = !cacheBusy
+        historyCheck.isEnabled = !cacheBusy
         status.isHidden = status.stringValue.isEmpty
         let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
         let rowsHeight: CGFloat
@@ -2427,7 +2704,103 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try previous.save(to: preferences)
     }
 
+    private func validateHistoryInspectionForSelfTest() throws {
+        let source = URL(fileURLWithPath: "/synthetic/history/history.sqlite3")
+        let overview: [String: Any] = ["history_schema_version": 2, "sqlite_version": "3.53.0", "journal_mode": "wal",
+            "page_size": 4096, "page_count": 12, "free_pages": 3, "sessions": 2, "events": 3,
+            "event_bytes": 512, "output_rows": 5, "output_bytes": 1024,
+            "oldest_session_update": "2026-01-01", "newest_session_update": "2026-01-02"]
+        let integrity: [String: Any] = ["status": "healthy", "checks_complete": true, "sqlite_integrity": "ok",
+            "foreign_keys": "ok", "record_types": "ok", "issue_count": 0, "issues": []]
+        let document: [String: Any] = ["schema_version": 1, "kind": "history_sqlite_inspection", "source": source.path,
+            "exists": true, "overview": overview, "integrity": integrity]
+        func decode(_ object: [String: Any], checked: Bool = true) throws -> HistoryDatabaseInspection {
+            try HistoryDatabaseInspection.decode(JSONSerialization.data(withJSONObject: object), source: source, checked: checked)
+        }
+        func refuse(_ object: [String: Any], checked: Bool = true) throws {
+            do { _ = try decode(object, checked: checked) }
+            catch { return }
+            throw HostError(message: "Invalid History inspection was accepted")
+        }
+        displayHistoryInspection(try decode(document))
+        guard historyOverview.stringValue.contains("2"), historyOverview.stringValue.contains("5"),
+              historyIntegrity.stringValue == localized("settings.history.structure.healthy", "0"),
+              historyInspectionArguments(directory: source.deletingLastPathComponent(), checked: false)
+                == ["--history-stats", "--history-directory", source.deletingLastPathComponent().path, "--json"],
+              historyInspectionArguments(directory: source.deletingLastPathComponent(), checked: true).last == "--check-integrity",
+              matchingSettings(localized("settings.history.overview")).contains(.cache),
+              matchingSettings(localized("settings.history.check")).contains(.cache),
+              historyCheck.toolTip == localized("settings.history.check_help") else {
+            throw HostError(message: "History inspection counts, arguments or Settings controls were lost")
+        }
+        var changed = document
+        changed["exists"] = false
+        try refuse(changed)
+        changed["overview"] = NSNull()
+        changed["integrity"] = NSNull()
+        displayHistoryInspection(try decode(changed))
+        guard historyOverview.stringValue == localized("settings.history.absent") else {
+            throw HostError(message: "Missing History was shown as an empty database")
+        }
+        var oldOverview = overview
+        oldOverview["history_schema_version"] = 1
+        oldOverview["output_rows"] = NSNull()
+        oldOverview["output_bytes"] = NSNull()
+        changed = document
+        changed["overview"] = oldOverview
+        displayHistoryInspection(try decode(changed))
+        guard historyOverview.stringValue.contains(localized("settings.history.unsupported")) else {
+            throw HostError(message: "Unsupported History output counters were guessed as zero")
+        }
+        oldOverview["output_rows"] = 0
+        changed["overview"] = oldOverview
+        try refuse(changed)
+        for (key, value) in [("schema_version", 2 as Any), ("source", "/synthetic/other/history.sqlite3"),
+            ("kind", "other_database")] {
+            changed = document
+            changed[key] = value
+            try refuse(changed)
+        }
+        for (key, value) in [("history_schema_version", 3 as Any), ("page_size", 513), ("free_pages", 13),
+            ("events", UInt64.max), ("output_bytes", NSNull())] {
+            var invalid = overview
+            invalid[key] = value
+            changed = document
+            changed["overview"] = invalid
+            try refuse(changed)
+        }
+        for (key, value) in [("checks_complete", false as Any), ("record_types", "failed"),
+            ("issue_count", 1), ("status", "unknown")] {
+            var invalid = integrity
+            invalid[key] = value
+            changed = document
+            changed["integrity"] = invalid
+            try refuse(changed)
+        }
+        var unhealthy = integrity
+        unhealthy["status"] = "unhealthy"
+        unhealthy["record_types"] = "failed"
+        unhealthy["issue_count"] = 1
+        unhealthy["issues"] = [["code": "invalid_type", "message": "Synthetic invalid stored type"]]
+        changed = document
+        changed["integrity"] = unhealthy
+        displayHistoryInspection(try decode(changed))
+        guard historyIntegrity.textColor == .systemRed else {
+            throw HostError(message: "Unhealthy History was displayed as a successful check")
+        }
+        changed["integrity"] = NSNull()
+        _ = try decode(changed, checked: false)
+        try refuse(changed)
+        try refuse(document, checked: false)
+        historyOverview.stringValue = localized("settings.cache.not_loaded")
+        historyOverview.toolTip = nil
+        historyIntegrity.stringValue = localized("settings.history.not_checked")
+        historyIntegrity.textColor = .secondaryLabelColor
+        historyIntegrity.toolTip = nil
+    }
+
     private func validateCacheForSelfTest() throws {
+        try validateHistoryInspectionForSelfTest()
         let document: [String: Any] = ["schema_version": 1, "cache_directory": "/synthetic/cache",
             "store_bytes": 1024, "legacy_analysis_bytes": 64, "legacy_analysis_files": 1,
             "removed_rows": 0, "removed_files": 0, "namespaces": [
@@ -2539,13 +2912,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try displayCache(databaseSnapshot)
         updatePanelSize()
         guard !cacheClear.isEnabled, !cachePrune.isEnabled, !cacheCheck.isEnabled, !cacheBackup.isEnabled,
-              !historyBackup.isEnabled, !cancelButton.isEnabled else {
+              !historyBackup.isEnabled, !historyRefresh.isEnabled, !historyCheck.isEnabled, !cancelButton.isEnabled else {
             throw HostError(message: "Cache commands stayed enabled while busy")
         }
         cacheBusy = false
         try displayCache(snapshot)
         let policy = EffectiveRuntimeSettings(values: ["cache.path_tree_max_bytes": "4096", "cache.path_tree_ttl_seconds": "60"],
             sources: [:], sourceChain: [:])
+        var before = draft(), after = draft()
+        before.values[.imgConfig] = "/synthetic/\u{00e9}.json"
+        after.values[.imgConfig] = "/synthetic/e\u{0301}.json"
+        guard !cachePruningDraftMatches(before, after), cachePruningDraftMatches(before, before) else {
+            throw HostError(message: "Pruning confirmation merged byte-distinct configuration paths")
+        }
         guard try cachePruningArguments([policy, policy]) == ["--no-config", "--cache-max-bytes", "4096", "--cache-ttl-seconds", "60"] else {
             throw HostError(message: "Cache pruning did not pin the resolved policy")
         }
@@ -2571,6 +2950,33 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
             catch { continue }
             throw HostError(message: "Contradictory pruning receipt was accepted")
+        }
+        var previewed = document
+        previewed["database"] = database
+        let preview: [String: Any] = ["schema_version": 1, "snapshot_unix_secs": 100, "cutoff_unix_secs": 40,
+            "policy": ["path_tree_max_bytes": 4096, "path_tree_ttl_seconds": 60],
+            "total_rows": 3, "total_payload_bytes": 512, "expired_rows": 1, "expired_payload_bytes": 128,
+            "evicted_rows": 1, "evicted_payload_bytes": 128, "retained_rows": 1, "retained_payload_bytes": 256]
+        previewed["pruning_preview"] = preview
+        guard try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: previewed)).pruningPreview?.retainedRows == 1 else {
+            throw HostError(message: "Read-only cache preview lost retained counts")
+        }
+        for (key, value) in [("schema_version", 2 as Any), ("cutoff_unix_secs", 101), ("cutoff_unix_secs", 39),
+            ("expired_rows", 4), ("retained_payload_bytes", 255), ("total_rows", UInt64.max)] {
+            var invalidPreview = preview
+            invalidPreview[key] = value
+            var invalid = previewed
+            invalid["pruning_preview"] = invalidPreview
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Invalid pruning preview was accepted: \(key)")
+        }
+        for key in ["removed_rows", "removed_files"] {
+            var invalid = previewed
+            invalid[key] = 1
+            do { _ = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: invalid)) }
+            catch { continue }
+            throw HostError(message: "Read-only preview claimed a mutation")
         }
         cacheLabels["path"]?.stringValue = "/synthetic/" + String(repeating: "long-directory/", count: 30)
         cacheMessage.stringValue = String(repeating: "Synthetic cache error. ", count: 30)
