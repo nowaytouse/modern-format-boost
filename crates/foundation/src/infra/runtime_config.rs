@@ -225,6 +225,84 @@ pub struct ToolsPolicy {
     pub paths: BTreeMap<String, PathBuf>,
 }
 
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct ToolsArgs {
+    /// Override a media tool executable, e.g. --tool cjxl=/absolute/path; may be repeated.
+    #[arg(long = "tool", global = true, value_parser = parse_tool_override)]
+    pub tools: Vec<(String, PathBuf)>,
+}
+
+/// Parse an explicit tool path without reading or executing the selected file.
+/// Additional '=' characters belong to the path.
+///
+/// # Errors
+/// Rejects empty values, invalid tool names or non-absolute executable paths.
+pub fn parse_tool_override(value: &str) -> std::result::Result<(String, PathBuf), String> {
+    let (name, path) = value
+        .split_once('=')
+        .ok_or_else(|| "expected NAME=PATH".to_owned())?;
+    if name.is_empty() || path.is_empty() {
+        return Err("tool name and executable path must be nonempty".into());
+    }
+    let path = PathBuf::from(path);
+    validate_tool_override(name, &path).map_err(|error| error.to_string())?;
+    Ok((name.to_owned(), path))
+}
+
+fn validate_tool_override(name: &str, path: &Path) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_'),
+        "tools.paths has invalid tool name {name:?}"
+    );
+    ensure!(path.is_absolute(), "tools.paths.{name} must be absolute");
+    ensure!(
+        !path.as_os_str().as_encoded_bytes().contains(&0),
+        "tools.paths.{name} cannot contain NUL"
+    );
+    Ok(())
+}
+
+impl ToolsArgs {
+    /// Preserve the exact path at string-based launcher boundaries.
+    ///
+    /// # Errors
+    /// Rejects invalid paths or paths that cannot be represented without UTF-8 loss.
+    pub fn cli_arguments(&self) -> Result<Vec<String>> {
+        let mut arguments = Vec::with_capacity(self.tools.len() * 2);
+        for (name, path) in &self.tools {
+            validate_tool_override(name, path)?;
+            let path = path.to_str().with_context(|| {
+                format!("tools.paths.{name} cannot be forwarded without UTF-8 loss")
+            })?;
+            arguments.extend(["--tool".to_owned(), format!("{name}={path}")]);
+        }
+        Ok(arguments)
+    }
+
+    /// Apply explicit overrides; omitted tools continue inheriting the loaded configuration.
+    ///
+    /// # Errors
+    /// Returns invalid tool override or effective configuration errors.
+    pub fn apply_to(&self, loaded: &mut LoadedConfig) -> Result<()> {
+        for (name, path) in &self.tools {
+            validate_tool_override(name, path)?;
+        }
+        for (name, path) in &self.tools {
+            loaded.config.tools.paths.insert(name.clone(), path.clone());
+            record_source(
+                &mut loaded.sources,
+                &mut loaded.source_chain,
+                format!("tools.paths.{name}"),
+                "CLI",
+            );
+        }
+        loaded.config.validate()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CachePolicy {
@@ -343,15 +421,7 @@ impl RuntimeConfig {
             }
         }
         for (name, path) in &self.tools.paths {
-            ensure!(
-                !name.is_empty()
-                    && name.chars().all(|ch| ch.is_ascii_lowercase()
-                        || ch.is_ascii_digit()
-                        || ch == '-'
-                        || ch == '_'),
-                "tools.paths has invalid tool name {name:?}"
-            );
-            ensure!(path.is_absolute(), "tools.paths.{name} must be absolute");
+            validate_tool_override(name, path)?;
         }
         Ok(())
     }
@@ -725,6 +795,88 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tool_overrides_preserve_inheritance_exact_paths_and_cli_sources() -> Result<()> {
+        let mut loaded = LoadedConfig {
+            config: RuntimeConfig::default(),
+            sources: BTreeMap::new(),
+            source_chain: BTreeMap::new(),
+        };
+        for name in ["cjxl", "djxl"] {
+            loaded
+                .config
+                .tools
+                .paths
+                .insert(name.into(), PathBuf::from(format!("/saved/{name}")));
+            record_source(
+                &mut loaded.sources,
+                &mut loaded.source_chain,
+                format!("tools.paths.{name}"),
+                "saved",
+            );
+        }
+        ToolsArgs::default().apply_to(&mut loaded)?;
+        assert_eq!(ToolsArgs::default().cli_arguments()?, Vec::<String>::new());
+        let path = "/not-created/\u{5de5}\u{5177} nightly=1/cjxl";
+        let tools = ToolsArgs {
+            tools: vec![
+                parse_tool_override("cjxl=/first/cjxl").map_err(anyhow::Error::msg)?,
+                parse_tool_override(&format!("cjxl={path}")).map_err(anyhow::Error::msg)?,
+            ],
+        };
+        assert_eq!(
+            tools.cli_arguments()?,
+            [
+                "--tool",
+                "cjxl=/first/cjxl",
+                "--tool",
+                &format!("cjxl={path}")
+            ]
+        );
+        tools.apply_to(&mut loaded)?;
+        assert_eq!(loaded.config.tools.paths["cjxl"], PathBuf::from(path));
+        assert_eq!(
+            loaded.config.tools.paths["djxl"],
+            PathBuf::from("/saved/djxl")
+        );
+        assert_eq!(
+            loaded.source_chain["tools.paths.cjxl"],
+            ["saved", "CLI", "CLI"]
+        );
+        assert_eq!(loaded.sources["tools.paths.djxl"], "saved");
+        let document: Value = serde_json::from_str(&loaded.to_json(false)?)?;
+        assert_eq!(document["config"]["tools"]["paths"]["cjxl"], path);
+        for invalid in [
+            "missing-equals",
+            "=empty",
+            "cjxl=",
+            "CJXL=/tool",
+            "tool name=/tool",
+            "cjxl=relative/tool",
+            "cjxl=/bad\0path",
+        ] {
+            assert!(parse_tool_override(invalid).is_err());
+        }
+        let invalid = ToolsArgs {
+            tools: vec![("cjxl".into(), PathBuf::from("relative/tool"))],
+        };
+        assert!(invalid.cli_arguments().is_err());
+        assert!(invalid.apply_to(&mut loaded).is_err());
+        assert_eq!(loaded.config.tools.paths["cjxl"], PathBuf::from(path));
+        #[cfg(unix)]
+        {
+            use std::ffi::OsString;
+            use std::os::unix::ffi::OsStringExt;
+            let tools = ToolsArgs {
+                tools: vec![(
+                    "cjxl".into(),
+                    PathBuf::from(OsString::from_vec(b"/tool-\xff".to_vec())),
+                )],
+            };
+            assert!(tools.cli_arguments().is_err());
+        }
+        Ok(())
+    }
     #[test]
     fn image_size_tolerance_budget_defaults_layers_and_integer_bounds() -> Result<()> {
         let mut value = serde_json::to_value(RuntimeConfig::default())?;

@@ -33,6 +33,14 @@ private struct PreflightPlan: Decodable {
     let selected_media_bytes: UInt64
     let entries: [PreflightEntry]
     let relationships: [PreflightRelationship]
+    let storage: PreflightStorage
+}
+
+private struct PreflightStorage: Decodable {
+    let status: String
+    let directory: String?
+    let available_bytes: UInt64?
+    let diagnostic: String?
 }
 
 private struct PreflightWorker: Decodable {
@@ -83,7 +91,12 @@ private struct PreflightSnapshot: Decodable {
         for plan in plans {
             try keys(plan, ["input", "output_requested", "in_place_requested", "files_discovered",
                 "selected_images", "selected_videos", "filtered_media", "sidecars", "other_files",
-                "selected_media_bytes", "entries", "relationships"])
+                "selected_media_bytes", "entries", "relationships", "storage"])
+            guard let storage = plan["storage"] as? [String: Any] else {
+                try require(false, "storage observation shape")
+                continue
+            }
+            try keys(storage, ["status", "directory", "available_bytes", "diagnostic"])
             guard let entries = plan["entries"] as? [[String: Any]],
                   let relationships = plan["relationships"] as? [[String: Any]] else {
                 try require(false, "inventory shape")
@@ -109,6 +122,21 @@ private struct PreflightSnapshot: Decodable {
             && !plan.input.contains("\0"), "input identity")
         if let output = plan.output_requested {
             try require(output.hasPrefix("/") && !output.contains("\0"), "output path")
+        }
+        switch plan.storage.status {
+        case "observed":
+            try require(plan.in_place_requested || plan.output_requested != nil, "storage destination is unbound")
+            guard let directory = plan.storage.directory else {
+                try require(false, "storage directory is absent")
+                throw NSError(domain: "MFBPreflight", code: 1)
+            }
+            try require(directory.hasPrefix("/") && !directory.contains("\0")
+                && plan.storage.available_bytes != nil && plan.storage.diagnostic == nil, "observed storage evidence")
+        case "unknown":
+            try require(plan.storage.directory == nil && plan.storage.available_bytes == nil
+                && plan.storage.diagnostic.map { !$0.isEmpty && !$0.contains("\0") } == true, "unknown storage evidence")
+        default:
+            try require(false, "unknown storage status")
         }
         try require(plan.entries.count <= 2_000 && plan.files_discovered == plan.entries.count,
             "inventory exceeds 2,000 entries or is incomplete")
@@ -233,6 +261,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
     private let input = NSTextField(labelWithString: "")
     private let summary = NSTextField(wrappingLabelWithString: "")
     private let workers = NSTextField(wrappingLabelWithString: "")
+    private let storage = NSTextField(labelWithString: "")
     private let search = NSSearchField()
     private let table = NSTableView()
     private let detail = NSTextView()
@@ -278,6 +307,10 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         workers.font = .systemFont(ofSize: 12)
         workers.maximumNumberOfLines = 3
         workers.lineBreakMode = .byTruncatingMiddle
+        storage.font = .systemFont(ofSize: 12)
+        storage.isSelectable = true
+        storage.lineBreakMode = .byTruncatingMiddle
+        storage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         search.placeholderString = text("Path, route, action or reason", "搜索路径、类型、动作或原因", "パス・種類・処理・理由を検索")
         search.setAccessibilityLabel(search.placeholderString)
         search.delegate = self
@@ -327,7 +360,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
-        for view in [input, summary, workers, search, tableScroll, detailScroll, footer] {
+        for view in [input, summary, workers, storage, search, tableScroll, detailScroll, footer] {
             stack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -354,6 +387,9 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         self.input.setAccessibilityLabel(input)
         summary.stringValue = text("Reading selected input…", "正在检查选定路径…", "選択したパスを確認中…")
         workers.stringValue = ""
+        storage.stringValue = ""
+        storage.toolTip = nil
+        storage.setAccessibilityLabel(nil)
         detail.string = ""
         search.stringValue = ""
         search.isEnabled = false
@@ -385,10 +421,31 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         }.joined(separator: "\n")
         workers.toolTip = workers.stringValue
         workers.setAccessibilityLabel(workers.stringValue)
+        workers.isHidden = snapshot.workers.isEmpty
+        displayStorage(plan.storage)
         search.isEnabled = true
         applyFilter()
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func displayStorage(_ observation: PreflightStorage) {
+        let limits = text("Snapshot only; not reserved. Required output, temporary and Photos space is unknown.",
+            "仅为快照，未预留空间；输出、临时文件和照片图库的所需空间未知。",
+            "スナップショットのみ・領域は未予約です。出力・一時ファイル・写真ライブラリの必要容量は不明です。")
+        if let available = observation.available_bytes, let directory = observation.directory {
+            let readable = Int64(exactly: available).map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+                ?? String(available) + " bytes"
+            storage.stringValue = text("Destination disk available: ", "目标磁盘当前可用：", "出力先の空き容量：")
+                + readable + text(" (snapshot)", "（快照）", "（スナップショット）")
+            storage.toolTip = directory + "\n" + String(available) + " bytes\n" + limits
+        } else {
+            storage.stringValue = text("Destination filesystem capacity unknown", "目标文件系统的可用容量未知", "出力先のファイルシステムの空き容量は不明")
+            let reason = observation.diagnostic == "destination_not_bound"
+                ? text("No destination bound", "尚未绑定输出目标", "出力先は未確定") : observation.diagnostic ?? ""
+            storage.toolTip = reason + "\n" + limits
+        }
+        storage.setAccessibilityLabel(storage.stringValue + "\n" + (storage.toolTip ?? ""))
     }
 
     func showError(_ message: String) {
@@ -400,6 +457,9 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         search.isEnabled = false
         summary.stringValue = text("Inspection unavailable", "预检不可用", "確認できません")
         workers.stringValue = ""
+        storage.stringValue = ""
+        storage.toolTip = nil
+        storage.setAccessibilityLabel(nil)
         status.stringValue = text("No validated report · Processing has not started", "未获得有效报告 · 尚未开始处理", "有効なレポートなし · 処理は未開始")
         detail.string = message
     }
@@ -544,6 +604,8 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
             "execution_started": false, "plans": [["input": "/synthetic/preflight", "output_requested": NSNull(),
                 "in_place_requested": false, "files_discovered": 3, "selected_images": 1, "selected_videos": 1,
                 "filtered_media": 0, "sidecars": 1, "other_files": 0, "selected_media_bytes": 8,
+                "storage": ["status": "unknown", "directory": NSNull(), "available_bytes": NSNull(),
+                    "diagnostic": "destination_not_bound"],
                 "entries": [entry(media + ".jpg", "image", "submit_img", "content_routed_to_image_worker"),
                     entry(media + ".mov", "video", "submit_vid", "content_routed_to_video_worker"),
                     entry(media + ".jpg.xmp", "sidecar", "preserve_sidecar", "metadata_sidecar_not_a_separate_media_task")],
@@ -581,6 +643,36 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
               let relationships = plan["relationships"] as? [[String: Any]] else {
             return failures + ["invalid preflight test fixture"]
         }
+        var absentStorage = plan
+        absentStorage.removeValue(forKey: "storage")
+        var absentReport = original
+        absentReport["plans"] = [absentStorage]
+        check("missing storage observation", absentReport)
+        let observed: [String: Any] = ["status": "observed", "directory": "/synthetic",
+            "available_bytes": UInt64(0), "diagnostic": NSNull()]
+        var capacityPlan = plan
+        capacityPlan["output_requested"] = "/synthetic/output"
+        capacityPlan["storage"] = observed
+        var capacityReport = original
+        capacityReport["plans"] = [capacityPlan]
+        check("observed zero capacity", capacityReport, accepted: true)
+        for (field, value) in [("status", "guessed"), ("directory", "relative"),
+            ("available_bytes", -1), ("available_bytes", true), ("diagnostic", "unexpected")] as [(String, Any)] {
+            var invalid = observed
+            invalid[field] = value
+            capacityPlan["storage"] = invalid
+            capacityReport["plans"] = [capacityPlan]
+            check("invalid storage \(field)", capacityReport)
+        }
+        var unknown: [String: Any] = ["status": "unknown", "directory": NSNull(),
+            "available_bytes": NSNull(), "diagnostic": "probe failed"]
+        capacityPlan["storage"] = unknown
+        capacityReport["plans"] = [capacityPlan]
+        check("unknown capacity with diagnostic", capacityReport, accepted: true)
+        unknown["available_bytes"] = UInt64(0)
+        capacityPlan["storage"] = unknown
+        capacityReport["plans"] = [capacityPlan]
+        check("unknown capacity guessed zero", capacityReport)
         for (name, value) in [("schema_version", 1), ("execution_started", true)] as [(String, Any)] {
             var object = original
             object[name] = value

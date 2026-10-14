@@ -85,6 +85,15 @@ Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
 
+Developer **Tool Paths** provides a compact native executable chooser and per-tool
+or per-pipeline reset for IMG, Fast IMG and VID. Unset paths inherit the configuration;
+the configuration file is never rewritten. A read-only effective-config preview shows
+the winning path and its source chain, not a claim that the executable was tested.
+Both workers accept repeated `--tool NAME=/absolute/path`; the launcher uses separate
+`--img-tool` and `--vid-tool` overrides and rejects inapplicable scopes. Paths retain
+spaces and additional equals signs; invalid names, relative/NUL paths and lossy
+UTF-8 forwarding are rejected rather than silently changing the selected tool.
+
 Standard IMG exposes **Allow size growth** and **Growth limit (bytes)** in Images,
 backed by `img.allow_size_tolerance` (default `false`) and `img.size_tolerance_bytes`
 (default `524288`, or 512 KiB). `img run --allow-size-tolerance --size-tolerance-bytes 4096`
@@ -186,6 +195,10 @@ These unverified names do not establish a Live Photo relationship or authorize c
 Selected IMG/VID worker paths are observed without starting them or building missing
 tools. Readable regular-file metadata and Unix execute bits are not codec capability
 or full dependency readiness; unsupported executable checks remain unknown.
+Each plan also includes a destination-filesystem capacity snapshot from the nearest
+existing directory, without creating output. Missing/unbound destinations or failed
+queries retain an unknown value and diagnostic, not zero. Available bytes are neither
+reserved space nor a scratch/output estimate or proof that the run will fit.
 The native GUI's input-inspection icon opens this report for standard processing,
 with searchable paths/actions/reasons, exact totals, output scope and candidate details.
 It rejects invalid/incomplete reports and reports over 1 MiB or 2,000 entries rather

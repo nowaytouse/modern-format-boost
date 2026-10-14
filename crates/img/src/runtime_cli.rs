@@ -51,9 +51,8 @@ pub(super) struct RuntimeArgs {
     execution: runtime_config::ExecutionArgs,
     #[command(flatten)]
     cache: runtime_config::cache_args::CacheArgs,
-    /// Override a tool executable, e.g. --tool cjxl=/path/to/cjxl. May be repeated.
-    #[arg(long = "tool", global = true, value_parser = parse_tool)]
-    tools: Vec<(String, PathBuf)>,
+    #[command(flatten)]
+    tools: runtime_config::ToolsArgs,
 }
 
 #[derive(Subcommand)]
@@ -117,16 +116,6 @@ impl RuntimeArgs {
         }
         Ok(())
     }
-}
-
-fn parse_tool(value: &str) -> Result<(String, PathBuf), String> {
-    let (name, path) = value
-        .split_once('=')
-        .ok_or_else(|| "expected NAME=PATH".to_owned())?;
-    if name.is_empty() || path.is_empty() {
-        return Err("tool name and executable path must be nonempty".into());
-    }
-    Ok((name.to_owned(), PathBuf::from(path)))
 }
 
 fn apply<T: Copy>(
@@ -221,20 +210,11 @@ impl RuntimeArgs {
             source_chain,
             "img.jpeg_effort",
         );
-        for (name, path) in &self.tools {
-            config.tools.paths.insert(name.clone(), path.clone());
-            runtime_config::record_source(
-                sources,
-                source_chain,
-                format!("tools.paths.{name}"),
-                "CLI",
-            );
-        }
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
         self.execution.apply_to(&mut loaded);
         self.cache.apply_to(&mut loaded);
-        loaded.config.validate()?;
+        self.tools.apply_to(&mut loaded)?;
         Ok(loaded)
     }
 }
@@ -243,6 +223,49 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn shared_tool_paths_reach_image_config_run_and_fast_image_without_execution() -> Result<()> {
+        let path = "/synthetic/\u{5de5}\u{5177} nightly=1/cjxl";
+        for (command, tail) in [
+            ("config", "show"),
+            ("run", "/unused"),
+            ("fast-img", "/unused"),
+        ] {
+            let value = format!("cjxl={path}");
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                command,
+                tail,
+                "--no-config",
+                "--tool",
+                "djxl=/synthetic/djxl",
+                "--tool",
+                "cjxl=/synthetic/previous",
+                "--tool",
+                &value,
+            ])?;
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(loaded.config.tools.paths["cjxl"], PathBuf::from(path));
+            assert_eq!(
+                loaded.config.tools.paths["djxl"],
+                PathBuf::from("/synthetic/djxl")
+            );
+            assert_eq!(loaded.sources["tools.paths.cjxl"], "CLI");
+            assert_eq!(
+                loaded.source_chain["tools.paths.cjxl"]
+                    .last()
+                    .map(String::as_str),
+                Some("CLI")
+            );
+        }
+        for value in ["CJXL=/synthetic/cjxl", "cjxl=relative", "cjxl="] {
+            assert!(
+                crate::Cli::try_parse_from(["img", "config", "show", "--tool", value]).is_err()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn execution_flags_reach_image_inspection_and_fast_image() -> Result<()> {

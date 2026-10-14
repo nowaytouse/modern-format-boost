@@ -784,6 +784,8 @@ pub(crate) struct ToolIdentity {
 
 // shortcut: metadata is not a content proof; use hashing before persisted reuse.
 pub(crate) fn tool_identity(path: &Path) -> std::io::Result<ToolIdentity> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
     let target = path.canonicalize()?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -799,8 +801,6 @@ pub(crate) fn tool_identity(path: &Path) -> std::io::Result<ToolIdentity> {
             "tool identity requires a regular file",
         ));
     }
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
     Ok(ToolIdentity {
         target,
         len: metadata.len(),
@@ -1433,11 +1433,11 @@ mod tests {
     #[test]
     fn failed_multimedia_tool_retries_replacement_expiry_and_missing_identity() -> anyhow::Result<()>
     {
+        use std::os::unix::fs::PermissionsExt;
+
         if isolated_test_process() {
             return Ok(());
         }
-        use std::os::unix::fs::PermissionsExt;
-
         let tmp = TempDir::new()?;
         let tool = tmp.path().join("ffprobe");
         let counter = tmp.path().join("counter");

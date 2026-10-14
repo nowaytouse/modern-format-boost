@@ -123,7 +123,7 @@ impl VerificationGate for Gate1Local {
             ctx,
             || collect_delivery_output_files(&ctx.working_copy, None),
             |check, completed, total, state, files| {
-                activity.emit(check, completed, total, state, files)
+                activity.emit(check, completed, total, state, files);
             },
         )
     }
@@ -1330,14 +1330,6 @@ mod tests {
 
     #[test]
     fn required_checks_stop_on_failure_and_run_all_on_success() {
-        let calls = std::cell::Cell::new(0);
-        let probe = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
-            calls.set(calls.get() + 1);
-            super::detail("probe", true, "pass".into(), "pass".into(), vec![])
-        };
-        let fail = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
-            super::detail("failed", false, "pass".into(), "failed".into(), vec![])
-        };
         type TestProbe<'a> = (
             &'static str,
             &'a dyn Fn(
@@ -1346,6 +1338,14 @@ mod tests {
                 &mut dyn FnMut(usize, usize),
             ) -> super::CheckDetail,
         );
+        let calls = std::cell::Cell::new(0);
+        let probe = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
+            calls.set(calls.get() + 1);
+            super::detail("probe", true, "pass".into(), "pass".into(), vec![])
+        };
+        let fail = |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| {
+            super::detail("failed", false, "pass".into(), "failed".into(), vec![])
+        };
         let probes: [TestProbe<'_>; 3] = [("count", &probe), ("size", &fail), ("blake3", &probe)];
         let ctx = ctx_with_library(1, vec![]);
         let mut events = vec![];
@@ -1437,7 +1437,7 @@ mod tests {
             &mut |n, total| attempts.push((n, total)),
         );
         assert!(!failed.passed);
-        assert!(attempts.is_empty());
+        assert_eq!(attempts, Vec::<(usize, usize)>::new());
     }
 
     #[test]

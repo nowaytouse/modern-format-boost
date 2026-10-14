@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Shared tool-path settings and destination capacity (2026-10-14)
+
+- Share explicit tool-path parsing and typed config overrides between IMG and VID.
+  Retain unnamed inherited tools and CLI source chains, accept repeat overrides,
+  preserve spaces/additional equals signs, and reject invalid names, relative/NUL
+  paths or lossy UTF-8 launcher forwarding. Forward independent IMG/Fast IMG and
+  standard VID launcher overrides; reject inapplicable scopes without starting tools.
+- Add a compact native Developer Tool Paths editor with separate IMG/Fast IMG/VID
+  preferences, native executable selection, per-tool/per-pipeline inheritance reset,
+  Settings search and real effective-source previews. Child edits stay in the parent
+  draft until Apply validates through the worker; cancel and unrelated settings edits
+  do not overwrite paths or rewrite config files. Preview is not a capability test.
+- Add destination-filesystem available-capacity observations to read-only preflight
+  schema 2 and native inspection. Query the nearest existing destination directory,
+  never create output, preserve exact native Unix path bytes and reject overflow.
+  Unbound/failed/unsupported observations remain unknown with diagnostics, not zero.
+  Human-readable units retain exact bytes in accessible details; unused worker rows
+  no longer occupy blank space. This is not reserved/required scratch, Photos or
+  output space, an estimate that processing will fit, or a weaker verification gate.
+- Preserve the existing lock-file refresh (deranged 0.5.9, indicatif/zerocopy Git
+  revisions) during locked validation; do not run another dependency update. Correct
+  scoped strict-lint declaration ordering, empty assertions and a synthetic fixture
+  variable name without disabling checks or altering media policies.
+- Validation: 126 dev-library cases, seven scoped launcher cases, shared IMG/VID
+  CLI cases, the Foundation tool-inheritance case and Gate early-stop case passed;
+  the four disk-capacity cases were rechecked after adding zero-fragment rejection.
+  Scoped Foundation/dev/IMG/VID strict Clippy, formatting, Swift warnings-as-errors
+  and English/Chinese/Japanese native self-tests passed. Isolated dark/light native
+  windows checked exact path/source preview, reset/cancel/save/search, independent
+  VID forwarding and read-only synthetic preflight with compact capacity display.
+  No production media, Photos, real History/Core operation, installed-app replacement,
+  CI query, full-workspace/cross-platform or encoding-speed acceptance was performed.
+
 ### Decode-check progress, video policy and process observations (2026-10-13)
 
 - Report Gate 1 decode attempts against the existing inventory on the same Gate

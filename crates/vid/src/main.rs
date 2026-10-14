@@ -35,6 +35,8 @@ struct Cli {
     execution: foundation::runtime_config::ExecutionArgs,
     #[command(flatten)]
     cache: foundation::runtime_config::cache_args::CacheArgs,
+    #[command(flatten)]
+    tools: foundation::runtime_config::ToolsArgs,
     #[command(subcommand)]
     command: Commands,
 }
@@ -181,7 +183,7 @@ fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::Load
             "CLI",
         );
     }
-    loaded.config.validate()?;
+    cli.tools.apply_to(&mut loaded)?;
     Ok(loaded)
 }
 
@@ -1704,6 +1706,59 @@ mod fast_gif_tests {
             Cli::try_parse_from(["vid", "config", "show", "--config", &path, "--no-config",])
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn shared_tool_paths_reach_video_inspection_run_and_fast_gif_without_execution()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let file = root.path().join("tools.json");
+        std::fs::write(&file, br#"{"config_version":1,"tools":{"paths":{"ffmpeg":"/saved/ffmpeg","ffprobe":"/saved/ffprobe"}}}"#)?;
+        let file = file
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("synthetic config path is not UTF-8"))?;
+        let override_value = "ffmpeg=/synthetic/\u{5de5}\u{5177} nightly=1/ffmpeg";
+        for (command, tail) in [
+            ("config", "show"),
+            ("run", "/unused"),
+            ("fast-gif", "/unused"),
+        ] {
+            let inherited = Cli::try_parse_from(["vid", command, tail, "--config", file])?;
+            assert_eq!(
+                resolve_runtime(&inherited)?.config.tools.paths["ffmpeg"],
+                PathBuf::from("/saved/ffmpeg")
+            );
+            let cli = Cli::try_parse_from([
+                "vid",
+                command,
+                tail,
+                "--config",
+                file,
+                "--tool",
+                "ffmpeg=/first/ffmpeg",
+                "--tool",
+                override_value,
+            ])?;
+            let loaded = resolve_runtime(&cli)?;
+            assert_eq!(
+                loaded.config.tools.paths["ffmpeg"],
+                PathBuf::from("/synthetic/\u{5de5}\u{5177} nightly=1/ffmpeg")
+            );
+            assert_eq!(
+                loaded.config.tools.paths["ffprobe"],
+                PathBuf::from("/saved/ffprobe")
+            );
+            assert_eq!(loaded.sources["tools.paths.ffmpeg"], "CLI");
+            assert_eq!(
+                loaded.source_chain["tools.paths.ffmpeg"],
+                [file, "CLI", "CLI"]
+            );
+            assert_eq!(loaded.sources["tools.paths.ffprobe"], file);
+        }
+        for value in ["FFMPEG=/synthetic/ffmpeg", "ffmpeg=relative", "ffmpeg="] {
+            assert!(Cli::try_parse_from(["vid", "config", "show", "--tool", value]).is_err());
+        }
         Ok(())
     }
 

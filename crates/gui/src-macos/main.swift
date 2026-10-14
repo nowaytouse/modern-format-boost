@@ -408,6 +408,12 @@ private enum VideoCodec: String { case hevc, av1 }
 private enum ToolSelectionPolicy: String { case fallback, single }
 private enum PhotosImportBackend: String { case auto, native, applescript }
 
+private enum ToolPipeline: String, CaseIterable {
+    case image, fastImage, video
+    var title: String { self == .image ? "IMG" : (self == .fastImage ? "Fast IMG" : "VID") }
+    var preferenceKey: String { "MFBGuiToolPaths_\(rawValue)" }
+}
+
 private struct ImageSettings {
     var configurationFile: String?
     var fallback: ImageFallback?
@@ -445,6 +451,8 @@ private struct MediaSettings {
     var performance: String?
     var cacheMaxBytes: Int?
     var cacheTtlSeconds: Int?
+    var toolPaths: [ToolPipeline: [String: String]] = [:]
+    private var invalidToolPipelines: Set<ToolPipeline> = []
     private var invalidValues: [MediaSetting: String] = [:]
 
     // String values are the control/persistence boundary; processing uses typed groups.
@@ -477,7 +485,11 @@ private struct MediaSettings {
             return result
         }
         set {
+            let paths = toolPaths
+            let invalidPaths = invalidToolPipelines
             self = MediaSettings()
+            toolPaths = paths
+            invalidToolPipelines = invalidPaths
             for (field, value) in newValue {
                 if let range = field.range {
                     guard let number = Int(value), range.contains(number) else { invalidValues[field] = value; continue }
@@ -533,10 +545,40 @@ private struct MediaSettings {
                 }
             }
             values = saved
+            for pipeline in ToolPipeline.allCases {
+                if let stored = preferences.object(forKey: pipeline.preferenceKey) {
+                    if let paths = stored as? [String: String] { toolPaths[pipeline] = paths }
+                    else { invalidToolPipelines.insert(pipeline) }
+                }
+            }
         }
     }
 
+    mutating func resetToolPaths(_ pipeline: ToolPipeline) {
+        toolPaths.removeValue(forKey: pipeline)
+        invalidToolPipelines.remove(pipeline)
+    }
+
+    func validateToolPaths() throws {
+        guard invalidToolPipelines.isEmpty else { throw HostError(message: localized("settings.tools.invalid_saved")) }
+        for paths in toolPaths.values {
+            for (name, path) in paths {
+                let validName = !name.isEmpty && name.utf8.allSatisfy {
+                    (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+                }
+                guard validName, path.hasPrefix("/"), !path.utf8.contains(0) else {
+                    throw HostError(message: localized("settings.invalid", name, path))
+                }
+            }
+        }
+    }
+
+    func toolArguments(_ pipeline: ToolPipeline, flag: String = "--tool") -> [String] {
+        (toolPaths[pipeline] ?? [:]).sorted { $0.key < $1.key }.flatMap { [flag, "\($0.key)=\($0.value)"] }
+    }
+
     func validate(_ fields: [MediaSetting] = MediaSetting.allCases) throws {
+        try validateToolPaths()
         for field in fields {
             guard let value = values[field] else { continue }
             let valid: Bool
@@ -568,6 +610,10 @@ private struct MediaSettings {
             if let value = values[field] { preferences.set(value, forKey: field.preferenceKey) }
             else { preferences.removeObject(forKey: field.preferenceKey) }
         }
+        for pipeline in ToolPipeline.allCases {
+            if let paths = toolPaths[pipeline], !paths.isEmpty { preferences.set(paths, forKey: pipeline.preferenceKey) }
+            else { preferences.removeObject(forKey: pipeline.preferenceKey) }
+        }
     }
 
     func arguments(operation: OperationMode, processing: ProcessingMode) throws -> [String] {
@@ -579,14 +625,17 @@ private struct MediaSettings {
             return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
         try validate(fields)
-        return fields.flatMap { field -> [String] in
+        var arguments = fields.flatMap { field -> [String] in
             guard let value = values[field] else { return [] }
             return field.arguments(value)
         }
+        if images || fastImages { arguments += toolArguments(fastImages ? .fastImage : .image, flag: "--img-tool") }
+        if videos { arguments += toolArguments(.video, flag: "--vid-tool") }
+        return arguments
     }
 
     func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
-        MediaSetting.allCases.filter {
+        var arguments = MediaSetting.allCases.filter {
             ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
@@ -595,6 +644,8 @@ private struct MediaSettings {
                 argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
             }
         }
+        if !inheritedOnly { arguments += toolArguments(fast ? .fastImage : .image) }
+        return arguments
     }
 
     func videoRuntimeArguments(inheritedOnly: Bool) -> [String] {
@@ -606,6 +657,7 @@ private struct MediaSettings {
             if let videoCodec { arguments += ["--codec", videoCodec.rawValue] }
             if let videoFailure { arguments += ["--error-mode", videoFailure.rawValue] }
             if let videoForceMsSsimLong { arguments += ["--force-ms-ssim-long=\(videoForceMsSsimLong)"] }
+            arguments += toolArguments(.video)
         }
         return arguments
     }
@@ -633,6 +685,13 @@ private struct EffectiveRuntimeSettings {
         for (section, object) in config {
             guard let fields = object as? [String: Any] else { continue }
             for (key, value) in fields {
+                if section == "tools", key == "paths" {
+                    guard let paths = value as? [String: String] else {
+                        throw HostError(message: localized("settings.config_invalid"))
+                    }
+                    for (name, path) in paths { result["tools.paths.\(name)"] = path }
+                    continue
+                }
                 if value is NSNull { continue }
                 if let number = value as? NSNumber {
                     result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
@@ -1159,10 +1218,203 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
 }
 
 @MainActor
+private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDelegate {
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 240),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let pipelines: [ToolPipeline]
+    private let pipelinePopup = NSPopUpButton()
+    private let toolPopup = NSPopUpButton()
+    private let path = NSTextField()
+    private let preview = NSTextField(wrappingLabelWithString: "")
+    private var settings: MediaSettings
+    private var generation = UUID()
+    private var effective: [ToolPipeline: EffectiveRuntimeSettings] = [:]
+    private let completed: (MediaSettings?) -> Void
+    private static let names = ["avifdec", "avifenc", "cjxl", "djxl", "exiftool", "ffmpeg", "ffprobe"]
+    static var searchNames: String { names.joined(separator: " ") }
+    private var pipeline: ToolPipeline { pipelines[pipelinePopup.indexOfSelectedItem] }
+    private var name: String { toolPopup.titleOfSelectedItem ?? "" }
+
+    init(settings: MediaSettings, pipelines: [ToolPipeline], completed: @escaping (MediaSettings?) -> Void) {
+        precondition(!pipelines.isEmpty)
+        self.settings = settings
+        self.pipelines = pipelines
+        self.completed = completed
+        super.init()
+        panel.title = localized("settings.tools.title")
+        panel.delegate = self
+        for pipeline in pipelines { pipelinePopup.addItem(withTitle: pipeline.title) }
+        pipelinePopup.target = self
+        pipelinePopup.action = #selector(selectPipeline)
+        pipelinePopup.setAccessibilityLabel(localized("settings.tools.pipeline"))
+        toolPopup.target = self
+        toolPopup.action = #selector(selectTool)
+        toolPopup.setAccessibilityLabel(localized("settings.tools.tool"))
+        path.delegate = self
+        path.placeholderString = localized("settings.automatic")
+        path.setAccessibilityLabel(localized("settings.tools.path"))
+        path.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let choose = button("settings.tools.choose", symbol: "folder", action: #selector(choosePath))
+        let reset = button("settings.tools.inherit", symbol: "arrow.uturn.backward", action: #selector(resetTool))
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: localized("settings.tools.pipeline")), pipelinePopup],
+            [NSTextField(labelWithString: localized("settings.tools.tool")), toolPopup],
+            [NSTextField(labelWithString: localized("settings.tools.path")), NSStackView(views: [path, choose, reset])],
+        ])
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        grid.column(at: 0).width = 100
+        grid.column(at: 1).xPlacement = .fill
+        for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
+        preview.font = .systemFont(ofSize: 11)
+        preview.textColor = .secondaryLabelColor
+        preview.maximumNumberOfLines = 4
+        preview.isSelectable = true
+        preview.lineBreakMode = .byTruncatingMiddle
+        preview.setAccessibilityLabel(localized("settings.sources.preview"))
+        let actions = NSStackView(views: [
+            button("settings.tools.reset", symbol: "arrow.counterclockwise", action: #selector(resetPipeline)),
+            button("settings.tools.preview", symbol: "arrow.clockwise", action: #selector(loadPreview)),
+            button("alert.cancel", symbol: nil, action: #selector(cancel)),
+            button("settings.tools.use", symbol: nil, action: #selector(apply)),
+        ])
+        let root = NSStackView(views: [grid, preview, actions])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 16
+        root.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView?.addSubview(root)
+        if let content = panel.contentView {
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                grid.widthAnchor.constraint(equalTo: root.widthAnchor),
+                preview.widthAnchor.constraint(equalTo: root.widthAnchor),
+                preview.heightAnchor.constraint(equalToConstant: 58),
+            ])
+        }
+        selectPipeline()
+    }
+
+    private func button(_ key: String, symbol: String?, action: Selector) -> NSButton {
+        let button = NSButton(title: localized(key), target: self, action: action)
+        button.bezelStyle = .rounded
+        if let symbol {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: localized(key))
+            button.title = ""
+            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        }
+        button.toolTip = localized(key)
+        button.setAccessibilityLabel(localized(key))
+        return button
+    }
+
+    func show(for parent: NSWindow) { parent.beginSheet(panel); loadPreview() }
+
+    @objc private func selectPipeline() {
+        let inherited = effective[pipeline]?.values.keys.compactMap {
+            $0.hasPrefix("tools.paths.") ? String($0.dropFirst(12)) : nil
+        } ?? []
+        let names = Set(Self.names + Array(settings.toolPaths[pipeline]?.keys ?? [:].keys) + inherited).sorted()
+        let selected = name
+        toolPopup.removeAllItems()
+        toolPopup.addItems(withTitles: names)
+        if names.contains(selected) { toolPopup.selectItem(withTitle: selected) }
+        selectTool()
+    }
+
+    @objc private func selectTool() {
+        generation = UUID()
+        path.stringValue = settings.toolPaths[pipeline]?[name] ?? ""
+        path.placeholderString = effective[pipeline]?["tools.paths.\(name)"] ?? localized("settings.automatic")
+        preview.stringValue = localized("settings.tools.not_previewed")
+        preview.toolTip = nil
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextField === path else { return }
+        generation = UUID()
+        settings.toolPaths[pipeline, default: [:]][name] = path.stringValue.isEmpty ? nil : path.stringValue
+        preview.stringValue = localized("settings.tools.not_previewed")
+        preview.toolTip = nil
+    }
+
+    @objc private func choosePath() {
+        let chooser = NSOpenPanel()
+        chooser.canChooseDirectories = false
+        chooser.allowsMultipleSelection = false
+        chooser.beginSheetModal(for: panel) { [weak self] response in
+            guard let self, response == .OK, let url = chooser.url else { return }
+            self.path.stringValue = url.path
+            self.controlTextDidChange(Notification(name: NSText.didChangeNotification, object: self.path))
+            self.loadPreview()
+        }
+    }
+
+    @objc private func resetTool() {
+        settings.toolPaths[pipeline]?.removeValue(forKey: name)
+        selectTool()
+        loadPreview()
+    }
+
+    @objc private func resetPipeline() {
+        settings.resetToolPaths(pipeline)
+        selectPipeline()
+        loadPreview()
+    }
+
+    @objc private func loadPreview() {
+        generation = UUID()
+        let token = generation
+        let selectedPipeline = pipeline
+        let selectedName = name
+        let key = "tools.paths.\(selectedName)"
+        let arguments = selectedPipeline == .video ? settings.videoRuntimeArguments(inheritedOnly: false)
+            : settings.runtimeArguments(fast: selectedPipeline == .fastImage, inheritedOnly: false)
+        let override = settings.toolPaths[selectedPipeline]?[selectedName] != nil
+        preview.stringValue = localized("settings.tools.loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try queryRuntimeSettings(arguments: arguments, tool: selectedPipeline == .video ? "vid" : "img") }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                do {
+                    let resolved = try result.get()
+                    self.effective[selectedPipeline] = resolved
+                    self.selectPipeline()
+                    self.toolPopup.selectItem(withTitle: selectedName)
+                    self.path.stringValue = self.settings.toolPaths[selectedPipeline]?[selectedName] ?? ""
+                    self.path.placeholderString = resolved[key] ?? localized("settings.automatic")
+                    let text = try resolved[key].map { _ in try resolved.originDescription(key: key, guiOverride: override) }
+                        ?? localized("settings.tools.discovery")
+                    self.preview.stringValue = localized("settings.sources.preview") + "\n" + text
+                    self.preview.toolTip = self.preview.stringValue
+                } catch {
+                    self.preview.stringValue = error.localizedDescription
+                    self.preview.toolTip = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    @objc private func cancel() { generation = UUID(); panel.sheetParent?.endSheet(panel); completed(nil) }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { cancel(); return false }
+    @objc private func apply() {
+        do {
+            try settings.validateToolPaths()
+            generation = UUID()
+            panel.sheetParent?.endSheet(panel)
+            completed(settings)
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+}
+
+@MainActor
 private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private enum SearchDestination: Equatable {
         case setting(MediaSetting)
         case cache
+        case tools
     }
 
     private let panel: NSPanel
@@ -1222,6 +1474,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var cacheMessageRow: NSGridRow?
     private var cacheLoaded = false
     private var cacheBusy = false
+    private var toolEditor: ToolPathsPanel?
     private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
@@ -1332,6 +1585,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 row.yPlacement = .center
             }
             if section == "cache" { addCacheRows(to: grid) }
+            if section == "developer" {
+                let edit = NSButton(title: localized("settings.tools.title"), target: self, action: #selector(editToolPaths))
+                edit.image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: nil)
+                edit.imagePosition = .imageLeading
+                edit.bezelStyle = .rounded
+                edit.setAccessibilityLabel(localized("settings.tools.title"))
+                grid.addRow(with: [NSTextField(labelWithString: localized("settings.tools.path")), edit, NSView()]).yPlacement = .center
+            }
             grid.column(at: 0).xPlacement = .leading
             grid.column(at: 0).width = 220
             grid.column(at: 1).xPlacement = .fill
@@ -1432,6 +1693,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let section = fieldSections[field] ?? field.section
             return field.title + " · " + localized("settings.section.\(section)")
         case .cache: return localized("settings.section.cache")
+        case .tools: return localized("settings.tools.title")
         }
     }
 
@@ -1454,6 +1716,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                           "settings.history.path", "settings.history.backup", "settings.history.backup_help",
                           "settings.history.overview", "settings.history.check", "settings.history.check_help"].map { localized($0) }.joined(separator: " ")
         if matches(cacheTerms) { result.append(.cache) }
+        if developer, matches(localized("settings.tools.title") + " tools.paths --tool " + ToolPathsPanel.searchNames) {
+            result.append(.tools)
+        }
         return result
     }
 
@@ -1501,6 +1766,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         case .cache:
             tabs.selectTabViewItem(withIdentifier: "cache")
             panel.makeFirstResponder(cacheRefresh)
+        case .tools:
+            tabs.selectTabViewItem(withIdentifier: "developer")
+            editToolPaths()
         }
     }
 
@@ -2265,8 +2533,24 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         for field in rows.keys where field.section == section || (section == "img" && field.isFastImage && !field.isDeveloper) {
             settings.values.removeValue(forKey: field)
         }
+        if section == "developer" {
+            for pipeline in toolPipelines { settings.resetToolPaths(pipeline) }
+        }
         restore(settings)
         if section == "developer" && !validatingLayout { loadInheritedValues() }
+    }
+
+    private var toolPipelines: [ToolPipeline] { fast ? [.fastImage] : (videos ? [.video] : [.image, .video]) }
+
+    @objc private func editToolPaths() {
+        guard !applying, !cacheBusy, toolEditor == nil else { return }
+        sourceGeneration = UUID()
+        toolEditor = ToolPathsPanel(settings: draft(), pipelines: toolPipelines) { [weak self] settings in
+            guard let self else { return }
+            self.toolEditor = nil
+            if let settings { self.restore(settings) }
+        }
+        toolEditor?.show(for: panel)
     }
 
     @objc private func cancel() {
@@ -2314,6 +2598,63 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         } catch { NSAlert(error: error).beginSheetModal(for: panel) }
     }
 
+    private func validateToolPathsForSelfTest() throws {
+        let suite = "MFBToolPathsSelfTest_\(UUID().uuidString)"
+        guard let preferences = UserDefaults(suiteName: suite) else { throw HostError(message: "Tool path preferences unavailable") }
+        defer { preferences.removePersistentDomain(forName: suite) }
+        var settings = MediaSettings()
+        let imagePath = "/synthetic/tool dir/cjxl=a"
+        settings.toolPaths = [.image: ["cjxl": imagePath], .fastImage: ["cjxl": "/synthetic/fast/cjxl"],
+                              .video: ["ffmpeg": "/synthetic/video/ffmpeg"]]
+        settings.values[.imgJpegEffort] = "8"
+        try settings.save(to: preferences)
+        let restored = MediaSettings(preferences: preferences)
+        guard restored.toolPaths == settings.toolPaths,
+              restored.runtimeArguments(fast: false, inheritedOnly: false).suffix(2) == ["--tool", "cjxl=\(imagePath)"],
+              !restored.runtimeArguments(fast: false, inheritedOnly: true).contains("--tool"),
+              restored.runtimeArguments(fast: true, inheritedOnly: false).suffix(2) == ["--tool", "cjxl=/synthetic/fast/cjxl"],
+              restored.videoRuntimeArguments(inheritedOnly: false).suffix(2) == ["--tool", "ffmpeg=/synthetic/video/ffmpeg"],
+              !restored.videoRuntimeArguments(inheritedOnly: true).contains("--tool") else {
+            throw HostError(message: "Tool paths lost inheritance, exact spelling, or pipeline isolation")
+        }
+        let mixed = try restored.arguments(operation: .adjacent, processing: .both)
+        guard mixed.contains("--img-tool"), mixed.contains("--vid-tool"),
+              !(try restored.arguments(operation: .adjacent, processing: .imagesOnly)).contains("--vid-tool"),
+              !(try restored.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-tool") else {
+            throw HostError(message: "Tool path launcher scopes differ from processing scope")
+        }
+        for (name, path) in [("Bad", "/absolute"), ("cjxl", "relative"), ("cjxl", "/bad\0path")] {
+            var invalid = MediaSettings()
+            invalid.toolPaths[.image] = [name: path]
+            do { try invalid.validateToolPaths(); throw HostError(message: "Invalid tool override accepted") }
+            catch { guard error.localizedDescription != "Invalid tool override accepted" else { throw error } }
+        }
+        preferences.set(["cjxl": 4], forKey: ToolPipeline.image.preferenceKey)
+        var invalid = MediaSettings(preferences: preferences)
+        do { try invalid.validateToolPaths(); throw HostError(message: "Invalid saved tool paths ignored") }
+        catch { guard error.localizedDescription != "Invalid saved tool paths ignored" else { throw error } }
+        invalid.resetToolPaths(.image)
+        try invalid.validateToolPaths()
+        try invalid.save(to: preferences)
+        guard preferences.object(forKey: ToolPipeline.image.preferenceKey) == nil else {
+            throw HostError(message: "Reset tool paths did not restore inheritance")
+        }
+        let key = "tools.paths.cjxl"
+        let document: [String: Any] = ["config": ["tools": ["paths": ["cjxl": imagePath]]],
+                                      "sources": [key: "CLI"], "source_chain": [key: ["default", "overlay", "CLI"]]]
+        let resolved = try EffectiveRuntimeSettings.decode(JSONSerialization.data(withJSONObject: document))
+        guard resolved[key] == imagePath, try resolved.originDescription(key: key, guiOverride: true).contains("CLI (GUI)") else {
+            throw HostError(message: "Nested tool paths or their effective source chain were lost")
+        }
+        var missingSource = document
+        missingSource["sources"] = ["tools.policy": "default"]
+        missingSource["source_chain"] = ["tools.policy": ["default"]]
+        do {
+            _ = try EffectiveRuntimeSettings.decode(JSONSerialization.data(withJSONObject: missingSource))
+            throw HostError(message: "Tool path with no source accepted")
+        } catch { guard error.localizedDescription != "Tool path with no source accepted" else { throw error } }
+    }
+
     func validateForSelfTest() throws {
         validatingLayout = true
         defer { validatingLayout = false }
@@ -2322,6 +2663,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try validatePhotosForSelfTest()
         try validateSearchForSelfTest()
         try validateFailurePolicyForSelfTest()
+        try validateToolPathsForSelfTest()
         if !fast && !videos {
             var budget = MediaSettings()
             budget.values = [.imgSizeToleranceBytes: String(Int.max)]

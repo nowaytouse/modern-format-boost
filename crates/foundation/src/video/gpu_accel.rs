@@ -4822,6 +4822,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn gpu_capability_cache_tracks_tool_replacement_without_reprobing_hits() {
+        use std::os::unix::fs::PermissionsExt;
+
         const CHILD: &str = "MFB_GPU_CACHE_CHILD_FIXTURE";
         if let Some(counter) = std::env::var_os(CHILD) {
             let count = || {
@@ -4850,7 +4852,6 @@ mod tests {
             assert_eq!(count(), 3);
             return;
         }
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().expect("owned GPU cache test root");
         let tool = root.path().join("ffmpeg");
         let counter = root.path().join("encoder-list-count");

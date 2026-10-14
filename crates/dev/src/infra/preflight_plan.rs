@@ -20,6 +20,63 @@ pub struct RoutingPlan {
     pub selected_media_bytes: u64,
     pub entries: Vec<PlannedEntry>,
     pub relationships: Vec<RelationshipObservation>,
+    pub storage: StorageObservation,
+}
+
+/// Destination filesystem capacity only, not a required-space estimate or reservation.
+#[derive(Debug, Serialize)]
+pub struct StorageObservation {
+    pub status: &'static str,
+    pub directory: Option<PathBuf>,
+    pub available_bytes: Option<u64>,
+    pub diagnostic: Option<String>,
+}
+
+impl Default for StorageObservation {
+    fn default() -> Self {
+        Self {
+            status: "unknown",
+            directory: None,
+            available_bytes: None,
+            diagnostic: Some("destination_not_bound".to_owned()),
+        }
+    }
+}
+
+impl StorageObservation {
+    #[must_use]
+    pub fn observe(directory: Result<PathBuf>) -> Self {
+        Self::observe_with(directory, crate::infra::system_checks::get_disk_free_space)
+    }
+
+    fn observe_with(directory: Result<PathBuf>, probe: impl FnOnce(&Path) -> Result<u64>) -> Self {
+        let observed = directory.and_then(|path| {
+            let directory = std::fs::canonicalize(&path).with_context(|| {
+                format!("resolve storage observation directory {}", path.display())
+            })?;
+            ensure!(
+                std::fs::metadata(&directory)?.is_dir(),
+                "storage observation path is not a directory: {}",
+                directory.display()
+            );
+            let available_bytes = probe(&directory)?;
+            Ok((directory, available_bytes))
+        });
+        match observed {
+            Ok((directory, available_bytes)) => Self {
+                status: "observed",
+                directory: Some(directory),
+                available_bytes: Some(available_bytes),
+                diagnostic: None,
+            },
+            Err(error) => Self {
+                status: "unknown",
+                directory: None,
+                available_bytes: None,
+                diagnostic: Some(format!("storage observation failed: {error:#}")),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -230,6 +287,7 @@ impl RoutingPlan {
             selected_media_bytes: scan.media_total_size,
             entries,
             relationships,
+            storage: StorageObservation::default(),
         })
     }
 }
@@ -336,6 +394,74 @@ impl PreflightReport {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn storage_observation_preserves_known_zero_and_does_not_create_outputs() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let observed = StorageObservation::observe_with(Ok(temp.path().to_path_buf()), |path| {
+            ensure!(
+                path == fs::canonicalize(temp.path())?,
+                "unexpected directory"
+            );
+            Ok(0)
+        });
+        assert_eq!(observed.status, "observed");
+        assert_eq!(observed.available_bytes, Some(0));
+        assert_eq!(observed.directory, Some(fs::canonicalize(temp.path())?));
+        assert!(observed.diagnostic.is_none());
+        assert_eq!(fs::read_dir(temp.path())?.count(), 0);
+        let json = serde_json::to_value(observed)?;
+        assert_eq!(json["available_bytes"], 0);
+        assert!(json["diagnostic"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn storage_observation_keeps_unbound_missing_non_directory_and_probe_errors_unknown()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let missing = temp.path().join("missing");
+        let file = temp.path().join("not-a-directory");
+        fs::write(&file, b"synthetic")?;
+        let called = std::cell::Cell::new(false);
+        for directory in [
+            Err(anyhow::anyhow!("unresolved destination")),
+            Ok(missing.clone()),
+            Ok(file),
+        ] {
+            let observation = StorageObservation::observe_with(directory, |_| {
+                called.set(true);
+                Ok(123)
+            });
+            assert_eq!(observation.status, "unknown");
+            assert!(observation.directory.is_none());
+            assert!(observation.available_bytes.is_none());
+            assert!(
+                observation
+                    .diagnostic
+                    .is_some_and(|value| !value.is_empty())
+            );
+        }
+        assert!(!called.get());
+        assert!(!missing.exists());
+        let failed = StorageObservation::observe_with(Ok(temp.path().to_path_buf()), |_| {
+            Err(anyhow::anyhow!("synthetic capacity probe failed"))
+        });
+        assert_eq!(failed.status, "unknown");
+        assert!(failed.available_bytes.is_none());
+        assert!(
+            failed
+                .diagnostic
+                .is_some_and(|value| value.contains("synthetic capacity probe failed"))
+        );
+        let default = serde_json::to_value(StorageObservation::default())?;
+        assert_eq!(default["status"], "unknown");
+        assert_eq!(default["diagnostic"], "destination_not_bound");
+        assert!(default["directory"].is_null());
+        assert!(default["available_bytes"].is_null());
+        assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+        Ok(())
+    }
 
     fn planned(path: impl Into<PathBuf>, route: ScanRoute) -> PlannedEntry {
         PlannedEntry {
@@ -543,6 +669,8 @@ mod tests {
         assert_eq!(document["schema_version"], 2);
         assert_eq!(document["read_only"], true);
         assert_eq!(document["execution_started"], false);
+        assert_eq!(document["plans"][0]["storage"]["status"], "unknown");
+        assert!(document["plans"][0]["storage"]["available_bytes"].is_null());
         assert_eq!(fs::read(input.join("spoofed.bin"))?, jpeg);
         assert!(!output.exists());
         assert_eq!(fs::read_dir(temp.path())?.count(), 1);

@@ -32,6 +32,8 @@ vid --config /path/to/video.json config show --effective
 vid run /path/to/videos --codec av1
 img run /path/to/images --error-mode log-and-continue
 vid --error-mode fail-fast config show --effective
+vid --tool 'ffmpeg=/path/to/tool dir/ffmpeg=custom' config show --effective
+img --tool cjxl=/absolute/path/cjxl config validate
 img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
@@ -57,6 +59,23 @@ empty targets and path-resolution failures are reported without selecting a
 fallback destination. These commands do not access Photos.
 
 ## Policy Fields
+
+Tool paths use a shared IMG/VID parser and typed resolver: repeated `--tool
+NAME=PATH` overrides only named keys in `tools.paths`, retaining inherited tools.
+The last duplicate name wins and the effective source chain records each CLI layer.
+The launcher forwards independent `--img-tool` and `--vid-tool` values to the matching
+worker, including Fast IMG, and rejects explicit values outside their supported scope.
+Tool names use lowercase ASCII letters, digits, hyphens or underscores; paths must
+be absolute and NUL-free. Spaces and additional equals signs are preserved; non-UTF-8
+paths cannot cross the string-based launcher boundary and are explicitly rejected.
+Configuration inspection parses paths without reading/executing the selected tools.
+Actual processing retains existing executable health checks and fidelity gates.
+
+Native Developer Tool Paths keeps independent IMG/Fast IMG/VID preferences. Its
+file chooser, reset and effective source preview edit the parent Settings draft;
+cancelling discards them and Apply validates through the worker before persistence.
+No override means inheritance, not a saved copy of a discovered or inherited value.
+No raw JSON editor or configuration-file rewrite is involved.
 
 ### Native GUI Overrides
 
