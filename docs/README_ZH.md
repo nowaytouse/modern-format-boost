@@ -107,6 +107,11 @@ Developer 的“工具路径”可分别编辑 IMG、Fast IMG、VID，支持原�
 或能力已核验。IMG/VID 共用可重复的 `--tool NAME=/absolute/path`；启动器分别使用
 `--img-tool`、`--vid-tool`，不适用的类型会报错。路径中的空格和等号原样保留，非法名称、
 相对路径、空字节或无法无损传递的路径会明确拒绝。
+Developer 还可分别设置标准 IMG 和 Fast IMG 的“直接 JXL 编码强度”，仅提供当前生产策略
+支持的 7、8、10。配置字段 `img.jxl_effort` 默认 `null`：未指定时保留普通模式 e7、
+ultimate/archive e10、PNG e10；直接命令使用 `--jxl-effort`，启动器使用
+`--img-jxl-effort`。GUI 选择继承或重置只移除自己的覆盖，不改写 JSON。这一设置只改变
+编码投入，不修改 distance、质量判断或核验要求；可逆 JPEG 转码仍使用独立的 `jpeg_effort`。
 直接指定标准 `images/videos` 模式与对应筛选开关使用相同范围；图片模式不会再把视频算作
 选中媒体。目录的相邻输出不能与源目录相同、包含源目录或位于源目录内部；链接别名也会
 先解析再核对，不通过创建输出目录来试探。

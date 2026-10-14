@@ -274,9 +274,9 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
+    case imgConfig, imgFallback, imgJpegEffort, imgJxlEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJxlEffort, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -288,9 +288,10 @@ private enum MediaSetting: String, CaseIterable {
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
+    var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
-    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy, .vidForceMsSsimLong].contains(self) }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy, .vidForceMsSsimLong, .imgJxlEffort, .fastJxlEffort].contains(self) }
     var section: String {
         if self == .performance { return "performance" }
         if isCache { return "cache" }
@@ -307,6 +308,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgConfig, .fastConfig: "--img-config"
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
+        case .imgJxlEffort, .fastJxlEffort: "--img-jxl-effort"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
         case .imgSizeTolerance: "--img-allow-size-tolerance"
@@ -337,6 +339,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
+        case .imgJxlEffort, .fastJxlEffort: ["7", "8", "10"]
         case .vidCodec: ["hevc", "av1"]
         case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
         case .photosBackend: ["auto", "native", "applescript"]
@@ -361,6 +364,7 @@ private enum MediaSetting: String, CaseIterable {
         case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
+        case .imgJxlEffort, .fastJxlEffort: "img.jxl_effort"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgSizeTolerance: "img.allow_size_tolerance"
@@ -389,6 +393,7 @@ private enum MediaSetting: String, CaseIterable {
         case .fastConfig: "fastConfig"
         case .fastFallback: "imgFallback"
         case .fastJpegEffort: "imgJpegEffort"
+        case .fastJxlEffort: "imgJxlEffort"
         case .fastHeuristic: "imgHeuristic"
         case .fastDatabase: "imgDatabase"
         case .fastToolPolicy: "imgToolPolicy"
@@ -418,6 +423,7 @@ private struct ImageSettings {
     var configurationFile: String?
     var fallback: ImageFallback?
     var jpegEffort: Int?
+    var jxlEffort: Int?
     var qualityHeuristic: Bool?
     var allowDatabase: Bool?
     var toolPolicy: ToolSelectionPolicy?
@@ -463,12 +469,14 @@ private struct MediaSettings {
                 .cacheMaxBytes: cacheMaxBytes.map(String.init), .cacheTtlSeconds: cacheTtlSeconds.map(String.init),
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
+                .imgJxlEffort: image.jxlEffort.map(String.init),
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
                 .imgSizeTolerance: imageSizeTolerance.map(String.init),
                 .imgSizeToleranceBytes: imageSizeToleranceBytes.map(String.init),
                 .imgToolPolicy: image.toolPolicy?.rawValue,
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
+                .fastJxlEffort: fastImage.jxlEffort.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
@@ -504,6 +512,7 @@ private struct MediaSettings {
                 case .imgConfig: image.configurationFile = value
                 case .imgFallback: image.fallback = ImageFallback(rawValue: value)
                 case .imgJpegEffort: image.jpegEffort = Int(value)
+                case .imgJxlEffort: image.jxlEffort = Int(value)
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
                 case .imgSizeTolerance: imageSizeTolerance = Bool(value)
@@ -513,6 +522,7 @@ private struct MediaSettings {
                 case .fastConfig: fastImage.configurationFile = value
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
+                case .fastJxlEffort: fastImage.jxlEffort = Int(value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
                 case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
@@ -2355,10 +2365,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
-            if field.isFailurePolicy {
+            if field.isFailurePolicy || field.isPixelEffort {
                 let inheritedValue = inherited[field].map {
                     field.choices.contains($0) ? localized("settings.value.\($0)") : localized("settings.invalid", field.title, $0)
-                } ?? localized("result.unknown")
+                } ?? localized(field.isPixelEffort && inheritedSources[field] != nil ? "settings.automatic" : "result.unknown")
                 popup.insertItem(withTitle: localized("settings.failure.inherited", inheritedValue), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0); continue }
             }
@@ -2398,7 +2408,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
         }
         for (field, popup) in popups {
-            if field.isFailurePolicy {
+            if field.isFailurePolicy || field.isPixelEffort {
                 settings.values[field] = popup.selectedItem?.representedObject as? String
                 continue
             }
@@ -2658,6 +2668,68 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     func validateForSelfTest() throws {
         validatingLayout = true
         defer { validatingLayout = false }
+        var pixelEffort = MediaSettings()
+        pixelEffort.values = [.imgJxlEffort: "8", .fastJxlEffort: "10", .imgJpegEffort: "11"]
+        try pixelEffort.validate()
+        let imageArguments = try pixelEffort.arguments(operation: .adjacent, processing: .imagesOnly)
+        let fastArguments = try pixelEffort.arguments(operation: .fastImgJxl, processing: .imagesOnly)
+        guard imageArguments.contains("8"), imageArguments.contains("--img-jxl-effort"),
+              fastArguments.contains("10"), !fastArguments.contains("8"),
+              !pixelEffort.runtimeArguments(fast: false, inheritedOnly: true).contains("--jxl-effort"),
+              pixelEffort.runtimeArguments(fast: false, inheritedOnly: false).contains("--jxl-effort"),
+              !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
+            throw HostError(message: "JXL pixel effort does not preserve independent scopes and inheritance")
+        }
+        for invalid in ["0", "6", "9", "11", "1.5"] {
+            pixelEffort.values[.imgJxlEffort] = invalid
+            do { try pixelEffort.validate(); throw HostError(message: "Invalid JXL pixel effort accepted") }
+            catch { guard error.localizedDescription != "Invalid JXL pixel effort accepted" else { throw error } }
+        }
+        if developer && !videos {
+            let previousInherited = inherited
+            let previousSources = inheritedSources
+            let previousMixed = inheritedMixed
+            defer {
+                inherited = previousInherited
+                inheritedSources = previousSources
+                inheritedMixed = previousMixed
+                restore(MediaSettings())
+            }
+            let key = "img.jxl_effort"
+            let standard = EffectiveRuntimeSettings(values: [key: "8"], sources: [key: "/synthetic/img.json"],
+                sourceChain: [key: ["default", "/synthetic/img.json"]])
+            let fastImage = EffectiveRuntimeSettings(values: [key: "10"], sources: [key: "/synthetic/fast.json"],
+                sourceChain: [key: ["default", "/synthetic/fast.json"]])
+            setInheritedValues(standard: standard, fast: fastImage, video: standard)
+            restore(MediaSettings())
+            restore(MediaSettings())
+            let field: MediaSetting = fast ? .fastJxlEffort : .imgJxlEffort
+            guard let popup = popups[field], popup.numberOfItems == 4, popup.indexOfSelectedItem == 0,
+                  sourceButtons[field] != nil, inherited[field] == (fast ? "10" : "8"), draft().values[field] == nil else {
+                throw HostError(message: "JXL pixel effort inheritance used the wrong pipeline or fabricated an override")
+            }
+            popup.selectItem(at: fast ? 3 : 2)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Explicit JXL pixel effort equal to inheritance lost its override")
+            }
+            popup.selectItem(at: 0)
+            guard draft().values[field] == nil else {
+                throw HostError(message: "Returning to JXL pixel effort inheritance retained an override")
+            }
+            inherited.removeAll()
+            inheritedSources.removeAll()
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("settings.failure.inherited", localized("result.unknown")) else {
+                throw HostError(message: "Unavailable JXL pixel configuration was presented as automatic")
+            }
+            inheritedSources[field] = "default"
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("settings.failure.inherited", localized("settings.automatic")),
+                  draft().values[field] == nil else {
+                throw HostError(message: "Known null JXL pixel effort did not preserve automatic inheritance")
+            }
+        }
+        restore(MediaSettings())
         try validateCacheForSelfTest()
         try validateCachePolicyForSelfTest()
         try validatePhotosForSelfTest()

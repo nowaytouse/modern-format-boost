@@ -183,6 +183,10 @@ struct Args {
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
     img_jpeg_effort: Option<u8>,
 
+    /// JXL pixel encoding effort (7, 8 or 10); omitted preserves mode defaults.
+    #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
+    img_jxl_effort: Option<u8>,
+
     /// Override image quality inference without affecting video settings.
     #[arg(long, num_args = 1, require_equals = true)]
     img_quality_heuristic: Option<bool>,
@@ -992,6 +996,13 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        args.img_jxl_effort.is_none()
+            || args.mode == LaunchMode::FastImg
+            || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
+                && processing_filter(args).accepts_image()),
+        "JXL pixel effort requires selected standard images or --mode fast-img"
+    );
+    anyhow::ensure!(
         args.img_tools.is_empty()
             || args.mode == LaunchMode::FastImg
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
@@ -1037,6 +1048,7 @@ fn validate_media_options(args: &Args) -> Result<()> {
         || args.img_fallback_policy.is_some()
         || args.img_tool_policy.is_some()
         || args.img_jpeg_effort.is_some()
+        || args.img_jxl_effort.is_some()
         || args.img_quality_heuristic.is_some()
         || args.img_allow_database.is_some()
         || args.img_error_mode.is_some();
@@ -1910,6 +1922,9 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
     }
     if let Some(effort) = args.img_jpeg_effort {
         command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
+    }
+    if let Some(effort) = args.img_jxl_effort {
+        command.extend(["--jxl-effort".to_owned(), effort.to_string()]);
     }
     if let Some(heuristic) = args.img_quality_heuristic {
         command.push(format!("--quality-heuristic={heuristic}"));
@@ -3336,6 +3351,7 @@ fn build_run_args(
         img_fallback_policy: None,
         img_tool_policy: None,
         img_jpeg_effort: None,
+        img_jxl_effort: None,
         img_quality_heuristic: None,
         img_allow_database: None,
         img_allow_size_tolerance: None,
@@ -4005,7 +4021,9 @@ mod tests {
         };
         isolate_preflight_process_group().unwrap();
         let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
-        fs::write(path, child.id().to_string()).unwrap();
+        let staged = PathBuf::from(&path).with_extension("pending");
+        fs::write(&staged, child.id().to_string()).unwrap();
+        fs::rename(staged, path).unwrap();
         child.wait().unwrap();
     }
 
@@ -4023,12 +4041,28 @@ mod tests {
             .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut probe_pid = None;
+        let mut receipt_failure = None;
         while std::time::Instant::now() < deadline {
-            probe_pid = fs::read_to_string(&receipt)
-                .ok()
-                .and_then(|value| value.parse::<i32>().ok());
-            if probe_pid.is_some() {
-                break;
+            match fs::read_to_string(&receipt) {
+                Ok(value) => match value.parse::<i32>() {
+                    Ok(pid) if pid > 0 => {
+                        probe_pid = Some(pid);
+                        break;
+                    }
+                    Ok(pid) => {
+                        receipt_failure = Some(format!("invalid fixture probe PID: {pid}"));
+                        break;
+                    }
+                    Err(error) => {
+                        receipt_failure = Some(format!("parse fixture probe PID: {error}"));
+                        break;
+                    }
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    receipt_failure = Some(format!("read fixture probe PID: {error}"));
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -4039,6 +4073,10 @@ mod tests {
             libc::kill(pid, libc::SIGKILL);
         }
         child.wait().unwrap();
+        assert!(
+            receipt_failure.is_none(),
+            "fixture receipt failed: {receipt_failure:?}"
+        );
         let probe_pid = probe_pid.expect("fixture probe did not start before the deadline");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while unsafe { libc::kill(probe_pid, 0) } == 0 && std::time::Instant::now() < deadline {
@@ -4861,6 +4899,73 @@ mod tests {
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
         assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn jxl_pixel_effort_is_independent_scoped_and_forwarded() -> Result<()> {
+        let args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "images",
+            "--img-jxl-effort",
+            "8",
+            "--img-jpeg-effort",
+            "11",
+        ])?;
+        validate_media_options(&args)?;
+        let command = rust_run_command(
+            Path::new("/repo"),
+            "img",
+            &args,
+            Path::new("/synthetic/input"),
+        )?;
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--jxl-effort", "8"])
+        );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--jpeg-effort", "11"])
+        );
+        let mut fast = args.clone();
+        fast.mode = LaunchMode::FastImg;
+        let (command, _) =
+            fast_img_launch_command(&fast, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--jxl-effort", "8"])
+        );
+        for value in ["0", "6", "9", "11"] {
+            assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", value]).is_err());
+        }
+        for mode in ["videos", "fast-vid", "restore-jpeg", "collect"] {
+            let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-effort", "8"])?;
+            assert!(validate_media_options(&args).is_err());
+        }
+        let videos_only = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "auto",
+            "--videos-only",
+            "--img-jxl-effort",
+            "8",
+        ])?;
+        assert!(validate_media_options(&videos_only).is_err());
+        let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
+        let command = rust_run_command(
+            Path::new("/repo"),
+            "img",
+            &args,
+            Path::new("/synthetic/input"),
+        )?;
+        assert!(!command.args.contains(&"--jxl-effort".to_owned()));
+        Ok(())
     }
 
     #[test]
@@ -6179,6 +6284,7 @@ mod tests {
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
+            img_jxl_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6290,6 +6396,7 @@ mod tests {
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
+                img_jxl_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,
@@ -6342,6 +6449,7 @@ mod tests {
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
+            img_jxl_effort: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6416,6 +6524,7 @@ mod tests {
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
+                img_jxl_effort: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,

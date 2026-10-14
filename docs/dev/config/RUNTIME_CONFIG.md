@@ -39,6 +39,7 @@ img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img run /path/to/images --allow-database --quality-heuristic
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+img run /path/to/images --jxl-effort 8
 img fast-img /path/to/images --fallback-policy same-semantics --tool-policy single
 img fast-img /path/to/images --shortest-path --photos-backend native \
   --photos-import-root Archive --photos-album-name Family \
@@ -77,6 +78,17 @@ cancelling discards them and Apply validates through the worker before persisten
 No override means inheritance, not a saved copy of a discovered or inherited value.
 No raw JSON editor or configuration-file rewrite is involved.
 
+Direct pixel JXL effort uses optional `img.jxl_effort`, default `null`. Omission
+inherits lower-priority configuration; `null` selects the existing mode policy:
+normal e7, ultimate/archive e10 and PNG e10. Explicit values must be **7, 8 or 10**;
+other efforts, including retired e9 and experimental e11, are rejected rather
+than clamped or substituted. Direct IMG uses `--jxl-effort`; the launcher uses
+`--img-jxl-effort` for standard and Fast IMG, not video or maintenance operations.
+The shared immutable runtime configuration selects one effort for encoding,
+probes, guarded recovery and distance exploration, including the direct HDR
+paths. `jpeg_effort` independently controls reversible JPEG reconstruction.
+Neither field changes distance, source semantics or required fidelity checks.
+
 ### Native GUI Overrides
 
 The gear button shows the current image workflow, a standard Video tab,
@@ -85,6 +97,9 @@ independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Standard IMG preferences are never
 copied into Fast IMG on read; each workflow uses its own saved overrides and the
 backend's effective configuration. Existing independent preferences stay intact.
+Developer adds independent standard/Fast IMG direct JXL effort menus with 7, 8,
+10 and inheritance. An unchanged inherited control does not save an override;
+explicit selection retains one, and reset removes it without changing JSON.
 Search locates the original setting by localized label, section or choice. In
 Developer mode, runtime keys and flags are searchable too. Results include only
 the current workflow's applicable controls; selecting a Photos advanced parameter
@@ -139,7 +154,7 @@ remains owned by the shared Rust model. Tool executable paths remain available t
 direct `img --tool` overrides.
 
 The launcher accepts `--img-config`, `--img-fallback-policy`,
-`--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
+`--img-jpeg-effort`, `--img-jxl-effort`, `--img-quality-heuristic=true|false`,
 `--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
 `--vid-error-mode`, plus `--vid-force-ms-ssim-long=true|false`. Error modes are `log-and-continue` and `fail-fast`; overrides
 are forwarded as typed worker `--error-mode` flags, including PTY launches, without
@@ -205,7 +220,8 @@ chosen after runtime fallback are not yet part of this record.
 | `execution.error_mode` | `log-and-continue` | Standard IMG/VID recoverable file-failure policy. `fail-fast` stops on the first recoverable failure; fatal errors always stop and intentional skips remain skips. `--error-mode` overrides files. Does not change Fast IMG/Fast GIF encoding loops. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
-| `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11. Pixel encoding retains its normal/ultimate mode policy. |
+| `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11; independent of direct pixel encoding. |
+| `img.jxl_effort` | `null` | Direct pixel JXL effort, only 7, 8 or 10. `null` retains normal e7, ultimate/archive e10 and PNG e10. `--jxl-effort` overrides files; distance and verification are unchanged. |
 | `img.fallback_policy` | `strict` | `strict`: one requested JPEG encode attempt. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
 | `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |

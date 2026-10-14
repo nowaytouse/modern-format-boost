@@ -40,9 +40,12 @@ pub(super) struct RuntimeArgs {
     /// Whether alternate encoding/recovery tools may be attempted.
     #[arg(long, global = true, value_enum)]
     tool_policy: Option<ToolPolicy>,
-    /// Effort for reversible JPEG-to-JXL encoding; direct pixel encoding keeps its mode policy.
+    /// Effort for reversible JPEG-to-JXL encoding; independent of direct pixel JXL effort.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(1..=11))]
     jpeg_effort: Option<u8>,
+    /// Effort for direct pixel JXL encoding (7, 8 or 10); omission retains the saved or mode effort.
+    #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
+    jxl_effort: Option<u8>,
     #[command(flatten)]
     photos: PhotosArgs,
     #[command(flatten)]
@@ -210,6 +213,13 @@ impl RuntimeArgs {
             source_chain,
             "img.jpeg_effort",
         );
+        apply(
+            self.jxl_effort.map(Some),
+            &mut config.img.jxl_effort,
+            sources,
+            source_chain,
+            "img.jxl_effort",
+        );
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
         self.execution.apply_to(&mut loaded);
@@ -223,6 +233,51 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn direct_jxl_effort_flags_preserve_saved_values_and_reconstruction_policy() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config = temp.path().join("direct.json");
+        std::fs::write(
+            &config,
+            br#"{"config_version":1,"img":{"jxl_effort":8,"jpeg_effort":9}}"#,
+        )?;
+        let path = config.to_str().context("test configuration path")?;
+        for (command, tail) in [
+            ("config", "show"),
+            ("run", "/unused"),
+            ("fast-img", "/unused"),
+        ] {
+            for (flags, expected, source) in [
+                (Vec::new(), 8, path),
+                (vec!["--jxl-effort", "7"], 7, "CLI"),
+                (vec!["--jxl-effort", "10"], 10, "CLI"),
+            ] {
+                let argv = [vec!["img", command, tail, "--config", path], flags].concat();
+                let loaded = crate::Cli::try_parse_from(argv)?.policy.resolve(false)?;
+                assert_eq!(loaded.config.img.jxl_effort, Some(expected));
+                assert_eq!(loaded.config.img.jpeg_effort, 9);
+                assert_eq!(loaded.sources["img.jxl_effort"], source);
+                assert_eq!(
+                    loaded.source_chain["img.jxl_effort"]
+                        .last()
+                        .map(String::as_str),
+                    Some(source)
+                );
+            }
+        }
+        for effort in ["0", "1", "6", "9", "11", "255", "256", "null"] {
+            assert!(
+                crate::Cli::try_parse_from(["img", "config", "show", "--jxl-effort", effort])
+                    .is_err()
+            );
+        }
+        let loaded = crate::Cli::try_parse_from(["img", "config", "show", "--no-config"])?
+            .policy
+            .resolve(false)?;
+        assert_eq!(loaded.config.img.jxl_effort, None);
+        Ok(())
+    }
 
     #[test]
     fn shared_tool_paths_reach_image_config_run_and_fast_image_without_execution() -> Result<()> {

@@ -1142,25 +1142,17 @@ pub fn convert_to_jxl(
     } else {
         resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)
     };
-    let effort_plan = if is_genuine_png {
-        vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
-            foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
-        )]
-    } else {
-        foundation::jxl_effort_policy::effort_plan_for_mode(
-            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
-            options.ultimate(),
-            options.archive(),
-        )
-    };
     let actual_eff = if is_genuine_png {
-        foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT
+        foundation::jxl_effort_policy::direct_encoder_effort(
+            foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
+        )
     } else {
         foundation::jxl_effort_policy::encoder_effort_for_mode(
             options.ultimate(),
             options.archive(),
         )
     };
+    let effort_plan = vec![JxlEffortPlan::Single(actual_eff)];
 
     // Report the source color evidence; the encoder below applies a validated
     // named `cjxl` color-space mapping when one is unambiguous.
@@ -1305,6 +1297,7 @@ pub fn convert_to_jxl(
                         input_payload_size,
                         output_payload_size,
                         max_threads,
+                        actual_eff,
                         options,
                         icc_path,
                         color_info,
@@ -1471,7 +1464,9 @@ pub fn convert_to_jxl_probe(
 
     let effort_plan = if is_genuine_png {
         vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
-            foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
+            foundation::jxl_effort_policy::direct_encoder_effort(
+                foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
+            ),
         )]
     } else {
         foundation::jxl_effort_policy::effort_plan_for_mode(
@@ -4670,6 +4665,7 @@ fn try_explore_ultimate_jxl_distance(
     input_size: u64,
     initial_output_size: u64,
     max_threads: usize,
+    exploration_effort: u8,
     options: &ConvertOptions,
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
@@ -4681,7 +4677,6 @@ fn try_explore_ultimate_jxl_distance(
         "Ultimate Exploration: one effort domain, distance screening, shortlist verification",
     );
 
-    let exploration_effort = foundation::jxl_effort_policy::encoder_effort(true);
     // Active policy: must be consistent with d0 check and SizeToleranceCheck.
     // Resolves the same way as jxl_d0_misses_active_size_policy.
     let active_policy = options.effective_size_policy();

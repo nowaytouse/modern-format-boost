@@ -142,7 +142,22 @@ pub struct ImgPolicy {
     /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
     pub size_tolerance_bytes: u64,
     pub jpeg_effort: u8,
+    /// Direct pixel JXL encoding only; None retains the normal/ultimate or PNG effort.
+    pub jxl_effort: Option<u8>,
     pub fallback_policy: FallbackPolicy,
+}
+
+/// Parse a direct pixel JXL effort without enabling retired or experimental tiers.
+///
+/// # Errors
+/// Rejects values outside the current production effort policy (7, 8 or 10).
+pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
+    let effort = value.parse::<u8>().map_err(|error| error.to_string())?;
+    if crate::constants::is_supported_jxl_effort(effort) {
+        Ok(effort)
+    } else {
+        Err("direct JXL effort must be 7, 8 or 10".into())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -179,6 +194,7 @@ impl Default for ImgPolicy {
             allow_size_tolerance: false,
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             jpeg_effort: 11,
+            jxl_effort: None,
             fallback_policy: FallbackPolicy::Strict,
         }
     }
@@ -379,6 +395,12 @@ impl RuntimeConfig {
         ensure!(
             (1..=11).contains(&self.img.jpeg_effort),
             "img.jpeg_effort must be 1..11"
+        );
+        ensure!(
+            self.img
+                .jxl_effort
+                .is_none_or(crate::constants::is_supported_jxl_effort),
+            "img.jxl_effort must be null or 7, 8 or 10"
         );
         ensure!(
             (1..=1000).contains(&self.photos.native_batch_size),
@@ -794,6 +816,43 @@ pub fn load(explicit: Option<&Path>, no_config: bool) -> Result<LoadedConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_jxl_effort_is_optional_bounded_and_independent_from_jpeg() -> Result<()> {
+        let mut config = RuntimeConfig::default();
+        assert_eq!(config.img.jxl_effort, None);
+        assert_eq!(
+            serde_json::to_value(&config)?["img"]["jxl_effort"],
+            Value::Null
+        );
+        for effort in [7, 8, 10] {
+            config.img.jxl_effort = Some(effort);
+            config.validate()?;
+            assert_eq!(parse_direct_jxl_effort(&effort.to_string()), Ok(effort));
+            assert_eq!(config.img.jpeg_effort, 11);
+        }
+        for effort in [0, 1, 6, 9, 11, u8::MAX] {
+            config.img.jxl_effort = Some(effort);
+            assert!(config.validate().is_err());
+            assert!(parse_direct_jxl_effort(&effort.to_string()).is_err());
+        }
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        let temp = tempfile::tempdir()?;
+        let saved = temp.path().join("direct.json");
+        std::fs::write(
+            &saved,
+            br#"{"config_version":1,"img":{"jxl_effort":8,"jpeg_effort":9}}"#,
+        )?;
+        apply_file(&mut value, &saved, &mut sources, &mut source_chain)?;
+        assert_eq!(value["img"]["jxl_effort"], 8);
+        std::fs::write(&saved, br#"{"config_version":1,"img":{"jxl_effort":null}}"#)?;
+        apply_file(&mut value, &saved, &mut sources, &mut source_chain)?;
+        assert_eq!(value["img"]["jxl_effort"], Value::Null);
+        assert_eq!(value["img"]["jpeg_effort"], 9);
+        Ok(())
+    }
 
     #[test]
     fn tool_overrides_preserve_inheritance_exact_paths_and_cli_sources() -> Result<()> {

@@ -254,6 +254,11 @@
 "settings.imgConfig" = "Configuration file";
 "settings.imgFallback" = "Encoding fallback";
 "settings.imgJpegEffort" = "JPEG transcoding effort (1–11)";
+"settings.imgJxlEffort" = "JXL Pixel Encoding Effort";
+"settings.imgJxlEffort.help" = "JXL pixel encoding supports effort 7, 8 or 10. Inherit keeps mode defaults, including the existing PNG default. JPEG reversible transcoding effort, quality distance and mandatory verification are unchanged.";
+"settings.value.7" = "7";
+"settings.value.8" = "8";
+"settings.value.10" = "10";
 "settings.imgHeuristic" = "Estimate source quality";
 "settings.imgDatabase" = "Quality database";
 "settings.imgErrorMode" = "Standard images: file failure";

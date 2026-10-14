@@ -497,7 +497,10 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     archive: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
-    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
+    // JPEG bitstream migration retains its mode policy, not the pixel-encoding override.
+    let actual_effort = crate::constants::jxl_effort_for_mode(
+        crate::jxl_effort_policy::effective_ultimate(ultimate, archive),
+    );
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,

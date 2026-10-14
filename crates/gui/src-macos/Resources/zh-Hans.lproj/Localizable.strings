@@ -254,6 +254,11 @@
 "settings.imgConfig" = "配置文件";
 "settings.imgFallback" = "编码回退策略";
 "settings.imgJpegEffort" = "JPEG 转码强度（1–11）";
+"settings.imgJxlEffort" = "JXL 像素编码强度";
+"settings.imgJxlEffort.help" = "JXL 像素编码支持 7、8、10 档。选择继承时保持处理模式和既有 PNG 默认强度；不改变 JPEG 可逆转码强度、质量距离或必要核验。";
+"settings.value.7" = "7";
+"settings.value.8" = "8";
+"settings.value.10" = "10";
 "settings.imgHeuristic" = "估算原始图像质量";
 "settings.imgDatabase" = "质量数据库";
 "settings.imgErrorMode" = "标准图像：单个文件失败时";

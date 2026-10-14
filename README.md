@@ -1424,6 +1424,7 @@ img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+img run /path/to/images --jxl-effort 8
 vid --performance adaptive run /path/to/videos
 ```
 
@@ -1435,6 +1436,12 @@ The GUI shows effective choices directly, keeps image settings contextual to
 the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
 Photos batch sizes expand on demand; failure policies and configuration sources
 belong to Developer mode, enabled from About.
+Developer also offers independent standard/Fast IMG direct JXL effort choices
+of 7, 8 or 10. JSON `img.jxl_effort` defaults to `null`, retaining normal e7,
+ultimate/archive e10 and PNG e10; `img --jxl-effort` or launcher
+`--img-jxl-effort` explicitly overrides that choice. GUI inheritance removes only
+its override and does not rewrite JSON. This controls encoder effort, not distance
+or verification; JPEG reconstruction retains its separate `jpeg_effort` policy.
 JPEG retries now default to `strict`; `same-semantics` permits original-byte
 compatibility retries, and `repair` enables existing guarded recovery paths.
 No preference disables exact reconstruction, metadata checks or Photos custody

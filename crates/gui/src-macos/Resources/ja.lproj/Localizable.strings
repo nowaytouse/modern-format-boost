@@ -254,6 +254,11 @@
 "settings.imgConfig" = "設定ファイル";
 "settings.imgFallback" = "エンコードのフォールバック";
 "settings.imgJpegEffort" = "JPEG 圧縮の念入りさ（1–11）";
+"settings.imgJxlEffort" = "JXL ピクセル符号化強度";
+"settings.imgJxlEffort.help" = "JXL ピクセル符号化は7、8、10に対応します。継承を選ぶと処理モードと既存のPNG設定を維持します。JPEG可逆変換の強度、品質距離、必須検証は変更しません。";
+"settings.value.7" = "7";
+"settings.value.8" = "8";
+"settings.value.10" = "10";
 "settings.imgHeuristic" = "元画像の品質を推定";
 "settings.imgDatabase" = "品質データベース";
 "settings.imgErrorMode" = "標準画像：ファイル失敗時";

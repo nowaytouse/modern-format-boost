@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### CI contract fixes and direct JXL effort settings (2026-10-14)
+
+- Fix the four contract failures confirmed in nightly run 38496290025. GPU probe
+  identity now reads the real working directory through the shared strict entry,
+  preserving OS errors and invalidating an unavailable context without another
+  probe. Configured FFmpeg, environment and PATH precedence remains explicit.
+  The cancellation fixture publishes its PID receipt atomically and reports
+  read/parse failures after cleaning up its isolated process group.
+- Add nullable `img.jxl_effort`, IMG `--jxl-effort` and launcher
+  `--img-jxl-effort`, restricted to the existing production efforts 7, 8 and 10.
+  Omission inherits; null retains normal e7, ultimate/archive e10 and PNG e10.
+  Initial encoding, probes, guarded recovery and distance exploration use the
+  same selected effort. JPEG reconstruction keeps its independent policy,
+  including the public UltraHDR bitstream migration entry's unchanged defaults;
+  distance, media routing, fidelity checks and cleanup requirements are unchanged.
+- Add independent standard/Fast IMG effort menus in native Developer Settings,
+  with inheritance, reset, draft/cancel and real effective-source previews.
+  Explicitly choosing an inherited value preserves an override; returning to
+  inheritance removes only the GUI override. Unknown config remains unknown,
+  rather than being displayed as automatic; unsupported efforts and scopes fail.
+- Preserve the pre-existing lock-file refresh for equivalent 1.0.3, tokio 1.53.3
+  and zerocopy/derive 0.8.63. No additional dependency update was requested or run.
+- Validation: all 398 existing silent-fallback contracts passed, including the
+  four failed CI checks. Nine scoped JXL policy/config cases, two GPU cache cases,
+  the shared CWD case, the IMG CLI case and two launcher cases passed. Locked
+  worker builds, scoped Foundation/launcher/IMG strict Clippy, formatting, Swift
+  warnings-as-errors and three-language native self-tests passed. Isolated dark
+  and light windows checked actual worker-backed preview, standard preference
+  save, draft cancellation and independent Fast IMG inheritance. Run 38508869207
+  on the same old commit repeated the four failures; its overall result was still
+  pending when inspected. Post-push CI, production media/Photos, full-workspace,
+  cross-platform and encoding-speed acceptance were not performed; the installed
+  app was not replaced. Owned native QA artifacts and preferences were removed.
+
 ### Shared tool-path settings and destination capacity (2026-10-14)
 
 - Share explicit tool-path parsing and typed config overrides between IMG and VID.

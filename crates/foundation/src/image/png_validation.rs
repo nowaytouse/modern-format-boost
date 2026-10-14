@@ -1,7 +1,8 @@
 //! PNG genuineness validation and heuristic policy.
 //!
 //! Genuine PNG media receive full exemption: always treated as lossless, encoded
-//! to JXL at effort 10 with no file-size gate. PNG quantization heuristics are
+//! to JXL at default effort 10 (or an explicit production effort) with no file-size
+//! gate. PNG quantization heuristics are
 //! retained but disabled by default (`MFB_ENABLE_PNG_HEURISTIC`).
 
 use crate::unified_error::{ImgQualityError, Result};
@@ -14,7 +15,7 @@ use super::format_detect::{FormatKind, detect_true_format, validate_format_foren
 /// content-level lossy detection (256-color art, palette logos, etc.).
 pub const ENV_ENABLE_PNG_HEURISTIC: &str = "MFB_ENABLE_PNG_HEURISTIC";
 
-/// Effort value mandated for genuine PNG → lossless JXL encoding.
+/// Default effort for genuine PNG → lossless JXL encoding.
 pub const PNG_LOSSLESS_JXL_EFFORT: u8 = 10;
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
