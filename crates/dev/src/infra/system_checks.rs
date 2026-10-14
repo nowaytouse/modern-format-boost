@@ -5,9 +5,13 @@
 
 #[cfg(target_os = "linux")]
 use crate::infra::hardening::parse_kb_token;
-use anyhow::{Result, anyhow, bail};
+#[cfg(unix)]
+use anyhow::anyhow;
+use anyhow::{Result, bail};
 use std::path::Path;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::thread;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
@@ -93,27 +97,57 @@ fn refresh_sysinfo_snapshot(resources: &mut SystemResources) {
     resources.cpu_percent = system.global_cpu_usage() as f64;
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn get_disk_free_space(path: &Path) -> Result<u64> {
-    let path_str = path.to_string_lossy();
-    let path_cstr =
-        std::ffi::CString::new(path_str.as_bytes()).map_err(|e| anyhow!("path to CString: {e}"))?;
+/// Read currently available bytes on the filesystem containing an existing path.
+/// This is a snapshot, not a capacity reservation or an estimate of required space.
+///
+/// # Errors
+/// Rejects invalid paths, failed filesystem probes, overflow, and unsupported platforms.
+#[cfg(unix)]
+pub fn get_disk_free_space(path: &Path) -> Result<u64> {
+    let path_cstr = disk_probe_path(path)?;
 
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         let ret = libc::statvfs(path_cstr.as_ptr(), &mut stat);
         if ret != 0 {
-            bail!("statvfs failed");
+            let error = std::io::Error::last_os_error();
+            return Err(
+                anyhow!(error).context(format!("read available disk bytes for {}", path.display()))
+            );
         }
         statvfs_available_bytes(&stat)
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// # Errors
+/// Disk capacity snapshots are not supported on this platform.
+#[cfg(not(unix))]
+pub fn get_disk_free_space(_path: &Path) -> Result<u64> {
+    bail!("available disk-byte snapshots are unsupported on this platform")
+}
+
+#[cfg(unix)]
+fn disk_probe_path(path: &Path) -> Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|error| anyhow!("invalid disk probe path: {error}"))
+}
+
+#[cfg(unix)]
 #[allow(clippy::unnecessary_cast)] // libc field widths vary across supported platforms.
 fn statvfs_available_bytes(stat: &libc::statvfs) -> Result<u64> {
-    (stat.f_bavail as u64)
-        .checked_mul(stat.f_frsize as u64)
+    anyhow::ensure!(
+        stat.f_frsize > 0,
+        "statvfs returned an invalid zero fragment size"
+    );
+    available_byte_product(stat.f_bavail as u64, stat.f_frsize as u64)
+}
+
+#[cfg(unix)]
+fn available_byte_product(blocks: u64, fragment_bytes: u64) -> Result<u64> {
+    blocks
+        .checked_mul(fragment_bytes)
         .ok_or_else(|| anyhow!("statvfs available-byte count overflow"))
 }
 
@@ -188,18 +222,56 @@ fn get_cpu_percent_cached() -> Result<f64> {
     Ok(0.0)
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(test, unix))]
 mod tests {
-    use super::{get_disk_free_space, statvfs_available_bytes};
+    use super::{
+        available_byte_product, disk_probe_path, get_disk_free_space, statvfs_available_bytes,
+    };
+    use std::path::Path;
 
     #[test]
     fn disk_free_space_uses_statvfs_fragment_size() {
-        // Two live filesystem probes race with unrelated disk writes.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         stat.f_bavail = 3;
         stat.f_frsize = 1024;
         stat.f_bsize = 4096;
         assert_eq!(statvfs_available_bytes(&stat).unwrap(), 3072);
-        assert!(get_disk_free_space(&std::env::temp_dir()).is_ok());
+        stat.f_bavail = 0;
+        assert_eq!(statvfs_available_bytes(&stat).unwrap(), 0);
+        stat.f_frsize = 0;
+        assert!(statvfs_available_bytes(&stat).is_err());
+    }
+
+    #[test]
+    fn disk_free_space_rejects_available_byte_overflow() {
+        assert!(available_byte_product(u64::MAX, 2).is_err());
+        assert_eq!(available_byte_product(u64::MAX, 1).unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn disk_free_space_keeps_native_path_bytes_and_rejects_nul() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let bytes = vec![b's', 0xff, b'\n'];
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes.clone()));
+        assert_eq!(disk_probe_path(&path).unwrap().as_bytes(), bytes);
+        assert!(get_disk_free_space(Path::new("synthetic\0path")).is_err());
+    }
+
+    #[test]
+    fn disk_free_space_reports_missing_paths_without_creating_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("not-created");
+        let error = get_disk_free_space(&missing).unwrap_err();
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(!missing.exists());
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod tests {
+    #[test]
+    fn disk_free_space_is_explicitly_unsupported() {
+        assert!(super::get_disk_free_space(std::path::Path::new("synthetic")).is_err());
     }
 }

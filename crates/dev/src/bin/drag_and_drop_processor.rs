@@ -160,6 +160,12 @@ struct Args {
     /// Video runtime JSON overlay; the file is not modified.
     #[arg(long, value_name = "PATH")]
     vid_config: Option<PathBuf>,
+    /// Image/Fast IMG tool override, NAME=/absolute/path; may be repeated.
+    #[arg(long = "img-tool", value_parser = foundation::runtime_config::parse_tool_override)]
+    img_tools: Vec<(String, PathBuf)>,
+    /// Standard VID tool override, NAME=/absolute/path; may be repeated.
+    #[arg(long = "vid-tool", value_parser = foundation::runtime_config::parse_tool_override)]
+    vid_tools: Vec<(String, PathBuf)>,
     #[command(flatten)]
     performance: foundation::runtime_config::PerformanceArgs,
     #[command(flatten)]
@@ -205,6 +211,10 @@ struct Args {
     /// Standard video codec; AV1 explicitly disables Apple compatibility.
     #[arg(long, value_enum)]
     vid_codec: Option<VidCodec>,
+
+    /// Standard VID only: override full quality verification for long videos.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    vid_force_ms_ssim_long: Option<bool>,
 
     /// Restrict restore-jpeg to one native Photos album UUID.
     #[arg(long, conflicts_with = "photos_folder_id")]
@@ -982,6 +992,27 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        args.img_tools.is_empty()
+            || args.mode == LaunchMode::FastImg
+            || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
+                && processing_filter(args).accepts_image()),
+        "image tool paths require selected standard images or --mode fast-img"
+    );
+    anyhow::ensure!(
+        args.vid_tools.is_empty()
+            || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos)
+                && processing_filter(args).accepts_video()),
+        "video tool paths require selected standard videos"
+    );
+    foundation::runtime_config::ToolsArgs {
+        tools: args.img_tools.clone(),
+    }
+    .cli_arguments()?;
+    foundation::runtime_config::ToolsArgs {
+        tools: args.vid_tools.clone(),
+    }
+    .cli_arguments()?;
+    anyhow::ensure!(
         (args.img_allow_size_tolerance.is_none() && args.img_size_tolerance_bytes.is_none())
             || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
         "image size tolerance requires --mode auto or images; Fast IMG is unchanged"
@@ -1018,7 +1049,9 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "image settings require --mode auto, images, or fast-img"
     );
     anyhow::ensure!(
-        (args.vid_error_mode.is_none() && args.vid_codec.is_none())
+        (args.vid_error_mode.is_none()
+            && args.vid_codec.is_none()
+            && args.vid_force_ms_ssim_long.is_none())
             || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
         "video settings require --mode auto or videos"
     );
@@ -1574,7 +1607,7 @@ fn plan_routed_pipeline_commands_unbound(
                 "img",
                 &file_args,
                 &file_args.inputs[0],
-            ));
+            )?);
         }
     }
     if run_videos {
@@ -1588,7 +1621,7 @@ fn plan_routed_pipeline_commands_unbound(
                 "vid",
                 &file_args,
                 &file_args.inputs[0],
-            ));
+            )?);
         }
     }
     if commands.is_empty() {
@@ -1842,12 +1875,18 @@ fn fast_img_launch_command(
         args.strategy.as_deref(),
         args.ultimate || DRAG_DROP_CHILD_ULTIMATE,
     ))?;
-    push_img_policy_args(&mut command.args, args);
+    push_img_policy_args(&mut command.args, args)?;
     let command = command.with_error_mode(args.img_error_mode);
     Ok((command, output))
 }
 
-fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
+fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
+    command.extend(
+        foundation::runtime_config::ToolsArgs {
+            tools: args.img_tools.clone(),
+        }
+        .cli_arguments()?,
+    );
     command.extend(args.performance.cli_arguments());
     command.extend(args.cache.cli_arguments());
     command.extend(args.photos.cli_arguments());
@@ -1884,6 +1923,7 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) {
     if let Some(bytes) = args.img_size_tolerance_bytes {
         command.extend(["--size-tolerance-bytes".to_owned(), bytes.to_string()]);
     }
+    Ok(())
 }
 
 fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
@@ -1926,15 +1966,26 @@ fn push_common_run_args(command: &mut Vec<String>, args: &Args, input: &Path) {
     }
 }
 
-fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -> LaunchCommand {
+fn rust_run_command(
+    project_root: &Path,
+    bin: &str,
+    args: &Args,
+    input: &Path,
+) -> Result<LaunchCommand> {
     let mut command = vec![cli_binary(project_root, bin).to_string_lossy().into_owned()];
     push_common_run_args(&mut command, args, input);
     match bin {
         "img" => {
             command.push("--apple-compat".to_owned());
-            push_img_policy_args(&mut command, args);
+            push_img_policy_args(&mut command, args)?;
         }
         "vid" => {
+            command.extend(
+                foundation::runtime_config::ToolsArgs {
+                    tools: args.vid_tools.clone(),
+                }
+                .cli_arguments()?,
+            );
             command.extend(args.performance.cli_arguments());
             command.extend(args.cache.cli_arguments());
             if let Some(path) = &args.vid_config {
@@ -1946,25 +1997,28 @@ fn rust_run_command(project_root: &Path, bin: &str, args: &Args, input: &Path) -
                     command.push("--no-apple-compat".to_owned());
                 }
             }
+            if let Some(force) = args.vid_force_ms_ssim_long {
+                command.push(format!("--force-ms-ssim-long={force}"));
+            }
         }
         _ => {}
     }
-    LaunchCommand::from_argv(command)
-        .expect("internal command must include binary")
-        .with_error_mode(match bin {
+    Ok(
+        LaunchCommand::from_argv(command)?.with_error_mode(match bin {
             "img" => args.img_error_mode,
             "vid" => args.vid_error_mode,
             _ => None,
-        })
+        }),
+    )
 }
 
 fn plan_auto_file(project_root: &Path, args: &Args, input: &Path) -> Result<LaunchCommand> {
     match classify_media_owner(input)? {
         Some(owner) if owner == PIPELINE_IMAGE => {
-            Ok(rust_run_command(project_root, "img", args, input))
+            rust_run_command(project_root, "img", args, input)
         }
         Some(owner) if owner == PIPELINE_VIDEO => {
-            Ok(rust_run_command(project_root, "vid", args, input))
+            rust_run_command(project_root, "vid", args, input)
         }
         Some(owner) => bail!("unsupported media owner `{owner}` for {}", input.display()),
         None => bail!("unsupported drag/drop input: {}", input.display()),
@@ -2039,12 +2093,16 @@ fn plan_cli_invocations(
     for input in &args.inputs {
         match args.mode {
             LaunchMode::Auto if input.is_dir() => {
-                commands.push(rust_run_command(project_root, "img", args, input));
-                commands.push(rust_run_command(project_root, "vid", args, input));
+                commands.push(rust_run_command(project_root, "img", args, input)?);
+                commands.push(rust_run_command(project_root, "vid", args, input)?);
             }
             LaunchMode::Auto => commands.push(plan_auto_file(project_root, args, input)?),
-            LaunchMode::Images => commands.push(rust_run_command(project_root, "img", args, input)),
-            LaunchMode::Videos => commands.push(rust_run_command(project_root, "vid", args, input)),
+            LaunchMode::Images => {
+                commands.push(rust_run_command(project_root, "img", args, input)?)
+            }
+            LaunchMode::Videos => {
+                commands.push(rust_run_command(project_root, "vid", args, input)?)
+            }
             LaunchMode::FastImg => {
                 commands.push(fast_img_launch_command(args, project_root, input)?.0);
             }
@@ -3271,6 +3329,8 @@ fn build_run_args(
         photos_folder_id: None,
         img_config: None,
         vid_config: None,
+        img_tools: Vec::new(),
+        vid_tools: Vec::new(),
         performance: Default::default(),
         cache: cache.clone(),
         img_fallback_policy: None,
@@ -3284,6 +3344,7 @@ fn build_run_args(
         img_error_mode: None,
         vid_error_mode: None,
         vid_codec: None,
+        vid_force_ms_ssim_long: None,
     }
 }
 
@@ -3600,21 +3661,74 @@ fn inspect_routing_plan(args: &Args) -> Result<dev::infra::preflight_plan::Prefl
                 .first()
                 .context("routing plan omitted its input")?;
             safety_check(input)?;
-            dev::infra::preflight_plan::RoutingPlan::inspect(
+            let mut routing = dev::infra::preflight_plan::RoutingPlan::inspect(
                 input,
                 plan.output.as_deref(),
                 processing_filter(plan),
                 plan.in_place,
-            )
+            )?;
+            if !plan.in_place && plan.output.is_none() {
+                return Ok(routing);
+            }
+            let destination = if plan.in_place {
+                if fs::metadata(input)?.is_dir() {
+                    Ok(input.clone())
+                } else {
+                    input
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .context("input has no parent directory")
+                }
+            } else {
+                plan.output.clone().context("destination_not_bound")
+            };
+            routing.storage = dev::infra::preflight_plan::StorageObservation::observe(
+                destination.and_then(|path| output_resource_check_dir(&path)),
+            );
+            Ok(routing)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(dev::infra::preflight_plan::PreflightReport::new(plans))
+    let required = [
+        ("img", plans.iter().any(|plan| plan.selected_images > 0)),
+        ("vid", plans.iter().any(|plan| plan.selected_videos > 0)),
+    ];
+    let workers = if required.iter().any(|(_, selected)| *selected) {
+        let root = resolve_runtime_root()?;
+        required
+            .into_iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(name, _)| {
+                dev::infra::preflight_plan::WorkerObservation::inspect(
+                    name,
+                    cli_binary(&root, name),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(dev::infra::preflight_plan::PreflightReport::new(
+        plans, workers,
+    ))
+}
+
+#[cfg(unix)]
+fn isolate_preflight_process_group() -> Result<()> {
+    // Read-only probes inherit this group, allowing GUI cancellation to reap them together.
+    let already_isolated = unsafe { libc::getpgrp() == libc::getpid() };
+    if !already_isolated && unsafe { libc::setpgid(0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("isolate read-only preflight process group");
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
     use std::io::IsTerminal;
     let args = apply_mode_overrides(Args::parse());
     if args.plan_json {
+        #[cfg(unix)]
+        isolate_preflight_process_group()?;
         let plan = inspect_routing_plan(&args)?;
         println!("{}", serde_json::to_string_pretty(&plan)?);
         return Ok(());
@@ -3819,15 +3933,32 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "auto"]).unwrap();
         args.inputs = vec![first.clone(), second.clone()];
         let plan = inspect_routing_plan(&args).unwrap();
+        assert_eq!(plan.schema_version, 2);
+        assert_eq!(plan.workers.len(), 1);
+        assert_eq!(plan.workers[0].name, "img");
         assert_eq!(plan.plans.len(), 2);
         assert_eq!(plan.plans[0].entries[0].action, "submit_img");
         assert_eq!(plan.plans[1].entries[0].action, "copy_after_success");
+        #[cfg(unix)]
+        for routing in &plan.plans {
+            assert_eq!(routing.storage.status, "observed");
+            assert_eq!(
+                routing.storage.directory,
+                Some(temp.path().canonicalize().unwrap())
+            );
+            assert!(routing.storage.available_bytes.is_some());
+            assert!(routing.storage.diagnostic.is_none());
+        }
         assert!(
             plan.plans
                 .iter()
                 .all(|plan| !plan.output_requested.as_ref().unwrap().exists())
         );
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+        args.mode = LaunchMode::Videos;
+        let filtered = inspect_routing_plan(&args).unwrap();
+        assert!(filtered.workers.is_empty());
+        assert_eq!(filtered.plans[0].filtered_media, 1);
         args.mode = LaunchMode::FastImg;
         assert!(inspect_routing_plan(&args).is_err());
         args.mode = LaunchMode::Images;
@@ -3835,6 +3966,91 @@ mod tests {
         assert!(inspect_routing_plan(&args).is_err());
         assert!(Args::try_parse_from(["mfb", "--plan-json", "--dry-run"]).is_err());
         assert!(Args::try_parse_from(["mfb", "--plan-json", "--watch"]).is_err());
+    }
+
+    #[test]
+    fn read_only_storage_plan_leaves_unbound_file_destination_unknown() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("notes.txt");
+        fs::write(&input, b"synthetic")?;
+        let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "auto"])?;
+        args.inputs = vec![input];
+        let report = inspect_routing_plan(&args)?;
+        assert_eq!(report.plans[0].storage.status, "unknown");
+        assert!(report.plans[0].storage.available_bytes.is_none());
+        assert!(report.plans[0].storage.diagnostic.is_some());
+        assert_eq!(
+            report.plans[0].storage.diagnostic.as_deref(),
+            Some("destination_not_bound")
+        );
+        args.output = Some(temp.path().join("new").join("output"));
+        let report = inspect_routing_plan(&args)?;
+        #[cfg(unix)]
+        {
+            assert_eq!(report.plans[0].storage.status, "observed");
+            assert_eq!(
+                report.plans[0].storage.directory,
+                Some(temp.path().canonicalize()?)
+            );
+        }
+        assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_plan_group_child_fixture() {
+        let Some(path) = std::env::var_os("MFB_PREFLIGHT_GROUP_FIXTURE") else {
+            return;
+        };
+        isolate_preflight_process_group().unwrap();
+        let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        fs::write(path, child.id().to_string()).unwrap();
+        child.wait().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_plan_group_cancellation_removes_probe_children() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt = temp.path().join("probe-pid");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::read_only_plan_group_child_fixture"])
+            .env("MFB_PREFLIGHT_GROUP_FIXTURE", &receipt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut probe_pid = None;
+        while std::time::Instant::now() < deadline {
+            probe_pid = fs::read_to_string(&receipt)
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok());
+            if probe_pid.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pid = i32::try_from(child.id()).unwrap();
+        // These PIDs belong exclusively to the fixture process group we just started.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+            libc::kill(pid, libc::SIGKILL);
+        }
+        child.wait().unwrap();
+        let probe_pid = probe_pid.expect("fixture probe did not start before the deadline");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while unsafe { libc::kill(probe_pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let remained = unsafe { libc::kill(probe_pid, 0) };
+        if remained == 0 {
+            unsafe {
+                libc::kill(probe_pid, libc::SIGKILL);
+            }
+        }
+        assert_ne!(remained, 0, "cancelled preflight left a live probe");
     }
 
     #[test]
@@ -4592,7 +4808,8 @@ mod tests {
             .unwrap(),
         );
         validate_media_options(&args).unwrap();
-        let command = rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media"));
+        let command =
+            rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media")).unwrap();
         assert!(
             command
                 .args
@@ -4635,7 +4852,8 @@ mod tests {
                 .any(|pair| pair == ["--error-mode", "log-and-continue"])
         );
         assert!(command.env_overrides.is_empty());
-        let video = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video"));
+        let video =
+            rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/video")).unwrap();
         assert!(!video.args.contains(&"--config".to_owned()));
         assert!(video.env_overrides.is_empty());
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort", "12", "/tmp/media"]).is_err());
@@ -4643,6 +4861,133 @@ mod tests {
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
         assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn tool_paths_are_pipeline_scoped_exact_and_preview_only() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let input = root.path().join("input");
+        fs::create_dir(&input)?;
+        let image_tool = root.path().join("\u{5de5}\u{5177} nightly=1 cjxl");
+        let video_tool = root.path().join("ffmpeg nightly=2");
+        let image_value = format!(
+            "cjxl={}",
+            image_tool.to_str().context("synthetic image tool path")?
+        );
+        let video_value = format!(
+            "ffmpeg={}",
+            video_tool.to_str().context("synthetic video tool path")?
+        );
+        let args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "auto",
+            "--img-tool",
+            "cjxl=/synthetic/first=cjxl",
+            "--img-tool",
+            &image_value,
+            "--vid-tool",
+            &video_value,
+            input.to_str().context("synthetic input path")?,
+        ])?;
+        let commands = plan_cli_invocations(&args, root.path(), None)?;
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands[0]
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--tool", &image_value])
+        );
+        assert!(
+            commands[0]
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--tool", "cjxl=/synthetic/first=cjxl"])
+        );
+        assert!(!commands[0].args.contains(&video_value));
+        assert!(
+            commands[1]
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--tool", &video_value])
+        );
+        assert!(!commands[1].args.contains(&image_value));
+        assert!(
+            commands
+                .iter()
+                .all(|command| command.env_overrides.is_empty())
+        );
+        assert!(!image_tool.exists() && !video_tool.exists());
+        let mut fast = args.clone();
+        fast.mode = LaunchMode::FastImg;
+        fast.vid_tools.clear();
+        let (execution, output) = fast_img_launch_command(&fast, root.path(), &input)?;
+        let preview = plan_cli_invocations(&fast, root.path(), None)?;
+        assert_eq!(execution.args, preview[0].args);
+        assert!(
+            execution
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--tool", &image_value])
+        );
+        assert!(!output.exists());
+        assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn tool_paths_reject_inapplicable_scopes_and_non_utf8_forwarding() -> Result<()> {
+        for (mode, flag) in [
+            ("images", "--vid-tool"),
+            ("videos", "--img-tool"),
+            ("fast-img", "--vid-tool"),
+            ("fast-vid", "--img-tool"),
+            ("fast-vid", "--vid-tool"),
+            ("restore-jpeg", "--img-tool"),
+            ("collect", "--vid-tool"),
+        ] {
+            let args =
+                Args::try_parse_from(["mfb", "--mode", mode, flag, "ffmpeg=/synthetic/tool"])?;
+            assert!(validate_media_options(&args).is_err());
+        }
+        for (filter, flag) in [
+            ("--images-only", "--vid-tool"),
+            ("--videos-only", "--img-tool"),
+        ] {
+            let args = Args::try_parse_from([
+                "mfb",
+                "--mode",
+                "auto",
+                filter,
+                flag,
+                "ffmpeg=/synthetic/tool",
+            ])?;
+            assert!(validate_media_options(&args).is_err());
+            assert!(validate_media_options(&apply_mode_overrides(args)).is_err());
+        }
+        for value in ["CJXL=/synthetic/tool", "cjxl=relative", "cjxl="] {
+            assert!(Args::try_parse_from(["mfb", "--img-tool", value]).is_err());
+            assert!(Args::try_parse_from(["mfb", "--vid-tool", value]).is_err());
+        }
+        #[cfg(unix)]
+        {
+            use std::ffi::OsString;
+            use std::os::unix::ffi::OsStringExt;
+            let mut args = Args::try_parse_from(["mfb", "--mode", "auto"])?;
+            let path = PathBuf::from(OsString::from_vec(b"/synthetic/\xff".to_vec()));
+            args.img_tools.push(("cjxl".into(), path.clone()));
+            assert!(validate_media_options(&args).is_err());
+            assert!(
+                rust_run_command(Path::new("/repo"), "img", &args, Path::new("/input")).is_err()
+            );
+            args.img_tools.clear();
+            args.vid_tools.push(("ffmpeg".into(), path));
+            assert!(validate_media_options(&args).is_err());
+            assert!(
+                rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/input")).is_err()
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -4780,7 +5125,7 @@ mod tests {
             standard_error_modes(&args).unwrap(),
             (BatchErrorMode::LogAndContinue, BatchErrorMode::FailFast)
         );
-        let command = rust_run_command(temp.path(), "vid", &args, Path::new("input"));
+        let command = rust_run_command(temp.path(), "vid", &args, Path::new("input")).unwrap();
         assert!(
             command
                 .args
@@ -4811,12 +5156,14 @@ mod tests {
                 "/tmp/vid.json",
                 "--vid-error-mode",
                 "fail-fast",
+                "--vid-force-ms-ssim-long=false",
                 "/tmp/media",
             ])
             .unwrap(),
         );
         validate_media_options(&args).unwrap();
-        let command = rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/media"));
+        let command =
+            rust_run_command(Path::new("/repo"), "vid", &args, Path::new("/tmp/media")).unwrap();
         assert!(
             command
                 .args
@@ -4824,6 +5171,19 @@ mod tests {
                 .any(|pair| pair == ["--codec", "av1"])
         );
         assert!(command.args.contains(&"--no-apple-compat".to_owned()));
+        assert!(
+            command
+                .args
+                .contains(&"--force-ms-ssim-long=false".to_owned())
+        );
+        let image =
+            rust_run_command(Path::new("/repo"), "img", &args, Path::new("/tmp/media")).unwrap();
+        assert!(
+            !image
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("--force-ms-ssim-long"))
+        );
         assert!(
             command
                 .args
@@ -4857,6 +5217,8 @@ mod tests {
             ],
             vec!["mfb", "--videos-only", "--img-jpeg-effort", "10"],
             vec!["mfb", "--images-only", "--vid-codec", "av1"],
+            vec!["mfb", "--images-only", "--vid-force-ms-ssim-long=false"],
+            vec!["mfb", "--mode", "fast-vid", "--vid-force-ms-ssim-long"],
             vec!["mfb", "--images-only", "--vid-config", "/tmp/vid.json"],
             vec!["mfb", "--videos-only", "--img-tool-policy", "single"],
             vec!["mfb", "--mode", "fast-vid", "--vid-codec", "av1"],
@@ -4890,7 +5252,8 @@ mod tests {
     fn explicit_performance_is_forwarded_as_cli_precedence() {
         let args = Args::try_parse_from(["mfb", "--performance", "tight"]).unwrap();
         for bin in ["img", "vid"] {
-            let command = rust_run_command(Path::new("/tmp"), bin, &args, Path::new("input"));
+            let command =
+                rust_run_command(Path::new("/tmp"), bin, &args, Path::new("input")).unwrap();
             assert!(
                 command
                     .args
@@ -4956,7 +5319,8 @@ mod tests {
         );
         let default = Args::try_parse_from(["mfb"]).unwrap();
         for bin in ["img", "vid"] {
-            let command = rust_run_command(Path::new("/tmp"), bin, &default, Path::new("input"));
+            let command =
+                rust_run_command(Path::new("/tmp"), bin, &default, Path::new("input")).unwrap();
             assert!(!command.args.iter().any(|arg| arg.starts_with("--cache-")));
         }
     }
@@ -4981,7 +5345,7 @@ mod tests {
         .unwrap();
         validate_media_options(&args).unwrap();
         let mut forwarded = Vec::new();
-        push_img_policy_args(&mut forwarded, &args);
+        push_img_policy_args(&mut forwarded, &args).unwrap();
         assert!(
             forwarded
                 .windows(2)
@@ -5808,6 +6172,8 @@ mod tests {
             photos_folder_id: None,
             img_config: None,
             vid_config: None,
+            img_tools: Vec::new(),
+            vid_tools: Vec::new(),
             performance: Default::default(),
             cache: Default::default(),
             img_fallback_policy: None,
@@ -5821,6 +6187,7 @@ mod tests {
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
+            vid_force_ms_ssim_long: None,
         };
 
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
@@ -5916,6 +6283,8 @@ mod tests {
                 photos_folder_id: None,
                 img_config: None,
                 vid_config: None,
+                img_tools: Vec::new(),
+                vid_tools: Vec::new(),
                 performance: Default::default(),
                 cache: Default::default(),
                 img_fallback_policy: None,
@@ -5929,6 +6298,7 @@ mod tests {
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,
+                vid_force_ms_ssim_long: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);
@@ -5965,6 +6335,8 @@ mod tests {
             photos_folder_id: None,
             img_config: None,
             vid_config: None,
+            img_tools: Vec::new(),
+            vid_tools: Vec::new(),
             performance: Default::default(),
             cache: Default::default(),
             img_fallback_policy: None,
@@ -5978,6 +6350,7 @@ mod tests {
             img_error_mode: None,
             vid_error_mode: None,
             vid_codec: None,
+            vid_force_ms_ssim_long: None,
         };
         let error = plan_cli_invocations(&args, Path::new("/repo"), None)
             .expect_err("folder comparison must be rejected before spawning a worker");
@@ -6036,6 +6409,8 @@ mod tests {
                 photos_folder_id: None,
                 img_config: None,
                 vid_config: None,
+                img_tools: Vec::new(),
+                vid_tools: Vec::new(),
                 performance: Default::default(),
                 cache: Default::default(),
                 img_fallback_policy: None,
@@ -6049,6 +6424,7 @@ mod tests {
                 img_error_mode: None,
                 vid_error_mode: None,
                 vid_codec: None,
+                vid_force_ms_ssim_long: None,
             };
             let commands = plan_cli_invocations(&args, Path::new("/repo"), None).unwrap();
             assert_eq!(commands.len(), 1);

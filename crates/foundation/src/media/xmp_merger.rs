@@ -2794,12 +2794,15 @@ mod tests {
         let xmp = temp_dir.path().join("fixture.xmp");
         image::RgbImage::from_pixel(24, 16, image::Rgb([37, 61, 83])).save(&png)?;
         image::RgbImage::from_pixel(8, 8, image::Rgb([19, 41, 73])).save(&thumbnail)?;
-        let encoded = std::process::Command::new(encoder)
+        let encoding_result = std::process::Command::new(encoder)
             .args(["-q", "80", "-o"])
             .arg(&media)
             .arg(&png)
             .output()?;
-        anyhow::ensure!(encoded.status.success(), "synthetic HEIC encoding failed");
+        anyhow::ensure!(
+            encoding_result.status.success(),
+            "synthetic HEIC encoding failed"
+        );
         let seeded = ExiftoolBuilder::new()
             .arg(format!("-ThumbnailImage<={}", thumbnail.display()))
             .overwrite_original()

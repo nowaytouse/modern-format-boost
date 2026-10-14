@@ -69,6 +69,12 @@ Settings now has a dedicated **Videos** tab. Standard VID supports independent
 `--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
 The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
 delivery, while an explicitly conflicting Apple-compatibility request is rejected.
+Developer settings also expose long-video fusion quality checks through typed
+`vid.force_ms_ssim_long` (default `false`). Standard VID accepts
+`--force-ms-ssim-long[=true|false]`; omission inherits configuration, and explicit
+`false` overrides an enabled file setting. The launcher uses the independent
+`--vid-force-ms-ssim-long` override. This can increase validation time; it does not
+change codec routing or reduce other checks, and is not a Fast GIF option.
 Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
@@ -78,6 +84,15 @@ to its existing control. Developer mode also accepts configuration keys and flag
 Search preserves unsaved edits and reveals applicable advanced Photos fields.
 Standard IMG preferences no longer migrate implicitly into Fast IMG; both retain
 their own current overrides.
+
+Developer **Tool Paths** provides a compact native executable chooser and per-tool
+or per-pipeline reset for IMG, Fast IMG and VID. Unset paths inherit the configuration;
+the configuration file is never rewritten. A read-only effective-config preview shows
+the winning path and its source chain, not a claim that the executable was tested.
+Both workers accept repeated `--tool NAME=/absolute/path`; the launcher uses separate
+`--img-tool` and `--vid-tool` overrides and rejects inapplicable scopes. Paths retain
+spaces and additional equals signs; invalid names, relative/NUL paths and lossy
+UTF-8 forwarding are rejected rather than silently changing the selected tool.
 
 Standard IMG exposes **Allow size growth** and **Growth limit (bytes)** in Images,
 backed by `img.allow_size_tolerance` (default `false`) and `img.size_tolerance_bytes`
@@ -125,6 +140,13 @@ Missing or unreadable binary evidence remains unknown with a diagnostic; older
 records are not filled from current executables. `launch_requested` is a request,
 not proof of the executed process, loaded binary, PID or build provenance, and does
 not establish a complete Run Manifest.
+New session-bound executions separately record the actual OS child PID at spawn
+and the observed wait result, bound to the same invocation/run and pipeline.
+History displays and diagnostic exports preserve these observations. Normal exit
+codes and Unix termination signals are distinct; missing exits remain unknown,
+not a claim that a process is currently alive. This observation does not prove
+the loaded binary's identity, media fidelity or completed delivery. Conflicting
+observations are rejected without replacing independent media outcome counts.
 Session archives use a sanitized input-folder prefix, such as
 `Photos_Bundle_<session>`, with collision-safe suffixes; older archives remain readable.
 See [runtime preferences](docs/dev/config/RUNTIME_CONFIG.md) for scope and precedence.
@@ -166,6 +188,25 @@ processing. An incomplete or unsafe scan fails rather than returning a partial p
 This is a routing snapshot, not an encoder-quality prediction, space/time estimate,
 delivery proof, or a persisted execution/resume plan. Fast and management modes
 are not covered. `--plan-json` and the existing command-only `--dry-run` are distinct.
+Schema 2 additionally reports same-directory XMP and image/video filename candidates
+from that exact inventory, including ambiguous/unmatched cases. Candidate paths are
+limited to 64 per observation with the complete count and an explicit truncation flag.
+These unverified names do not establish a Live Photo relationship or authorize cleanup.
+Selected IMG/VID worker paths are observed without starting them or building missing
+tools. Readable regular-file metadata and Unix execute bits are not codec capability
+or full dependency readiness; unsupported executable checks remain unknown.
+Each plan also includes a destination-filesystem capacity snapshot from the nearest
+existing directory, without creating output. Missing/unbound destinations or failed
+queries retain an unknown value and diagnostic, not zero. Available bytes are neither
+reserved space nor a scratch/output estimate or proof that the run will fit.
+The native GUI's input-inspection icon opens this report for standard processing,
+with searchable paths/actions/reasons, exact totals, output scope and candidate details.
+It rejects invalid/incomplete reports and reports over 1 MiB or 2,000 entries rather
+than displaying partial success; the CLI remains available for larger inventories.
+Changing selection or starting processing invalidates the snapshot. Closing it or
+reaching the 30-second limit cancels the isolated query and its read-only probes on
+Unix. Inspection may use existing format probes such as `jxlinfo`; it never starts
+the encoding/delivery workers, writes processing state or weakens final verification.
 Explicit standard `images/videos` modes select the same scope as the corresponding
 filter flags. Adjacent output for a directory must not contain, equal or sit inside
 its source directory; linked aliases are resolved before this check, without creating output.
@@ -269,6 +310,15 @@ does not use immutable mode, ignore committed WAL, repair or reset a database.
 Existing cold histories missing these files are not silently repaired by the GUI;
 a normal validated writer opening that database manages its sidecar lifecycle.
 
+Select two batches to open **Reason comparison** in the existing details tabs.
+It compares exact recorded paths, optional absolute paths, pipeline, reason and
+code, with groups shared by both snapshots or present in only one. Each snapshot
+keeps its batch/run identity, output boundary and observation counts. The view
+reuses the bounded read-only scan and cancels when selection changes; damaged,
+unreadable or oversized evidence makes the comparison unavailable. Matching
+records do not prove equal file contents or root causes; absence does not prove
+success or repair. This is not a cross-run failure fingerprint or media count.
+
 The live main-window log folds only consecutive, exactly identical warnings and
 errors and labels how many times that same log appeared. Different paths/numbers,
 normal intervening lines, phase controls and new attempts break folding. Latest
@@ -294,8 +344,29 @@ local Gate instance, not the batch or Photos delivery. The activity label shows
 how long ago the GUI received its latest update, not a timeout, remaining-time
 estimate or whole-run percentage. Original events remain in History, and processing
 or terminal-state changes clear the live activity without changing result counts.
+Decode checks additionally report attempted files against the same inventory's
+exact total, on the same Gate ID. The file bar counts returned probes, including
+failures, not successful media; running checks never display 100%, and a failed
+Gate remains failed even when every probe was attempted. Early format/tool failure
+does not fabricate file progress. No extra scan, decode or weaker validation is
+introduced; updates are coalesced while retaining the first and final counts.
 
 ### Database and cache management
+
+Process-local multimedia tool health observations follow the resolved executable's
+metadata identity, including canonical target and Unix device/inode/status-change
+time. Same-size replacements with preserved modification time and symlink changes
+invalidate remembered failures; unchanged failures are retried after five seconds
+so repaired dependencies are not suppressed indefinitely. Resolution does not
+revive an earlier cached path after current configuration/PATH candidates fail.
+GPU capability reuse also binds the selected FFmpeg and probe environment, checks
+for drift before/after detection and reports its cache decision. Normal hits do
+not repeat hardware probes; fallback selection is periodically revalidated, with
+the positive proof retained when the selected context is unchanged. Linux VAAPI
+device arguments follow the current setting rather than the first process lookup.
+These are metadata-scoped in-process observations, not content hashes, persisted
+cache keys or proof that hardware/driver state cannot change. Other caches and
+State/Cache separation retain their independent requirements.
 
 Directory scan snapshots now read and write only the shared local SQLite store;
 this cache path does not connect to PostgreSQL or maintain a second replica.
@@ -351,11 +422,22 @@ committed but subsequent inspection fails, the error states the committed counts
 Do not combine pruning with `--stats`, integrity inspection, a target
 path, PostgreSQL cleanup, or session-state cleanup.
 
+`cache_cleaner --preview-prune --json` with the same configuration/cache flags
+provides a read-only snapshot of expired/time-invalid, capacity-evicted and retained
+path-tree rows and logical payload bytes. It uses the exact pruning predicates and
+newest-prefix ordering, checks category totals and excludes all formal state. It
+does not create storage, migrate, refresh timestamps, delete rows or silently choose
+a temporary fallback root. Missing storage has no preview; malformed or unknown
+storage is an error. Payload bytes are not immediately reclaimable disk space.
+
 **Settings → Database & Cache → Prune Cache** runs the same operation using the current
 draft's effective cache limits. It resolves relevant image/video configuration
 before any deletion and pins the resulting limits for the maintenance command.
 Different inherited limits must be reconciled with explicit shared overrides;
-the GUI does not choose one pipeline silently. Confirmation, category counts and
+the GUI does not choose one pipeline silently. A read-only impact preview precedes
+confirmation; changed drafts require a fresh preview. Later pruning re-evaluates
+current data under the pinned policy, so concurrent writes can change its actual
+receipt. Confirmation, category counts and
 the applied byte/idle limits remain visible. **Clear Cache** remains a separate
 action that removes all managed rebuildable cache, rather than only excess cache.
 
@@ -401,6 +483,25 @@ rows in that snapshot, not media files. All original stored rows remain intact;
 Core state, media and PostgreSQL are not included. Filesystem hard-link support
 is required and Unix backups use mode 0600; errors remove ordinary staging, while
 forced termination can leave a private staging directory.
+
+**Storage Overview** beside the History backup controls reads one committed snapshot
+of the explicitly displayed History location, without loading log rows into the
+GUI. It reports schema/SQLite/page metadata, session/event/output-row counts and
+logical stored byte lengths. These are database records, not processed media or
+completed-run counts. Schema 1 lacks captured-output storage: its output counters
+are unavailable, not fabricated zero. A missing database remains absent and is not
+created. CLI: `cache_cleaner --history-stats --history-directory
+/absolute/history-directory --json`.
+
+**Check Structure**, or the same command with `--check-integrity`, adds read-only
+SQLite integrity, canonical identity/sequence primary-key, foreign-key and stored
+column-type checks. Diagnostics are bounded while the full issue count is retained.
+Unhealthy structural evidence returns valid JSON with exit code 2; unsupported,
+malformed or unreadable storage fails explicitly without reset or migration.
+This does not decode event JSON, verify media, prove completed runs or establish
+recovery readiness. Committed WAL is visible; SQLite may coordinate readers through
+shared memory, without changing database/WAL contents. Reads never fall back to
+another History location, and the GUI does not start these checks automatically.
 
 **Check Database** in the same tab, or `cache_cleaner --stats --check-integrity --json`,
 checks SQLite structure, foreign keys and every stored BLAKE3 digest in one read

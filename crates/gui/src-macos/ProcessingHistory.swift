@@ -325,6 +325,27 @@ private struct HistoryInvocation: Codable {
     }
 }
 
+private struct HistoryWorkerExecution: Codable, Equatable {
+    let schema_version: Int
+    let scope: String
+    let invocation_id: String
+    let run_id: String?
+    let pipeline: String
+    let state: String
+    let pid: UInt32
+    let exit_code: Int32?
+    let signal: Int32?
+
+    var valid: Bool {
+        guard schema_version == 1, scope == "os_child_process", pid > 0,
+              validHistoryIdentity(invocation_id), run_id.map(validHistoryIdentity) ?? true,
+              ["img", "vid", "cmd"].contains(pipeline) else { return false }
+        if state == "spawned" { return exit_code == nil && signal == nil }
+        return state == "exited" && ((exit_code != nil && signal == nil)
+            || (exit_code == nil && signal.map { $0 > 0 } == true))
+    }
+}
+
 private struct HistoryRecord: Decodable {
     let ts: String
     let event: String
@@ -348,6 +369,8 @@ private struct HistoryEntry {
     var invocations: [HistoryInvocation] = []
     var invocationConfigs: [String: HistoryConfigSnapshot] = [:]
     var invocationEvidenceInvalid = false
+    var workerExecutions: [String: [HistoryWorkerExecution]] = [:]
+    var workerExecutionEvidenceInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -857,6 +880,23 @@ private enum HistoryStore {
                         throw HistoryParseError.invalid
                     }
                     current.invocations.append(invocation)
+                } else if event.hasPrefix("MFB_HISTORY_WORKER_EXECUTION=") {
+                    let observation = try decode(HistoryWorkerExecution.self, from: event, prefix: "MFB_HISTORY_WORKER_EXECUTION=")
+                    guard current.finished == nil, !current.workerExecutionEvidenceInvalid, !current.invocationEvidenceInvalid,
+                          observation.valid,
+                          let invocation = current.invocations.first(where: { $0.invocation_id == observation.invocation_id }),
+                          observation.pipeline == invocation.pipeline, observation.run_id == invocation.run_id else {
+                        throw HistoryParseError.invalid
+                    }
+                    let previous = current.workerExecutions[observation.invocation_id] ?? []
+                    if observation.state == "spawned" {
+                        guard previous.isEmpty else { throw HistoryParseError.invalid }
+                    } else {
+                        guard previous.count == 1, previous[0].state == "spawned", previous[0].pid == observation.pid else {
+                            throw HistoryParseError.invalid
+                        }
+                    }
+                    current.workerExecutions[observation.invocation_id] = previous + [observation]
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -888,6 +928,11 @@ private enum HistoryStore {
                     current.invocationConfigs.removeAll()
                     current.invocationEvidenceInvalid = true
                     current.contradictoryFields.insert("invocation")
+                }
+                if event.hasPrefix("MFB_HISTORY_WORKER_EXECUTION=") || event.hasPrefix("MFB_HISTORY_INVOCATION=") {
+                    current.workerExecutions.removeAll()
+                    current.workerExecutionEvidenceInvalid = true
+                    current.contradictoryFields.insert("worker_execution")
                 }
                 if event.hasPrefix("MFB_HISTORY_SUMMARY=") {
                     current.summary = nil
@@ -1343,6 +1388,9 @@ private enum HistoryStore {
                     "config": try JSONSerialization.jsonObject(with: Data(config.values.utf8)),
                     "sources": try JSONSerialization.jsonObject(with: Data(config.sources.utf8))]
             } else { object["configuration"] = NSNull() }
+            object["process_observations"] = try entry.workerExecutions[invocation.invocation_id].map {
+                try JSONSerialization.jsonObject(with: JSONEncoder().encode($0))
+            } ?? NSNull()
             return object
         }
         let plan: [String: Any]? = entry.inputPlan.map {
@@ -1801,6 +1849,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var outputPage: HistoryStore.Output?
     private var outputLoading = false
     private var batchIssueResult: HistoryStore.BatchIssues?
+    private var comparisonIssues: [HistoryStore.BatchIssues]?
     private var issueScanControl: HistoryStore.IssueScanControl?
     private var issueGeneration = UUID()
     private let status = NSTextField(labelWithString: "")
@@ -2241,6 +2290,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         updateHistoryStatus()
         let selection = selectedEntries
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare" : "history.summary"), forSegment: 0)
+        detailMode.setLabel(localized(selection.count == 2 ? "history.compare.failures" : "history.failed_files"), forSegment: 2)
         if selection.count == 2 { detail.string = Self.renderComparison(selection) }
         else if selection.count > 2 { detail.string = localized("history.compare.select_two") }
         else { detail.string = selected.map { Self.render($0) } ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select") }
@@ -2410,6 +2460,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     lines.append(row("worker_binary", "\(bytes) B · \(hash)"))
                 } else { lines.append(row("worker_observation_error", invocation.binary.diagnostic ?? unknown)) }
                 lines.append(row("config_package_version", entry.invocationConfigs[invocation.invocation_id]?.packageVersion ?? unknown))
+                if entry.workerExecutionEvidenceInvalid {
+                    lines.append(localized("history.worker.execution.invalid"))
+                } else if let observations = entry.workerExecutions[invocation.invocation_id], let last = observations.last {
+                    lines.append(localized("history.worker.execution.pid", String(last.pid)))
+                    if last.state == "spawned" { lines.append(localized("history.worker.execution.spawned")) }
+                    else if let signal = last.signal { lines.append(localized("history.worker.execution.signal", String(signal))) }
+                    else { lines.append(localized("history.worker.execution.exited", last.exit_code.map(String.init) ?? unknown)) }
+                } else { lines.append(localized("history.worker.execution.unknown")) }
             }
         }
         lines += ["", localized("history.processor_counts")]
@@ -2450,6 +2508,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func updateActions() {
         let ready = refreshButton.isEnabled && !exportBusy
         let single = ready && selected != nil
+        let pair = ready && selectedEntries.count == 2 && selectedEntries.allSatisfy(\.hasStoredOutput)
         table.isEnabled = ready
         search.isEnabled = ready
         filter.isEnabled = ready
@@ -2463,7 +2522,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedRevealButton.isEnabled = failuresVisible && selectedFailedURL != nil
         logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
-        detailMode.setEnabled(single, forSegment: 2)
+        detailMode.setEnabled(single || pair, forSegment: 2)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
@@ -2549,6 +2608,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func resetOutput() {
         cancelIssueScan()
         batchIssueResult = nil
+        comparisonIssues = nil
         outputGeneration = UUID()
         outputLoading = false
         outputPage = nil
@@ -2557,6 +2617,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func detailModeChanged() {
+        if selectedEntries.count == 2 {
+            if detailMode.selectedSegment == 2 {
+                if let issues = comparisonIssues { displayFailureComparison(issues) }
+                else { loadFailureComparison(entries: selectedEntries) }
+            } else {
+                cancelIssueScan()
+                detail.string = Self.renderComparison(selectedEntries)
+                updateHistoryStatus()
+            }
+            updateActions()
+            return
+        }
         guard selected != nil else { showSelected(); return }
         outputGeneration = UUID()
         outputLoading = false
@@ -2725,6 +2797,102 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         issueScanControl = nil
     }
 
+    private struct FailureComparisonKey: Hashable {
+        let pipeline: String
+        let path: String
+        let absolutePath: String?
+        let message: String
+        let code: String?
+
+        init(_ failure: HistoryFileFailure) {
+            pipeline = failure.pipeline
+            path = failure.source_path
+            absolutePath = failure.absolute_path
+            message = failure.message
+            code = failure.reason_code
+        }
+        var ordering: [String] { [path, absolutePath ?? "", pipeline, message, code ?? ""] }
+    }
+
+    fileprivate static func renderFailureComparison(_ results: [HistoryStore.BatchIssues]) throws -> String {
+        guard results.count == 2 else { throw HostError(message: localized("history.compare.select_two")) }
+        let observations = results.map { result in
+            Dictionary(grouping: result.fileFailures, by: FailureComparisonKey.init).mapValues(\.count)
+        }
+        let keys = Set(observations[0].keys).union(observations[1].keys)
+        guard keys.count <= 1_000 else { throw HostError(message: localized("history.batch_issues.limit")) }
+        let shared = keys.filter { observations[0][$0] != nil && observations[1][$0] != nil }
+        let first = keys.filter { observations[1][$0] == nil }
+        let second = keys.filter { observations[0][$0] == nil }
+        var sections = [localized("history.compare.failures"), localized("history.compare.failures.note")]
+        for (index, result) in results.enumerated() {
+            sections.append(localized("history.compare.batch", index + 1) + "\n"
+                + localized(result.endSource == "snapshot_only" ? "history.batch_issues.scope_snapshot" : "history.batch_issues.scope_closed",
+                            result.scannedRows, result.start, result.upper))
+        }
+        sections.append(localized("history.compare.failures.totals", shared.count, first.count, second.count))
+        for (label, group) in [("shared", shared), ("first_only", first), ("second_only", second)] {
+            var lines = [localized("history.compare.failures.\(label)")]
+            for key in group.sorted(by: { $0.ordering.lexicographicallyPrecedes($1.ordering) }) {
+                lines += ["", localized("history.media.\(key.pipeline)") + ": " + key.path,
+                          localized("history.compare.failures.observations", observations[0][key] ?? 0, observations[1][key] ?? 0),
+                          key.message]
+                if let absolute = key.absolutePath, absolute != key.path { lines.append(absolute) }
+                if let code = key.code { lines.append(code) }
+            }
+            if group.isEmpty { lines.append(localized("history.compare.failures.empty")) }
+            sections.append(lines.joined(separator: "\n"))
+        }
+        let text = sections.joined(separator: "\n\n")
+        guard text.utf8.count <= 2 * 1_024 * 1_024 else { throw HostError(message: localized("history.batch_issues.limit")) }
+        return text
+    }
+
+    private func displayFailureComparison(_ results: [HistoryStore.BatchIssues]) {
+        do {
+            let identities = selectedEntries.enumerated().map { index, entry in
+                localized("history.compare.batch", index + 1) + ": " + entry.stamp + " · " + Self.timestampLabel(entry.timestamp)
+                    + "\n" + localized("history.detail.run_id") + ": " + (entry.context?.run_id ?? localized("result.unknown"))
+            }
+            let text = identities.joined(separator: "\n\n") + "\n\n" + (try Self.renderFailureComparison(results))
+            guard text.utf8.count <= HistoryStore.maximumOutputBytes else { throw HostError(message: localized("history.batch_issues.limit")) }
+            detail.string = text
+        }
+        catch { detail.string = error.localizedDescription }
+        detail.scrollToBeginningOfDocument(nil)
+        updateHistoryStatus()
+    }
+
+    private func loadFailureComparison(entries: [HistoryEntry]) {
+        cancelIssueScan()
+        let token = UUID()
+        issueGeneration = token
+        let control = HistoryStore.IssueScanControl()
+        issueScanControl = control
+        comparisonIssues = nil
+        detail.string = localized("history.compare.failures.loading")
+        status.stringValue = detail.string
+        updateActions()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try entries.map { try HistoryStore.batchIssues(for: $0, control: control) } }
+            DispatchQueue.main.async {
+                guard let self, self.issueGeneration == token, self.selectedEntries.map(\.id) == entries.map(\.id),
+                      self.detailMode.selectedSegment == 2, !control.isCancelled else { return }
+                self.issueScanControl = nil
+                switch result {
+                case let .success(issues):
+                    self.comparisonIssues = issues
+                    self.displayFailureComparison(issues)
+                case let .failure(error):
+                    self.comparisonIssues = nil
+                    self.detail.string = error.localizedDescription + "\n" + localized("history.compare.failures.unavailable")
+                    self.status.stringValue = error.localizedDescription
+                }
+                self.updateActions()
+            }
+        }
+    }
+
     private func renderBatchIssues() {
         guard let result = batchIssueResult else { return }
         let scope = localized(result.endSource == "snapshot_only" ? "history.batch_issues.scope_snapshot"
@@ -2831,6 +2999,31 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.selectedSegment = 0
         detailModeChanged()
         guard detail.string.contains(entry.context!.run_id!) else { throw HostError(message: "History overview lost run identity") }
+    }
+
+    fileprivate func validateFailureComparisonForSelfTest(_ entry: HistoryEntry, results: [HistoryStore.BatchIssues]) throws {
+        var other = HistoryEntry(id: "comparison-other", stamp: "comparison-other", audit: entry.audit, timestamp: entry.timestamp)
+        other.context = entry.context
+        entries = [entry, other]
+        filter.selectedSegment = 0
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
+        showSelected()
+        comparisonIssues = results
+        detailMode.selectedSegment = 2
+        detailModeChanged()
+        guard detailMode.isEnabled(forSegment: 2), failedContent.isHidden, !detailScroll.isHidden,
+              !failedCopyButton.isEnabled, !failedRevealButton.isEnabled, !exportButton.isEnabled,
+              detail.string.contains(localized("history.compare.failures.note")),
+              detail.string.contains(entry.stamp), detail.string.contains(other.stamp),
+              detail.string.contains(entry.context!.run_id!) else {
+            throw HostError(message: "Native reason comparison retained single-file actions or lost its evidence scope")
+        }
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        showSelected()
+        guard comparisonIssues == nil, issueScanControl == nil, detailMode.selectedSegment == 0 else {
+            throw HostError(message: "Changing selection retained the previous reason comparison")
+        }
     }
 
     func validateForSelfTest() throws {
@@ -3402,6 +3595,34 @@ func runProcessingHistorySelfTests() throws {
                 && ProcessingHistoryPanel.render(launched).contains(localized("history.worker.note")),
                 "Worker launch provenance lost exact argv, unknown evidence, configuration binding, or real processing counts")
     let launchBatches = try parsed([context, launch, boundImage, summary, completed, context, secondLaunch, boundVideo, summary, completed])
+    let spawnValue: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "synthetic-call-1",
+        "pipeline": "img", "state": "spawned", "pid": 1234, "exit_code": NSNull(), "signal": NSNull()]
+    var exitValue = spawnValue
+    exitValue["state"] = "exited"
+    exitValue["exit_code"] = 7
+    let spawn = try payload("MFB_HISTORY_WORKER_EXECUTION", spawnValue)
+    let exited = try payload("MFB_HISTORY_WORKER_EXECUTION", exitValue)
+    let executed = try parsed([context, launch, spawn, boundImage, exited, summary, failed]).entries[0]
+    try require(executed.workerExecutions["synthetic-call-1"]?.count == 2 && executed.succeededLabel == "2"
+                && ProcessingHistoryPanel.render(executed).contains(localized("history.worker.execution.exited", "7")),
+                "Actual child observations were lost or replaced media counts")
+    let unfinishedChild = try parsed([context, launch, spawn, summary, failed]).entries[0]
+    try require(ProcessingHistoryPanel.render(unfinishedChild).contains(localized("history.worker.execution.spawned")),
+                "Missing exit observation became a fabricated success or current liveness")
+    var wrongPID = exitValue
+    wrongPID["pid"] = 1235
+    var signalValue = exitValue
+    signalValue["exit_code"] = NSNull()
+    signalValue["signal"] = 15
+    let signalled = try parsed([context, launch, spawn, try payload("MFB_HISTORY_WORKER_EXECUTION", signalValue), summary, failed]).entries[0]
+    try require(ProcessingHistoryPanel.render(signalled).contains(localized("history.worker.execution.signal", "15")),
+                "Signal termination was interpreted as a normal exit")
+    for observations in [[exited], [spawn, spawn], [spawn, exited, exited],
+                         [spawn, try payload("MFB_HISTORY_WORKER_EXECUTION", wrongPID)]] {
+        let invalid = try parsed([context, launch] + observations + [summary, failed]).entries[0]
+        try require(invalid.workerExecutionEvidenceInvalid && invalid.workerExecutions.isEmpty && invalid.succeededLabel == "2",
+                    "Conflicting process observations became authoritative or hid file outcomes")
+    }
     try require(launchBatches.entries[0].invocations.map(\.invocation_id) == ["synthetic-call-1"]
                 && launchBatches.entries[1].invocations.map(\.invocation_id) == ["synthetic-call-2"],
                 "Worker launch evidence crossed selected-run boundaries")
@@ -4201,7 +4422,7 @@ func runProcessingHistorySelfTests() throws {
     let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
     let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
         "error": "synthetic terminal failure", "output_sequence": 6])
-    try writeDatabase([("export", [exportContext, launch, exportConfig, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
+    try writeDatabase([("export", [exportContext, launch, spawn, exportConfig, exited, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
     var exportDB: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
         throw HostError(message: "Synthetic export database open failed")
@@ -4262,6 +4483,8 @@ func runProcessingHistorySelfTests() throws {
                 && exportedImage["succeeded"] is NSNull && snapshots.count == 1
                 && workerLaunches.count == 1 && workerLaunches[0]["invocation_id"] as? String == "synthetic-call-1"
                 && workerLaunches[0]["arguments"] as? [String] == launchValue["arguments"] as? [String]
+                && (workerLaunches[0]["process_observations"] as? [[String: Any]])?.count == 2
+                && (workerLaunches[0]["process_observations"] as? [[String: Any]])?.last?["exit_code"] as? Int == 7
                 && (workerLaunches[0]["configuration"] as? [String: Any])?["package_version"] as? String == "0.12.0"
                 && (snapshots[0]["sources"] as? [String: String])?["execution.error_mode"] == "CLI"
                 && exportedRows.map({ $0["sequence"] as? Int }) == [3, 4, 6]
@@ -4276,6 +4499,7 @@ func runProcessingHistorySelfTests() throws {
     try require(ongoingArtifact?["summary"] is NSNull && ongoingArtifact?["finished"] is NSNull
                 && ongoingScope?["known_end_sequence"] is NSNull && ongoingScope?["end_source"] as? String == "snapshot_only"
                 && ongoingLaunch?["program_path"] is NSNull && ongoingLaunch?["configuration"] is NSNull
+                && ongoingLaunch?["process_observations"] is NSNull
                 && (ongoingLaunch?["binary"] as? [String: Any])?["blake3"] is NSNull
                 && ongoingRows?.first?["phase"] is NSNull,
                 "Ongoing diagnostic export invented a final state, counts, or phase")
@@ -4507,6 +4731,48 @@ func runProcessingHistorySelfTests() throws {
     let reasonIssues = try HistoryStore.batchIssues(for: reasonEntry)
     try require(reasonIssues.fileFailures.count == 3 && reasonIssues.scannedRows == 3 && reasonEntry.summary?.img.failed == 1,
                 "File failure log observations changed authoritative media outcome counts")
+    var otherMarker = markerValue
+    otherMarker["run_id"] = "run-synthetic-2"
+    otherMarker["invocation_id"] = "synthetic-call-2"
+    otherMarker["message"] = "synthetic decoder failed\nno guessed root cause"
+    otherMarker["reason_code"] = "decoder_failed"
+    let sharedFailure = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
+    otherMarker["message"] = "synthetic metadata failure"
+    otherMarker["reason_code"] = "different-code"
+    let changedCode = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
+    otherMarker["reason_code"] = nil
+    otherMarker["absolute_path"] = "/other-root/file.jpg"
+    let changedAbsolute = try HistoryFileFailure.decode(payload("MFB_FILE_FAILURE", otherMarker))!
+    let comparisonIssues = HistoryStore.BatchIssues(groups: [], occurrences: 0,
+        fileFailures: [sharedFailure, sharedFailure, changedCode, changedAbsolute], scannedRows: 4, start: 0, upper: 4,
+        endSource: "snapshot_only")
+    let failureComparison = try ProcessingHistoryPanel.renderFailureComparison([reasonIssues, comparisonIssues])
+    try require(failureComparison.contains(localized("history.compare.failures.totals", 1, 1, 2))
+                && failureComparison.contains(localized("history.compare.failures.observations", 2, 2))
+                && failureComparison.contains(exactPath) && failureComparison.contains(localized("history.compare.failures.note"))
+                && failureComparison.contains(localized("history.batch_issues.scope_snapshot", Int64(4), Int64(0), Int64(4)))
+                && reasonEntry.summary?.img.failed == 1,
+                "Reason comparison merged codes/absolute paths, compared run IDs, or invented failed-file counts")
+    let oversizedReasons = (0...1_000).map { index in
+        HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/\(index).jpg", absolute_path: nil,
+                           message: "synthetic", run_id: "run", invocation_id: "invocation", reason_code: nil)
+    }
+    let oversizedComparison = HistoryStore.BatchIssues(groups: [], occurrences: 0, fileFailures: oversizedReasons,
+        scannedRows: 1_001, start: 0, upper: 1_001, endSource: "terminal_boundary")
+    try refuseExport({ _ = try ProcessingHistoryPanel.renderFailureComparison([reasonIssues, oversizedComparison]) },
+                     "Oversized comparison displayed a misleading partial result")
+    let largeReasons = (0..<40).map { index in
+        HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/large-\(index).jpg", absolute_path: nil,
+                           message: String(repeating: "x", count: 60 * 1_024), run_id: "run", invocation_id: "invocation", reason_code: nil)
+    }
+    let largeComparison = HistoryStore.BatchIssues(groups: [], occurrences: 0, fileFailures: largeReasons,
+        scannedRows: 40, start: 0, upper: 40, endSource: "terminal_boundary")
+    try refuseExport({ _ = try ProcessingHistoryPanel.renderFailureComparison([reasonIssues, largeComparison]) },
+                     "Comparison text overflow displayed a misleading partial result")
+    try MainActor.assumeIsolated {
+        try ProcessingHistoryPanel(directory: directory).validateFailureComparisonForSelfTest(reasonEntry,
+            results: [reasonIssues, comparisonIssues])
+    }
     let reasonDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: reasonEntry)) as? [String: Any]
     try require(reasonDocument?["run_id"] as? String == "run-synthetic-1"
                 && (reasonDocument?["scope"] as? [String: Any])?["file_failure_observation_rows"] as? Int == 3

@@ -4,6 +4,162 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Shared tool-path settings and destination capacity (2026-10-14)
+
+- Share explicit tool-path parsing and typed config overrides between IMG and VID.
+  Retain unnamed inherited tools and CLI source chains, accept repeat overrides,
+  preserve spaces/additional equals signs, and reject invalid names, relative/NUL
+  paths or lossy UTF-8 launcher forwarding. Forward independent IMG/Fast IMG and
+  standard VID launcher overrides; reject inapplicable scopes without starting tools.
+- Add a compact native Developer Tool Paths editor with separate IMG/Fast IMG/VID
+  preferences, native executable selection, per-tool/per-pipeline inheritance reset,
+  Settings search and real effective-source previews. Child edits stay in the parent
+  draft until Apply validates through the worker; cancel and unrelated settings edits
+  do not overwrite paths or rewrite config files. Preview is not a capability test.
+- Add destination-filesystem available-capacity observations to read-only preflight
+  schema 2 and native inspection. Query the nearest existing destination directory,
+  never create output, preserve exact native Unix path bytes and reject overflow.
+  Unbound/failed/unsupported observations remain unknown with diagnostics, not zero.
+  Human-readable units retain exact bytes in accessible details; unused worker rows
+  no longer occupy blank space. This is not reserved/required scratch, Photos or
+  output space, an estimate that processing will fit, or a weaker verification gate.
+- Preserve the existing lock-file refresh (deranged 0.5.9, indicatif/zerocopy Git
+  revisions) during locked validation; do not run another dependency update. Correct
+  scoped strict-lint declaration ordering, empty assertions and a synthetic fixture
+  variable name without disabling checks or altering media policies.
+- Validation: 126 dev-library cases, seven scoped launcher cases, shared IMG/VID
+  CLI cases, the Foundation tool-inheritance case and Gate early-stop case passed;
+  the four disk-capacity cases were rechecked after adding zero-fragment rejection.
+  Scoped Foundation/dev/IMG/VID strict Clippy, formatting, Swift warnings-as-errors
+  and English/Chinese/Japanese native self-tests passed. Isolated dark/light native
+  windows checked exact path/source preview, reset/cancel/save/search, independent
+  VID forwarding and read-only synthetic preflight with compact capacity display.
+  No production media, Photos, real History/Core operation, installed-app replacement,
+  CI query, full-workspace/cross-platform or encoding-speed acceptance was performed.
+
+### Decode-check progress, video policy and process observations (2026-10-13)
+
+- Report Gate 1 decode attempts against the existing inventory on the same Gate
+  identity, without adding scans/decodes or weakening checks. Coalesce updates,
+  preserve initial/final counts, cap running progress below 100% and keep failure
+  separate from attempted-file completion. Native GUI, stored output and selected
+  diagnostic export consume the same optional file-progress evidence; earlier
+  format/tool failures do not fabricate file counts.
+- Add typed `vid.force_ms_ssim_long` (default false), inheritable standard VID
+  CLI overrides including explicit false, independent launcher forwarding and
+  Developer Settings with real effective values and source chains. Reject explicit
+  use outside standard runs/config inspection. The existing fusion-quality flag
+  is consumed unchanged; enabling it can cost time, not change codec defaults.
+- Persist actual OS child spawn PID and wait observations independently from
+  launch requests, bound to invocation/run/pipeline. Distinguish normal exit code
+  and Unix signal, reject conflicting History sequences, expose observations in
+  native History details and diagnostic exports. Missing exits do not establish
+  current liveness, and process exit does not establish media fidelity/delivery
+  or loaded-binary identity. Persistence failure drains the child and retains
+  independent media counters and exit status while returning the write error.
+- Validation: 121 dev-library cases, five scoped Foundation progress cases, the
+  launcher scope/forwarding case and the VID inheritance/override/flag case passed;
+  pipe observations were rechecked with the 16 stream cases. Scoped dev/VID Clippy,
+  formatting, Swift warnings-as-errors and three-language native self-tests passed.
+  Isolated dark Settings checked real effective config/source changes; light native
+  windows exercised synthetic 1/2 progress, retained errors and synthetic process
+  History without inferring unknown media counts. No production-media/Photos/real
+  History operation, dependency update, CI query, installed-app replacement or
+  encoding-speed/long-video fidelity benchmark was performed.
+
+### History storage inspection and cache impact preview (2026-10-13)
+
+- Add explicit read-only History storage inspection in CLI and native Settings:
+  database metadata, exact committed session/event/output-row counts, logical byte
+  lengths and recorded update bounds. Do not load logs into the GUI, migrate the
+  source or interpret storage rows as media outcomes. Missing databases and schema-1
+  output counters remain absent/unavailable rather than guessed zero.
+- Add manual History structural checks for SQLite integrity, canonical identity/
+  sequence primary keys, foreign keys and row storage types, with bounded diagnostics
+  and complete issue counts. Unhealthy JSON returns exit code 2; unknown, malformed
+  and unreadable storage fails without repair/reset. Reuse the canonical key check
+  for backup validation. Event JSON semantics, media fidelity and recovery readiness
+  are not part of this structural result.
+- Add a read-only path-tree pruning preview in the shared SQLite snapshot, using
+  the actual TTL/time-invalid and capacity/LRU predicates. Reconcile expired/evicted/
+  retained rows and logical payload bytes, preserve formal namespaces, refuse malformed
+  evidence and avoid creating/fallback root resolution. Native Settings confirms the
+  preview under pinned effective limits and rejects changed drafts; the subsequent
+  mutation has its own fresh receipt, not a promise of preview counts or disk savings.
+- Validation: three shared preview cases, 19 History cases and 23 cache-cleaner cases
+  passed; dev scoped Clippy, formatting, Swift warnings-as-errors and three-language
+  native self-tests passed. Isolated dark/light Settings checks exercised CLI-backed
+  storage overview, structural status and pruning preview/cancel; synthetic SQLite
+  bytes/rows remained unchanged by reads and cancellation. A broader standalone
+  Foundation lint check still reports existing common-utils/XMP/GPU findings outside
+  these files; no all-workspace lint or CI verdict is claimed. No dependency update,
+  production database/media/Photos access or installed-application replacement.
+
+### Native routing inspection and bounded preflight observations (2026-10-13)
+
+- Extend the read-only standard routing JSON to schema 2 with XMP exact-filename
+  and same-directory stem candidates, plus possible image/video filename pairs.
+  Preserve native path identity, unmatched/ambiguous status and exact candidate
+  totals; bound displayed references to 64 with explicit truncation. Do not change
+  media counts, actions or claim verified relationships from names.
+- Observe only the selected IMG/VID worker paths using readable regular-file
+  metadata and Unix execute bits. Missing/unreadable/non-regular/non-executable and
+  unsupported checks remain explicit. Do not start workers, auto-build, hash media
+  again or claim complete codec/backend/dependency readiness.
+- Add a compact native input-inspection window for standard processing, with
+  searchable routing rows, counts/bytes/output scope and candidate details. Validate
+  producer/consumer schema, paths, counts, byte totals and relationships; reject
+  oversized/incomplete evidence, cancel pending scans and invalidate stale results.
+  Display filename control characters visibly. Unix read-only query process groups
+  ensure existing nested format probes are terminated together on GUI cancellation.
+- Validation: six preflight library cases, three launcher cases (including one
+  child-fixture entry), one build-source regression, scoped dev Clippy with
+  `-D warnings`, format/diff checks, Swift warnings-as-errors compilation, three
+  localized native self-tests and isolated light/dark AppKit window checks passed.
+  Actual CLI reports decoded in the native window; synthetic input bytes/mtime/
+  inode stayed unchanged, with no output/session/log directory creation. No new CI,
+  production-media/Photos, full workspace, throughput or cross-platform acceptance
+  is claimed; the installed application was not replaced.
+
+### Tool-cache freshness and two-batch reason comparison (2026-10-13)
+
+- Scope multimedia tool-health failures to the current canonical executable
+  metadata, including Unix device/inode/ctime; invalidate same-size preserved-mtime
+  replacements and symlink changes, expire failures after five seconds, and prune
+  expired observations on lookup. Remove the obsolete path fallback that could
+  revive an earlier candidate after current selection failed. Loader/launch smoke
+  semantics are unchanged; this is not persisted content-hash identity.
+- Scope GPU capability reuse to the selected FFmpeg, preferred candidate and probe
+  environment. Verify identity before/after probing, serialize refresh, preserve
+  unavailable diagnostics and record actual cache decisions. Normal hits avoid
+  repeated hardware probes; bounded fallback re-selection retains a positive proof
+  when context is unchanged. Linux VAAPI device arguments read the current setting.
+  Physical hardware/driver acceptance and full cache architecture are separate.
+- Add native two-batch recorded-reason comparison in the existing History detail
+  tabs. Preserve snapshot/batch/run identity, exact path/absolute path/pipeline/
+  message/code, separate observation occurrences and authoritative outcome counts.
+  Show shared and snapshot-only groups, retain Unicode/newline paths, bound rows/
+  text and cancel actual reads on selection changes. Missing/damaged/oversized
+  evidence is unavailable, not zero; record differences are not repair, file-content
+  equality, root-cause fingerprints or automatic retry evidence.
+- Fix the prior `62830fdf` CI failures without weakening its residue or lint rules:
+  propagate file-marker serialization/absolute-path errors, retain worker-path
+  observation diagnostics, reject non-UTF-8 child-fixture selectors explicitly,
+  and correct five test-code Clippy findings while keeping concurrent spawn/join
+  semantics. The completed prior run was failed; no new CI verdict is claimed.
+- Preserve and validate the pre-existing lockfile patch updates `sha2 0.11.1` and
+  `syn 3.0.9`; no additional dependency update was performed in this batch.
+- Validation: scoped Rust runs passed (51 cache/GPU/admission/Gate cases, six
+  file-failure/log cases, seven shared-worker cases, one backup-root case and the
+  original CI residue-contract case). Runner cases include child fixtures; nested
+  probes and reruns are not additional acceptance. Same-CI lint policy passed for
+  Foundation library/tests and the dev library/cache cleaner/launcher, including
+  all features. Formatting, Swift warnings-as-errors and all three native-language
+  self-tests passed. Isolated AppKit light/dark inspection covered two-batch reason
+  counts, Unicode/newline paths and final batch/run labels. No production media,
+  Photos, actual History database, installed-app replacement, full workspace,
+  physical GPU/cross-platform, throughput or new CI verdict is claimed.
+
 ### Run identity, file-linked reasons and live diagnostic folding (2026-10-12)
 
 - Give each launcher-managed attempt an independent opaque run ID, including

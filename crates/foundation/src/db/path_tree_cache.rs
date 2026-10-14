@@ -129,7 +129,7 @@ mod tests {
     fn path_tree_snapshot_load_status_distinguishes_decode_and_store_errors() {
         let root = tempfile::tempdir().unwrap();
         let store = root.path().join("store.sqlite");
-        let _guard = mfb_sqlite_store::set_test_store_path_for_tests(store.clone());
+        let _guard = mfb_sqlite_store::set_test_store_path_for_tests(store);
         assert!(matches!(
             load_path_tree_snapshot_with_status::<Vec<String>>("absent", 4),
             Ok(PathTreeLookup::Miss(PathTreeMissReason::Absent)),

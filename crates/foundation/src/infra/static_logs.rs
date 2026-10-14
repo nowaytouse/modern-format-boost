@@ -4,6 +4,7 @@
 //! logging functions to ensure consistent styling across the workspace.
 
 use crate::modern_ui::{TerminalColor, symbols};
+use anyhow::Context as _;
 use std::io::Write as _;
 
 const PLAIN_DETAIL_PREFIXES: &[(&str, &str)] = &[
@@ -671,27 +672,36 @@ pub struct FileFailureMarker {
 
 impl FileFailureMarker {
     /// Validate the stable fields without interpreting diagnostic text as a cause.
-    #[must_use]
-    pub fn validate(&self) -> bool {
-        self.schema_version == 1
-            && matches!(self.pipeline.as_str(), "img" | "vid")
-            && valid_file_failure_id(&self.run_id)
-            && valid_file_failure_id(&self.invocation_id)
-            && !self.source_path.is_empty()
-            && !self.source_path.contains('\0')
-            && !self.message.is_empty()
-            && !self.message.contains('\0')
-            && self
-                .absolute_path
-                .as_ref()
-                .is_none_or(|path| path.starts_with('/') && !path.contains('\0'))
-            && self.reason_code.as_ref().is_none_or(|code| {
-                !code.is_empty()
-                    && code.len() <= FILE_FAILURE_ID_MAX_BYTES
-                    && code.bytes().all(|byte| byte.is_ascii_graphic())
-            })
-            && serde_json::to_vec(self)
-                .is_ok_and(|payload| payload.len() <= FILE_FAILURE_MARKER_MAX_BYTES)
+    ///
+    /// # Errors
+    /// Returns invalid fields, serialization failures, or an exceeded transport limit.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.schema_version == 1
+                && matches!(self.pipeline.as_str(), "img" | "vid")
+                && valid_file_failure_id(&self.run_id)
+                && valid_file_failure_id(&self.invocation_id)
+                && !self.source_path.is_empty()
+                && !self.source_path.contains('\0')
+                && !self.message.is_empty()
+                && !self.message.contains('\0')
+                && self
+                    .absolute_path
+                    .as_ref()
+                    .is_none_or(|path| path.starts_with('/') && !path.contains('\0'))
+                && self.reason_code.as_ref().is_none_or(|code| {
+                    !code.is_empty()
+                        && code.len() <= FILE_FAILURE_ID_MAX_BYTES
+                        && code.bytes().all(|byte| byte.is_ascii_graphic())
+                }),
+            "marker fields are invalid"
+        );
+        let payload = serde_json::to_vec(self).context("marker JSON serialization failed")?;
+        anyhow::ensure!(
+            payload.len() <= FILE_FAILURE_MARKER_MAX_BYTES,
+            "marker exceeds the 64 KiB limit"
+        );
+        Ok(())
     }
 }
 
@@ -708,17 +718,21 @@ fn file_failure_marker(
     reason_code: Option<&str>,
     run_id: &str,
     invocation_id: &str,
-) -> Result<String, &'static str> {
+) -> anyhow::Result<String> {
     if !matches!(pipeline, "img" | "vid") {
-        return Err("pipeline is not img or vid");
+        anyhow::bail!("pipeline is not img or vid");
     }
-    let source_path = path.to_str().ok_or("source path is not UTF-8")?;
+    let source_path = path.to_str().context("source path is not UTF-8")?;
     if source_path.len().saturating_add(message.len()) > FILE_FAILURE_MARKER_MAX_BYTES {
-        return Err("marker source and message exceed the 64 KiB limit");
+        anyhow::bail!("marker source and message exceed the 64 KiB limit");
     }
-    let absolute_path = std::path::absolute(path)
-        .ok()
-        .and_then(|absolute| absolute.to_str().map(str::to_owned));
+    let absolute = std::path::absolute(path).context("resolve marker source absolute path")?;
+    let absolute_path = Some(
+        absolute
+            .to_str()
+            .context("marker source absolute path is not UTF-8")?
+            .to_owned(),
+    );
     let marker = FileFailureMarker {
         schema_version: 1,
         pipeline: pipeline.to_owned(),
@@ -729,10 +743,8 @@ fn file_failure_marker(
         invocation_id: invocation_id.to_owned(),
         reason_code: reason_code.map(str::to_owned),
     };
-    if !marker.validate() {
-        return Err("marker fields are invalid or exceed the 64 KiB limit");
-    }
-    serde_json::to_string(&marker).map_err(|_| "marker JSON serialization failed")
+    marker.validate()?;
+    serde_json::to_string(&marker).context("marker JSON serialization failed")
 }
 
 fn emit_file_failure_marker(
@@ -775,7 +787,7 @@ fn emit_file_failure_marker(
         Err(error) => {
             let _ = writeln!(
                 std::io::stderr().lock(),
-                "[WARN] MFB_FILE_FAILURE marker omitted: {error}"
+                "[WARN] MFB_FILE_FAILURE marker omitted: {error:#}"
             );
         }
     }
@@ -2259,7 +2271,7 @@ mod ui_contract_tests {
         )
         .unwrap();
         let marker: super::FileFailureMarker = serde_json::from_str(&payload).unwrap();
-        assert!(marker.validate());
+        marker.validate().unwrap();
         assert_eq!(marker.source_path, "input/媒体\nfailed.jpg");
         assert_eq!(marker.message, "decoder rejected source\nsecond line");
         assert_eq!(marker.reason_code.as_deref(), Some("img_decode_rejected"));
@@ -2279,7 +2291,7 @@ mod ui_contract_tests {
         };
         let overhead = serde_json::to_vec(&marker).unwrap().len();
         marker.message = "x".repeat(super::FILE_FAILURE_MARKER_MAX_BYTES - overhead);
-        assert!(marker.validate());
+        marker.validate().unwrap();
         assert_eq!(
             format!(
                 "MFB_FILE_FAILURE={}\n",
@@ -2289,7 +2301,7 @@ mod ui_contract_tests {
             64 * 1024
         );
         marker.message.push('x');
-        assert!(!marker.validate());
+        assert!(marker.validate().is_err());
     }
 
     #[test]
@@ -2297,6 +2309,16 @@ mod ui_contract_tests {
         let path = std::path::Path::new("source.jpg");
         assert!(file_failure_marker("img", path, "failure", None, "", "invocation").is_err());
         assert!(file_failure_marker("cmd", path, "failure", None, "run", "invocation").is_err());
+        let unresolved = file_failure_marker(
+            "img",
+            std::path::Path::new(""),
+            "failure",
+            None,
+            "run",
+            "invocation",
+        )
+        .unwrap_err();
+        assert!(format!("{unresolved:#}").contains("resolve marker source absolute path"));
         assert!(
             file_failure_marker(
                 "vid",
@@ -2360,7 +2382,7 @@ mod ui_contract_tests {
                 Some("run-test"),
                 Some("invocation-test"),
             );
-            assert!(stderr.is_empty());
+            assert_eq!(stderr, "");
             assert_eq!(stdout.matches("MFB_FILE_FAILURE=").count(), 1);
             let payload = stdout
                 .split_once("MFB_FILE_FAILURE=")
@@ -2370,7 +2392,7 @@ mod ui_contract_tests {
                 .next()
                 .unwrap();
             let marker: super::FileFailureMarker = serde_json::from_str(payload).unwrap();
-            assert!(marker.validate());
+            marker.validate().unwrap();
             assert_eq!(marker.pipeline, pipeline);
             assert_eq!(marker.source_path, "synthetic/媒体\nfile.jpg");
         }
@@ -2383,7 +2405,7 @@ mod ui_contract_tests {
             let (stdout, stderr) =
                 probe(outcome, pipeline, Some("run-test"), Some("invocation-test"));
             assert!(!stdout.contains("MFB_FILE_FAILURE="));
-            assert!(stderr.is_empty());
+            assert_eq!(stderr, "");
         }
         assert!(
             !probe("failed", "img", None, None)

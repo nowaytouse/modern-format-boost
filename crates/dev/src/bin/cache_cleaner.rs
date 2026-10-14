@@ -56,28 +56,37 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
 #[command(
     name = "cache_cleaner",
     version,
-    about = "Modern Format Boost Cache Cleaner"
+    about = "Modern Format Boost Cache Cleaner",
+    group(clap::ArgGroup::new("inspection").args(["stats", "history_stats"])),
+    group(clap::ArgGroup::new("history_operation").args(["history_stats", "history_backup"])),
+    group(clap::ArgGroup::new("pruning_action").args(["prune", "preview_prune"]))
 )]
 struct Args {
-    #[arg(long, requires = "history_directory", conflicts_with_all = ["local_backup", "stats", "prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Create a verified snapshot of the explicitly selected History SQLite database at a new local destination; no source creation or migration")]
+    #[arg(long, requires = "history_directory", conflicts_with_all = ["local_backup", "stats", "history_stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Create a verified snapshot of the explicitly selected History SQLite database at a new local destination; no source creation or migration")]
     history_backup: Option<PathBuf>,
 
     #[arg(
         long,
-        requires = "history_backup",
-        help = "Existing absolute history log directory to back up; no implicit source or fallback"
+        requires = "history_operation",
+        help = "Existing absolute history log directory to inspect or back up; no implicit source or fallback"
     )]
     history_directory: Option<PathBuf>,
 
-    #[arg(long, conflicts_with_all = ["stats", "prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Create a verified snapshot of Core SQLite state and cache at a new local destination; History and PostgreSQL are not included")]
+    #[arg(long, conflicts_with_all = ["stats", "history_stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Create a verified snapshot of Core SQLite state and cache at a new local destination; History and PostgreSQL are not included")]
     local_backup: Option<PathBuf>,
 
     #[arg(long, conflicts_with_all = ["stats", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Remove only expired or over-budget directory snapshots, retaining useful cache and all formal state")]
     prune: bool,
 
+    #[arg(long, conflicts_with_all = ["stats", "history_stats", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes"], help = "Preview exact directory-cache expiry and eviction at one read-only snapshot; no rows or timestamps are changed")]
+    preview_prune: bool,
+
+    #[arg(long, requires = "history_directory", conflicts_with_all = ["prune", "preview_prune", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Inspect History schema, storage row counts and logical UTF-8 bytes without loading logs, migrating or creating a database; add --check-integrity for structural checks only")]
+    history_stats: bool,
+
     #[arg(
         long,
-        requires = "prune",
+        requires = "pruning_action",
         conflicts_with = "no_config",
         help = "Overlay an explicit JSON configuration for cache pruning"
     )]
@@ -85,7 +94,7 @@ struct Args {
 
     #[arg(
         long,
-        requires = "prune",
+        requires = "pruning_action",
         help = "Ignore configuration files when pruning"
     )]
     no_config: bool,
@@ -96,7 +105,7 @@ struct Args {
     #[arg(long, conflicts_with_all = ["path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Inspect local cache without deleting or rebuilding anything")]
     stats: bool,
 
-    #[arg(long, requires = "stats", conflicts_with_all = ["yes", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Check SQLite and stored payload hashes without repairing or deleting data")]
+    #[arg(long, requires = "inspection", conflicts_with_all = ["yes", "path", "postgres", "purge_animation_cache", "purge_session_state"], help = "Check Core SQLite and payload hashes, or explicitly selected History SQLite structure/relationships/types; never repair or delete data")]
     check_integrity: bool,
 
     #[arg(long, conflicts_with_all = ["postgres", "purge_animation_cache", "purge_session_state"], help = "Return versioned local inspection results or a backup receipt as JSON")]
@@ -492,6 +501,8 @@ struct CacheStatus {
     pruning: Option<CachePruning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     database: Option<DatabaseOverview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pruning_preview: Option<foundation::mfb_sqlite_store::CachePrunePreview>,
 }
 
 #[derive(Debug, Serialize)]
@@ -816,6 +827,14 @@ fn cache_status(cache_dir: &Path) -> Result<CacheStatus> {
 }
 
 fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Result<CacheStatus> {
+    cache_status_with_options(cache_dir, check_integrity, None)
+}
+
+fn cache_status_with_options(
+    cache_dir: &Path,
+    check_integrity: bool,
+    preview: Option<foundation::runtime_config::CachePolicy>,
+) -> Result<CacheStatus> {
     let mut status = CacheStatus {
         schema_version: 1,
         cache_directory: cache_dir
@@ -831,6 +850,7 @@ fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Resul
         integrity: check_integrity.then(CacheIntegrity::new),
         pruning: None,
         database: None,
+        pruning_preview: None,
     };
     let mut phase = "managed_paths";
     let inspection = (|| -> Result<()> {
@@ -854,6 +874,11 @@ fn cache_status_with_integrity(cache_dir: &Path, check_integrity: bool) -> Resul
             validate_cache_schema(&snapshot)?;
             phase = "database_overview";
             status.database = Some(database_overview(&snapshot)?);
+            if let Some(policy) = preview {
+                status.pruning_preview = Some(
+                    foundation::mfb_sqlite_store::preview_path_tree_pruning(&snapshot, policy)?,
+                );
+            }
             if let Some(integrity) = &mut status.integrity {
                 inspect_store_integrity(&snapshot, integrity, &mut phase)?;
             }
@@ -1457,9 +1482,57 @@ fn print_cache_status(status: &CacheStatus, json: bool) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args::parse();
     anyhow::ensure!(
-        args.prune || args.cache.is_empty(),
-        "cache policy flags require --prune; no action taken"
+        args.prune || args.preview_prune || args.cache.is_empty(),
+        "cache policy flags require --prune or --preview-prune; no action taken"
     );
+    anyhow::ensure!(
+        args.history_directory.is_none() || args.history_stats || args.history_backup.is_some(),
+        "--history-directory requires --history-stats or --history-backup; no action taken"
+    );
+    if args.history_stats {
+        let directory = args
+            .history_directory
+            .as_deref()
+            .context("History inspection requires an explicit history directory")?;
+        let report =
+            dev::infra::history_store::inspect_history_store(directory, args.check_integrity)?;
+        if args.json {
+            println!("{}", serde_json::to_string(&report)?);
+        } else {
+            println!("History storage: {}", report.source);
+            if let Some(overview) = &report.overview {
+                println!(
+                    "Schema {}, {} sessions, {} event rows ({} logical bytes); output rows {:?}, output logical bytes {:?}.",
+                    overview.history_schema_version,
+                    overview.sessions,
+                    overview.events,
+                    overview.event_bytes,
+                    overview.output_rows,
+                    overview.output_bytes
+                );
+                println!(
+                    "Storage rows are not processed media counts or completed runs. Schema 1 has no captured output storage."
+                );
+            } else {
+                println!("History database is absent; no database created.");
+            }
+            if let Some(integrity) = &report.integrity {
+                println!(
+                    "Structural checks: {} ({} issues). Event JSON and media correctness are not verified.",
+                    integrity.status, integrity.issue_count
+                );
+            }
+        }
+        io::stdout().flush()?;
+        if report
+            .integrity
+            .as_ref()
+            .is_some_and(|integrity| integrity.status == "unhealthy")
+        {
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
     if let Some(destination) = &args.history_backup {
         let directory = args
             .history_directory
@@ -1497,11 +1570,37 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if args.prune {
+    if args.prune || args.preview_prune {
         let mut loaded = foundation::runtime_config::load(args.config.as_deref(), args.no_config)?;
         args.cache.apply_to(&mut loaded);
         loaded.config.validate()?;
-        let cache_dir = get_mfb_state_root()?.join("cache");
+        let cache_dir = if args.preview_prune {
+            backup_cache_directory()?
+        } else {
+            get_mfb_state_root()?.join("cache")
+        };
+        if args.preview_prune {
+            let report = cache_status_with_options(&cache_dir, false, Some(loaded.config.cache))?;
+            if !args.json {
+                if let Some(preview) = &report.pruning_preview {
+                    println!(
+                        "Read-only pruning preview at {}: expire {} rows / {} payload bytes; evict {} rows / {} payload bytes; retain {} rows / {} payload bytes. Formal state is excluded. A later prune re-evaluates current data.",
+                        preview.snapshot_unix_secs,
+                        preview.expired_rows,
+                        preview.expired_payload_bytes,
+                        preview.evicted_rows,
+                        preview.evicted_payload_bytes,
+                        preview.retained_rows,
+                        preview.retained_payload_bytes
+                    );
+                } else {
+                    println!(
+                        "Core database is absent; no database created and no pruning performed."
+                    );
+                }
+            }
+            return print_cache_status(&report, args.json);
+        }
         let before = cache_status(&cache_dir)?;
         if !args.json {
             print_cache_status(&before, false)?;
@@ -1587,6 +1686,97 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn history_and_preview_inspection_flags_never_select_mutations() {
+        use clap::Parser;
+        let history = super::Args::try_parse_from([
+            "cache_cleaner",
+            "--history-stats",
+            "--history-directory",
+            "/synthetic/history",
+            "--json",
+            "--check-integrity",
+        ])
+        .unwrap();
+        assert!(history.history_stats && history.check_integrity && !history.prune && !history.yes);
+        let preview = super::Args::try_parse_from([
+            "cache_cleaner",
+            "--preview-prune",
+            "--json",
+            "--cache-max-bytes",
+            "100",
+            "--cache-ttl-seconds",
+            "10",
+        ])
+        .unwrap();
+        assert!(
+            preview.preview_prune && !preview.prune && !preview.yes && !preview.cache.is_empty()
+        );
+        for flag in [
+            "--yes",
+            "--stats",
+            "--prune",
+            "--purge-session-state",
+            "--postgres",
+        ] {
+            assert!(
+                super::Args::try_parse_from(["cache_cleaner", "--preview-prune", flag]).is_err()
+            );
+            assert!(
+                super::Args::try_parse_from([
+                    "cache_cleaner",
+                    "--history-stats",
+                    "--history-directory",
+                    "/synthetic/history",
+                    flag
+                ])
+                .is_err()
+            );
+        }
+        assert!(super::Args::try_parse_from(["cache_cleaner", "--history-stats"]).is_err());
+    }
+
+    #[test]
+    fn pruning_preview_uses_the_same_read_only_namespace_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open(root.path().join("mfb_store.sqlite")).unwrap();
+        conn.execute_batch("CREATE TABLE store_metadata(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+            INSERT INTO store_metadata VALUES ('schema_version',2);
+            CREATE TABLE blob_store(namespace TEXT NOT NULL,cache_key TEXT NOT NULL,schema_version INTEGER NOT NULL,root_path TEXT,payload BLOB NOT NULL,payload_blake3 BLOB NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(namespace,cache_key));
+            INSERT INTO blob_store VALUES ('path_tree','one',1,NULL,X'6361636865',zeroblob(32),0),('checkpoint','state',1,NULL,X'70726F746563746564',zeroblob(32),0);").unwrap();
+        drop(conn);
+        let source = root.path().join("mfb_store.sqlite");
+        let before = std::fs::read(&source).unwrap();
+        let policy = foundation::runtime_config::CachePolicy {
+            path_tree_max_bytes: 1,
+            path_tree_ttl_seconds: 10,
+        };
+        let status = super::cache_status_with_options(root.path(), false, Some(policy)).unwrap();
+        let preview = status.pruning_preview.unwrap();
+        assert_eq!(preview.total_rows, 1);
+        assert_eq!(preview.total_payload_bytes, 5);
+        assert_eq!(
+            preview.expired_rows + preview.evicted_rows + preview.retained_rows,
+            1
+        );
+        assert_eq!(status.removed_rows, 0);
+        assert_eq!(status.removed_files, 0);
+        assert_eq!(
+            status
+                .namespaces
+                .iter()
+                .find(|namespace| namespace.name == "checkpoint")
+                .unwrap()
+                .rows,
+            1
+        );
+        assert_eq!(std::fs::read(source).unwrap(), before);
+        let absent =
+            super::cache_status_with_options(&root.path().join("absent"), false, Some(policy))
+                .unwrap();
+        assert!(absent.database.is_none() && absent.pruning_preview.is_none());
+        assert!(!root.path().join("absent").exists());
+    }
     use super::*;
 
     fn cache_fixture(root: &Path) -> PathBuf {
@@ -1631,7 +1821,8 @@ mod tests {
     #[test]
     fn backup_source_root_resolution_is_strict_and_read_only() {
         const CHILD: &str = "MFB_TEST_BACKUP_ROOT_CHILD";
-        if let Ok(case) = std::env::var(CHILD) {
+        if let Some(case) = std::env::var_os(CHILD) {
+            let case = case.into_string().expect("backup test case is not UTF-8");
             if case == "absent" {
                 let cache = backup_cache_directory().unwrap();
                 let root = cache.parent().unwrap();

@@ -32,6 +32,8 @@ vid --config /path/to/video.json config show --effective
 vid run /path/to/videos --codec av1
 img run /path/to/images --error-mode log-and-continue
 vid --error-mode fail-fast config show --effective
+vid --tool 'ffmpeg=/path/to/tool dir/ffmpeg=custom' config show --effective
+img --tool cjxl=/absolute/path/cjxl config validate
 img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
@@ -58,6 +60,23 @@ fallback destination. These commands do not access Photos.
 
 ## Policy Fields
 
+Tool paths use a shared IMG/VID parser and typed resolver: repeated `--tool
+NAME=PATH` overrides only named keys in `tools.paths`, retaining inherited tools.
+The last duplicate name wins and the effective source chain records each CLI layer.
+The launcher forwards independent `--img-tool` and `--vid-tool` values to the matching
+worker, including Fast IMG, and rejects explicit values outside their supported scope.
+Tool names use lowercase ASCII letters, digits, hyphens or underscores; paths must
+be absolute and NUL-free. Spaces and additional equals signs are preserved; non-UTF-8
+paths cannot cross the string-based launcher boundary and are explicitly rejected.
+Configuration inspection parses paths without reading/executing the selected tools.
+Actual processing retains existing executable health checks and fidelity gates.
+
+Native Developer Tool Paths keeps independent IMG/Fast IMG/VID preferences. Its
+file chooser, reset and effective source preview edit the parent Settings draft;
+cancelling discards them and Apply validates through the worker before persistence.
+No override means inheritance, not a saved copy of a discovered or inherited value.
+No raw JSON editor or configuration-file rewrite is involved.
+
 ### Native GUI Overrides
 
 The gear button shows the current image workflow, a standard Video tab,
@@ -75,13 +94,20 @@ adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure
 policies and image tool selection appear only in Developer mode, enabled in About.
 Video exposes HEVC/AV1 in Settings, plus an independent developer configuration
-file and file-error mode. AV1 defaults to non-Apple delivery; an explicitly
+file, file-error mode and long-video fusion quality checks. The latter is typed
+`vid.force_ms_ssim_long`, default `false`; direct standard VID uses
+`--force-ms-ssim-long[=true|false]`, and the launcher uses
+`--vid-force-ms-ssim-long[=true|false]`. Omission inherits the file setting, explicit
+false overrides it, and GUI reset removes the override. Enabling can increase
+quality-validation time, without changing codec routing or reducing other checks.
+AV1 defaults to non-Apple delivery; an explicitly
 conflicting `--apple-compat` request is rejected. HEVC keeps Apple compatibility
 by default; `--no-apple-compat` still disables it. Video quality and preset are not exposed by the current
 CLI and therefore are not editable controls.
 Video settings apply only to standard `vid run` processing. Fast Video uses
-`vid fast-gif`, which does not use `vid.codec` or the standard error-mode override;
-explicit launcher codec/error overrides there are rejected. Direct Fast VID
+`vid fast-gif`, which does not use `vid.codec`, the standard error-mode override or
+long-video quality overrides; explicit launcher overrides and direct long-video
+quality flags there are rejected. Direct Fast VID
 configuration files can set its shared performance policy, not its GIF/AVIF
 strategy. The GUI disables the settings button for that operation.
 The image file-error override also belongs to standard processing. FastImg
@@ -115,7 +141,7 @@ direct `img --tool` overrides.
 The launcher accepts `--img-config`, `--img-fallback-policy`,
 `--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
 `--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
-`--vid-error-mode`. Error modes are `log-and-continue` and `fail-fast`; overrides
+`--vid-error-mode`, plus `--vid-force-ms-ssim-long=true|false`. Error modes are `log-and-continue` and `fail-fast`; overrides
 are forwarded as typed worker `--error-mode` flags, including PTY launches, without
 mutating the launcher's global environment. For standard runs the launcher resolves
 the relevant IMG/VID configuration files before routing, so parent continuation

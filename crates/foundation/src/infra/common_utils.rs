@@ -769,50 +769,103 @@ pub fn extract_isobmff_metadata(data: &[u8]) -> std::collections::HashMap<String
     metadata
 }
 
-static TOOL_PATH_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, Option<std::path::PathBuf>>>,
-> = std::sync::OnceLock::new();
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FailedToolIdentity {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ToolIdentity {
+    target: PathBuf,
     len: u64,
-    modified: Option<std::time::SystemTime>,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+// shortcut: metadata is not a content proof; use hashing before persisted reuse.
+pub(crate) fn tool_identity(path: &Path) -> std::io::Result<ToolIdentity> {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let target = path.canonicalize()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let metadata = options.open(&target)?.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "tool identity requires a regular file",
+        ));
+    }
+    Ok(ToolIdentity {
+        target,
+        len: metadata.len(),
+        modified: metadata.modified()?,
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(unix)]
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+    })
+}
+
+const TOOL_HEALTH_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Clone, Debug)]
+struct FailedToolProbe {
+    identity: ToolIdentity,
+    checked_at: std::time::Instant,
+}
+
+impl FailedToolProbe {
+    fn suppresses(&self, identity: &ToolIdentity, now: std::time::Instant) -> bool {
+        self.identity == *identity && now.duration_since(self.checked_at) < TOOL_HEALTH_FAILURE_TTL
+    }
 }
 
 static FAILED_TOOL_IDENTITIES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, FailedToolIdentity>>,
+    std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, FailedToolProbe>>,
 > = std::sync::OnceLock::new();
 
 fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    let identity = FailedToolIdentity {
-        len: metadata.len(),
-        modified: match metadata.modified() {
-            Ok(modified) => Some(modified),
-            Err(error) => {
-                crate::media_conversion_gate::delivery_runtime_path_audit(
-                    "tool_identity_metadata",
-                    path,
-                    format!(
-                        "tool modification time unavailable; using size-only identity: {error}"
-                    ),
-                );
-                None
-            }
-        },
-    };
     let failures = FAILED_TOOL_IDENTITIES
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if crate::media_conversion_gate::mutex_guard_or_recover(
-        "failed_tool_identity_cache_read",
-        failures.lock(),
-    )
-    .get(path)
-    .is_some_and(|failed| *failed == identity)
+    let identity = match tool_identity(path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            crate::media_conversion_gate::mutex_guard_or_recover(
+                "failed_tool_identity_cache_write",
+                failures.lock(),
+            )
+            .remove(path);
+            crate::media_conversion_gate::delivery_runtime_path_audit(
+                "tool_identity_metadata",
+                path,
+                format!("tool identity unavailable; not reusing its health result: {error}"),
+            );
+            return false;
+        }
+    };
+    let checked_at = std::time::Instant::now();
     {
-        return false;
+        let mut failures = crate::media_conversion_gate::mutex_guard_or_recover(
+            "failed_tool_identity_cache_read",
+            failures.lock(),
+        );
+        failures.retain(|_, failed| {
+            checked_at.duration_since(failed.checked_at) < TOOL_HEALTH_FAILURE_TTL
+        });
+        if failures
+            .get(path)
+            .is_some_and(|failed| failed.suppresses(&identity, checked_at))
+        {
+            return false;
+        }
     }
 
     let healthy = match std::process::Command::new(path).arg("-version").output() {
@@ -839,13 +892,22 @@ fn multimedia_tool_is_healthy(path: &std::path::Path) -> bool {
     if healthy {
         failures.remove(path);
     } else {
-        let newly_failed = failures.insert(path.to_path_buf(), identity) != Some(identity);
+        let newly_failed = !failures
+            .get(path)
+            .is_some_and(|failed| failed.identity == identity);
+        failures.insert(
+            path.to_path_buf(),
+            FailedToolProbe {
+                identity,
+                checked_at,
+            },
+        );
         drop(failures);
         if newly_failed {
             crate::media_conversion_gate::delivery_runtime_batch_audit(
                 "tool_path_smoke_fail",
                 format!(
-                    "WARNING: Tool candidate at '{}' is corrupt or failed its version smoke test; skipping until the binary changes",
+                    "WARNING: Tool candidate at '{}' failed its version smoke test; retrying after its identity changes or a short timeout",
                     path.display()
                 ),
             );
@@ -868,9 +930,6 @@ fn tool_override_env_name(name: &str) -> String {
 
 #[must_use]
 pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
-    let cache_mutex =
-        TOOL_PATH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-
     // GUI-launched macOS apps often miss shell PATH. An explicit developer
     // override and an explicitly selected PATH entry take priority over fixed
     // install locations, so nightly or locally built tools can be used safely.
@@ -934,13 +993,7 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
             let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(path);
 
             if is_healthy {
-                let resolved = path.to_path_buf();
-                crate::media_conversion_gate::mutex_guard_or_recover(
-                    "tool_path_cache",
-                    cache_mutex.lock(),
-                )
-                .insert(name.to_string(), Some(resolved.clone()));
-                return Some(resolved);
+                return Some(path.to_path_buf());
             }
         }
     }
@@ -953,19 +1006,6 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
             ),
         );
         return None;
-    }
-
-    {
-        let mut cache = crate::media_conversion_gate::mutex_guard_or_recover(
-            "tool_path_cache",
-            cache_mutex.lock(),
-        );
-        if let Some(Some(cached_path)) = cache.get(name).cloned() {
-            if cached_path.is_file() {
-                return Some(cached_path);
-            }
-            cache.remove(name);
-        }
     }
 
     if let Some(e) = home_error {
@@ -985,11 +1025,6 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
             let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(&path);
 
             if is_healthy {
-                crate::media_conversion_gate::mutex_guard_or_recover(
-                    "tool_path_cache",
-                    cache_mutex.lock(),
-                )
-                .insert(name.to_string(), Some(path.clone()));
                 return Some(path);
             }
         }
@@ -1358,7 +1393,10 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn resolve_tool_path_rechecks_stable_paths_before_cached_lookup() -> anyhow::Result<()> {
+    fn resolve_tool_path_rechecks_current_selection_without_stale_fallback() -> anyhow::Result<()> {
+        if isolated_test_process() {
+            return Ok(());
+        }
         let tmp = TempDir::new()?;
         let tool_name = format!("mfb-cache-order-tool-{}", std::process::id());
         let home = tmp.path().join("home");
@@ -1370,15 +1408,18 @@ mod tests {
         fs::write(&cached, b"cached")?;
 
         let _home_guard = EnvGuard::set(crate::constants::ENV_HOME, &home.to_string_lossy());
-        let cache_mutex =
-            TOOL_PATH_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-        crate::media_conversion_gate::mutex_guard_or_recover(
-            "tool_path_cache_test",
-            cache_mutex.lock(),
-        )
-        .insert(tool_name.clone(), Some(cached));
+        {
+            let _override = EnvGuard::set(
+                &tool_override_env_name(&tool_name),
+                &cached.to_string_lossy(),
+            );
+            assert_eq!(resolve_tool_path(&tool_name), Some(cached.clone()));
+        }
 
-        assert_eq!(resolve_tool_path(&tool_name), Some(primary));
+        assert_eq!(resolve_tool_path(&tool_name), Some(primary.clone()));
+        fs::remove_file(primary)?;
+        assert!(cached.is_file());
+        assert_eq!(resolve_tool_path(&tool_name), None);
         Ok(())
     }
 
@@ -1390,35 +1431,93 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_multimedia_tool_is_retried_only_after_binary_changes() -> anyhow::Result<()> {
+    fn failed_multimedia_tool_retries_replacement_expiry_and_missing_identity() -> anyhow::Result<()>
+    {
         use std::os::unix::fs::PermissionsExt;
 
+        if isolated_test_process() {
+            return Ok(());
+        }
         let tmp = TempDir::new()?;
         let tool = tmp.path().join("ffprobe");
         let counter = tmp.path().join("counter");
-        fs::write(
-            &tool,
-            "#!/bin/sh\nprintf x >> \"$MFB_TEST_TOOL_COUNTER\"\necho 'dyld: Library not loaded' >&2\nexit 1\n",
-        )?;
+        let original = "#!/bin/sh\nprintf x >> \"$MFB_TEST_TOOL_COUNTER\"\n[ -n \"$MFB_TEST_TOOL_REPAIR\" ] && exit 0\necho 'dyld: Library not loaded' >&2\nexit 1\n";
+        fs::write(&tool, original)?;
         let mut permissions = fs::metadata(&tool)?.permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&tool, permissions.clone())?;
         let _counter = EnvGuard::set("MFB_TEST_TOOL_COUNTER", &counter.to_string_lossy());
+        let _repair_state = EnvGuard::set("MFB_TEST_TOOL_REPAIR", "");
 
-        // Exercise the smoke-check seam directly.  Routing through
-        // `resolve_tool_path` would mutate process-wide PATH/override state and
-        // make this test race with unrelated resolver tests in the same binary.
+        // The direct seam makes retry counts independent of fixed-path candidates.
         assert!(!multimedia_tool_is_healthy(&tool));
         assert!(!multimedia_tool_is_healthy(&tool));
         assert_eq!(fs::read_to_string(&counter)?, "x");
 
-        fs::write(
-            &tool,
-            "#!/bin/sh\nprintf y >> \"$MFB_TEST_TOOL_COUNTER\"\nexit 0\n# replacement\n",
-        )?;
+        let metadata = fs::metadata(&tool)?;
+        let identity = tool_identity(&tool)?;
+        let replacement = original
+            .replace("dyld: Library not loaded", "pass: Library was loaded")
+            .replace("exit 1", "exit 0");
+        assert_eq!(original.len(), replacement.len());
+        fs::write(&tool, &replacement)?;
         fs::set_permissions(&tool, permissions)?;
+        filetime::set_file_mtime(
+            &tool,
+            filetime::FileTime::from_last_modification_time(&metadata),
+        )?;
+        assert_eq!(metadata.len(), fs::metadata(&tool)?.len());
+        assert_eq!(metadata.modified()?, fs::metadata(&tool)?.modified()?);
+        assert_ne!(identity, tool_identity(&tool)?);
         assert!(multimedia_tool_is_healthy(&tool));
-        assert_eq!(fs::read_to_string(counter)?, "xy");
+        assert_eq!(fs::read_to_string(&counter)?, "xx");
+
+        fs::write(&tool, original)?;
+        assert!(!multimedia_tool_is_healthy(&tool));
+        let failures = FAILED_TOOL_IDENTITIES.get().expect("cache initialized");
+        {
+            let mut entries = failures.lock().expect("cache lock");
+            let failed = entries.get_mut(&tool).expect("failed tool observation");
+            let now = std::time::Instant::now();
+            assert!(failed.suppresses(&failed.identity, now));
+            failed.checked_at = now
+                .checked_sub(TOOL_HEALTH_FAILURE_TTL)
+                .expect("fixture retry deadline is representable");
+            assert!(!failed.suppresses(&failed.identity, now));
+            drop(entries);
+        }
+        {
+            let _repair = EnvGuard::set("MFB_TEST_TOOL_REPAIR", "1");
+            assert!(multimedia_tool_is_healthy(&tool));
+        }
+        assert_eq!(fs::read_to_string(counter)?, "xxxx");
+        assert!(!failures.lock().expect("cache lock").contains_key(&tool));
+        assert!(!multimedia_tool_is_healthy(&tool));
+        fs::remove_file(&tool)?;
+        assert!(!multimedia_tool_is_healthy(&tool));
+        assert!(!failures.lock().expect("cache lock").contains_key(&tool));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tool_identity_tracks_symlink_targets_and_rejects_unavailable_inputs() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let tmp = TempDir::new()?;
+        let first = tmp.path().join("first");
+        let second = tmp.path().join("second");
+        let link = tmp.path().join("tool");
+        fs::write(&first, b"first")?;
+        fs::write(&second, b"other")?;
+        symlink(&first, &link)?;
+        let original = tool_identity(&link)?;
+        assert_eq!(original, tool_identity(&first)?);
+        fs::remove_file(&link)?;
+        symlink(&second, &link)?;
+        assert_ne!(original, tool_identity(&link)?);
+        fs::remove_file(second)?;
+        assert!(tool_identity(&link).is_err());
+        assert!(tool_identity(tmp.path()).is_err());
         Ok(())
     }
 
