@@ -669,13 +669,35 @@ fn convert_to_jxl(
             builder.apple_compat(true);
         }
 
-        let mut command = builder.build();
-        let status = foundation::process_runner::run_command_with_liveness_timeout(
-            &mut command,
-            std::time::Duration::from_secs(120),
-            foundation::process_runner::image_process_hard_timeout(),
-            "JXL image conversion",
-        )?;
+        let effort = foundation::jxl_effort_policy::encoder_effort_for_mode(
+            config.ultimate_mode(),
+            config.archive_mode(),
+        );
+        let efforts = foundation::jxl_effort_policy::effort_candidates(
+            foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+            effort,
+        );
+        let (status, _) = foundation::jxl_effort_policy::run_effort_search(
+            &input_abs,
+            &output_abs,
+            &efforts,
+            |selected, candidate| {
+                let mut command = builder.output(candidate).effort(selected).build();
+                foundation::process_runner::run_command_with_liveness_timeout(
+                    &mut command,
+                    std::time::Duration::from_secs(120),
+                    foundation::process_runner::image_process_hard_timeout(),
+                    "JXL image conversion",
+                )
+                .map_err(anyhow::Error::from)
+            },
+            |observation| observation.status.success(),
+            |candidate| {
+                foundation::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+                foundation::image::static_payload::jxl(candidate)
+            },
+        )
+        .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
 
         if !status.status.success() {
             return Err(ImgQualityError::ConversionError(

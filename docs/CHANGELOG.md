@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Separate effort and quality search in native settings (2026-10-14)
+
+- Move normal image tool selection and JXL/JPEG effort controls into Image
+  settings, and long-video full quality checks into Videos. Keep configuration
+  files, failure policies and diagnostic tool paths in Developer. Numeric effort
+  menus distinguish pixel JXL 7/8/10 from reversible JPEG 1..11; adaptive mode
+  calls the numeric value a search limit. Localized search/help/accessibility
+  use that same meaning, without reusing the performance "recommended" label.
+- Add independent typed `jxl_effort_search`, `jpeg_effort_search` and
+  `quality_search`, with worker/launcher flags, effective sources and independent
+  standard/Fast GUI drafts. Defaults preserve single-effort encoding and existing
+  quality exploration. Adaptive effort compares bounded verified media payloads
+  at one quality, checking source hashes in multi-candidate plans and retaining lower requested effort on
+  ties; JPEG candidates require exact byte reconstruction. Errors do not publish
+  a partial winner. Existing compatibility retries and final delivery gates remain
+  required. This adds work, not a speed guarantee or globally optimal search.
+- Keep quality search separate from source-quality inference and effort selection.
+  Existing JXL source/size restrictions remain required. Fast JXL offers JPEG
+  effort/search only; Fast AVIF offers quality search, not ineffective pixel/JPEG
+  effort controls. Explicit unsupported launcher/worker options fail. Fixed AVIF
+  quality tries only q100, reports that exact attempted range, and does not label
+  its accepted candidate as an adaptive optimization.
+- Fix the shared debug builder's JPEG range mismatch found by actual synthetic
+  CLI testing: reversible JPEG permits all configured 1..11 efforts, with the
+  expert switch only at e11. Pixel policy remains restricted to 7/8/10 and explicit
+  expert e11; JPEG e9 is not permission for pixel e9. Extend the existing builder
+  regression across every JPEG effort instead of disabling its assertion.
+- Validation: 398 source contracts, 48 scoped Foundation JXL cases,
+  11 IMG runtime CLI cases and the scoped launcher forwarding case passed.
+  Scoped strict Foundation/IMG/launcher Clippy, locked worker builds, formatting,
+  Swift warnings-as-errors and Chinese/English/Japanese native self-tests passed.
+  Isolated native dark/light windows checked normal-user placement, applicable
+  Fast controls and independent standard adaptive-effort/fixed-quality save.
+  Synthetic PNG adaptive encoding succeeded and its decoded RGB24 frame payload
+  matched; synthetic JPEG adaptive 1/7/8 and fixed e9 both succeeded with one
+  successful file and zero failed/skipped/ignored/unprocessed files per run,
+  and both final JXL files reconstructed byte-identical source JPEGs. These small
+  fixtures are not complete metadata, real-media, HDR or platform acceptance.
+  Owned native QA app, preferences and synthetic data were removed afterward.
+- Confirm nightly run 38525291156 on fd2bb2de completed successfully; the two
+  older a8df1539 runs completed with their already-fixed contract failures.
+  This is previous-commit CI evidence, not CI acceptance of this change. No
+  dependency update, production media/Photos operation or installed-app replacement
+  was performed; adaptive mode's additional cost has not been benchmarked on a
+  representative real-media corpus.
+
 ### CI contract fixes and direct JXL effort settings (2026-10-14)
 
 - Fix the four contract failures confirmed in nightly run 38496290025. GPU probe

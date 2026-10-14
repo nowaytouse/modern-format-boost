@@ -186,6 +186,12 @@ struct Args {
     /// JXL pixel encoding effort (7, 8 or 10); omitted preserves mode defaults.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
     img_jxl_effort: Option<u8>,
+    #[arg(long, value_enum)]
+    img_jxl_effort_search: Option<foundation::runtime_config::EffortSearch>,
+    #[arg(long, value_enum)]
+    img_jpeg_effort_search: Option<foundation::runtime_config::EffortSearch>,
+    #[arg(long, value_enum)]
+    img_quality_search: Option<foundation::runtime_config::QualitySearch>,
 
     /// Override image quality inference without affecting video settings.
     #[arg(long, num_args = 1, require_equals = true)]
@@ -996,11 +1002,30 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
-        args.img_jxl_effort.is_none()
-            || args.mode == LaunchMode::FastImg
+        args.mode != LaunchMode::FastImg
+            || args.strategy.as_deref() != Some("avif")
+            || args.img_jpeg_effort.is_none(),
+        "JPEG effort does not apply to Fast IMG AVIF"
+    );
+    anyhow::ensure!(
+        (args.img_jxl_effort.is_none() && args.img_jxl_effort_search.is_none())
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
-        "JXL pixel effort requires selected standard images or --mode fast-img"
+        "JXL pixel effort requires selected standard images; Fast IMG JXL performs JPEG reconstruction"
+    );
+    anyhow::ensure!(
+        args.img_jpeg_effort_search.is_none()
+            || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() != Some("avif"))
+            || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
+                && processing_filter(args).accepts_image()),
+        "JPEG effort search requires standard images or Fast IMG JXL"
+    );
+    anyhow::ensure!(
+        args.img_quality_search.is_none()
+            || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() == Some("avif"))
+            || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
+                && processing_filter(args).accepts_image()),
+        "quality search requires standard images or Fast IMG AVIF; JPEG reconstruction has no quality search"
     );
     anyhow::ensure!(
         args.img_tools.is_empty()
@@ -1925,6 +1950,26 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
     }
     if let Some(effort) = args.img_jxl_effort {
         command.extend(["--jxl-effort".to_owned(), effort.to_string()]);
+    }
+    for (flag, strategy) in [
+        ("--jxl-effort-search", args.img_jxl_effort_search),
+        ("--jpeg-effort-search", args.img_jpeg_effort_search),
+    ] {
+        if let Some(strategy) = strategy {
+            let value = match strategy {
+                foundation::runtime_config::EffortSearch::Fixed => "fixed",
+                foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
+            };
+            command.extend([flag.to_owned(), value.to_owned()]);
+        }
+    }
+    if let Some(strategy) = args.img_quality_search {
+        let value = match strategy {
+            foundation::runtime_config::QualitySearch::ModeDefault => "mode-default",
+            foundation::runtime_config::QualitySearch::Fixed => "fixed",
+            foundation::runtime_config::QualitySearch::Adaptive => "adaptive",
+        };
+        command.extend(["--quality-search".to_owned(), value.to_owned()]);
     }
     if let Some(heuristic) = args.img_quality_heuristic {
         command.push(format!("--quality-heuristic={heuristic}"));
@@ -3352,6 +3397,9 @@ fn build_run_args(
         img_tool_policy: None,
         img_jpeg_effort: None,
         img_jxl_effort: None,
+        img_jxl_effort_search: None,
+        img_jpeg_effort_search: None,
+        img_quality_search: None,
         img_quality_heuristic: None,
         img_allow_database: None,
         img_allow_size_tolerance: None,
@@ -4933,18 +4981,22 @@ mod tests {
         );
         let mut fast = args.clone();
         fast.mode = LaunchMode::FastImg;
+        assert!(validate_media_options(&fast).is_err());
+        fast.img_jxl_effort = None;
+        fast.img_jpeg_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
+        validate_media_options(&fast)?;
         let (command, _) =
             fast_img_launch_command(&fast, Path::new("/repo"), Path::new("/synthetic/input"))?;
         assert!(
             command
                 .args
                 .windows(2)
-                .any(|pair| pair == ["--jxl-effort", "8"])
+                .any(|pair| pair == ["--jpeg-effort-search", "adaptive"])
         );
         for value in ["0", "6", "9", "11"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", value]).is_err());
         }
-        for mode in ["videos", "fast-vid", "restore-jpeg", "collect"] {
+        for mode in ["videos", "fast-vid", "fast-img", "restore-jpeg", "collect"] {
             let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-effort", "8"])?;
             assert!(validate_media_options(&args).is_err());
         }
@@ -6285,6 +6337,9 @@ mod tests {
             img_tool_policy: None,
             img_jpeg_effort: None,
             img_jxl_effort: None,
+            img_jxl_effort_search: None,
+            img_jpeg_effort_search: None,
+            img_quality_search: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6397,6 +6452,9 @@ mod tests {
                 img_tool_policy: None,
                 img_jpeg_effort: None,
                 img_jxl_effort: None,
+                img_jxl_effort_search: None,
+                img_jpeg_effort_search: None,
+                img_quality_search: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,
@@ -6450,6 +6508,9 @@ mod tests {
             img_tool_policy: None,
             img_jpeg_effort: None,
             img_jxl_effort: None,
+            img_jxl_effort_search: None,
+            img_jpeg_effort_search: None,
+            img_quality_search: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6525,6 +6586,9 @@ mod tests {
                 img_tool_policy: None,
                 img_jpeg_effort: None,
                 img_jxl_effort: None,
+                img_jxl_effort_search: None,
+                img_jpeg_effort_search: None,
+                img_quality_search: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,

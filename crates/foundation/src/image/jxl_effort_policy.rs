@@ -2,7 +2,7 @@
 //!
 //! The policy is intentionally centralized so JPEG bitstream encode and
 //! direct JXL encode paths do not drift. Effort is an encoder policy, not a
-//! quality-search axis: every encode phase receives one policy-selected effort.
+//! quality-search axis: opt-in effort search selects one domain before quality search.
 //!
 //! ## Encoder tiers
 //! Direct pixel encoding inherits two bounded production tiers unless
@@ -24,6 +24,115 @@
 //! ```
 
 use crate::constants;
+
+/// Keep quality-parameter search separate from effort selection and source-quality inference.
+#[must_use]
+pub fn quality_search_enabled(default: bool) -> bool {
+    crate::runtime_config::active()
+        .map_or(default, |config| config.img.quality_search.enabled(default))
+}
+
+/// Bounded effort candidates; the selected fixed value is an upper bound in adaptive mode.
+#[must_use]
+pub fn effort_candidates(kind: JxlEffortContext, upper: u8) -> Vec<u8> {
+    use crate::runtime_config::EffortSearch;
+    let strategy = crate::runtime_config::active().map(|config| match kind {
+        JxlEffortContext::DirectEncode => config.img.jxl_effort_search,
+        JxlEffortContext::JpegLosslessTranscode => config.img.jpeg_effort_search,
+    });
+    if strategy != Some(EffortSearch::Adaptive) {
+        return vec![upper];
+    }
+    let domain: &[u8] = match kind {
+        JxlEffortContext::DirectEncode => &[7, 8, 10],
+        JxlEffortContext::JpegLosslessTranscode => &[1, 7, 8, 10, 11],
+    };
+    let mut efforts: Vec<u8> = domain
+        .iter()
+        .copied()
+        .filter(|effort| *effort < upper)
+        .collect();
+    efforts.push(upper);
+    efforts
+}
+
+/// Compare verified payloads at one immutable input/quality domain, retaining the lower effort on ties.
+/// A single candidate preserves the fixed path, including its caller's verification and fallback.
+/// # Errors
+/// Rejects invalid plans, changed inputs, I/O or verification failures; no partial winner is published.
+pub fn run_effort_search<T>(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    efforts: &[u8],
+    mut run: impl FnMut(u8, &std::path::Path) -> anyhow::Result<T>,
+    successful: impl Fn(&T) -> bool,
+    mut verify_payload: impl FnMut(&std::path::Path) -> anyhow::Result<u64>,
+) -> anyhow::Result<(T, u8)> {
+    use anyhow::Context;
+    anyhow::ensure!(
+        !efforts.is_empty()
+            && efforts.iter().all(|effort| (1..=11).contains(effort))
+            && efforts.windows(2).all(|pair| pair[0] < pair[1]),
+        "invalid effort search plan"
+    );
+    if let [effort] = efforts {
+        return Ok((run(*effort, output)?, *effort));
+    }
+    let identity = crate::common_utils::calculate_blake3_hash(input)?;
+    let parent = output.parent().context("effort search output parent")?;
+    let scratch = tempfile::Builder::new()
+        .prefix("mfb-effort-")
+        .tempdir_in(parent)?;
+    let mut best = None;
+    for effort in efforts {
+        let candidate = scratch.path().join(format!("e{effort}.jxl"));
+        let started = std::time::Instant::now();
+        let observation = run(*effort, &candidate)?;
+        if !successful(&observation) {
+            anyhow::ensure!(
+                crate::common_utils::calculate_blake3_hash(input)? == identity,
+                "effort search input changed during failed encoding"
+            );
+            crate::log_detail!(&format!(
+                "Effort search stopped at requested e{effort}: encoder failure; no candidate selected"
+            ));
+            return Ok((observation, *effort));
+        }
+        anyhow::ensure!(
+            std::fs::symlink_metadata(&candidate)?.file_type().is_file(),
+            "effort search candidate is not a regular file"
+        );
+        let size = verify_payload(&candidate)?;
+        anyhow::ensure!(size > 0, "effort search candidate has no media payload");
+        anyhow::ensure!(
+            crate::common_utils::calculate_blake3_hash(input)? == identity,
+            "effort search input changed"
+        );
+        crate::log_detail!(&format!(
+            "Effort search candidate requested e{effort}: payload={size}B, elapsed_ms={}",
+            started.elapsed().as_millis()
+        ));
+        if best
+            .as_ref()
+            .is_none_or(|(_, _, previous_size, _)| size < *previous_size)
+        {
+            best = Some((observation, *effort, size, candidate));
+        }
+    }
+    let (observation, effort, size, candidate) =
+        best.context("effort search has no verified candidate")?;
+    anyhow::ensure!(
+        crate::common_utils::calculate_blake3_hash(input)? == identity,
+        "effort search input changed before selection"
+    );
+    std::fs::rename(candidate, output)
+        .context("publish selected effort candidate to caller staging")?;
+    crate::log_detail!(&format!(
+        "Effort search selected requested e{effort}: payload={size}B, tried={} (permitted compatibility retries are logged separately; final delivery verification remains required)",
+        efforts.len()
+    ));
+    Ok((observation, effort))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JxlEffortPlan {
@@ -54,10 +163,15 @@ pub fn encoder_effort(ultimate: bool) -> u8 {
 /// The default is caller-specific: mode effort for most sources, e10 for PNG.
 #[must_use]
 pub fn direct_encoder_effort(default: u8) -> u8 {
-    resolve_direct_effort(
-        crate::infra::runtime_config::active().and_then(|config| config.img.jxl_effort),
-        default,
-    )
+    let configured = crate::infra::runtime_config::active();
+    let default = if configured.is_some_and(|config| {
+        config.img.jxl_effort_search == crate::runtime_config::EffortSearch::Adaptive
+    }) {
+        constants::JXL_ULTIMATE_EFFORT
+    } else {
+        default
+    };
+    resolve_direct_effort(configured.and_then(|config| config.img.jxl_effort), default)
 }
 
 fn resolve_direct_effort(configured: Option<u8>, default: u8) -> u8 {
@@ -89,9 +203,9 @@ pub fn effort_plan_for_mode(
 
 /// Build the encoder-effort plan.
 ///
-/// The returned vector intentionally contains one item. Quality exploration
-/// may vary distance, but it must not run extra encodes merely to rank effort
-/// levels by output size. JPEG bitstream transcode is deliberately isolated
+/// The final-domain plan intentionally contains one item. Explicit effort search
+/// selects that domain separately; quality exploration then varies distance at
+/// one effort. JPEG bitstream transcode is deliberately isolated
 /// from direct pixel encoding because its e11 implementation has different
 /// performance characteristics.
 #[must_use]
@@ -112,6 +226,73 @@ fn jpeg_transcode_effort(configured: Option<u8>) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_search_selects_measured_payload_and_keeps_source_and_prior_output_on_failure()
+    -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::write(&source, b"synthetic opaque input")?;
+        let (observed, effort) = run_effort_search(
+            &source,
+            &output,
+            &[7, 8, 10],
+            |effort, candidate| {
+                std::fs::write(candidate, vec![b'x'; if effort == 7 { 40 } else { 20 }])?;
+                Ok(effort)
+            },
+            |_| true,
+            |candidate| Ok(std::fs::metadata(candidate)?.len()),
+        )?;
+        assert_eq!((observed, effort), (8, 8));
+        assert_eq!(std::fs::metadata(&output)?.len(), 20);
+        let prior = std::fs::read(&output)?;
+        for cause in ["verification", "mutation", "launch"] {
+            std::fs::write(&source, b"synthetic opaque input")?;
+            let result = run_effort_search(
+                &source,
+                &output,
+                &[7, 8],
+                |effort, candidate| {
+                    if effort == 8 && cause == "launch" {
+                        anyhow::bail!("synthetic launch failure");
+                    }
+                    std::fs::write(candidate, b"opaque candidate")?;
+                    if effort == 8 && cause == "mutation" {
+                        std::fs::write(&source, b"changed source")?;
+                    }
+                    Ok(effort)
+                },
+                |_| true,
+                |candidate| {
+                    if cause == "verification" {
+                        anyhow::bail!("synthetic verification failure");
+                    }
+                    Ok(std::fs::metadata(candidate)?.len())
+                },
+            );
+            assert!(result.is_err(), "{cause} must not publish a partial winner");
+            assert_eq!(std::fs::read(&output)?, prior);
+        }
+        let (success, _) = run_effort_search(
+            &source,
+            &output,
+            &[7, 8],
+            |_, _| Ok(false),
+            |value| *value,
+            |_| unreachable!(),
+        )?;
+        assert!(!success);
+        assert_eq!(std::fs::read(&output)?, prior);
+        let remaining = std::fs::read_dir(root.path())?.collect::<std::io::Result<Vec<_>>>()?;
+        assert_eq!(remaining.len(), 2, "owned search staging leaked");
+        assert!(!crate::runtime_config::QualitySearch::Fixed.enabled(true));
+        assert!(crate::runtime_config::QualitySearch::Adaptive.enabled(false));
+        assert!(crate::runtime_config::QualitySearch::ModeDefault.enabled(true));
+        assert!(!crate::runtime_config::QualitySearch::ModeDefault.enabled(false));
+        Ok(())
+    }
 
     fn efforts(plan: &[JxlEffortPlan]) -> Vec<u8> {
         plan.iter().map(|item| item.effort()).collect()
@@ -224,6 +405,8 @@ mod tests {
             let mut config = crate::infra::runtime_config::RuntimeConfig::default();
             config.img.jxl_effort = Some(effort);
             config.img.jpeg_effort = 9;
+            config.img.jxl_effort_search = crate::runtime_config::EffortSearch::Adaptive;
+            config.img.jpeg_effort_search = crate::runtime_config::EffortSearch::Adaptive;
             config.tools.paths.insert(
                 "cjxl".into(),
                 std::path::PathBuf::from(
@@ -232,6 +415,17 @@ mod tests {
                 .join("missing-cjxl"),
             );
             crate::infra::runtime_config::install(config)?;
+            assert_eq!(
+                effort_candidates(JxlEffortContext::DirectEncode, effort),
+                [7, 8, 10]
+                    .into_iter()
+                    .filter(|candidate| *candidate <= effort)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                effort_candidates(JxlEffortContext::JpegLosslessTranscode, 9),
+                vec![1, 7, 8, 9]
+            );
             for (ultimate, archive) in [(false, false), (true, false), (false, true)] {
                 assert_eq!(encoder_effort_for_mode(ultimate, archive), effort);
                 assert_eq!(

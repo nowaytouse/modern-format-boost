@@ -144,6 +144,9 @@ pub struct ImgPolicy {
     pub jpeg_effort: u8,
     /// Direct pixel JXL encoding only; None retains the normal/ultimate or PNG effort.
     pub jxl_effort: Option<u8>,
+    pub jxl_effort_search: EffortSearch,
+    pub jpeg_effort_search: EffortSearch,
+    pub quality_search: QualitySearch,
     pub fallback_policy: FallbackPolicy,
 }
 
@@ -157,6 +160,34 @@ pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
         Ok(effort)
     } else {
         Err("direct JXL effort must be 7, 8 or 10".into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffortSearch {
+    #[default]
+    Fixed,
+    Adaptive,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum QualitySearch {
+    #[default]
+    ModeDefault,
+    Fixed,
+    Adaptive,
+}
+
+impl QualitySearch {
+    #[must_use]
+    pub const fn enabled(self, default: bool) -> bool {
+        match self {
+            Self::ModeDefault => default,
+            Self::Fixed => false,
+            Self::Adaptive => true,
+        }
     }
 }
 
@@ -195,6 +226,9 @@ impl Default for ImgPolicy {
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             jpeg_effort: 11,
             jxl_effort: None,
+            jxl_effort_search: EffortSearch::Fixed,
+            jpeg_effort_search: EffortSearch::Fixed,
+            quality_search: QualitySearch::ModeDefault,
             fallback_policy: FallbackPolicy::Strict,
         }
     }

@@ -10,6 +10,9 @@
     "size_tolerance_bytes": 524288,
     "jpeg_effort": 11,
     "jxl_effort": null,
+    "jxl_effort_search": "fixed",
+    "jpeg_effort_search": "fixed",
+    "quality_search": "mode-default",
     "fallback_policy": "strict"
   },
   "vid": {

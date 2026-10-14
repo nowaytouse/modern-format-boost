@@ -661,6 +661,9 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    if let Commands::FastImg { strategy, .. } = &cli.command {
+        cli.policy.validate_fast_strategy(strategy)?;
+    }
     cli.policy.validate_size_tolerance_scope(matches!(
         cli.command,
         Commands::Run { .. } | Commands::Config { .. }
@@ -5076,6 +5079,7 @@ fn explore_avif_meme_quality(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> AvifQualityExploreResult {
     const COARSE_STEP: u8 = 10;
+    let search_enabled = foundation::jxl_effort_policy::quality_search_enabled(true);
     let source_pure_media_size = match source_pure_media_size(source, format) {
         Ok(size) => size,
         Err(error) => {
@@ -5111,14 +5115,21 @@ fn explore_avif_meme_quality(
                 if candidate.quality == 100 {
                     return AvifQualityExploreResult::Found {
                         domain: avif_meme_speed_domain().encoder_domain(),
-                        outcome:
-                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
+                        outcome: if search_enabled {
+                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized
+                        } else {
+                            foundation::exploration_policy::ExplorationOutcome::Adopted
+                        },
                         quality: candidate.quality,
                         temp_path: candidate.temp_path,
                         output_size: candidate.output_size,
                         pure_media_size: candidate.pure_media_size,
                         content_blake3: candidate.content_blake3,
-                        selection: "highest_verified_fitting",
+                        selection: if search_enabled {
+                            "highest_verified_fitting"
+                        } else {
+                            "fixed_verified_quality"
+                        },
                     };
                 }
                 current_passed_candidate = Some(candidate);
@@ -5146,7 +5157,7 @@ fn explore_avif_meme_quality(
             }
         }
 
-        if coarse_quality == AVIF_MEME_MIN_QUALITY {
+        if !search_enabled || coarse_quality == AVIF_MEME_MIN_QUALITY {
             break;
         }
         if coarse_quality == 100 && locator_needed && !locator_attempted {
@@ -5233,7 +5244,12 @@ fn explore_avif_meme_quality(
 
     AvifQualityExploreResult::SourceUnavailable {
         reason: format!(
-            "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
+            "no AVIF candidate passed the Meme Mode quality gate at q={}{}",
+            if search_enabled {
+                format!("100..={AVIF_MEME_MIN_QUALITY}")
+            } else {
+                "100 (fixed; no lower qualities attempted)".to_owned()
+            },
             last_probe_error
                 .as_deref()
                 .map_or_else(String::new, |reason| format!(

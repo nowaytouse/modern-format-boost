@@ -40,6 +40,8 @@ img --config /path/to/preferences.json config show --effective
 img run /path/to/images --allow-database --quality-heuristic
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
 img run /path/to/images --jxl-effort 8
+img run /path/to/images --jxl-effort-search adaptive --jxl-effort 8 --quality-search fixed
+img fast-img /path/to/images --jpeg-effort-search adaptive --jpeg-effort 11
 img fast-img /path/to/images --fallback-policy same-semantics --tool-policy single
 img fast-img /path/to/images --shortest-path --photos-backend native \
   --photos-import-root Archive --photos-album-name Family \
@@ -83,11 +85,46 @@ inherits lower-priority configuration; `null` selects the existing mode policy:
 normal e7, ultimate/archive e10 and PNG e10. Explicit values must be **7, 8 or 10**;
 other efforts, including retired e9 and experimental e11, are rejected rather
 than clamped or substituted. Direct IMG uses `--jxl-effort`; the launcher uses
-`--img-jxl-effort` for standard and Fast IMG, not video or maintenance operations.
-The shared immutable runtime configuration selects one effort for encoding,
-probes, guarded recovery and distance exploration, including the direct HDR
-paths. `jpeg_effort` independently controls reversible JPEG reconstruction.
-Neither field changes distance, source semantics or required fidelity checks.
+`--img-jxl-effort` for standard IMG, not Fast IMG, video or maintenance operations.
+Fast IMG JXL uses JPEG reconstruction, not direct pixel encoding; explicit direct
+effort/search flags there are rejected. `jpeg_effort` independently controls
+reversible JPEG reconstruction and is not accepted for Fast IMG AVIF.
+
+Effort selection and quality-parameter search are independent:
+
+- `img.jxl_effort_search` and `img.jpeg_effort_search` default to `fixed` and accept
+  `adaptive`. Fixed preserves the existing single-effort path. In adaptive mode,
+  the respective effort value is a ceiling, not the final selected effort.
+  Unset direct JXL effort gives an adaptive ceiling of 10. Pixel candidates are
+  7/8/10 below the ceiling plus the ceiling; JPEG candidates are 1/7/8/10/11 below
+  the ceiling plus the ceiling. This is a bounded comparison, not exhaustive
+  JPEG 1..11 search or a globally optimal compression guarantee.
+- Multi-candidate comparisons check the same source hash before/after encoding
+  and before selection, using the same quality parameters. A one-candidate plan
+  retains the existing fixed path and its final gates without extra search I/O. Each pixel
+  candidate must pass JXL health/payload checks; JPEG candidates must also
+  reconstruct the exact source bytes. The smallest verified media payload wins,
+  with lower requested effort retained on ties. Source changes, encoder and
+  verification errors stop selection without publishing a partial winner.
+  Permitted JPEG compatibility retries remain governed by fallback policy and
+  are logged separately from the requested effort. Final delivery/metadata
+  checks remain mandatory. Adaptive mode adds encoding, hashing and verification
+  work; it is not a speed mode. Quality probes and guarded recovery use a single
+  selected domain rather than rerunning effort search for each quality value.
+- `img.quality_search` accepts `mode-default` (the default), `fixed` or `adaptive`.
+  It controls existing quality exploration, not source-quality inference.
+  Standard JXL distance exploration still requires confirmed-lossy non-JPEG
+  input of at least 1 MiB and excludes genuine PNG; enabling search cannot relax
+  source semantics or delivery gates. It starts at d0 and searches only when
+  required by the existing size gate. Fast IMG AVIF adaptive/default uses the
+  existing q search; fixed tries only verified q100 and reports that exact scope
+  if it cannot fit. Fast IMG JXL rejects explicit quality-search flags because
+  it reconstructs JPEG bytes rather than varying pixel quality.
+
+Worker flags use `--jxl-effort-search`, `--jpeg-effort-search`, `--quality-search`;
+launcher overrides prefix these with `--img-`. Explicit options outside their
+workflow scope fail rather than being silently ignored. Defaults, format routing,
+source preservation and all required fidelity checks remain unchanged.
 
 ### Native GUI Overrides
 
@@ -97,8 +134,12 @@ independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Standard IMG preferences are never
 copied into Fast IMG on read; each workflow uses its own saved overrides and the
 backend's effective configuration. Existing independent preferences stay intact.
-Developer adds independent standard/Fast IMG direct JXL effort menus with 7, 8,
-10 and inheritance. An unchanged inherited control does not save an override;
+The ordinary Image tab provides direct JXL effort choices 7, 8 and 10 and
+independent effort/quality search modes; JPEG effort is a numeric 1..11 menu.
+Adaptive mode relabels the numeric value as a search limit. Fast JXL shows only
+its JPEG controls; Fast AVIF shows quality search instead of ineffective JXL
+controls. Each workflow retains independent preferences.
+An unchanged inherited control does not save an override;
 explicit selection retains one, and reset removes it without changing JSON.
 Search locates the original setting by localized label, section or choice. In
 Developer mode, runtime keys and flags are searchable too. Results include only
@@ -107,9 +148,11 @@ reveals it without changing its value. Search and navigation preserve the draft.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure
-policies and image tool selection appear only in Developer mode, enabled in About.
+policies appear only in Developer mode, enabled in About. Image tool selection
+is an ordinary Image/Fast IMG processing preference.
 Video exposes HEVC/AV1 in Settings, plus an independent developer configuration
-file, file-error mode and long-video fusion quality checks. The latter is typed
+file and file-error mode. Long-video fusion quality checks are an ordinary Video
+preference. The latter is typed
 `vid.force_ms_ssim_long`, default `false`; direct standard VID uses
 `--force-ms-ssim-long[=true|false]`, and the launcher uses
 `--vid-force-ms-ssim-long[=true|false]`. Omission inherits the file setting, explicit
@@ -140,7 +183,8 @@ show an unknown inherited value, never a fabricated continue policy. When standa
 IMG and VID inherit different performance modes, the mixed workflow offers
 "Use each pipeline's configuration" rather than fabricating one shared mode;
 only an explicit shared selection overrides both. Developer
-tooltips include configuration keys and sources. Numeric fields use steppers;
+tooltips include configuration keys and sources. Efforts use numeric menus;
+other numeric fields use steppers;
 quality inference/database use Enabled/Disabled menus and Photos booleans use
 ordinary two-state checkboxes. Apply
 validates the relevant standard/Fast IMG and VID profiles, including adaptive
@@ -154,7 +198,8 @@ remains owned by the shared Rust model. Tool executable paths remain available t
 direct `img --tool` overrides.
 
 The launcher accepts `--img-config`, `--img-fallback-policy`,
-`--img-jpeg-effort`, `--img-jxl-effort`, `--img-quality-heuristic=true|false`,
+`--img-jpeg-effort`, `--img-jxl-effort`, `--img-jpeg-effort-search`,
+`--img-jxl-effort-search`, `--img-quality-search`, `--img-quality-heuristic=true|false`,
 `--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
 `--vid-error-mode`, plus `--vid-force-ms-ssim-long=true|false`. Error modes are `log-and-continue` and `fail-fast`; overrides
 are forwarded as typed worker `--error-mode` flags, including PTY launches, without
@@ -222,6 +267,9 @@ chosen after runtime fallback are not yet part of this record.
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11; independent of direct pixel encoding. |
 | `img.jxl_effort` | `null` | Direct pixel JXL effort, only 7, 8 or 10. `null` retains normal e7, ultimate/archive e10 and PNG e10. `--jxl-effort` overrides files; distance and verification are unchanged. |
+| `img.jxl_effort_search` | `fixed` | Independent direct pixel effort selection: fixed, or bounded verified adaptive search with `jxl_effort` as its ceiling (10 when unset). Standard IMG only. |
+| `img.jpeg_effort_search` | `fixed` | Independent JPEG effort selection: fixed, or bounded verified adaptive search with `jpeg_effort` as its ceiling. Every candidate must reconstruct exact source JPEG bytes. Standard IMG and Fast JXL. |
+| `img.quality_search` | `mode-default` | Existing quality-parameter search: processing defaults, fixed (no search), or adaptive. Standard JXL source restrictions and Fast AVIF quality/delivery gates remain required. Not source-quality inference. |
 | `img.fallback_policy` | `strict` | `strict`: one requested JPEG encode attempt. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
 | `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |

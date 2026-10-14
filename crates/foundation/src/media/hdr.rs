@@ -279,10 +279,28 @@ pub fn convert_heic_with_gainmap_to_jxl(
         );
     }
 
-    let status = builder
-        .build()
-        .status()
-        .context("Failed to execute cjxl for HDR synthesis")?;
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        actual_effort,
+    );
+    let (status, _) = crate::jxl_effort_policy::run_effort_search(
+        &tmp_file,
+        output,
+        &efforts,
+        |effort, candidate| {
+            builder
+                .output(candidate)
+                .effort(effort)
+                .build()
+                .status()
+                .context("Failed to execute cjxl for HDR synthesis")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !status.success() {
         if tmp_file.exists() {
@@ -449,10 +467,28 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         );
     }
 
-    let status = builder
-        .build()
-        .status()
-        .context("Failed to execute cjxl for HDR synthesis")?;
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        actual_effort,
+    );
+    let (status, _) = crate::jxl_effort_policy::run_effort_search(
+        &tmp_file,
+        output,
+        &efforts,
+        |effort, candidate| {
+            builder
+                .output(candidate)
+                .effort(effort)
+                .build()
+                .status()
+                .context("Failed to execute cjxl for HDR synthesis")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !status.success() {
         if tmp_file.exists() {
@@ -514,16 +550,40 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     let extracted = extract_ultrahdr_jpeg_payload(&data)
         .map_err(|e| anyhow!("Failed to extract gainmap for migration: {e}"))?;
 
-    let encode_status = CjxlBuilder::new()
-        .input(input)
-        .output(output)
-        .lossless_jpeg(true)
-        .distance(actual_distance)
-        .effort(actual_effort)
-        .apple_compat(apple_compat)
-        .build()
-        .status()
-        .context("Failed to spawn cjxl for UltraHDR migration")?;
+    let upper = match crate::runtime_config::active() {
+        Some(config)
+            if config.img.jpeg_effort_search == crate::runtime_config::EffortSearch::Adaptive =>
+        {
+            config.img.jpeg_effort
+        }
+        _ => actual_effort,
+    };
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+        upper,
+    );
+    let (encode_status, _) = crate::jxl_effort_policy::run_effort_search(
+        input,
+        output,
+        &efforts,
+        |effort, candidate| {
+            CjxlBuilder::new()
+                .input(input)
+                .output(candidate)
+                .lossless_jpeg(true)
+                .distance(actual_distance)
+                .effort(effort)
+                .apple_compat(apple_compat)
+                .build()
+                .status()
+                .context("Failed to spawn cjxl for UltraHDR migration")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !encode_status.success() {
         return Err(anyhow!(

@@ -1132,17 +1132,25 @@ pub fn convert_to_jxl(
 
     let exploration_requested = !is_genuine_png
         && input_size_allows_jxl_distance_exploration(input_size)
-        && options.ultimate()
-        && options.explore()
-        && !options.archive();
+        && foundation::jxl_effort_policy::quality_search_enabled(
+            options.ultimate() && options.explore() && !options.archive(),
+        );
     let is_extreme_explore =
         exploration_requested && jxl_distance_exploration_allowed(source_semantics);
+    if runtime_config::active()
+        .is_some_and(|config| config.img.quality_search == runtime_config::QualitySearch::Adaptive)
+        && !is_extreme_explore
+    {
+        log_detail!(&format!(
+            "Quality search not applicable: source={source_semantics:?}, genuine_png={is_genuine_png}, input_bytes={input_size}; confirmed-lossy non-JPEG input of at least {JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES} bytes is required"
+        ));
+    }
     let actual_dist = if is_extreme_explore {
         0.0
     } else {
         resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)
     };
-    let actual_eff = if is_genuine_png {
+    let mut actual_eff = if is_genuine_png {
         foundation::jxl_effort_policy::direct_encoder_effort(
             foundation::image::png_validation::PNG_LOSSLESS_JXL_EFFORT,
         )
@@ -1187,16 +1195,39 @@ pub fn convert_to_jxl(
         ));
     }
 
-    let result = run_direct_jxl_encode_with_policy(
+    let efforts = foundation::jxl_effort_policy::effort_candidates(
+        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        actual_eff,
+    );
+    let result = foundation::jxl_effort_policy::run_effort_search(
         &actual_input,
         &temp_output,
-        actual_dist,
-        max_threads,
-        options.flags,
-        icc_path,
-        color_info,
-        &effort_plan,
-    );
+        &efforts,
+        |effort, output| {
+            run_direct_jxl_encode_with_effort(
+                &actual_input,
+                output,
+                actual_dist,
+                effort,
+                max_threads,
+                options.flags,
+                icc_path,
+                color_info,
+            )
+            .map_err(anyhow::Error::from)
+        },
+        |observation| observation.status.success(),
+        |candidate| {
+            foundation::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            foundation::image::static_payload::jxl(candidate)
+        },
+    )
+    .map(|(observation, selected)| {
+        actual_eff = selected;
+        observation
+    })
+    .map_err(|error| JxlDirectEncodeError::Conversion(error.to_string()));
+    let effort_plan = vec![JxlEffortPlan::Single(actual_eff)];
 
     let result = match result {
         Ok(output_cmd) if !output_cmd.status.success() => {
@@ -1879,14 +1910,42 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
     let plan = jpeg_lossless_encode_plan(mode, options);
     match plan.as_slice() {
-        [JxlEffortPlan::Single(effort)] => run_cjxl_jpeg_encode_with_effort(
-            input,
-            temp_output,
-            options,
-            max_threads,
-            allow_jpeg_reconstruction,
-            *effort,
-        ),
+        [JxlEffortPlan::Single(effort)] => {
+            let efforts = if matches!(
+                mode,
+                JpegLosslessTranscodePlanMode::Policy
+                    | JpegLosslessTranscodePlanMode::AggressiveE11
+            ) && allow_jpeg_reconstruction != Some(0)
+            {
+                foundation::jxl_effort_policy::effort_candidates(
+                    foundation::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+                    *effort,
+                )
+            } else {
+                vec![*effort]
+            };
+            foundation::jxl_effort_policy::run_effort_search(
+                input,
+                temp_output,
+                &efforts,
+                |selected, candidate| {
+                    run_cjxl_jpeg_encode_with_effort(
+                        input,
+                        candidate,
+                        options,
+                        max_threads,
+                        allow_jpeg_reconstruction,
+                        selected,
+                    )
+                },
+                |observation| observation.status.success(),
+                |candidate| {
+                    foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
+                    foundation::image::static_payload::jxl(candidate)
+                },
+            )
+            .map(|(observation, _)| observation)
+        }
         _ => anyhow::bail!(
             "JPEG lossless encoder policy must select exactly one effort; got {} entries",
             plan.len()
@@ -4363,16 +4422,35 @@ pub fn convert_to_jxl_matched(
         max_threads
     ));
 
-    let result = run_direct_jxl_encode_with_policy(
+    let efforts = foundation::jxl_effort_policy::effort_candidates(
+        foundation::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        effort_plan[0].effort(),
+    );
+    let result = foundation::jxl_effort_policy::run_effort_search(
         input,
         &temp_output,
-        actual_dist,
-        max_threads,
-        options.flags,
-        None,
-        None,
-        &effort_plan,
-    );
+        &efforts,
+        |effort, candidate| {
+            run_direct_jxl_encode_with_effort(
+                input,
+                candidate,
+                actual_dist,
+                effort,
+                max_threads,
+                options.flags,
+                None,
+                None,
+            )
+            .map_err(anyhow::Error::from)
+        },
+        |observation| observation.status.success(),
+        |candidate| {
+            foundation::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            foundation::image::static_payload::jxl(candidate)
+        },
+    )
+    .map(|(observation, _)| observation)
+    .map_err(|error| JxlDirectEncodeError::Conversion(error.to_string()));
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {

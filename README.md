@@ -69,13 +69,13 @@ Settings now has a dedicated **Videos** tab. Standard VID supports independent
 `--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
 The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
 delivery, while an explicitly conflicting Apple-compatibility request is rejected.
-Developer settings also expose long-video fusion quality checks through typed
+The ordinary Videos tab exposes long-video fusion quality checks through typed
 `vid.force_ms_ssim_long` (default `false`). Standard VID accepts
 `--force-ms-ssim-long[=true|false]`; omission inherits configuration, and explicit
 `false` overrides an enabled file setting. The launcher uses the independent
 `--vid-force-ms-ssim-long` override. This can increase validation time; it does not
 change codec routing or reduce other checks, and is not a Fast GIF option.
-Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
+Image and Fast IMG tool selection (`single`/`fallback`) lives in their processing tabs
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
 IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
@@ -888,8 +888,10 @@ adapter.
 The gear button remains available in every idle workflow. Its **Photos** tab
 always exposes import preferences, including the backend, import and verification
 batch sizes, adaptive bounds, folder and album names. Image controls
-are contextual: standard IMG and Fast IMG independently configure JPEG
-transcoding effort, fallback, database access and quality inference. Developer
+are contextual: standard IMG offers pixel JXL effort 7/8/10, JPEG effort 1..11,
+separate effort and quality search, fallback, database access and quality inference.
+Fast JXL offers JPEG effort/search, while Fast AVIF offers quality search; controls
+that do not affect the selected workflow are not shown or forwarded. Developer
 mode additionally exposes configuration-file overrides and standard image/video
 failure handling. Inherited image/Photos values are read
 from the actual backend, and Apply validates both image profiles before saving.
@@ -1425,6 +1427,7 @@ img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
 img run /path/to/images --jxl-effort 8
+img run /path/to/images --jxl-effort-search adaptive --jxl-effort 8 --quality-search fixed
 vid --performance adaptive run /path/to/videos
 ```
 
@@ -1436,12 +1439,17 @@ The GUI shows effective choices directly, keeps image settings contextual to
 the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
 Photos batch sizes expand on demand; failure policies and configuration sources
 belong to Developer mode, enabled from About.
-Developer also offers independent standard/Fast IMG direct JXL effort choices
-of 7, 8 or 10. JSON `img.jxl_effort` defaults to `null`, retaining normal e7,
-ultimate/archive e10 and PNG e10; `img --jxl-effort` or launcher
-`--img-jxl-effort` explicitly overrides that choice. GUI inheritance removes only
-its override and does not rewrite JSON. This controls encoder effort, not distance
-or verification; JPEG reconstruction retains its separate `jpeg_effort` policy.
+The ordinary Image tab offers direct JXL efforts 7/8/10 and JPEG efforts 1..11.
+Both have independent fixed/adaptive effort selection, separate from quality
+parameter search. Fixed keeps mode/PNG defaults when `img.jxl_effort` is null;
+adaptive uses the numeric value as a ceiling (direct JXL defaults to 10), comparing
+bounded verified candidates at the same quality and retaining lower effort on ties.
+Every JPEG candidate must reconstruct the exact source bytes; all final gates stay
+mandatory. Adaptive adds work and does not guarantee higher speed or a global
+optimum. Quality search defaults to the existing workflow and can independently
+be fixed/adaptive; genuine PNG and reversible JPEG do not gain lossy exploration.
+GUI inheritance removes only its override and never rewrites JSON. Fast IMG JXL
+uses JPEG controls, not pixel JXL effort; Fast AVIF uses quality search, not JPEG effort.
 JPEG retries now default to `strict`; `same-semantics` permits original-byte
 compatibility retries, and `repair` enables existing guarded recovery paths.
 No preference disables exact reconstruction, metadata checks or Photos custody

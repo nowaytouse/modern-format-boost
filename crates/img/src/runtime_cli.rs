@@ -46,6 +46,14 @@ pub(super) struct RuntimeArgs {
     /// Effort for direct pixel JXL encoding (7, 8 or 10); omission retains the saved or mode effort.
     #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
     jxl_effort: Option<u8>,
+    /// Fixed effort or bounded verified candidate exploration; the effort value caps the search.
+    #[arg(long, global = true, value_enum)]
+    jxl_effort_search: Option<runtime_config::EffortSearch>,
+    #[arg(long, global = true, value_enum)]
+    jpeg_effort_search: Option<runtime_config::EffortSearch>,
+    /// Quality-parameter search, independent of source inference and effort search.
+    #[arg(long, global = true, value_enum)]
+    quality_search: Option<runtime_config::QualitySearch>,
     #[command(flatten)]
     photos: PhotosArgs,
     #[command(flatten)]
@@ -75,6 +83,21 @@ pub(super) enum ConfigCommand {
 }
 
 impl RuntimeArgs {
+    pub(crate) fn validate_fast_strategy(&self, strategy: &str) -> Result<()> {
+        anyhow::ensure!(
+            self.jxl_effort.is_none() && self.jxl_effort_search.is_none(),
+            "Fast IMG does not directly encode JXL pixels; use JPEG effort for JXL strategy"
+        );
+        anyhow::ensure!(
+            strategy != "avif" || (self.jpeg_effort.is_none() && self.jpeg_effort_search.is_none()),
+            "JPEG effort settings do not apply to Fast IMG AVIF"
+        );
+        anyhow::ensure!(
+            strategy != "jxl" || self.quality_search.is_none(),
+            "Fast IMG JXL reconstructs exact JPEG bytes and has no quality search"
+        );
+        Ok(())
+    }
     pub(crate) fn inspect(&self, command: &ConfigCommand) -> Result<()> {
         match command {
             ConfigCommand::Show { .. } => println!("{}", self.resolve(false)?.to_json(true)?),
@@ -220,6 +243,27 @@ impl RuntimeArgs {
             source_chain,
             "img.jxl_effort",
         );
+        apply(
+            self.jxl_effort_search,
+            &mut config.img.jxl_effort_search,
+            sources,
+            source_chain,
+            "img.jxl_effort_search",
+        );
+        apply(
+            self.jpeg_effort_search,
+            &mut config.img.jpeg_effort_search,
+            sources,
+            source_chain,
+            "img.jpeg_effort_search",
+        );
+        apply(
+            self.quality_search,
+            &mut config.img.quality_search,
+            sources,
+            source_chain,
+            "img.quality_search",
+        );
         self.photos.apply_to(&mut loaded);
         self.performance.apply_to(&mut loaded);
         self.execution.apply_to(&mut loaded);
@@ -233,6 +277,71 @@ impl RuntimeArgs {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn fast_search_flags_reject_inapplicable_encoder_scopes() -> Result<()> {
+        let fast = crate::Cli::try_parse_from([
+            "img",
+            "fast-img",
+            "/unused",
+            "--jxl-effort-search",
+            "adaptive",
+        ])?;
+        assert!(fast.policy.validate_fast_strategy("jxl").is_err());
+        let fast = crate::Cli::try_parse_from([
+            "img",
+            "fast-img",
+            "/unused",
+            "--quality-search",
+            "fixed",
+        ])?;
+        assert!(fast.policy.validate_fast_strategy("jxl").is_err());
+        fast.policy.validate_fast_strategy("avif")?;
+        Ok(())
+    }
+
+    #[test]
+    fn search_modes_are_independent_typed_overrides() -> Result<()> {
+        let loaded = crate::Cli::try_parse_from([
+            "img",
+            "config",
+            "show",
+            "--no-config",
+            "--jxl-effort-search",
+            "adaptive",
+            "--jpeg-effort-search",
+            "fixed",
+            "--quality-search",
+            "adaptive",
+        ])?
+        .policy
+        .resolve(false)?;
+        assert_eq!(
+            loaded.config.img.jxl_effort_search,
+            runtime_config::EffortSearch::Adaptive
+        );
+        assert_eq!(
+            loaded.config.img.jpeg_effort_search,
+            runtime_config::EffortSearch::Fixed
+        );
+        assert_eq!(
+            loaded.config.img.quality_search,
+            runtime_config::QualitySearch::Adaptive
+        );
+        assert_eq!(loaded.config.img.jpeg_effort, 11);
+        for key in [
+            "img.jxl_effort_search",
+            "img.jpeg_effort_search",
+            "img.quality_search",
+        ] {
+            assert_eq!(loaded.sources[key], "CLI");
+        }
+        assert!(
+            crate::Cli::try_parse_from(["img", "config", "show", "--quality-search", "automatic"])
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn direct_jxl_effort_flags_preserve_saved_values_and_reconstruction_policy() -> Result<()> {
