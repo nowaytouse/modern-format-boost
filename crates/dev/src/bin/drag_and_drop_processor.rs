@@ -182,14 +182,18 @@ struct Args {
     /// JPEG reversible recompression effort, from 1 through 11.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
     img_jpeg_effort: Option<u8>,
+    #[arg(long, value_enum)]
+    img_jpeg_effort_search: Option<foundation::runtime_config::EffortSearch>,
 
-    /// JXL pixel encoding effort (7, 8 or 10); omitted preserves mode defaults.
+    /// Override pixel distance only where the private media policy permits lossy encoding.
+    #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
+    img_jxl_distance: Option<f32>,
+
+    /// Fixed JXL pixel effort, or the highest candidate when effort search is enabled.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_direct_jxl_effort)]
     img_jxl_effort: Option<u8>,
     #[arg(long, value_enum)]
     img_jxl_effort_search: Option<foundation::runtime_config::EffortSearch>,
-    #[arg(long, value_enum)]
-    img_jpeg_effort_search: Option<foundation::runtime_config::EffortSearch>,
     #[arg(long, value_enum)]
     img_quality_search: Option<foundation::runtime_config::QualitySearch>,
 
@@ -1004,7 +1008,7 @@ fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
         args.mode != LaunchMode::FastImg
             || args.strategy.as_deref() != Some("avif")
-            || args.img_jpeg_effort.is_none(),
+            || (args.img_jpeg_effort.is_none() && args.img_jpeg_effort_search.is_none()),
         "JPEG effort does not apply to Fast IMG AVIF"
     );
     anyhow::ensure!(
@@ -1014,11 +1018,10 @@ fn validate_media_options(args: &Args) -> Result<()> {
         "JXL pixel effort requires selected standard images; Fast IMG JXL performs JPEG reconstruction"
     );
     anyhow::ensure!(
-        args.img_jpeg_effort_search.is_none()
-            || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() != Some("avif"))
+        args.img_jxl_distance.is_none()
             || (matches!(args.mode, LaunchMode::Auto | LaunchMode::Images)
                 && processing_filter(args).accepts_image()),
-        "JPEG effort search requires standard images or Fast IMG JXL"
+        "JXL pixel distance requires standard images; Fast IMG does not use pixel distance"
     );
     anyhow::ensure!(
         args.img_quality_search.is_none()
@@ -1073,7 +1076,11 @@ fn validate_media_options(args: &Args) -> Result<()> {
         || args.img_fallback_policy.is_some()
         || args.img_tool_policy.is_some()
         || args.img_jpeg_effort.is_some()
+        || args.img_jpeg_effort_search.is_some()
+        || args.img_jxl_distance.is_some()
         || args.img_jxl_effort.is_some()
+        || args.img_jxl_effort_search.is_some()
+        || args.img_quality_search.is_some()
         || args.img_quality_heuristic.is_some()
         || args.img_allow_database.is_some()
         || args.img_error_mode.is_some();
@@ -1948,20 +1955,25 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
     if let Some(effort) = args.img_jpeg_effort {
         command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
     }
+    if let Some(strategy) = args.img_jpeg_effort_search {
+        let value = match strategy {
+            foundation::runtime_config::EffortSearch::Fixed => "fixed",
+            foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
+        };
+        command.extend(["--jpeg-effort-search".to_owned(), value.to_owned()]);
+    }
+    if let Some(distance) = args.img_jxl_distance {
+        command.extend(["--jxl-distance".to_owned(), distance.to_string()]);
+    }
     if let Some(effort) = args.img_jxl_effort {
         command.extend(["--jxl-effort".to_owned(), effort.to_string()]);
     }
-    for (flag, strategy) in [
-        ("--jxl-effort-search", args.img_jxl_effort_search),
-        ("--jpeg-effort-search", args.img_jpeg_effort_search),
-    ] {
-        if let Some(strategy) = strategy {
-            let value = match strategy {
-                foundation::runtime_config::EffortSearch::Fixed => "fixed",
-                foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
-            };
-            command.extend([flag.to_owned(), value.to_owned()]);
-        }
+    if let Some(strategy) = args.img_jxl_effort_search {
+        let value = match strategy {
+            foundation::runtime_config::EffortSearch::Fixed => "fixed",
+            foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
+        };
+        command.extend(["--jxl-effort-search".to_owned(), value.to_owned()]);
     }
     if let Some(strategy) = args.img_quality_search {
         let value = match strategy {
@@ -2316,7 +2328,7 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
         mode_label: mode_label(&args.mode).to_string(),
         target_type: target_type_label(args).to_string(),
         output_path: args.output.as_ref().map(|p| p.display().to_string()),
-        ultimate: args.ultimate && mode_supports_ultimate(&args.mode),
+        ultimate: (args.ultimate || DRAG_DROP_CHILD_ULTIMATE) && mode_supports_ultimate(&args.mode),
         watch: args.watch,
         cpu_percent: snapshot.as_ref().map(|s| s.cpu_percent),
         memory_percent: snapshot.as_ref().map(|s| s.memory_percent),
@@ -3396,9 +3408,10 @@ fn build_run_args(
         img_fallback_policy: None,
         img_tool_policy: None,
         img_jpeg_effort: None,
+        img_jpeg_effort_search: None,
+        img_jxl_distance: None,
         img_jxl_effort: None,
         img_jxl_effort_search: None,
-        img_jpeg_effort_search: None,
         img_quality_search: None,
         img_quality_heuristic: None,
         img_allow_database: None,
@@ -4957,6 +4970,8 @@ mod tests {
             "images",
             "--img-jxl-effort",
             "8",
+            "--img-jxl-distance",
+            "0.4",
             "--img-jpeg-effort",
             "11",
         ])?;
@@ -4979,10 +4994,20 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--jpeg-effort", "11"])
         );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--jxl-distance", "0.4"])
+        );
+        assert!(command.args.contains(&"--ultimate".to_owned()));
         let mut fast = args.clone();
         fast.mode = LaunchMode::FastImg;
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_effort = None;
+        fast.img_jxl_distance = Some(0.0);
+        assert!(validate_media_options(&fast).is_err());
+        fast.img_jxl_distance = None;
         fast.img_jpeg_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
         validate_media_options(&fast)?;
         let (command, _) =
@@ -4993,8 +5018,25 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--jpeg-effort-search", "adaptive"])
         );
-        for value in ["0", "6", "9", "11"] {
+        assert!(!command.args.contains(&"--ultimate".to_owned()));
+        assert!(!command.args.contains(&"--extreme-precision".to_owned()));
+        assert!(!command.args.contains(&"--jxl-distance".to_owned()));
+        fast.img_jxl_distance = Some(0.4);
+        assert!(validate_media_options(&fast).is_err());
+        fast.img_jxl_distance = Some(0.0);
+        fast.strategy = Some("avif".to_owned());
+        fast.img_jpeg_effort = None;
+        assert!(validate_media_options(&fast).is_err());
+        for value in ["0", "12", "255"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", value]).is_err());
+        }
+        for effort in 1..=11 {
+            let value = effort.to_string();
+            assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", &value]).is_ok());
+        }
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "adaptive"]).is_ok());
+        for value in ["-0.1", "25.1", "NaN", "inf"] {
+            assert!(Args::try_parse_from(["mfb", "--img-jxl-distance", value]).is_err());
         }
         for mode in ["videos", "fast-vid", "fast-img", "restore-jpeg", "collect"] {
             let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-effort", "8"])?;
@@ -5009,6 +5051,10 @@ mod tests {
             "8",
         ])?;
         assert!(validate_media_options(&videos_only).is_err());
+        for mode in ["videos", "fast-vid", "restore-jpeg", "collect"] {
+            let args = Args::try_parse_from(["mfb", "--mode", mode, "--img-jxl-distance", "0"])?;
+            assert!(validate_media_options(&args).is_err());
+        }
         let args = Args::try_parse_from(["mfb", "--mode", "images"])?;
         let command = rust_run_command(
             Path::new("/repo"),
@@ -5017,6 +5063,8 @@ mod tests {
             Path::new("/synthetic/input"),
         )?;
         assert!(!command.args.contains(&"--jxl-effort".to_owned()));
+        assert!(!command.args.contains(&"--jxl-distance".to_owned()));
+        assert!(command.args.contains(&"--ultimate".to_owned()));
         Ok(())
     }
 
@@ -6336,9 +6384,10 @@ mod tests {
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
+            img_jpeg_effort_search: None,
+            img_jxl_distance: None,
             img_jxl_effort: None,
             img_jxl_effort_search: None,
-            img_jpeg_effort_search: None,
             img_quality_search: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -6451,9 +6500,10 @@ mod tests {
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
+                img_jpeg_effort_search: None,
+                img_jxl_distance: None,
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
-                img_jpeg_effort_search: None,
                 img_quality_search: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
@@ -6507,9 +6557,10 @@ mod tests {
             img_fallback_policy: None,
             img_tool_policy: None,
             img_jpeg_effort: None,
+            img_jpeg_effort_search: None,
+            img_jxl_distance: None,
             img_jxl_effort: None,
             img_jxl_effort_search: None,
-            img_jpeg_effort_search: None,
             img_quality_search: None,
             img_quality_heuristic: None,
             img_allow_database: None,
@@ -6585,9 +6636,10 @@ mod tests {
                 img_fallback_policy: None,
                 img_tool_policy: None,
                 img_jpeg_effort: None,
+                img_jpeg_effort_search: None,
+                img_jxl_distance: None,
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
-                img_jpeg_effort_search: None,
                 img_quality_search: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,

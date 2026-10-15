@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Restore historical IMG algorithm boundaries (2026-10-15)
+
+- Audit `a8df1539` as the algorithm reference, with `dea69c6b` cross-checks.
+  Restore source/mode effort defaults and the original same-effort Distance
+  Explorer. Remove the uncommitted cross-effort screening experiment rather than
+  presenting it as the existing E search or a proven acceleration.
+- Keep opt-in verified E payload comparison separate from D exploration,
+  defaulting E comparison off. E-only, D-only and sequential E-then-D remain
+  distinct. Fixed E is a target; explored E is a selected verified candidate.
+  Existing source admission, size policies and final delivery gates remain.
+- Preserve PNG/lossless D0, reversible JPEG and modern-lossy retention policies.
+  Restore route-specific HDR defaults rather than forcing all HDR to D0 or all
+  JPEG-related primitives to E11. Retain added health/reconstruction checks and
+  original same-semantics compatibility retries; existing CLI flags are not
+  mechanically retired.
+- Native settings separate values from independent exploration checkboxes,
+  remove pixel D from Fast JXL and show values without repeating configuration
+  provenance in ordinary controls. Fast AVIF keeps its existing Q/Speed search
+  and metadata policy; no unimplemented Q/Speed controls are advertised.
+- Preserve distinct inherited and explicit equal menu values. An intentional
+  checkbox change records an explicit search choice; reset restores inheritance.
+  Inactive manual D is retained without being forwarded to explicit D search.
+- Scope and behavioral differences are recorded in `IMG_PRIVATE_POLICY.md`.
+  This is a correction of algorithm/configuration boundaries, not completion of
+  the full private-strategy or preflight architecture.
+- Validation: 112 Foundation JXL tests, 99 IMG library tests, 13 IMG CLI tests,
+  the scoped launcher regression and 398 source contracts pass. Scoped strict
+  Clippy, formatting, locked worker builds, Swift warnings-as-errors and native
+  self-test pass. Dark standard IMG and light Fast JXL/AVIF settings were checked
+  in native windows, including independent search choices and retained Photos settings.
+  Synthetic CLI checks preserve PNG D0/E10 and JPEG E11 defaults; JPEG recovery
+  is byte-identical, PNG baseline/E7-E8 comparison outputs decode to identical RGB,
+  and lossy WebP is retained byte-for-byte with a skip rather than success count.
+  These checks are not representative throughput, full metadata/HDR, Photos,
+  production-media or cross-platform acceptance; no installed App was replaced.
+
 ### Separate effort and quality search in native settings (2026-10-14)
 
 - Move normal image tool selection and JXL/JPEG effort controls into Image

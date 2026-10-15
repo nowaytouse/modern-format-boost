@@ -9,6 +9,7 @@
     "allow_size_tolerance": false,
     "size_tolerance_bytes": 524288,
     "jpeg_effort": 11,
+    "jxl_distance": null,
     "jxl_effort": null,
     "jxl_effort_search": "fixed",
     "jpeg_effort_search": "fixed",

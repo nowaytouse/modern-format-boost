@@ -314,6 +314,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
         ));
     }
 
+    crate::jxl_utils::verify_jxl_health(output).map_err(anyhow::Error::msg)?;
     let mut artifacts = HdrArtifacts::default();
     let gainmap_png = encode_png_sidecar_bytes(&DynamicImage::ImageLuma16(gain.to_luma16()))
         .context("Failed to encode gainmap sidecar PNG")?;
@@ -502,6 +503,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         ));
     }
 
+    crate::jxl_utils::verify_jxl_health(output).map_err(anyhow::Error::msg)?;
     if tmp_file.exists() {
         crate::media_conversion_gate::delivery_remove_file_or_audit(
             "hdr_ultrahdr_tmp_cleanup",
@@ -550,7 +552,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     let extracted = extract_ultrahdr_jpeg_payload(&data)
         .map_err(|e| anyhow!("Failed to extract gainmap for migration: {e}"))?;
 
-    let upper = match crate::runtime_config::active() {
+    let selected = match crate::runtime_config::active() {
         Some(config)
             if config.img.jpeg_effort_search == crate::runtime_config::EffortSearch::Adaptive =>
         {
@@ -560,7 +562,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     };
     let efforts = crate::jxl_effort_policy::effort_candidates(
         crate::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
-        upper,
+        selected,
     );
     let (encode_status, _) = crate::jxl_effort_policy::run_effort_search(
         input,
@@ -590,6 +592,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
             "Lossless JPEG recompression failed for UltraHDR migration"
         ));
     }
+
+    crate::fast_img::verify_jxl_roundtrip_integrity(input, output)
+        .context("UltraHDR migration JPEG reconstruction proof failed")?;
 
     crate::metadata::preserve_for_delivery(input, output)
         .context("Failed to preserve metadata for UltraHDR migration output")?;

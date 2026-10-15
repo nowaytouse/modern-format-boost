@@ -5,16 +5,15 @@
 //! quality-search axis: opt-in effort search selects one domain before quality search.
 //!
 //! ## Encoder tiers
-//! Direct pixel encoding inherits two bounded production tiers unless
-//! `img.jxl_effort` explicitly selects a production effort (7, 8 or 10):
+//! Direct pixel encoding retains mode defaults for callers without runtime config;
+//! explicit runtime targets can select 1 through 11 (e11 needs the expert switch).
 //!   - Normal   → e7  (`ultimate = false`)
 //!   - Ultimate → e10 (`ultimate = true`)
 //!
 //! JPEG bitstream transcode is a separate primitive. libjxl's e11 path is
 //! optimized for lossless JPEG reconstruction and is selected for that context;
-//! a tool that rejects the expert switch receives the explicit production
-//! fallback. It must not leak into ordinary pixel encoding, where e11 can be
-//! disproportionately slow.
+//! an unsupported expert switch permits the verified production fallback.
+//! Pixel e11 is explicit only, because it can be disproportionately slow.
 //!
 //! `archive` is a product mode, not a third encoder tier. Normalize it to the
 //! Ultimate tier here so individual encode paths cannot drift:
@@ -32,16 +31,16 @@ pub fn quality_search_enabled(default: bool) -> bool {
         .map_or(default, |config| config.img.quality_search.enabled(default))
 }
 
-/// Bounded effort candidates; the selected fixed value is an upper bound in adaptive mode.
+/// Compare bounded efforts at a fixed quality before entering one distance-search domain.
 #[must_use]
-pub fn effort_candidates(kind: JxlEffortContext, upper: u8) -> Vec<u8> {
+pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
     use crate::runtime_config::EffortSearch;
     let strategy = crate::runtime_config::active().map(|config| match kind {
         JxlEffortContext::DirectEncode => config.img.jxl_effort_search,
         JxlEffortContext::JpegLosslessTranscode => config.img.jpeg_effort_search,
     });
     if strategy != Some(EffortSearch::Adaptive) {
-        return vec![upper];
+        return vec![selected];
     }
     let domain: &[u8] = match kind {
         JxlEffortContext::DirectEncode => &[7, 8, 10],
@@ -50,16 +49,16 @@ pub fn effort_candidates(kind: JxlEffortContext, upper: u8) -> Vec<u8> {
     let mut efforts: Vec<u8> = domain
         .iter()
         .copied()
-        .filter(|effort| *effort < upper)
+        .filter(|effort| *effort < selected)
         .collect();
-    efforts.push(upper);
+    efforts.push(selected);
     efforts
 }
 
-/// Compare verified payloads at one immutable input/quality domain, retaining the lower effort on ties.
-/// A single candidate preserves the fixed path, including its caller's verification and fallback.
+/// Compare verified payloads at one immutable input/quality domain; ties retain lower effort.
+/// A single candidate preserves the caller's existing verification and recovery path.
 /// # Errors
-/// Rejects invalid plans, changed inputs, I/O or verification failures; no partial winner is published.
+/// Rejects invalid plans, changed inputs, I/O or verification failures without publishing a partial winner.
 pub fn run_effort_search<T>(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -163,15 +162,10 @@ pub fn encoder_effort(ultimate: bool) -> u8 {
 /// The default is caller-specific: mode effort for most sources, e10 for PNG.
 #[must_use]
 pub fn direct_encoder_effort(default: u8) -> u8 {
-    let configured = crate::infra::runtime_config::active();
-    let default = if configured.is_some_and(|config| {
-        config.img.jxl_effort_search == crate::runtime_config::EffortSearch::Adaptive
-    }) {
-        constants::JXL_ULTIMATE_EFFORT
-    } else {
-        default
-    };
-    resolve_direct_effort(configured.and_then(|config| config.img.jxl_effort), default)
+    resolve_direct_effort(
+        crate::infra::runtime_config::active().and_then(|config| config.img.jxl_effort),
+        default,
+    )
 }
 
 fn resolve_direct_effort(configured: Option<u8>, default: u8) -> u8 {
@@ -204,8 +198,8 @@ pub fn effort_plan_for_mode(
 /// Build the encoder-effort plan.
 ///
 /// The final-domain plan intentionally contains one item. Explicit effort search
-/// selects that domain separately; quality exploration then varies distance at
-/// one effort. JPEG bitstream transcode is deliberately isolated
+/// selects that domain separately; distance exploration stays within that effort.
+/// JPEG bitstream transcode is deliberately isolated
 /// from direct pixel encoding because its e11 implementation has different
 /// performance characteristics.
 #[must_use]
@@ -228,7 +222,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effort_search_selects_measured_payload_and_keeps_source_and_prior_output_on_failure()
+    fn effort_search_selects_verified_payload_and_preserves_prior_output_on_failure()
     -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let source = root.path().join("source");
@@ -377,7 +371,7 @@ mod tests {
             constants::JXL_ULTIMATE_EFFORT,
         ] {
             assert_eq!(resolve_direct_effort(None, default), default);
-            for configured in [7, 8, 10] {
+            for configured in 1..=11 {
                 assert_eq!(resolve_direct_effort(Some(configured), default), configured);
                 assert_eq!(jpeg_transcode_effort(None), 11);
             }
@@ -419,7 +413,8 @@ mod tests {
                 effort_candidates(JxlEffortContext::DirectEncode, effort),
                 [7, 8, 10]
                     .into_iter()
-                    .filter(|candidate| *candidate <= effort)
+                    .filter(|candidate| *candidate < effort)
+                    .chain(std::iter::once(effort))
                     .collect::<Vec<_>>()
             );
             assert_eq!(
@@ -462,6 +457,12 @@ mod tests {
                 args.windows(2)
                     .any(|pair| pair[0] == constants::JXL_ARG_DISTANCE && pair[1] == "0")
             );
+            assert_eq!(
+                args.contains(&std::ffi::OsStr::new(
+                    constants::JXL_ARG_ALLOW_EXPERT_OPTIONS
+                )),
+                effort == 11
+            );
             return Ok(());
         }
         let name = format!(
@@ -470,7 +471,7 @@ mod tests {
         );
         let (_, name) = name.split_once("::").context("test module path")?;
         let root = tempfile::tempdir()?;
-        for effort in ["7", "8", "10"] {
+        for effort in ["1", "7", "8", "9", "10", "11"] {
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args(["--exact", name])
                 .env(CHILD, effort)

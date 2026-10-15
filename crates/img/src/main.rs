@@ -2412,7 +2412,7 @@ fn dispatch_static_conversion(
         _ => {
             if config.verbose() {
                 log_detail!(&format!(
-                    " {} Lossy→JXL (Near-Lossless): {}",
+                    " {} Lossy→JXL (configured quality target): {}",
                     match format.to_uppercase().as_str() {
                         "PNG" => "Quantized PNG",
                         "GIF" => "Static GIF",

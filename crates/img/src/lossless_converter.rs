@@ -1013,16 +1013,37 @@ const fn jxl_distance_exploration_allowed(source: JxlSourceSemantics) -> bool {
     matches!(source, JxlSourceSemantics::ConfirmedLossy)
 }
 
-const fn resolved_jxl_distance_for_source(
+fn resolved_jxl_distance_for_source(
     requested_distance: f32,
     ultimate: bool,
     source: JxlSourceSemantics,
-) -> f32 {
-    if !matches!(source, JxlSourceSemantics::ConfirmedLossy) || requested_distance <= 0.0 {
-        0.0
-    } else {
-        foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
+) -> Result<f32> {
+    if !jxl_distance_exploration_allowed(source) {
+        return Ok(0.0);
     }
+    let distance = runtime_config::active()
+        .filter(|config| config.img.quality_search != runtime_config::QualitySearch::Adaptive)
+        .and_then(|config| config.img.jxl_distance)
+        .unwrap_or_else(|| {
+            if requested_distance <= 0.0 {
+                0.0
+            } else {
+                foundation::constants::jxl_distance_for_mode(requested_distance, ultimate)
+            }
+        });
+    validate_jxl_distance_for_source(distance, source)
+}
+
+fn validate_jxl_distance_for_source(distance: f32, source: JxlSourceSemantics) -> Result<f32> {
+    if !distance.is_finite() || !(0.0..=25.0).contains(&distance) {
+        return Err(ImgQualityError::ConversionError(
+            "JXL distance must be finite and within 0..=25".to_string(),
+        ));
+    }
+    if !jxl_distance_exploration_allowed(source) {
+        return Ok(0.0);
+    }
+    Ok(distance)
 }
 
 /// Returns true when JXL d=0 output does NOT satisfy the active size policy.
@@ -1132,8 +1153,9 @@ pub fn convert_to_jxl(
 
     let exploration_requested = !is_genuine_png
         && input_size_allows_jxl_distance_exploration(input_size)
+        && !options.archive()
         && foundation::jxl_effort_policy::quality_search_enabled(
-            options.ultimate() && options.explore() && !options.archive(),
+            options.ultimate() && options.explore(),
         );
     let is_extreme_explore =
         exploration_requested && jxl_distance_exploration_allowed(source_semantics);
@@ -1145,10 +1167,12 @@ pub fn convert_to_jxl(
             "Quality search not applicable: source={source_semantics:?}, genuine_png={is_genuine_png}, input_bytes={input_size}; confirmed-lossy non-JPEG input of at least {JXL_DISTANCE_EXPLORATION_MIN_INPUT_BYTES} bytes is required"
         ));
     }
+    let requested_dist =
+        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)?;
     let actual_dist = if is_extreme_explore {
         0.0
     } else {
-        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)
+        requested_dist
     };
     let mut actual_eff = if is_genuine_png {
         foundation::jxl_effort_policy::direct_encoder_effort(
@@ -1491,7 +1515,7 @@ pub fn convert_to_jxl_probe(
     };
 
     let actual_dist =
-        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics);
+        resolved_jxl_distance_for_source(distance, options.ultimate(), source_semantics)?;
 
     let effort_plan = if is_genuine_png {
         vec![foundation::jxl_effort_policy::JxlEffortPlan::Single(
@@ -1802,21 +1826,29 @@ fn run_cjxl_jpeg_encode_attempts(
         }
         // Lossless-JPEG e11 itself requires the expert switch in CjxlBuilder,
         // even when the broader expert-options flag is off.
-        if allow_same_semantics && cjxl_rejected_expert_option(selected_effort, &output.stderr) {
+        if allow_same_semantics
+            && (cjxl_rejected_expert_option(selected_effort, &output.stderr)
+                || (allow_expert
+                    && cjxl_rejected_option(
+                        &output.stderr,
+                        foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
+                    )))
+        {
             foundation::media_conversion_gate::delivery_remove_file_or_audit(
                 "cjxl_expert_compat_retry",
                 temp_output,
             );
+            if selected_effort == foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT {
+                selected_effort = foundation::constants::JXL_ULTIMATE_EFFORT;
+            }
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "cjxl_expert_option_unsupported",
                 input,
                 format!(
-                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{}",
+                    "installed cjxl rejected {}; retrying reversible JPEG reconstruction at compatible effort e{selected_effort}",
                     foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS,
-                    foundation::constants::JXL_ULTIMATE_EFFORT,
                 ),
             );
-            selected_effort = foundation::constants::JXL_ULTIMATE_EFFORT;
             allow_expert = false;
             continue;
         }
@@ -1842,10 +1874,8 @@ fn run_cjxl_jpeg_encode_attempts(
 }
 
 fn cjxl_rejected_expert_option(effort: u8, stderr: &str) -> bool {
-    if effort != foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT {
-        return false;
-    }
-    cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
+    effort == foundation::constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+        && cjxl_rejected_option(stderr, foundation::constants::JXL_ARG_ALLOW_EXPERT_OPTIONS)
 }
 
 fn cjxl_rejected_apple_compat_option(stderr: &str) -> bool {
@@ -2547,6 +2577,11 @@ pub fn convert_jpeg_to_jxl(
     options: &ConvertOptions,
     _color_context: Option<&ConversionColorContext>,
 ) -> Result<TaskResult> {
+    resolved_jxl_distance_for_source(
+        0.0,
+        options.ultimate(),
+        JxlSourceSemantics::JpegReconstruction,
+    )?;
     // Validate input file
     if let Err(e) = foundation::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
@@ -4084,7 +4119,10 @@ fn try_jxl_pre_avif_fallback(
     );
     let candidate_output = foundation::path_safety::isolated_temp_path_for_search(jxl_temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    let effort = foundation::constants::jxl_effort_for_mode(true);
+    let effort = foundation::jxl_effort_policy::encoder_effort_for_mode(
+        options.ultimate(),
+        options.archive(),
+    );
     let active_policy = options.effective_size_policy();
     let input_payload_size =
         foundation::image::static_payload::measure(input).map_err(|error| {
@@ -4395,7 +4433,7 @@ pub fn convert_to_jxl_matched(
         0.0
     };
     let actual_dist =
-        resolved_jxl_distance_for_source(requested_distance, options.ultimate(), source_semantics);
+        resolved_jxl_distance_for_source(requested_distance, options.ultimate(), source_semantics)?;
     log_stat!(
         foundation::infra::static_logs::messages::LABEL_JXL,
         format!("Forensic: Effective JXL distance finalized at {actual_dist:.2}")
@@ -4504,6 +4542,7 @@ fn run_direct_jxl_encode_with_effort(
         .distance(distance)
         .effort(effort)
         .threads(max_threads)
+        .allow_expert_options(flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS))
         .apple_compat(flags.contains(ConvertFlags::APPLE_COMPAT))
         .fixed_features(flags.contains(ConvertFlags::JXL_FIXED_FEATURES));
 
@@ -4748,13 +4787,54 @@ fn try_explore_ultimate_jxl_distance(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
+    let source_hash = foundation::common_utils::calculate_blake3_hash(input)?;
+    let actual_hash = foundation::common_utils::calculate_blake3_hash(actual_input)?;
+    let result = try_explore_jxl_distance_in_domain(
+        input,
+        actual_input,
+        temp_output,
+        input_size,
+        initial_output_size,
+        max_threads,
+        exploration_effort,
+        options,
+        icc_path,
+        color_info,
+    );
+    let unchanged: Result<bool> = (|| {
+        Ok(
+            foundation::common_utils::calculate_blake3_hash(input)? == source_hash
+                && foundation::common_utils::calculate_blake3_hash(actual_input)? == actual_hash,
+        )
+    })();
+    if !matches!(unchanged, Ok(true)) {
+        cleanup_temp_output(temp_output, input);
+        unchanged?;
+        return Err(ImgQualityError::ConversionError(
+            "JXL exploration input changed; no candidate may be delivered".to_string(),
+        ));
+    }
+    result
+}
+
+fn try_explore_jxl_distance_in_domain(
+    input: &Path,
+    actual_input: &Path,
+    temp_output: &Path,
+    input_size: u64,
+    initial_output_size: u64,
+    max_threads: usize,
+    exploration_effort: u8,
+    options: &ConvertOptions,
+    icc_path: Option<&Path>,
+    color_info: Option<&ColorInfo>,
+) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
     const MAX_REFINEMENT_ITERATIONS: u32 = 20;
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
         "Ultimate Exploration: one effort domain, distance screening, shortlist verification",
     );
-
     // Active policy: must be consistent with d0 check and SizeToleranceCheck.
     // Resolves the same way as jxl_d0_misses_active_size_policy.
     let active_policy = options.effective_size_policy();
@@ -6114,7 +6194,7 @@ mod tests {
     }
 
     fn test_tool_available(tool: &str) -> bool {
-        match Command::new(tool)
+        match Command::new(foundation::common_utils::resolve_tool_path_or_audit(tool))
             .arg("--help")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -6277,14 +6357,16 @@ mod tests {
         } else if test_tool_available("avifenc") {
             // If the repository sample is missing, try to produce a candidate
             // using the local `avifenc` tool so the test can run in CI/local.
-            let status = Command::new("avifenc")
-                .arg("-s")
-                .arg("0")
-                .arg("-j")
-                .arg("all")
-                .arg(&source)
-                .arg(&candidate)
-                .status()?;
+            let status = Command::new(foundation::common_utils::resolve_tool_path_or_audit(
+                "avifenc",
+            ))
+            .arg("-s")
+            .arg("0")
+            .arg("-j")
+            .arg("all")
+            .arg(&source)
+            .arg(&candidate)
+            .status()?;
             anyhow::ensure!(
                 status.success(),
                 "avifenc failed to generate candidate AVIF"
@@ -6319,10 +6401,12 @@ mod tests {
         let output = Path::new(result.output_path.as_ref().unwrap());
         let previous = fs::read(output)?;
         fs::copy(output, &candidate)?;
-        let status = Command::new("exiftool")
-            .args(["-overwrite_original", "-XMP-dc:Description=must be cleared"])
-            .arg(&candidate)
-            .status()?;
+        let status = Command::new(foundation::common_utils::resolve_tool_path_or_audit(
+            "exiftool",
+        ))
+        .args(["-overwrite_original", "-XMP-dc:Description=must be cleared"])
+        .arg(&candidate)
+        .status()?;
         anyhow::ensure!(
             status.success(),
             "failed to add metadata to regression candidate"
@@ -6825,6 +6909,66 @@ mod tests {
     }
 
     #[test]
+    fn saved_distance_applies_only_in_the_active_private_policy_mode() -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_PRIVATE_DISTANCE_MODE";
+        let mode = match std::env::var(CHILD) {
+            Ok(mode) => Some(mode),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(mode) = mode {
+            let mut config = runtime_config::RuntimeConfig::default();
+            config.img.jxl_distance = Some(0.25);
+            config.img.quality_search = match mode.as_str() {
+                "fixed" => runtime_config::QualitySearch::Fixed,
+                "adaptive" => runtime_config::QualitySearch::Adaptive,
+                "mode_default" => runtime_config::QualitySearch::ModeDefault,
+                _ => anyhow::bail!("unexpected distance mode: {mode}"),
+            };
+            runtime_config::install(config)?;
+            for ultimate in [false, true] {
+                let expected = if mode == "adaptive" {
+                    foundation::constants::jxl_distance_for_mode(1.0, ultimate)
+                } else {
+                    0.25
+                };
+                assert_eq!(
+                    resolved_jxl_distance_for_source(
+                        1.0,
+                        ultimate,
+                        JxlSourceSemantics::ConfirmedLossy
+                    )?,
+                    expected
+                );
+                for protected in [
+                    JxlSourceSemantics::ConfirmedLossless,
+                    JxlSourceSemantics::JpegReconstruction,
+                    JxlSourceSemantics::ModernLossy,
+                    JxlSourceSemantics::Unknown,
+                ] {
+                    assert_eq!(
+                        resolved_jxl_distance_for_source(1.0, ultimate, protected)?,
+                        0.0
+                    );
+                }
+            }
+            assert_eq!(
+                runtime_config::active().unwrap().img.jxl_distance,
+                Some(0.25)
+            );
+            return Ok(());
+        }
+        for mode in ["fixed", "adaptive", "mode_default"] {
+            let status = Command::new(std::env::current_exe()?)
+                .args(["--exact", "lossless_converter::tests::saved_distance_applies_only_in_the_active_private_policy_mode"])
+                .env(CHILD, mode)
+                .status()?;
+            anyhow::ensure!(status.success(), "distance mode regression failed: {mode}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn jxl_distance_exploration_starts_only_after_d0_misses_active_policy() {
         use foundation::exploration_policy::SizePolicy;
         let strict = SizePolicy::StrictlySmaller;
@@ -6852,25 +6996,25 @@ mod tests {
         ));
         // strict equality still rejects under strict policy
         assert!(jxl_d0_misses_active_size_policy(source, source, strict));
+        for semantics in [
+            JxlSourceSemantics::ConfirmedLossless,
+            JxlSourceSemantics::JpegReconstruction,
+            JxlSourceSemantics::ModernLossy,
+            JxlSourceSemantics::Unknown,
+            JxlSourceSemantics::SingleFrameVideo,
+        ] {
+            assert_eq!(
+                validate_jxl_distance_for_source(1.5, semantics).unwrap(),
+                0.0
+            );
+            assert_eq!(
+                validate_jxl_distance_for_source(0.0, semantics).unwrap(),
+                0.0
+            );
+        }
         assert_eq!(
-            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossless),
-            0.0
-        );
-        assert_eq!(
-            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::JpegReconstruction),
-            0.0
-        );
-        assert_eq!(
-            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ModernLossy),
-            0.0
-        );
-        assert_eq!(
-            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::Unknown),
-            0.0
-        );
-        assert_eq!(
-            resolved_jxl_distance_for_source(1.5, true, JxlSourceSemantics::ConfirmedLossy),
-            foundation::constants::JXL_ULTIMATE_DISTANCE
+            validate_jxl_distance_for_source(1.5, JxlSourceSemantics::ConfirmedLossy).unwrap(),
+            1.5
         );
     }
 
@@ -6891,7 +7035,7 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_transcode_uses_e11_and_has_production_fallback() {
+    fn jpeg_transcode_uses_e11_and_has_verified_production_fallback() {
         let options = ConvertOptions::default();
         assert!(jpeg_aggressive_lossless_enabled(&options));
         assert_eq!(
@@ -6907,7 +7051,7 @@ mod tests {
             vec![JxlEffortPlan::Single(
                 foundation::constants::JXL_ULTIMATE_EFFORT
             )],
-            "e11 rejection must fall back to production e10"
+            "the private JPEG policy retains the compatible production e10 fallback"
         );
     }
 
@@ -6979,10 +7123,33 @@ mod tests {
         )
         .unwrap();
         assert!(compatible.status.success());
-        assert_eq!(
-            compatible_attempts,
-            vec![(11, true, false), (10, false, false)]
-        );
+        assert_eq!(compatible_attempts, [(11, true, false), (10, false, false)]);
+
+        let mut same_effort_attempts = Vec::new();
+        let compatible = run_cjxl_jpeg_encode_attempts(
+            &input,
+            &output,
+            8,
+            true,
+            false,
+            true,
+            |effort, expert, apple| {
+                same_effort_attempts.push((effort, expert, apple));
+                if expert {
+                    Ok(failed())
+                } else {
+                    Ok(foundation::process_runner::ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        command_line: "cjxl".into(),
+                    })
+                }
+            },
+        )
+        .unwrap();
+        assert!(compatible.status.success());
+        assert_eq!(same_effort_attempts, [(8, true, false), (8, false, false)]);
 
         let mut configured_attempts = Vec::new();
         run_cjxl_jpeg_encode_attempts(
@@ -7540,17 +7707,45 @@ mod tests {
     #[test]
     fn explicit_lossless_jxl_distance_survives_ultimate_mode() {
         assert_eq!(
-            resolved_jxl_distance_for_source(0.0, true, JxlSourceSemantics::ConfirmedLossy),
+            resolved_jxl_distance_for_source(0.0, true, JxlSourceSemantics::ConfirmedLossy)
+                .unwrap(),
             0.0
         );
         assert_eq!(
-            resolved_jxl_distance_for_source(0.4, true, JxlSourceSemantics::ConfirmedLossless),
+            validate_jxl_distance_for_source(0.4, JxlSourceSemantics::ConfirmedLossless).unwrap(),
             0.0
         );
         assert_eq!(
-            resolved_jxl_distance_for_source(0.4, true, JxlSourceSemantics::ConfirmedLossy),
+            resolved_jxl_distance_for_source(0.4, true, JxlSourceSemantics::ConfirmedLossy)
+                .unwrap(),
             foundation::constants::JXL_ULTIMATE_DISTANCE
         );
+        for distance in [f32::NAN, f32::INFINITY, -0.1, 25.1] {
+            assert!(
+                validate_jxl_distance_for_source(distance, JxlSourceSemantics::ConfirmedLossy)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn distance_search_reuses_measured_d0_in_one_selected_effort_domain() {
+        let source = include_str!("lossless_converter.rs");
+        let start = source
+            .find("fn try_explore_jxl_distance_in_domain(")
+            .unwrap();
+        let end = source[start..]
+            .find("let result = foundation::jxl_explorer::JxlExploreResult")
+            .map(|offset| start + offset)
+            .unwrap();
+        let exploration = &source[start..end];
+        assert!(exploration.contains("input_size,\n        initial_output_size,"));
+        assert_eq!(
+            exploration.matches("effort: exploration_effort,").count(),
+            3
+        );
+        assert!(!exploration.contains("screening_efforts("));
+        assert!(!exploration.contains("run_jxl_screening_attempts("));
     }
 
     #[test]
@@ -7737,6 +7932,17 @@ mod tests {
                 .count(),
             0,
             "no JXL fallback may run after terminal AVIF handoff"
+        );
+        let fallback_start = source.find("fn try_jxl_pre_avif_fallback(").unwrap();
+        let fallback_end = source[fallback_start..]
+            .find("fn probe_jxl_pre_avif_fallback_with<")
+            .map(|offset| fallback_start + offset)
+            .unwrap();
+        let fallback = &source[fallback_start..fallback_end];
+        assert!(fallback.contains("foundation::jxl_effort_policy::encoder_effort_for_mode("));
+        assert!(
+            !fallback.contains("foundation::constants::jxl_effort_for_mode("),
+            "the last JXL fallback must honor the configured final effort"
         );
     }
 
@@ -8187,11 +8393,13 @@ mod tests {
                 "avifenc pipeline failed: {}",
                 output.stderr
             );
-            let output = Command::new("avifdec")
-                .arg(&encoded)
-                .arg(&decoded)
-                .output()
-                .expect("run avifdec");
+            let output = Command::new(foundation::common_utils::resolve_tool_path_or_audit(
+                "avifdec",
+            ))
+            .arg(&encoded)
+            .arg(&decoded)
+            .output()
+            .expect("run avifdec");
             assert!(
                 output.status.success(),
                 "avifdec failed: {}",

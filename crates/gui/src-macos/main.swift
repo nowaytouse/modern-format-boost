@@ -274,9 +274,9 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJxlSearch, imgJxlEffort, imgJpegSearch, imgJpegEffort, imgQualitySearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
+    case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJxlSearch, fastJxlEffort, fastJpegSearch, fastJpegEffort, fastQualitySearch, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -290,9 +290,20 @@ private enum MediaSetting: String, CaseIterable {
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
     var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
     var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
+    var isDistance: Bool { self == .imgJxlDistance }
     var isSearch: Bool { [.imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch, .fastQualitySearch].contains(self) }
+    var isSearchToggle: Bool { [.imgJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch].contains(self) }
+    func searchEnabled(_ value: String) -> Bool? {
+        if value == "adaptive" { return true }
+        if value == "fixed" { return false }
+        if self == .imgQualitySearch && value == "mode-default" { return true }
+        return nil
+    }
     func choiceTitle(_ value: String) -> String {
-        if isEffort { return value }
+        if isEffort || isDistance { return value }
+        if self == .imgJxlSearch || self == .fastJxlSearch || self == .imgJpegSearch || self == .fastJpegSearch { return localized("settings.effort.\(value)") }
+        if self == .imgQualitySearch { return localized("settings.distance.\(value)") }
+        if self == .fastQualitySearch { return localized("settings.avif.\(value)") }
         return localized(isSearch && value == "adaptive" ? "settings.search.adaptive" : "settings.value.\(value)")
     }
     func appliesToFast(avif: Bool) -> Bool {
@@ -319,6 +330,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgConfig, .fastConfig: "--img-config"
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
+        case .imgJxlDistance: "--img-jxl-distance"
         case .imgJxlEffort, .fastJxlEffort: "--img-jxl-effort"
         case .imgJxlSearch, .fastJxlSearch: "--img-jxl-effort-search"
         case .imgJpegSearch, .fastJpegSearch: "--img-jpeg-effort-search"
@@ -353,8 +365,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
-        case .imgJxlEffort, .fastJxlEffort: ["7", "8", "10"]
-        case .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
+        case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
         case .imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch: ["fixed", "adaptive"]
         case .imgQualitySearch, .fastQualitySearch: ["mode-default", "fixed", "adaptive"]
         case .vidCodec: ["hevc", "av1"]
@@ -380,6 +391,7 @@ private enum MediaSetting: String, CaseIterable {
         case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
+        case .imgJxlDistance: "img.jxl_distance"
         case .imgJxlEffort, .fastJxlEffort: "img.jxl_effort"
         case .imgJxlSearch, .fastJxlSearch: "img.jxl_effort_search"
         case .imgJpegSearch, .fastJpegSearch: "img.jpeg_effort_search"
@@ -411,11 +423,11 @@ private enum MediaSetting: String, CaseIterable {
         switch self {
         case .fastConfig: "fastConfig"
         case .fastFallback: "imgFallback"
-        case .fastJpegEffort: "imgJpegEffort"
+        case .fastJpegEffort: "fastJpegEffort"
+        case .fastJpegSearch: "imgJpegSearch"
         case .fastJxlEffort: "imgJxlEffort"
         case .fastJxlSearch: "imgJxlSearch"
-        case .fastJpegSearch: "imgJpegSearch"
-        case .fastQualitySearch: "imgQualitySearch"
+        case .fastQualitySearch: "fastQualitySearch"
         case .fastHeuristic: "imgHeuristic"
         case .fastDatabase: "imgDatabase"
         case .fastToolPolicy: "imgToolPolicy"
@@ -447,9 +459,10 @@ private struct ImageSettings {
     var configurationFile: String?
     var fallback: ImageFallback?
     var jpegEffort: Int?
+    var jpegEffortSearch: EffortSearchMode?
+    var jxlDistance: Float?
     var jxlEffort: Int?
     var jxlEffortSearch: EffortSearchMode?
-    var jpegEffortSearch: EffortSearchMode?
     var qualitySearch: QualitySearchMode?
     var qualityHeuristic: Bool?
     var allowDatabase: Bool?
@@ -497,7 +510,9 @@ private struct MediaSettings {
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
                 .imgJxlEffort: image.jxlEffort.map(String.init),
-                .imgJxlSearch: image.jxlEffortSearch?.rawValue, .imgJpegSearch: image.jpegEffortSearch?.rawValue,
+                .imgJxlDistance: image.jxlDistance.map { $0.rounded() == $0 ? String(Int($0)) : String($0) },
+                .imgJxlSearch: image.jxlEffortSearch?.rawValue,
+                .imgJpegSearch: image.jpegEffortSearch?.rawValue,
                 .imgQualitySearch: image.qualitySearch?.rawValue,
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
                 .imgSizeTolerance: imageSizeTolerance.map(String.init),
@@ -506,7 +521,8 @@ private struct MediaSettings {
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
                 .fastJxlEffort: fastImage.jxlEffort.map(String.init),
-                .fastJxlSearch: fastImage.jxlEffortSearch?.rawValue, .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
+                .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
+                .fastJxlSearch: fastImage.jxlEffortSearch?.rawValue,
                 .fastQualitySearch: fastImage.qualitySearch?.rawValue,
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
@@ -530,7 +546,9 @@ private struct MediaSettings {
             toolPaths = paths
             invalidToolPipelines = invalidPaths
             for (field, value) in newValue {
-                if let range = field.range {
+                if field.isDistance {
+                    guard let number = Float(value), number.isFinite, (0...25).contains(number) else { invalidValues[field] = value; continue }
+                } else if let range = field.range {
                     guard let number = Int(value), range.contains(number) else { invalidValues[field] = value; continue }
                 } else if !field.choices.isEmpty, !field.choices.contains(value) {
                     invalidValues[field] = value
@@ -543,6 +561,7 @@ private struct MediaSettings {
                 case .imgConfig: image.configurationFile = value
                 case .imgFallback: image.fallback = ImageFallback(rawValue: value)
                 case .imgJpegEffort: image.jpegEffort = Int(value)
+                case .imgJxlDistance: image.jxlDistance = Float(value)
                 case .imgJxlEffort: image.jxlEffort = Int(value)
                 case .imgJxlSearch: image.jxlEffortSearch = EffortSearchMode(rawValue: value)
                 case .imgJpegSearch: image.jpegEffortSearch = EffortSearchMode(rawValue: value)
@@ -556,9 +575,9 @@ private struct MediaSettings {
                 case .fastConfig: fastImage.configurationFile = value
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
+                case .fastJpegSearch: fastImage.jpegEffortSearch = EffortSearchMode(rawValue: value)
                 case .fastJxlEffort: fastImage.jxlEffort = Int(value)
                 case .fastJxlSearch: fastImage.jxlEffortSearch = EffortSearchMode(rawValue: value)
-                case .fastJpegSearch: fastImage.jpegEffortSearch = EffortSearchMode(rawValue: value)
                 case .fastQualitySearch: fastImage.qualitySearch = QualitySearchMode(rawValue: value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
@@ -630,6 +649,8 @@ private struct MediaSettings {
             guard let value = values[field] else { continue }
             let valid: Bool
             switch field {
+            case .imgJxlDistance:
+                valid = Float(value).map { $0.isFinite && (0...25).contains($0) } ?? false
             case .imgConfig, .fastConfig, .vidConfig:
                 var isDirectory: ObjCBool = false
                 valid = value.hasPrefix("/")
@@ -663,6 +684,11 @@ private struct MediaSettings {
         }
     }
 
+    private func argumentValue(for field: MediaSetting) -> String? {
+        if field == .imgJxlDistance && image.qualitySearch == .adaptive { return nil }
+        return values[field]
+    }
+
     func arguments(operation: OperationMode, processing: ProcessingMode) throws -> [String] {
         let fastImages = operation.backendMode == "fast-img"
         let images = operation == .adjacent && processing != .videosOnly
@@ -674,7 +700,7 @@ private struct MediaSettings {
         }
         try validate(fields)
         var arguments = fields.flatMap { field -> [String] in
-            guard let value = values[field] else { return [] }
+            guard let value = argumentValue(for: field) else { return [] }
             return field.arguments(value)
         }
         if images || fastImages { arguments += toolArguments(fastImages ? .fastImage : .image, flag: "--img-tool") }
@@ -682,12 +708,13 @@ private struct MediaSettings {
         return arguments
     }
 
-    func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false) -> [String] {
         var arguments = MediaSetting.allCases.filter {
             ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+                && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
-            guard let value = values[field] else { return [] }
+            guard let value = inheritedOnly ? values[field] : argumentValue(for: field) else { return [] }
             return field.arguments(value).map { argument in
                 argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
             }
@@ -742,8 +769,16 @@ private struct EffectiveRuntimeSettings {
                 }
                 if value is NSNull { continue }
                 if let number = value as? NSNumber {
-                    result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
-                        ? (number.boolValue ? "true" : "false") : number.stringValue
+                    if section == "img" && key == "jxl_distance" {
+                        let distance = number.floatValue
+                        guard CFGetTypeID(number) != CFBooleanGetTypeID(), distance.isFinite, (0...25).contains(distance) else {
+                            throw HostError(message: localized("settings.config_invalid"))
+                        }
+                        result["img.jxl_distance"] = distance.rounded() == distance ? String(Int(distance)) : String(distance)
+                    } else {
+                        result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                            ? (number.boolValue ? "true" : "false") : number.stringValue
+                    }
                 } else if let text = value as? String { result["\(section).\(key)"] = text }
             }
         }
@@ -1458,7 +1493,7 @@ private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDeleg
 }
 
 @MainActor
-private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSComboBoxDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private enum SearchDestination: Equatable {
         case setting(MediaSetting)
         case cache
@@ -1574,8 +1609,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             grid.columnSpacing = 12
             for field in fields {
                 let control: NSView
-                if field == .photosAdaptive || field == .photosPreserveTree {
+                if field.isSearchToggle || field == .photosAdaptive || field == .photosPreserveTree {
                     let toggle = NSButton(checkboxWithTitle: field.title, target: self, action: #selector(updateVisibility))
+                    if field.isSearchToggle { toggle.action = #selector(changeSearch(_:)) }
                     toggle.allowsMixedState = false
                     toggles[field] = toggle
                     control = toggle
@@ -1590,7 +1626,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     popups[field] = popup
                     control = popup
                 } else {
-                    let text = NSTextField()
+                    let text: NSTextField
+                    if field == .imgJxlDistance {
+                        let combo = NSComboBox()
+                        combo.addItems(withObjectValues: ["0", "0.1", "0.25", "0.5", "1", "2"])
+                        combo.isEditable = true
+                        combo.completes = false
+                        text = combo
+                    } else { text = NSTextField() }
                     text.delegate = self
                     text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -2395,10 +2438,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         for (field, toggle) in toggles {
             let value = displayed[field]
-            toggle.state = value == "true" ? .on : .off
-            toggle.isEnabled = value.flatMap(Bool.init) != nil
+            let enabled = field.isSearchToggle ? value.flatMap(field.searchEnabled) : value.flatMap(Bool.init)
+            toggle.state = enabled == true ? .on : .off
+            toggle.isEnabled = enabled != nil
             toggle.title = field.title
-            if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
+            if let value, enabled == nil { toggle.title = localized("settings.invalid", field.title, value) }
         }
         for (field, popup) in popups {
             for index in popup.itemArray.indices.reversed()
@@ -2406,11 +2450,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
-            if field.isFailurePolicy || field.isEffort || field.isSearch {
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
                 let inheritedValue = inherited[field].map {
                     field.choices.contains($0) ? field.choiceTitle($0) : localized("settings.invalid", field.title, $0)
-                } ?? localized(field.isPixelEffort && inheritedSources[field] != nil ? "settings.effort.mode_default" : "result.unknown")
-                popup.insertItem(withTitle: localized("settings.failure.inherited", inheritedValue), at: 0)
+                } ?? localized(field.isEffort && inheritedSources[field] != nil ? "settings.private_policy" : "result.unknown")
+                let title = field.isEffort || field.isSearch ? inheritedValue : localized("settings.failure.inherited", inheritedValue)
+                // NSPopUpButton merges equal titles; inheritance and an explicit equal value are distinct.
+                popup.menu?.insertItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0); continue }
             }
             if field == .performance && inheritedMixed.contains(field) {
@@ -2445,11 +2491,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         for (field, toggle) in toggles {
-            let value = toggle.state == .on ? "true" : "false"
-            if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
+            let enabled = field.isSearchToggle ? displayed[field].flatMap(field.searchEnabled) : displayed[field].flatMap(Bool.init)
+            if toggle.isEnabled && (toggle.state == .on) != enabled {
+                settings.values[field] = field.isSearchToggle
+                    ? (toggle.state == .on ? "adaptive" : "fixed") : (toggle.state == .on ? "true" : "false")
+            }
         }
         for (field, popup) in popups {
-            if field.isFailurePolicy || field.isEffort || field.isSearch {
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
                 settings.values[field] = popup.selectedItem?.representedObject as? String
                 continue
             }
@@ -2475,24 +2524,23 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         return true
     }
 
+    @objc private func changeSearch(_ sender: NSButton) {
+        guard let field = toggles.first(where: { $0.value === sender })?.key else { return }
+        var settings = draft()
+        settings.values[field] = sender.state == .on ? "adaptive" : "fixed"
+        restore(settings)
+    }
+
     @objc private func updateVisibility() {
         sourceGeneration = UUID()
-        let choices = draft().values
+        let distanceSearch = draft().image.qualitySearch?.rawValue ?? inherited[.imgQualitySearch]
+        textFields[.imgJxlDistance]?.isEnabled = distanceSearch != "adaptive"
+        if let distanceSearch, MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
+            toggles[.imgQualitySearch]?.title = distanceSearch == "mode-default"
+                ? localized("settings.distance.mode-default") : MediaSetting.imgQualitySearch.title
+        }
         for (field, row) in rows {
             row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
-            if field.isEffort {
-                let search: MediaSetting = field.isPixelEffort
-                    ? (field.isFastImage ? .fastJxlSearch : .imgJxlSearch)
-                    : (field.isFastImage ? .fastJpegSearch : .imgJpegSearch)
-                let adaptive = (choices[search] ?? inherited[search]) == "adaptive"
-                let title = localized("settings.\(field.labelKey)" + (adaptive ? ".limit" : ""))
-                (row.cell(at: 0).contentView as? NSTextField)?.stringValue = title
-                row.cell(at: 1).contentView?.setAccessibilityLabel(title)
-                if field.isPixelEffort, inherited[field] == nil, inheritedSources[field] != nil,
-                   let item = popups[field]?.item(at: 0), item.representedObject == nil {
-                    item.title = localized("settings.failure.inherited", localized(adaptive ? "settings.effort.default_limit" : "settings.effort.mode_default"))
-                }
-            }
         }
         updateSearch()
     }
@@ -2513,6 +2561,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if [.imgConfig, .fastConfig, .vidConfig].contains(field) {
             inheritedGeneration = UUID()
         }
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let combo = notification.object as? NSComboBox,
+              let value = combo.objectValueOfSelectedItem as? String else { return }
+        combo.stringValue = value
+        sourceGeneration = UUID()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -2552,7 +2607,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
                 let useFast = field.isFastImage || field.isPhotos || (field.isShared && fast)
-                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false))]
+                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result {
@@ -2640,7 +2695,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             applyGeneration = UUID()
             let generation = applyGeneration
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
-            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif)
             let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
             let needsStandard = !fast && !videos
             let needsVideo = !fast
@@ -2737,7 +2792,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
               !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
             throw HostError(message: "JXL pixel effort does not preserve independent scopes and inheritance")
         }
-        for invalid in ["0", "6", "9", "11", "1.5"] {
+        for effort in ["1", "9", "11"] {
+            pixelEffort.values[.imgJxlEffort] = effort
+            try pixelEffort.validate()
+        }
+        for invalid in ["0", "12", "1.5"] {
             pixelEffort.values[.imgJxlEffort] = invalid
             do { try pixelEffort.validate(); throw HostError(message: "Invalid JXL pixel effort accepted") }
             catch { guard error.localizedDescription != "Invalid JXL pixel effort accepted" else { throw error } }
@@ -2761,12 +2820,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             restore(MediaSettings())
             restore(MediaSettings())
             let field: MediaSetting = fast ? .fastJxlEffort : .imgJxlEffort
-            guard let popup = popups[field], popup.numberOfItems == 4, popup.indexOfSelectedItem == 0,
+            guard let popup = popups[field], popup.numberOfItems == 12, popup.indexOfSelectedItem == 0,
                   (sourceButtons[field] != nil) == developer, fieldSections[field] == "img",
                   inherited[field] == (fast ? "10" : "8"), draft().values[field] == nil else {
                 throw HostError(message: "JXL pixel effort inheritance used the wrong pipeline or fabricated an override")
             }
-            popup.selectItem(at: fast ? 3 : 2)
+            popup.selectItem(at: fast ? 10 : 8)
             guard draft().values[field] == inherited[field] else {
                 throw HostError(message: "Explicit JXL pixel effort equal to inheritance lost its override")
             }
@@ -2777,14 +2836,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             inherited.removeAll()
             inheritedSources.removeAll()
             restore(MediaSettings())
-            guard popup.titleOfSelectedItem == localized("settings.failure.inherited", localized("result.unknown")) else {
+            guard popup.titleOfSelectedItem == localized("result.unknown") else {
                 throw HostError(message: "Unavailable JXL pixel configuration was presented as automatic")
             }
             inheritedSources[field] = "default"
             restore(MediaSettings())
-            guard popup.titleOfSelectedItem == localized("settings.failure.inherited", localized("settings.effort.mode_default")),
+            guard popup.titleOfSelectedItem == localized("settings.private_policy"),
                   draft().values[field] == nil else {
-                throw HostError(message: "Known null JXL pixel effort did not preserve automatic inheritance")
+                throw HostError(message: "Null JXL pixel effort invented a resolved target")
             }
         }
         restore(MediaSettings())
@@ -2969,27 +3028,113 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     func validateEncodingScopesForSelfTest() throws {
         if !videos && !fast {
-            guard [.imgJxlSearch, .imgJxlEffort, .imgJpegSearch, .imgJpegEffort, .imgQualitySearch, .imgToolPolicy]
-                .allSatisfy({ fieldSections[$0] == "img" && popups[$0] != nil }) else {
+            guard [.imgJxlEffort, .imgJpegEffort, .imgToolPolicy]
+                .allSatisfy({ fieldSections[$0] == "img" && popups[$0] != nil }),
+                  [.imgJxlSearch, .imgJpegSearch, .imgQualitySearch]
+                    .allSatisfy({ fieldSections[$0] == "img" && toggles[$0] != nil }),
+                  let distance = textFields[.imgJxlDistance] as? NSComboBox,
+                  distance.isEditable, distance.numberOfItems == 6,
+                  fieldSections[.imgJxlDistance] == "img" else {
                 throw HostError(message: "Image decisions escaped the ordinary image settings tab")
             }
             var settings = MediaSettings()
-            settings.values = [.imgJxlSearch: "adaptive", .imgJxlEffort: "8", .imgJpegSearch: "fixed", .imgJpegEffort: "11", .imgQualitySearch: "fixed"]
+            settings.values = [.imgJxlDistance: "0.25", .imgJxlSearch: "adaptive", .imgJxlEffort: "8", .imgJpegEffort: "11", .imgJpegSearch: "fixed", .imgQualitySearch: "fixed"]
             restore(settings)
-            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == localized("settings.imgJxlEffort.limit"),
-                  draft().values == settings.values else { throw HostError(message: "Adaptive effort limits and independent quality mode are unclear or lost") }
+            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == MediaSetting.imgJxlEffort.title,
+                  rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .off,
+                  distance.stringValue == "0.25", draft().values == settings.values else {
+                throw HostError(message: "Effort-only exploration hid or changed a fixed distance")
+            }
+            distance.stringValue = "0.125"
+            guard draft().image.jxlDistance == 0.125 else { throw HostError(message: "Manual JXL distance did not reach the draft") }
+            distance.stringValue = "0.25"
             let arguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
-            guard arguments.contains("--img-jxl-effort-search"), arguments.contains("--img-quality-search") else {
-                throw HostError(message: "Search decisions did not reach the processing request")
+            let runtimeArguments = draft().runtimeArguments(fast: false, inheritedOnly: false)
+            guard arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == runtimeArguments,
+                  arguments.contains("0.25"), arguments.contains("8") else {
+                throw HostError(message: "Distance or effort differed between preview and processing")
+            }
+            settings.values[.imgQualitySearch] = "adaptive"
+            restore(settings)
+            let exploration = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .on,
+                  draft().image.jxlDistance == 0.25, draft().image.jxlEffort == 8,
+                  !exploration.contains("--img-jxl-distance"), !exploration.contains("0.25"),
+                  exploration.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "Distance exploration did not preserve the draft and use its policy baseline")
+            }
+            for distanceSearch in ["fixed", "adaptive"] {
+                for effortSearch in ["fixed", "adaptive"] {
+                    settings.values[.imgQualitySearch] = distanceSearch
+                    settings.values[.imgJxlSearch] = effortSearch
+                    restore(settings)
+                    guard toggles[.imgQualitySearch]?.state == (distanceSearch == "adaptive" ? .on : .off),
+                          toggles[.imgJxlSearch]?.state == (effortSearch == "adaptive" ? .on : .off),
+                          draft().values == settings.values,
+                          rows[.imgJxlDistance]?.isHidden == false, rows[.imgJxlEffort]?.isHidden == false else {
+                        throw HostError(message: "Independent distance and effort exploration combinations were lost")
+                    }
+                }
+            }
+            settings.values[.imgQualitySearch] = "mode-default"
+            restore(settings)
+            guard toggles[.imgQualitySearch]?.state == .on, draft().image.qualitySearch == .modeDefault else {
+                throw HostError(message: "The private policy default was replaced by a GUI search override")
+            }
+            let policyArguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard draft().image.jxlDistance == 0.25, distance.isEnabled,
+                  toggles[.imgQualitySearch]?.title == localized("settings.distance.mode-default"),
+                  policyArguments.contains("--img-jxl-distance"), policyArguments.contains("0.25"),
+                  policyArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "The private policy default lost its editable fixed distance or canonical arguments")
+            }
+            toggles[.imgQualitySearch]?.performClick(nil)
+            toggles[.imgQualitySearch]?.performClick(nil)
+            guard draft().image.qualitySearch == .adaptive, !distance.isEnabled,
+                  draft().image.jxlDistance == 0.25,
+                  !(try draft().arguments(operation: .adjacent, processing: .imagesOnly)).contains("--img-jxl-distance") else {
+                throw HostError(message: "Explicitly enabling distance exploration fell back to inherited mode semantics")
+            }
+            toggles[.imgQualitySearch]?.state = .off
+            guard draft().image.qualitySearch == .fixed, draft().image.jxlDistance == 0.25 else {
+                throw HostError(message: "Disabling distance exploration lost the saved fixed value")
+            }
+            for invalid in ["-0.1", "25.1", "nan", "inf", "distance"] {
+                settings.values[.imgJxlDistance] = invalid
+                restore(settings)
+                guard draft().values[.imgJxlDistance] == invalid else {
+                    throw HostError(message: "Invalid saved JXL distance was silently replaced")
+                }
+                do { try settings.validate() }
+                catch { continue }
+                throw HostError(message: "Invalid JXL distance was accepted")
             }
             restore(MediaSettings())
         }
         if fast {
             guard popups[.fastJxlEffort] == nil, popups[.fastJxlSearch] == nil,
-                  (popups[.fastJpegEffort] != nil) == !avif, (popups[.fastJpegSearch] != nil) == !avif,
+                  (popups[.fastJpegEffort] != nil) == !avif, (toggles[.fastJpegSearch] != nil) == !avif,
                   (popups[.fastQualitySearch] != nil) == avif else {
                 throw HostError(message: "Fast IMG displayed an ineffective encoder decision")
             }
+            var settings = MediaSettings()
+            settings.values = [.fastJpegEffort: "11", .fastJpegSearch: "adaptive", .fastQualitySearch: "adaptive"]
+            restore(settings)
+            let operation: OperationMode = avif ? .fastImgAvif : .fastImgJxl
+            let arguments = try settings.arguments(operation: operation, processing: .imagesOnly)
+            guard arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif),
+                  !arguments.contains("--img-jxl-distance"),
+                  arguments.contains("--img-jpeg-effort") == !avif,
+                  arguments.contains("--img-jpeg-effort-search") == !avif,
+                  arguments.contains("--img-quality-search") == avif else {
+                throw HostError(message: "Fast encoder decisions differed between preview and processing")
+            }
+            restore(MediaSettings())
         }
         if !fast {
             guard fieldSections[.vidForceMsSsimLong] == "vid" else { throw HostError(message: "Video quality decision escaped video settings") }
@@ -5196,7 +5341,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func restoreOptions(for operation: OperationMode) {
         for (control, name) in optionControls {
             let saved = preferences.object(forKey: optionKey(name, for: operation)) as? Bool
-            let enabledByDefault = name == "verbose" || name == "archive"
+            let enabledByDefault = name == "verbose"
                 || (name == "fresh" && operation.capabilities.supportsResume)
                 || (name == "shortestPath" && operation.backendMode == "fast-img")
             control.state = (saved ?? enabledByDefault) ? .on : .off
@@ -5976,8 +6121,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
         processingRow?.isHidden = !capabilities.usesProcessingSelection
-        // The launcher always enables --ultimate for supported operations.
-        // Show the effective policy instead of an off switch it cannot honor.
         ultimateCheck.isEnabled = false
         ultimateCheck.state = capabilities.supportsUltimate ? .on : .off
         verboseCheck.state = .on
@@ -5985,7 +6128,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
         resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
         freshCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
-        archiveCheck.isEnabled = configurationControlsEnabled && capabilities.supportsArchive
+        let exposesArchive = capabilities.supportsArchive && selectedOperation != .adjacent
+        archiveCheck.isEnabled = configurationControlsEnabled && exposesArchive
         retryCheck.isEnabled = configurationControlsEnabled && capabilities.supportsRetry
         if selectedOperation.backendMode == "fast-img", resumeCheck.state == .on {
             retryCheck.state = .on
@@ -6000,7 +6144,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         freshCheck.isHidden = true
         retryCheck.isHidden = true
         shortestPathCheck.isHidden = !capabilities.supportsShortestPath
-        archiveCheck.isHidden = !developerMode || !capabilities.supportsArchive
+        archiveCheck.isHidden = !developerMode || !exposesArchive
         for control in [forceCheck, plainCheck, inPlaceCheck] {
             control.isHidden = !developerMode || !capabilities.supportsStandardOptions
         }
@@ -6029,7 +6173,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         if !capabilities.supportsShortestPath { shortestPathCheck.state = .off }
         if !capabilities.supportsResume { resumeCheck.state = .off }
         if !capabilities.supportsResume { freshCheck.state = .off }
-        if !capabilities.supportsArchive { archiveCheck.state = .off }
+        if !exposesArchive { archiveCheck.state = .off }
         if !capabilities.supportsRetry { retryCheck.state = .off }
         if !capabilities.supportsStandardOptions {
             for control in [forceCheck, plainCheck, inPlaceCheck] { control.state = .off }
@@ -6075,7 +6219,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             shortestPath: shortestPathCheck.state == .on,
             resume: developerMode && resumeCheck.state == .on,
             fresh: developerMode && freshCheck.state == .on,
-            archive: archiveCheck.state == .on,
+            archive: developerMode && archiveCheck.state == .on,
             retry: developerMode && retryCheck.state == .on,
             force: forceCheck.state == .on,
             dryRun: dryRunCheck.state == .on,
@@ -6900,7 +7044,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               commandField.isHidden, watchCheck.isHidden,
               !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
               !verboseCheck.isEnabled,
-              verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
+              verboseCheck.state == .on, archiveCheck.state == .off, freshCheck.state == .on,
               !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Default options or developer gating failed") }
         content.layoutSubtreeIfNeeded()
@@ -7112,7 +7256,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         targetField.stringValue = "/tmp/media"
         let defaultArguments = try ProcessorCommand.arguments(from: request())
-        guard defaultArguments.contains("--verbose"), defaultArguments.contains("--archive"),
+        guard defaultArguments.contains("--verbose"), !defaultArguments.contains("--archive"),
+              defaultArguments.contains("--ultimate"), !defaultArguments.contains("--img-quality-search"),
               !defaultArguments.contains("--no-resume"), !defaultArguments.contains("--resume"),
               !defaultArguments.contains("--retry"), !defaultArguments.contains("--watch")
         else { throw HostError(message: "Default checkbox flags disagree with the command") }
@@ -7153,9 +7298,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerModeChanged()
         operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
         operationChanged()
-        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled,
+        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled, ultimateCheck.isHidden,
               archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
-              verboseCheck.state == .on, archiveCheck.state == .on,
+              verboseCheck.state == .on, archiveCheck.state == .off,
               shortestPathCheck.state == .on, freshCheck.state == .on
         else { throw HostError(message: "Incorrect option capabilities or defaults") }
         guard try ProcessorCommand.arguments(from: request()).contains("--shortest-path") else {
@@ -7348,6 +7493,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        guard MediaSetting.fastQualitySearch.choices.allSatisfy({
+            MediaSetting.fastQualitySearch.choiceTitle($0) != localized("settings.value.\($0)")
+        }) else { throw HostError(message: "AVIF choices lost codec-specific quality meaning") }
         let cancelledQuery = PreflightQuery()
         cancelledQuery.cancel()
         do {
@@ -7376,14 +7524,14 @@ private func runSelfTest() -> Int32 {
         }
         try runProcessingHistorySelfTests()
         let sourceDocument: [String: Any] = [
-            "config": ["img": ["jpeg_effort": 9]],
-            "sources": ["img.jpeg_effort": "CLI"],
-            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"]],
+            "config": ["img": ["jpeg_effort": 9, "jxl_distance": 0.0]],
+            "sources": ["img.jpeg_effort": "CLI", "img.jxl_distance": "default"],
+            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"], "img.jxl_distance": ["default"]],
         ]
         let sourceData = try JSONSerialization.data(withJSONObject: sourceDocument)
         let sourceSettings = try EffectiveRuntimeSettings.decode(sourceData)
         let sourcePreview = try sourceSettings.originDescription(key: "img.jpeg_effort", guiOverride: true)
-        guard sourcePreview.contains("img.jpeg_effort = 9"),
+        guard sourcePreview.contains("img.jpeg_effort = 9"), sourceSettings["img.jxl_distance"] == "0",
               sourcePreview.contains("1. default\n2. /synthetic/project.json\n3. CLI (GUI)") else {
             throw HostError(message: "Configuration preview lost its real values or override order")
         }
@@ -7436,6 +7584,7 @@ private func runSelfTest() -> Int32 {
         )
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
+                                            .imgJxlDistance: "0.25", .imgJxlEffort: "8", .imgQualitySearch: "fixed", .imgJxlSearch: "adaptive",
                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
@@ -7479,6 +7628,8 @@ private func runSelfTest() -> Int32 {
         let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
         guard imageEffective["execution.error_mode"] == "log-and-continue",
+               imageEffective["img.jxl_distance"] == "0.25", imageEffective["img.jxl_effort"] == "8",
+               imageEffective["img.quality_search"] == "fixed", imageEffective["img.jxl_effort_search"] == "adaptive",
               imageEffective["img.allow_size_tolerance"] == "true",
                imageEffective["img.size_tolerance_bytes"] == "4096",
                imageEffective.sourceChain["img.size_tolerance_bytes"]?.last == "CLI",
@@ -7491,6 +7642,19 @@ private func runSelfTest() -> Int32 {
               !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
               !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
             throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
+        }
+        var explorationSettings = configured.mediaSettings
+        explorationSettings.values[.imgQualitySearch] = "adaptive"
+        let explorationArguments = try explorationSettings.arguments(operation: .adjacent, processing: .imagesOnly)
+        let explorationRuntimeArguments = explorationSettings.runtimeArguments(fast: false, inheritedOnly: false)
+        let explorationEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + explorationRuntimeArguments)
+        guard explorationEffective["img.jxl_distance"] == nil, explorationEffective["img.jxl_effort"] == "8",
+              explorationEffective.sourceChain["img.jxl_effort"]?.last == "CLI",
+              explorationEffective["img.quality_search"] == "adaptive", explorationSettings.image.jxlDistance == 0.25,
+              !explorationArguments.contains("--img-jxl-distance"),
+              explorationArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == explorationRuntimeArguments else {
+            throw HostError(message: "Distance exploration preview lost its effort scope, inactive fixed distance, or canonical arguments")
         }
         configured.mediaSettings.values[.fastToolPolicy] = "single"
         let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]

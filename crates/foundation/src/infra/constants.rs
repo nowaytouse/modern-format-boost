@@ -1098,8 +1098,7 @@ pub const JXL_DEFAULT_EFFORT: u8 = 7;
 pub const JXL_DEEP_EFFORT: u8 = 8;
 /// Lossless-only high-effort setting.
 pub const JXL_EXPERIMENTAL_LOSSLESS_EFFORT: u8 = 11;
-/// Disabled production effort due to the documented e9/e10 efficiency
-/// inversion.
+/// Not selected by automatic defaults; explicit user targets may still use e9.
 pub const JXL_DISABLED_EFFORT: u8 = 9;
 /// Runtime JXL policy: default mode emits `e7`; ultimate mode emits production `e10`.
 #[must_use]
@@ -1110,10 +1109,10 @@ pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
         JXL_DEFAULT_EFFORT
     }
 }
-/// Runtime JXL policy: supports the production efforts used by this project.
+/// Non-expert encoder range; e11 requires an explicit target or expert opt-in.
 #[must_use]
 pub const fn is_supported_jxl_effort(effort: u8) -> bool {
-    effort == JXL_DEFAULT_EFFORT || effort == JXL_DEEP_EFFORT || effort == JXL_ULTIMATE_EFFORT
+    effort >= 1 && effort <= 10
 }
 /// Runtime JXL policy with explicit expert/lab opt-in for e11.
 #[must_use]
@@ -3604,8 +3603,12 @@ mod tests {
             JXL_EXPERIMENTAL_LOSSLESS_EFFORT,
             true
         ));
-        assert!(!is_supported_jxl_effort(6));
-        assert!(!is_supported_jxl_effort(JXL_DISABLED_EFFORT));
+        for effort in 1..=10 {
+            assert!(is_supported_jxl_effort(effort));
+        }
+        assert!(is_supported_jxl_effort(JXL_DISABLED_EFFORT));
+        assert!(!is_supported_jxl_effort(0));
+        assert!(!is_supported_jxl_effort_with_expert(12, true));
     }
 
     #[test]

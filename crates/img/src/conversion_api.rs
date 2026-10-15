@@ -251,12 +251,19 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
-                reason: "Static legacy lossy image, encode as near-lossless JXL".to_string(),
+                reason: "Static legacy lossy image, encode JXL at the private policy distance"
+                    .to_string(),
                 command: format!(
                     "cjxl '{}' '{}' -d {}",
                     input_path,
                     output_path.display(),
-                    foundation::constants::JXL_ULTIMATE_DISTANCE
+                    foundation::runtime_config::active()
+                        .filter(|config| {
+                            config.img.quality_search
+                                != foundation::runtime_config::QualitySearch::Adaptive
+                        })
+                        .and_then(|config| config.img.jxl_distance)
+                        .unwrap_or(foundation::constants::JXL_ULTIMATE_DISTANCE)
                 ),
                 expected_reduction: foundation::constants::EXPECTED_REDUCTION_JXL_LOSSY_STATIC,
             })
@@ -619,6 +626,35 @@ fn convert_to_jxl(
 ) -> Result<()> {
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
+    let distance = if compression == CompressionType::Lossy
+        && !matches!(
+            format,
+            DetectedFormat::JPEG
+                | DetectedFormat::WebP
+                | DetectedFormat::JXL
+                | DetectedFormat::AVIF
+                | DetectedFormat::HEIC
+                | DetectedFormat::HEIF
+                | DetectedFormat::MP4
+                | DetectedFormat::MOV
+                | DetectedFormat::MKV
+                | DetectedFormat::WEBM
+                | DetectedFormat::Unknown(_)
+        ) {
+        foundation::runtime_config::active()
+            .filter(|config| {
+                config.img.quality_search != foundation::runtime_config::QualitySearch::Adaptive
+            })
+            .and_then(|config| config.img.jxl_distance)
+            .unwrap_or(foundation::constants::JXL_ULTIMATE_DISTANCE)
+    } else {
+        0.0
+    };
+    if !distance.is_finite() || !(0.0..=25.0).contains(&distance) {
+        return Err(ImgQualityError::ConversionError(
+            "JXL distance must be finite and within 0..=25".to_string(),
+        ));
+    }
     let max_threads = foundation::thread_manager::get_balanced_thread_config(
         foundation::thread_manager::WorkloadType::Image,
     )
@@ -655,7 +691,7 @@ fn convert_to_jxl(
                 builder.distance(0.0);
             }
             CompressionType::Lossy => {
-                builder.distance(foundation::constants::JXL_ULTIMATE_DISTANCE);
+                builder.distance(distance);
             }
             CompressionType::Unknown | CompressionType::JpegReconstruction => {
                 return Err(ImgQualityError::ConversionError(format!(
@@ -682,7 +718,11 @@ fn convert_to_jxl(
             &output_abs,
             &efforts,
             |selected, candidate| {
-                let mut command = builder.output(candidate).effort(selected).build();
+                let mut command = builder
+                    .output(candidate)
+                    .effort(selected)
+                    .allow_expert_options(config.allow_expert_options())
+                    .build();
                 foundation::process_runner::run_command_with_liveness_timeout(
                     &mut command,
                     std::time::Duration::from_secs(120),

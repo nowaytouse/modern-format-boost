@@ -142,24 +142,40 @@ pub struct ImgPolicy {
     /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
     pub size_tolerance_bytes: u64,
     pub jpeg_effort: u8,
-    /// Direct pixel JXL encoding only; None retains the normal/ultimate or PNG effort.
+    /// Override distance only where the private media policy permits lossy encoding.
+    pub jxl_distance: Option<f32>,
+    /// None retains the normal/ultimate or PNG effort selected by the media policy.
     pub jxl_effort: Option<u8>,
+    /// Compare verified encodes at fixed quality before distance exploration.
     pub jxl_effort_search: EffortSearch,
     pub jpeg_effort_search: EffortSearch,
     pub quality_search: QualitySearch,
     pub fallback_policy: FallbackPolicy,
 }
 
-/// Parse a direct pixel JXL effort without enabling retired or experimental tiers.
+/// Parse a final direct pixel JXL effort.
 ///
 /// # Errors
-/// Rejects values outside the current production effort policy (7, 8 or 10).
+/// Rejects values outside the encoder range (1 through 11).
 pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
     let effort = value.parse::<u8>().map_err(|error| error.to_string())?;
-    if crate::constants::is_supported_jxl_effort(effort) {
+    if (1..=11).contains(&effort) {
         Ok(effort)
     } else {
-        Err("direct JXL effort must be 7, 8 or 10".into())
+        Err("direct JXL effort must be 1..11".into())
+    }
+}
+
+/// Parse a finite JXL distance within the encoder range.
+///
+/// # Errors
+/// Rejects non-finite values and distances outside 0 through 25.
+pub fn parse_jxl_distance(value: &str) -> std::result::Result<f32, String> {
+    let distance = value.parse::<f32>().map_err(|error| error.to_string())?;
+    if distance.is_finite() && (0.0..=25.0).contains(&distance) {
+        Ok(distance)
+    } else {
+        Err("JXL distance must be finite and within 0..25".into())
     }
 }
 
@@ -225,6 +241,7 @@ impl Default for ImgPolicy {
             allow_size_tolerance: false,
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             jpeg_effort: 11,
+            jxl_distance: None,
             jxl_effort: None,
             jxl_effort_search: EffortSearch::Fixed,
             jpeg_effort_search: EffortSearch::Fixed,
@@ -433,8 +450,14 @@ impl RuntimeConfig {
         ensure!(
             self.img
                 .jxl_effort
-                .is_none_or(crate::constants::is_supported_jxl_effort),
-            "img.jxl_effort must be null or 7, 8 or 10"
+                .is_none_or(|effort| (1..=11).contains(&effort)),
+            "img.jxl_effort must be 1..11 when specified"
+        );
+        ensure!(
+            self.img
+                .jxl_distance
+                .is_none_or(|distance| distance.is_finite() && (0.0..=25.0).contains(&distance)),
+            "img.jxl_distance must be finite and within 0..25 when specified"
         );
         ensure!(
             (1..=1000).contains(&self.photos.native_batch_size),
@@ -852,20 +875,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_jxl_effort_is_optional_bounded_and_independent_from_jpeg() -> Result<()> {
+    fn direct_jxl_effort_is_bounded_and_independent_from_jpeg() -> Result<()> {
         let mut config = RuntimeConfig::default();
         assert_eq!(config.img.jxl_effort, None);
+        assert_eq!(config.img.jxl_distance, None);
+        assert_eq!(config.img.jxl_effort_search, EffortSearch::Fixed);
+        assert_eq!(config.img.jpeg_effort_search, EffortSearch::Fixed);
         assert_eq!(
             serde_json::to_value(&config)?["img"]["jxl_effort"],
             Value::Null
         );
-        for effort in [7, 8, 10] {
+        for effort in 1..=11 {
             config.img.jxl_effort = Some(effort);
             config.validate()?;
             assert_eq!(parse_direct_jxl_effort(&effort.to_string()), Ok(effort));
             assert_eq!(config.img.jpeg_effort, 11);
         }
-        for effort in [0, 1, 6, 9, 11, u8::MAX] {
+        for effort in [0, 12, u8::MAX] {
             config.img.jxl_effort = Some(effort);
             assert!(config.validate().is_err());
             assert!(parse_direct_jxl_effort(&effort.to_string()).is_err());
@@ -885,6 +911,32 @@ mod tests {
         apply_file(&mut value, &saved, &mut sources, &mut source_chain)?;
         assert_eq!(value["img"]["jxl_effort"], Value::Null);
         assert_eq!(value["img"]["jpeg_effort"], 9);
+        Ok(())
+    }
+
+    #[test]
+    fn jxl_distance_rejects_non_finite_and_out_of_range_values() -> Result<()> {
+        let mut config = RuntimeConfig::default();
+        for distance in [0.0, 0.001, 0.4, 25.0] {
+            config.img.jxl_distance = Some(distance);
+            config.validate()?;
+            assert_eq!(parse_jxl_distance(&distance.to_string()), Ok(distance));
+        }
+        for distance in [-0.1, 25.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            config.img.jxl_distance = Some(distance);
+            assert!(config.validate().is_err());
+            assert!(parse_jxl_distance(&distance.to_string()).is_err());
+        }
+        config.img.jxl_distance = Some(0.4);
+        config.img.quality_search = QualitySearch::Adaptive;
+        config.validate()?;
+        config.img.quality_search = QualitySearch::Fixed;
+        config.validate()?;
+        config.img.jxl_distance = None;
+        config.validate()?;
+        let restored: RuntimeConfig =
+            serde_json::from_value(json!({"img":{"jpeg_effort_search":"adaptive"}}))?;
+        assert_eq!(restored.img.jpeg_effort_search, EffortSearch::Adaptive);
         Ok(())
     }
 

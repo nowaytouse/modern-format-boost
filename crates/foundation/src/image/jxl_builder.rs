@@ -147,12 +147,14 @@ impl ToolBuilder for CjxlBuilder {
         if let Some(e) = self.effort {
             let lossless_encode_e11 =
                 self.lossless_jpeg && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
-            let expert_e11 =
-                self.allow_expert_options && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
+            let expert_e11 = e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+                && (self.allow_expert_options
+                    || crate::runtime_config::active()
+                        .is_some_and(|config| config.img.jxl_effort == Some(e)));
             debug_assert!(
-                constants::is_supported_jxl_effort_with_expert(e, self.allow_expert_options)
+                constants::is_supported_jxl_effort_with_expert(e, expert_e11)
                     || (self.lossless_jpeg && (1..=11).contains(&e)),
-                "unsupported cjxl effort {e}; pixel policy permits e7/e8/e10 or explicit \
+                "unsupported cjxl effort {e}; pixel policy permits e1 through e10 or explicit \
                  expert e11; reversible JPEG permits e1 through e11"
             );
             if lossless_encode_e11 || expert_e11 {
