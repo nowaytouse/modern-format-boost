@@ -264,7 +264,11 @@
 "settings.imgJpegSearch" = "Compare JPEG levels (E)";
 "settings.imgQualitySearch" = "Select image quality automatically (D)";
 "settings.fastQualitySearch" = "AVIF quality selection";
-"settings.fastQualitySearch.help" = "Fixed Q100 is AVIF's highest quality setting, not a guarantee of mathematically lossless RGB. Automatic selection keeps the existing quality and delivery checks. It follows AVIF rules and does not use JXL D/E.";
+"settings.fastQualitySearch.help" = "Automatic selection and Follow AVIF rules keep any saved manual Q inactive. Automatic selection keeps the existing quality and delivery checks. AVIF does not use JXL D/E.";
+"settings.fastAvifQuality" = "Fixed quality (Q)";
+"settings.fastAvifQuality.help" = "Enter Q from 10 to 100; progressive AVIF requires at least Q10. Higher Q means higher quality, but no value universally guarantees lossless RGB. Archive rules may accept a true-lossless result first. Q affects only new lossy encodes; existing AVIF files are not re-encoded.";
+"settings.fastAvifSpeed" = "Encoding speed (Speed)";
+"settings.fastAvifSpeed.help" = "Enter Speed from 0 (slowest) to 10 (fastest). This is not compression effort (E). Archive rules may accept a true-lossless result first. Speed affects new true-lossless probes and lossy encodes; Q affects only new lossy encodes. Existing AVIF files are not re-encoded.";
 "settings.imgJxlSearch.help" = "Compare candidates up to the selected level, then choose a verified result with smaller image data; this can take longer. E is not a quality rating. If automatic quality is also enabled, select E first, then D.";
 "settings.imgJpegSearch.help" = "Off by default. Compare multiple lossless JPEG transcode candidates up to the selected effort; this can take longer, and every candidate must reconstruct the exact source JPEG. This comparison is independent of JXL image D.";
 "settings.imgQualitySearch.help" = "Only applies to sources the archive rules already allow to be lossy; PNG stays lossless and JPEG reconstruction stays reversible. Explicit D search keeps but does not use the manual value and starts from a lossless D0 baseline. Archive-rule mode searches only when its existing conditions call for it; otherwise it uses the manual value or rule baseline.";
@@ -272,7 +276,7 @@
 "settings.distance.adaptive" = "Select image quality automatically (D)";
 "settings.distance.mode-default" = "Image quality: follow archive rules";
 "settings.avif.mode-default" = "Follow AVIF rules";
-"settings.avif.fixed" = "Fixed highest quality (Q100)";
+"settings.avif.fixed" = "Manual quality (Q)";
 "settings.avif.adaptive" = "Select quality automatically";
 "settings.effort.fixed" = "Fixed compression level (E)";
 "settings.effort.adaptive" = "Compare compression levels (E)";

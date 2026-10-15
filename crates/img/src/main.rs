@@ -661,6 +661,12 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    cli.policy
+        .validate_avif_settings_scope(match &cli.command {
+            Commands::Config { .. } => true,
+            Commands::FastImg { strategy, .. } => strategy == "avif",
+            _ => false,
+        })?;
     if let Commands::FastImg { strategy, .. } = &cli.command {
         cli.policy.validate_fast_strategy(strategy)?;
     }
@@ -3429,8 +3435,14 @@ fn scan_fast_img_sources(
             planned_encode_count,
             src_dir.display()
         );
+        let quality = if foundation::jxl_effort_policy::quality_search_enabled(true) {
+            "search q=100..0 (saved fixed Q is inactive)".to_owned()
+        } else {
+            format!("fixed q={} (no quality search)", avif_meme_fixed_quality())
+        };
         println!(
-            "[MEME    ] AVIF quality search: q=100..0; use pure-media budget with smallest verified pure-media fallback"
+            "[MEME    ] AVIF {quality}; final speed={}; verified pure-media size policy remains required",
+            avif_meme_speed_domain().value()
         );
     } else {
         println!(
@@ -4542,6 +4554,7 @@ fn fast_img_effective_encode_parallelism(
 }
 
 /// Quality exploration result for AVIF Meme Mode.
+#[derive(Debug)]
 enum AvifQualityExploreResult {
     /// Highest verified candidate within the source's pure-media budget.
     Found {
@@ -4834,13 +4847,21 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
                 || message.contains("Unsupported file format")))
 }
 
+#[cfg(test)]
 const AVIF_MEME_SPEED: u8 =
     foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH.value();
 
 /// Keep every AVIF quality probe in one comparable speed domain.
 #[must_use]
-const fn avif_meme_speed_domain() -> foundation::exploration_policy::AvifSpeedDomain {
-    foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH
+fn avif_meme_speed_domain() -> foundation::exploration_policy::AvifSpeedDomain {
+    foundation::infra::runtime_config::active().map_or(
+        foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH,
+        |config| foundation::exploration_policy::AvifSpeedDomain::new(config.img.avif_speed),
+    )
+}
+
+fn avif_meme_fixed_quality() -> u8 {
+    foundation::infra::runtime_config::active().map_or(100, |config| config.img.avif_quality)
 }
 pub(crate) use foundation::infra::constants::AVIF_MEME_MIN_QUALITY;
 
@@ -5026,7 +5047,7 @@ fn probe_single_avif_quality(
 }
 
 /// Find a bounded quality anchor. The locator candidate is always discarded;
-/// only its coordinate is reused, and the final speed=0 domain must probe it
+/// only its coordinate is reused, and the selected final speed domain must probe it
 /// again before it can become delivery evidence.
 fn locate_avif_meme_quality(
     source: &Path,
@@ -5092,7 +5113,11 @@ fn explore_avif_meme_quality(
     };
 
     let mut evidence = AvifMemeQualityEvidence::default();
-    let mut coarse_quality = 100_u8;
+    let mut coarse_quality = if search_enabled {
+        100
+    } else {
+        avif_meme_fixed_quality()
+    };
     let mut locator_attempted = false;
     let mut locator_needed = false;
     let mut locator_quality = None;
@@ -5112,7 +5137,7 @@ fn explore_avif_meme_quality(
         ) {
             AvifMemeProbeOutcome::Fits(candidate) => {
                 evidence.record_fit(&candidate);
-                if candidate.quality == 100 {
+                if !search_enabled || candidate.quality == 100 {
                     return AvifQualityExploreResult::Found {
                         domain: avif_meme_speed_domain().encoder_domain(),
                         outcome: if search_enabled {
@@ -5248,7 +5273,10 @@ fn explore_avif_meme_quality(
             if search_enabled {
                 format!("100..={AVIF_MEME_MIN_QUALITY}")
             } else {
-                "100 (fixed; no lower qualities attempted)".to_owned()
+                format!(
+                    "{} (fixed; no other qualities attempted)",
+                    avif_meme_fixed_quality()
+                )
             },
             last_probe_error
                 .as_deref()
@@ -5275,11 +5303,12 @@ fn try_fast_img_lossless_avif(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> anyhow::Result<Option<foundation::TaskResult>> {
     let source_pure_media_size = source_pure_media_size(source, source_format)?;
+    let speed = avif_meme_speed_domain().value();
     let probe =
         img::lossless_converter::convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
-            AVIF_MEME_SPEED,
+            speed,
             metadata_retry,
             options,
         );
@@ -5316,7 +5345,7 @@ fn try_fast_img_lossless_avif(
         active_policy,
     ) {
         foundation::log_detail!(&format!(
-            "Meme Mode true-lossless AVIF is outside the active size policy: complete_file={complete_file_size}B pure_media={candidate_pure_media_size}B source_pure_media={source_pure_media_size}B; continuing with q-boundary exploration"
+            "Meme Mode true-lossless AVIF is outside the active size policy: complete_file={complete_file_size}B pure_media={candidate_pure_media_size}B source_pure_media={source_pure_media_size}B; continuing with the configured quality mode"
         ));
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "fast_img_lossless_probe_oversize_cleanup",
@@ -5334,7 +5363,7 @@ fn try_fast_img_lossless_avif(
         foundation::exploration_policy::ExplorationOutcome::LosslessTranscoded,
     );
     foundation::log_detail!(&format!(
-        "Meme Mode accepted true-lossless AVIF at speed={AVIF_MEME_SPEED}: pure_media={candidate_pure_media_size}B < source={source_pure_media_size}B"
+        "Meme Mode accepted true-lossless AVIF at speed={speed}: pure_media={candidate_pure_media_size}B < source={source_pure_media_size}B"
     ));
     Ok(Some(result))
 }
@@ -5502,7 +5531,7 @@ fn fast_img_run_encode_job_inner(
                     }
                     AvifQualityExploreResult::SourceUnavailable { reason } => {
                         anyhow::bail!(
-                            "AVIF source preflight could not produce a verifiable target output for {}: {reason}",
+                            "AVIF encoding/verification could not produce an eligible target output for {}; source retained: {reason}",
                             job.source.display()
                         );
                     }
@@ -14329,6 +14358,107 @@ mod fast_img_hardening_tests {
         );
         assert_eq!(super::AVIF_MEME_MIN_QUALITY, 0);
         assert!(img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7);
+    }
+
+    #[test]
+    fn fast_avif_numeric_settings_reach_verified_local_candidates() -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_FAST_AVIF_SETTINGS_CHILD";
+        let case = match std::env::var(CHILD) {
+            Ok(case) => case,
+            Err(std::env::VarError::NotPresent) => {
+                for case in ["fixed_minimum", "fixed_manual", "fixed_highest", "adaptive"] {
+                    let output = std::process::Command::new(std::env::current_exe()?)
+                        .args([
+                            "--exact",
+                            "fast_img_hardening_tests::fast_avif_numeric_settings_reach_verified_local_candidates",
+                            "--nocapture",
+                        ])
+                        .env(CHILD, case)
+                        .output()?;
+                    anyhow::ensure!(
+                        output.status.success()
+                            && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                        "{case} failed: {}\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let (manual_quality, speed, search, expected_quality) = match case.as_str() {
+            "fixed_minimum" => (10, 10, foundation::runtime_config::QualitySearch::Fixed, 10),
+            "fixed_manual" => (80, 8, foundation::runtime_config::QualitySearch::Fixed, 80),
+            "fixed_highest" => (
+                100,
+                0,
+                foundation::runtime_config::QualitySearch::Fixed,
+                100,
+            ),
+            "adaptive" => (
+                10,
+                8,
+                foundation::runtime_config::QualitySearch::Adaptive,
+                100,
+            ),
+            _ => anyhow::bail!("unknown isolated AVIF test case"),
+        };
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let mut config = foundation::runtime_config::RuntimeConfig::default();
+        config.img.avif_quality = manual_quality;
+        config.img.avif_speed = speed;
+        config.img.quality_search = search;
+        foundation::runtime_config::install(config)?;
+        foundation::tools::require(&["avifenc", "avifdec"]).map_err(anyhow::Error::msg)?;
+        let source = root.path().join("source.jpg");
+        image::ImageEncoder::write_image(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(
+                std::fs::File::create(&source)?,
+                100,
+            ),
+            image::RgbImage::new(128, 128).as_raw(),
+            128,
+            128,
+            image::ExtendedColorType::Rgb8,
+        )?;
+        let original = std::fs::read(&source)?;
+        let options = foundation::ConvertOptions {
+            output_dir: Some(root.path().join("output")),
+            flags: foundation::ConvertFlags::FORCE | foundation::ConvertFlags::AVIF_PROGRESSIVE,
+            ..Default::default()
+        };
+        let mut retry = img::lossless_converter::AvifencMetadataRetryState::strip_all();
+        let result = super::explore_avif_meme_quality(
+            &source,
+            FormatKind::Jpeg,
+            &source,
+            &options,
+            &mut retry,
+        );
+        let super::AvifQualityExploreResult::Found {
+            quality,
+            domain,
+            temp_path,
+            content_blake3,
+            ..
+        } = result
+        else {
+            anyhow::bail!("{case} did not produce a verified fitting AVIF: {result:?}");
+        };
+        assert_eq!(quality, expected_quality);
+        assert_eq!(
+            domain,
+            foundation::exploration_policy::EncoderDomain::avif(speed)
+        );
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&temp_path)?,
+            content_blake3
+        );
+        assert_eq!(std::fs::read(&source)?, original, "source bytes changed");
+        std::fs::remove_file(temp_path)?;
+        Ok(())
     }
 
     #[test]

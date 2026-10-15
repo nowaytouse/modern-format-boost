@@ -264,7 +264,11 @@
 "settings.imgJpegSearch" = "比较 JPEG 转码档位（E）";
 "settings.imgQualitySearch" = "自动选择画质（D）";
 "settings.fastQualitySearch" = "AVIF 质量选择";
-"settings.fastQualitySearch.help" = "固定 Q100 是 AVIF 的最高画质设置，不保证 RGB 数值无损。自动选择仍执行现有画质和交付核验。按 AVIF 规则处理，不套用 JXL 的 D/E。";
+"settings.fastQualitySearch.help" = "自动选择画质或按 AVIF 规则处理时，已保存的手动 Q 暂不生效。自动选择仍执行现有画质和交付核验。不套用 JXL 的 D/E。";
+"settings.fastAvifQuality" = "固定画质（Q）";
+"settings.fastAvifQuality.help" = "Q 范围为 10–100；渐进式 AVIF 的 Q 至少为 10。数值越大画质越高，但不保证 RGB 数值一定无损。归档规则可能优先接受真正无损的结果。Q 只影响新生成的有损编码；已有 AVIF 文件不会重新编码。";
+"settings.fastAvifSpeed" = "编码速度（Speed）";
+"settings.fastAvifSpeed.help" = "Speed 范围为 0（最慢）到 10（最快），它不是压缩档位（E）。归档规则可能优先接受真正无损的结果。Speed 影响新生成的真正无损探测和有损编码；Q 只影响新生成的有损编码。已有 AVIF 文件不会重新编码。";
 "settings.imgJxlSearch.help" = "比较不超过所选档位的候选，核验后选择图像数据更小的结果，可能更耗时。E 不是画质等级；若也开启自动画质，先比较 E，再选择 D。";
 "settings.imgJpegSearch.help" = "默认关闭。比较不超过所选档位的多个 JPEG 无损转码候选，可能更慢；每个候选都必须逐字节还原原 JPEG。此比较独立于 JXL 画质参数 D。";
 "settings.imgQualitySearch.help" = "仅用于归档规则允许有损的来源；PNG 保持无损，JPEG 保持可逆重构。显式自动选择 D 会保留但暂不使用手动值，从 D0 无损基线开始；按归档规则时，仅在现有条件要求搜索时才搜索，否则使用手动值或规则基线。";
@@ -272,7 +276,7 @@
 "settings.distance.adaptive" = "自动选择画质（D）";
 "settings.distance.mode-default" = "画质选择：按归档规则";
 "settings.avif.mode-default" = "按 AVIF 规则";
-"settings.avif.fixed" = "固定最高画质（Q100）";
+"settings.avif.fixed" = "手动指定画质（Q）";
 "settings.avif.adaptive" = "自动选择画质";
 "settings.effort.fixed" = "固定压缩档位（E）";
 "settings.effort.adaptive" = "比较压缩档位（E）";

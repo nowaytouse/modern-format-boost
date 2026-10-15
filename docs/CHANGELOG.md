@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Complete Fast AVIF numeric quality and speed settings (2026-10-15)
+
+- Add typed `img.avif_quality` and `img.avif_speed`, matching worker flags,
+  launcher forwarding, effective configuration sources and native GUI controls.
+  Manual Q accepts 10..100; the existing progressive-output policy rejects lower
+  qualities, as confirmed with the installed official encoder. Speed accepts
+  0..10, preserving explicit zero. Defaults remain Q100, automatic quality search
+  and final Speed0 rather than changing the historical processing policy.
+- Fixed mode probes its requested Q without lowering it on failure. Automatic
+  selection keeps saved manual Q inactive. Final-domain probes and true-lossless
+  attempts use the configured Speed; the existing Speed6 locator remains only a
+  coordinate hint whose candidate is discarded before final-domain verification.
+  Existing AVIF reuse, lossless-first admission, metadata policy, payload-size
+  requirements and delivery gates remain unchanged.
+- Keep AVIF controls out of standard IMG/Fast JXL and reject inapplicable CLI
+  options before processing. Rename fixed Q100 to manual quality in all three
+  languages; disable but retain Q during automatic selection, provide a Speed
+  popup, and label the numeric input and stepper for accessibility. Logs now
+  distinguish fixed/search modes and actual final Speed instead of always
+  announcing Q search at the hardcoded default.
+- Validation: 13 runtime configuration tests, 15 IMG runtime CLI tests, two
+  launcher tests, nine shared exploration tests, three AVIF evidence tests and
+  one isolated encoder regression pass. The latter runs four separate processes
+  for Q10/Speed10, Q80/Speed8, Q100/Speed0 and automatic search with saved Q10;
+  verified candidate hashes and unchanged synthetic JPEG bytes are checked.
+  Targeted worker/launcher and optimized warnings-as-errors Swift builds pass,
+  as do native self-tests and all three localization resource parsers. Native
+  Chinese/English dark and Japanese light settings windows were inspected,
+  including default Q100/Speed0 and saving/reloading Q80/Speed8 in a temporary
+  preference domain. No installed App, private media, Photos library or
+  dependency was changed; full CI and representative performance were not run.
+
 ### Make image settings easier to understand (2026-10-15)
 
 - Use quality, compression level, automatic selection and JPEG lossless

@@ -34,6 +34,12 @@ pub(super) struct RuntimeArgs {
     /// Standard IMG only: maximum pure-media growth in bytes when tolerance is enabled.
     #[arg(long, global = true)]
     size_tolerance_bytes: Option<u64>,
+    /// Fixed AVIF quality for Fast IMG AVIF; progressive AVIF requires Q10 or higher.
+    #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(10..=100))]
+    avif_quality: Option<u8>,
+    /// Final AVIF encoder speed for Fast IMG AVIF, in the backend's 0..10 range.
+    #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(0..=10))]
+    avif_speed: Option<u8>,
     /// JPEG retries and intermediate recovery; integrity verification always remains required.
     #[arg(long, global = true, value_enum)]
     fallback_policy: Option<FallbackPolicy>,
@@ -103,6 +109,18 @@ impl RuntimeArgs {
         anyhow::ensure!(
             strategy != "jxl" || self.quality_search.is_none(),
             "Fast IMG JXL reconstructs exact JPEG bytes and has no quality search"
+        );
+        anyhow::ensure!(
+            strategy != "jxl" || (self.avif_quality.is_none() && self.avif_speed.is_none()),
+            "AVIF quality and speed settings apply only to Fast IMG AVIF"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn validate_avif_settings_scope(&self, fast_avif_or_config: bool) -> Result<()> {
+        anyhow::ensure!(
+            fast_avif_or_config || (self.avif_quality.is_none() && self.avif_speed.is_none()),
+            "AVIF quality and speed flags require Fast IMG AVIF or img config"
         );
         Ok(())
     }
@@ -229,6 +247,20 @@ impl RuntimeArgs {
             "img.size_tolerance_bytes",
         );
         apply(
+            self.avif_quality,
+            &mut config.img.avif_quality,
+            sources,
+            source_chain,
+            "img.avif_quality",
+        );
+        apply(
+            self.avif_speed,
+            &mut config.img.avif_speed,
+            sources,
+            source_chain,
+            "img.avif_speed",
+        );
+        apply(
             self.fallback_policy,
             &mut config.img.fallback_policy,
             sources,
@@ -316,6 +348,8 @@ mod tests {
         let loaded = cli.policy.resolve(false)?;
         assert_eq!(loaded.config.img.jxl_distance, None);
         assert_eq!(loaded.config.img.jxl_effort, None);
+        assert_eq!(loaded.config.img.avif_quality, 100);
+        assert_eq!(loaded.config.img.avif_speed, 0);
         assert_eq!(
             loaded.config.img.jxl_effort_search,
             runtime_config::EffortSearch::Fixed
@@ -328,6 +362,78 @@ mod tests {
             loaded.config.img.quality_search,
             runtime_config::QualitySearch::ModeDefault
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_avif_values_layer_independently_of_quality_search() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let config = temp.path().join("image.json");
+        std::fs::write(
+            &config,
+            br#"{"config_version":1,"img":{"avif_quality":85,"avif_speed":4,"quality_search":"adaptive"}}"#,
+        )?;
+        let path = config.to_str().context("test configuration path")?;
+        let cli = crate::Cli::try_parse_from([
+            "img",
+            "fast-img",
+            "/unused",
+            "--strategy",
+            "avif",
+            "--config",
+            path,
+            "--avif-quality",
+            "10",
+            "--avif-speed",
+            "10",
+        ])?;
+        let loaded = cli.policy.resolve(false)?;
+        assert_eq!(loaded.config.img.avif_quality, 10);
+        assert_eq!(loaded.config.img.avif_speed, 10);
+        assert_eq!(
+            loaded.config.img.quality_search,
+            runtime_config::QualitySearch::Adaptive
+        );
+        assert_eq!(loaded.sources["img.avif_quality"], "CLI");
+        assert_eq!(loaded.sources["img.avif_speed"], "CLI");
+        assert_eq!(
+            loaded.source_chain["img.avif_quality"],
+            ["default", path, "CLI"]
+        );
+        assert_eq!(loaded.sources["img.quality_search"], path);
+        assert!(cli.policy.validate_fast_strategy("avif").is_ok());
+        assert!(cli.policy.validate_avif_settings_scope(true).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn fast_avif_flags_are_scoped_before_processing() -> Result<()> {
+        for flag in ["--avif-quality", "--avif-speed"] {
+            let run = crate::Cli::try_parse_from(["img", "run", "/unused", flag, "10"])?;
+            assert!(run.policy.validate_avif_settings_scope(false).is_err());
+
+            let fast_jxl = crate::Cli::try_parse_from([
+                "img",
+                "fast-img",
+                "/unused",
+                "--strategy",
+                "jxl",
+                flag,
+                "10",
+            ])?;
+            assert!(fast_jxl.policy.validate_fast_strategy("jxl").is_err());
+
+            let config = crate::Cli::try_parse_from(["img", "config", "show", flag, "10"])?;
+            assert!(config.policy.validate_avif_settings_scope(true).is_ok());
+        }
+        for (flag, invalid) in [
+            ("--avif-quality", "0"),
+            ("--avif-quality", "9"),
+            ("--avif-quality", "101"),
+            ("--avif-speed", "11"),
+        ] {
+            assert!(crate::Cli::try_parse_from(["img", "config", "show", flag, invalid]).is_err());
+        }
         Ok(())
     }
 

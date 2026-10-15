@@ -264,7 +264,11 @@
 "settings.imgJpegSearch" = "JPEG変換レベル（E）を比較";
 "settings.imgQualitySearch" = "画質を自動選択（D）";
 "settings.fastQualitySearch" = "AVIF 品質の選択";
-"settings.fastQualitySearch.help" = "固定Q100はAVIFの最高画質設定で、RGB値の数学的な可逆性を保証しません。自動選択でも既存の画質・出力検証を維持します。AVIFの規則に従い、JXLのD/Eは使いません。";
+"settings.fastQualitySearch.help" = "自動画質選択またはAVIFの規則に従う場合、保存済みの手動Qは使われません。自動選択では既存の画質・出力検証を維持します。AVIFではJXLのD/Eを使いません。";
+"settings.fastAvifQuality" = "画質を指定（Q）";
+"settings.fastAvifQuality.help" = "Qは10〜100で指定します。プログレッシブAVIFにはQ10以上が必要です。値が大きいほど画質が高くなりますが、RGB値の可逆性を一律に保証するものではありません。アーカイブ規則は先に真の可逆結果を採用する場合があります。Qは新しい有損エンコードにのみ適用し、既存のAVIFは再エンコードしません。";
+"settings.fastAvifSpeed" = "エンコード速度（Speed）";
+"settings.fastAvifSpeed.help" = "Speedは0（最も遅い）〜10（最も速い）です。圧縮レベル（E）ではありません。アーカイブ規則は先に真の可逆結果を採用する場合があります。Speedは新しい真の可逆プローブと有損エンコードに適用し、Qは新しい有損エンコードにのみ適用します。既存のAVIFは再エンコードしません。";
 "settings.imgJxlSearch.help" = "指定レベル以下の候補を比較し、検証後に画像データが小さい結果を選ぶため、時間がかかる場合があります。Eは画質の評価値ではありません。画質も自動選択する場合は、先にE、次にDを選びます。";
 "settings.imgJpegSearch.help" = "既定は無効です。選択値以下の複数のJPEG可逆変換候補を比較するため、時間がかかる場合があります。各候補で元JPEGの完全なバイト単位復元が必須です。この比較はJXLの画質設定Dとは独立しています。";
 "settings.imgQualitySearch.help" = "アーカイブ規則が有損を許可する入力にのみ適用し、PNGは可逆、JPEGは可逆再構成を維持します。Dを明示的に自動選択すると手動値は保持されますが使われず、可逆のD0基準から始めます。規則に従う場合は既存条件を満たす時だけ探索し、それ以外は手動値または規則の基準値を使います。";
@@ -272,7 +276,7 @@
 "settings.distance.adaptive" = "画質を自動選択（D）";
 "settings.distance.mode-default" = "画質選択：アーカイブ規則に従う";
 "settings.avif.mode-default" = "AVIFの規則に従う";
-"settings.avif.fixed" = "最高画質に固定（Q100）";
+"settings.avif.fixed" = "画質を指定（Q）";
 "settings.avif.adaptive" = "画質を自動選択";
 "settings.effort.fixed" = "圧縮レベルを固定（E）";
 "settings.effort.adaptive" = "圧縮レベル（E）を比較";

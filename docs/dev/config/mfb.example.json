@@ -8,6 +8,8 @@
     "quality_heuristic": false,
     "allow_size_tolerance": false,
     "size_tolerance_bytes": 524288,
+    "avif_quality": 100,
+    "avif_speed": 0,
     "jpeg_effort": 11,
     "jxl_distance": null,
     "jxl_effort": null,

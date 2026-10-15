@@ -1457,7 +1457,14 @@ D exploration retains the original D0 baseline, ladder, binary search and
 refinement in one selected E domain. Both enabled means sequential E-then-D,
 not unvalidated low-E assistance or globally optimal joint search.
 Fast JXL shows JPEG E, not a pixel D control. Fast AVIF keeps distinct Q/Speed
-semantics and its separate metadata policy. Preview and execution share typed
+semantics and its separate metadata policy. It now accepts fixed Q10..100 and
+final Speed0..10, independently of standard IMG settings. Automatic Q search
+keeps the saved manual quality inactive. Defaults remain automatic search with
+final Speed0 and a Speed6 locator; locator coordinates are re-probed in the
+selected final domain. Lossless-first admission and native AVIF reuse remain
+unchanged, and fixed Q is not silently lowered to manufacture success. The
+existing progressive-output policy requires Q at least 10.
+Preview and execution share typed
 preferences; GUI reset does not rewrite configuration files. Existing CLI
 interfaces and route-specific compatibility retries remain available.
 See [the private IMG policy](docs/dev/config/IMG_PRIVATE_POLICY.md) for the

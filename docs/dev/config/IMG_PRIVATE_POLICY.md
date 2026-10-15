@@ -68,10 +68,18 @@ the pixel encoder's D. Same-semantics compatibility retries remain subject to
 the configured fallback policy and exact reconstruction checks.
 
 Fast AVIF retains the existing bounded Q search, locator Speed and final Speed
-domains. Final verification uses the actual delivery domain. Its Meme Mode
+domains. `img.avif_quality` (10..100, default 100) supplies the one requested
+quality only when search is fixed; automatic search retains but does not use it.
+The existing progressive-output policy requires the fixed quality to be at least
+10; general encoder support for non-progressive Q0 does not relax that policy.
+`img.avif_speed` (0..10, default 0) selects the final domain for lossless and
+quality probes. The locator remains Speed6 and its candidate is discarded before
+re-probing in that final domain. Confirmed-lossless input still attempts the
+existing true-lossless route first; existing AVIF is not re-encoded by these
+settings. Final verification uses the actual delivery domain. Its Meme Mode
 metadata cleanup policy is distinct from ordinary JXL archival metadata
-preservation; this correction does not silently unify them. Arbitrary fixed
-Q/Speed settings are not claimed where no typed backend contract exists.
+preservation; these settings do not silently unify them. Fixed Q is not lowered
+to manufacture success if its candidate fails verification or the size policy.
 
 ## Evidence And Remaining Work
 
@@ -85,7 +93,7 @@ acceptance. See the dated changelog for the executed validation scope.
 
 This correction establishes historical algorithm/configuration boundaries and
 native parameter semantics. Full per-file persistent execution plans, a complete
-private policy file/runtime binding, arbitrary AVIF Q/Speed configuration,
+private policy file/runtime binding, further AVIF metadata-policy configuration,
 representative performance comparisons and full real-media/Photos acceptance
 remain separate work. Do not delete the temporary strategy requirements merely
 because this document or individual controls exist.

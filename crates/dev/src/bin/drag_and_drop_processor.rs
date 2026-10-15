@@ -196,6 +196,12 @@ struct Args {
     img_jxl_effort_search: Option<foundation::runtime_config::EffortSearch>,
     #[arg(long, value_enum)]
     img_quality_search: Option<foundation::runtime_config::QualitySearch>,
+    /// Fast IMG AVIF quality, from 10 through 100.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(10..=100))]
+    img_avif_quality: Option<u8>,
+    /// Fast IMG AVIF encoder speed, from 0 through 10.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=10))]
+    img_avif_speed: Option<u8>,
 
     /// Override image quality inference without affecting video settings.
     #[arg(long, num_args = 1, require_equals = true)]
@@ -1006,6 +1012,11 @@ const fn mode_uses_standard_pipeline(mode: &LaunchMode) -> bool {
 
 fn validate_media_options(args: &Args) -> Result<()> {
     anyhow::ensure!(
+        (args.img_avif_quality.is_none() && args.img_avif_speed.is_none())
+            || (args.mode == LaunchMode::FastImg && args.strategy.as_deref() == Some("avif")),
+        "AVIF quality and speed require --mode fast-img --strategy avif"
+    );
+    anyhow::ensure!(
         args.mode != LaunchMode::FastImg
             || args.strategy.as_deref() != Some("avif")
             || (args.img_jpeg_effort.is_none() && args.img_jpeg_effort_search.is_none()),
@@ -1081,6 +1092,8 @@ fn validate_media_options(args: &Args) -> Result<()> {
         || args.img_jxl_effort.is_some()
         || args.img_jxl_effort_search.is_some()
         || args.img_quality_search.is_some()
+        || args.img_avif_quality.is_some()
+        || args.img_avif_speed.is_some()
         || args.img_quality_heuristic.is_some()
         || args.img_allow_database.is_some()
         || args.img_error_mode.is_some();
@@ -1982,6 +1995,12 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
             foundation::runtime_config::QualitySearch::Adaptive => "adaptive",
         };
         command.extend(["--quality-search".to_owned(), value.to_owned()]);
+    }
+    if let Some(quality) = args.img_avif_quality {
+        command.extend(["--avif-quality".to_owned(), quality.to_string()]);
+    }
+    if let Some(speed) = args.img_avif_speed {
+        command.extend(["--avif-speed".to_owned(), speed.to_string()]);
     }
     if let Some(heuristic) = args.img_quality_heuristic {
         command.push(format!("--quality-heuristic={heuristic}"));
@@ -3413,6 +3432,8 @@ fn build_run_args(
         img_jxl_effort: None,
         img_jxl_effort_search: None,
         img_quality_search: None,
+        img_avif_quality: None,
+        img_avif_speed: None,
         img_quality_heuristic: None,
         img_allow_database: None,
         img_allow_size_tolerance: None,
@@ -4268,6 +4289,22 @@ mod tests {
     }
 
     #[test]
+    fn child_config_marker_preserves_fast_avif_numeric_overrides() -> Result<()> {
+        let mut marker = synthetic_config_marker("img");
+        marker["config"]["img"]["avif_quality"] = serde_json::json!(10);
+        marker["config"]["img"]["avif_speed"] = serde_json::json!(10);
+        marker["sources"]["img.avif_quality"] = serde_json::json!("CLI");
+        marker["sources"]["img.avif_speed"] = serde_json::json!("CLI");
+
+        let resolved = ChildConfigMarker::parse(&marker.to_string(), "img")?;
+        assert_eq!(resolved.config.img.avif_quality, 10);
+        assert_eq!(resolved.config.img.avif_speed, 10);
+        assert_eq!(resolved.sources["img.avif_quality"], "CLI");
+        assert_eq!(resolved.sources["img.avif_speed"], "CLI");
+        Ok(())
+    }
+
+    #[test]
     fn history_preserves_escaped_context_and_separate_run_outcomes() {
         let temp = tempfile::tempdir().unwrap();
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
@@ -4960,6 +4997,107 @@ mod tests {
             Args::try_parse_from(["mfb", "--img-fallback-policy", "silent", "/tmp/media"]).is_err()
         );
         assert!(Args::try_parse_from(["mfb", "--img-tool-policy", "unknown"]).is_err());
+    }
+
+    #[test]
+    fn fast_avif_numeric_settings_are_isolated_and_forwarded_exactly() -> Result<()> {
+        for arguments in [
+            vec!["mfb", "--mode", "images", "--img-avif-quality", "10"],
+            vec![
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--strategy",
+                "jxl",
+                "--img-avif-speed",
+                "10",
+            ],
+            vec!["mfb", "--mode", "fast-vid", "--img-avif-quality", "100"],
+        ] {
+            let args = Args::try_parse_from(arguments)?;
+            assert!(validate_media_options(&args).is_err());
+        }
+
+        for (flag, value) in [
+            ("--img-avif-quality", "-1"),
+            ("--img-avif-quality", "0"),
+            ("--img-avif-quality", "9"),
+            ("--img-avif-quality", "101"),
+            ("--img-avif-speed", "-1"),
+            ("--img-avif-speed", "11"),
+        ] {
+            assert!(
+                Args::try_parse_from([
+                    "mfb",
+                    "--mode",
+                    "fast-img",
+                    "--strategy",
+                    "avif",
+                    flag,
+                    value,
+                ])
+                .is_err()
+            );
+        }
+
+        let args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "fast-img",
+            "--strategy",
+            "avif",
+            "--img-avif-quality",
+            "10",
+            "--img-avif-speed",
+            "0",
+            "/synthetic/input",
+        ])?;
+        validate_media_options(&args)?;
+        let (command, _) =
+            fast_img_launch_command(&args, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--avif-quality", "10"])
+        );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--avif-speed", "0"])
+        );
+
+        let mut args = Args::try_parse_from([
+            "mfb",
+            "--mode",
+            "fast-img",
+            "--strategy",
+            "avif",
+            "--img-avif-quality",
+            "100",
+            "--img-avif-speed",
+            "10",
+            "/synthetic/input",
+        ])?;
+        validate_media_options(&args)?;
+        let (command, _) =
+            fast_img_launch_command(&args, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--avif-quality", "100"])
+        );
+        assert!(
+            command
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--avif-speed", "10"])
+        );
+        args.mode = LaunchMode::Images;
+        assert!(validate_media_options(&args).is_err());
+        Ok(())
     }
 
     #[test]
@@ -6389,6 +6527,8 @@ mod tests {
             img_jxl_effort: None,
             img_jxl_effort_search: None,
             img_quality_search: None,
+            img_avif_quality: None,
+            img_avif_speed: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6505,6 +6645,8 @@ mod tests {
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
                 img_quality_search: None,
+                img_avif_quality: None,
+                img_avif_speed: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,
@@ -6562,6 +6704,8 @@ mod tests {
             img_jxl_effort: None,
             img_jxl_effort_search: None,
             img_quality_search: None,
+            img_avif_quality: None,
+            img_avif_speed: None,
             img_quality_heuristic: None,
             img_allow_database: None,
             img_allow_size_tolerance: None,
@@ -6641,6 +6785,8 @@ mod tests {
                 img_jxl_effort: None,
                 img_jxl_effort_search: None,
                 img_quality_search: None,
+                img_avif_quality: None,
+                img_avif_speed: None,
                 img_quality_heuristic: None,
                 img_allow_database: None,
                 img_allow_size_tolerance: None,

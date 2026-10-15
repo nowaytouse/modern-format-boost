@@ -276,7 +276,7 @@ private struct ProcessorRequest {
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -301,6 +301,7 @@ private enum MediaSetting: String, CaseIterable {
     }
     func choiceTitle(_ value: String) -> String {
         if isEffort || isDistance { return value }
+        if self == .fastAvifSpeed { return value }
         if self == .imgJxlSearch || self == .fastJxlSearch || self == .imgJpegSearch || self == .fastJpegSearch { return localized("settings.effort.\(value)") }
         if self == .imgQualitySearch { return localized("settings.distance.\(value)") }
         if self == .fastQualitySearch { return localized("settings.avif.\(value)") }
@@ -309,7 +310,7 @@ private enum MediaSetting: String, CaseIterable {
     func appliesToFast(avif: Bool) -> Bool {
         if self == .fastJxlEffort || self == .fastJxlSearch { return false }
         if self == .fastJpegEffort || self == .fastJpegSearch { return !avif }
-        return self != .fastQualitySearch || avif
+        return ![.fastQualitySearch, .fastAvifQuality, .fastAvifSpeed].contains(self) || avif
     }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
@@ -335,6 +336,8 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJxlSearch, .fastJxlSearch: "--img-jxl-effort-search"
         case .imgJpegSearch, .fastJpegSearch: "--img-jpeg-effort-search"
         case .imgQualitySearch, .fastQualitySearch: "--img-quality-search"
+        case .fastAvifQuality: "--img-avif-quality"
+        case .fastAvifSpeed: "--img-avif-speed"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
         case .imgSizeTolerance: "--img-allow-size-tolerance"
@@ -368,6 +371,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
         case .imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch: ["fixed", "adaptive"]
         case .imgQualitySearch, .fastQualitySearch: ["mode-default", "fixed", "adaptive"]
+        case .fastAvifSpeed: (0...10).map(String.init)
         case .vidCodec: ["hevc", "av1"]
         case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
         case .photosBackend: ["auto", "native", "applescript"]
@@ -381,6 +385,7 @@ private enum MediaSetting: String, CaseIterable {
         case .photosTargetSeconds: 1...600
         case .cacheMaxBytes, .cacheTtlSeconds: 1...Int.max
         case .imgSizeToleranceBytes: 0...Int.max
+        case .fastAvifQuality: 10...100
         default: nil
         }
     }
@@ -396,6 +401,8 @@ private enum MediaSetting: String, CaseIterable {
         case .imgJxlSearch, .fastJxlSearch: "img.jxl_effort_search"
         case .imgJpegSearch, .fastJpegSearch: "img.jpeg_effort_search"
         case .imgQualitySearch, .fastQualitySearch: "img.quality_search"
+        case .fastAvifQuality: "img.avif_quality"
+        case .fastAvifSpeed: "img.avif_speed"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgSizeTolerance: "img.allow_size_tolerance"
@@ -428,6 +435,8 @@ private enum MediaSetting: String, CaseIterable {
         case .fastJxlEffort: "imgJxlEffort"
         case .fastJxlSearch: "imgJxlSearch"
         case .fastQualitySearch: "fastQualitySearch"
+        case .fastAvifQuality: "fastAvifQuality"
+        case .fastAvifSpeed: "fastAvifSpeed"
         case .fastHeuristic: "imgHeuristic"
         case .fastDatabase: "imgDatabase"
         case .fastToolPolicy: "imgToolPolicy"
@@ -464,6 +473,8 @@ private struct ImageSettings {
     var jxlEffort: Int?
     var jxlEffortSearch: EffortSearchMode?
     var qualitySearch: QualitySearchMode?
+    var avifQuality: Int?
+    var avifSpeed: Int?
     var qualityHeuristic: Bool?
     var allowDatabase: Bool?
     var toolPolicy: ToolSelectionPolicy?
@@ -524,6 +535,7 @@ private struct MediaSettings {
                 .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
                 .fastJxlSearch: fastImage.jxlEffortSearch?.rawValue,
                 .fastQualitySearch: fastImage.qualitySearch?.rawValue,
+                .fastAvifQuality: fastImage.avifQuality.map(String.init), .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
@@ -579,6 +591,8 @@ private struct MediaSettings {
                 case .fastJxlEffort: fastImage.jxlEffort = Int(value)
                 case .fastJxlSearch: fastImage.jxlEffortSearch = EffortSearchMode(rawValue: value)
                 case .fastQualitySearch: fastImage.qualitySearch = QualitySearchMode(rawValue: value)
+                case .fastAvifQuality: fastImage.avifQuality = Int(value)
+                case .fastAvifSpeed: fastImage.avifSpeed = Int(value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
                 case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
@@ -686,6 +700,8 @@ private struct MediaSettings {
 
     private func argumentValue(for field: MediaSetting) -> String? {
         if field == .imgJxlDistance && image.qualitySearch == .adaptive { return nil }
+        if field == .fastAvifQuality,
+           fastImage.qualitySearch == .adaptive || fastImage.qualitySearch == .modeDefault { return nil }
         return values[field]
     }
 
@@ -1644,7 +1660,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                         control = text
                     } else if let range = field.range {
                         text.widthAnchor.constraint(equalToConstant: 100).isActive = true
+                        text.setAccessibilityLabel(field.title)
+                        text.toolTip = localized("settings.\(field.labelKey).help")
                         let stepper = NSStepper()
+                        stepper.setAccessibilityLabel(field.title)
+                        stepper.toolTip = text.toolTip
                         stepper.minValue = Double(range.lowerBound)
                         stepper.maxValue = Double(range.upperBound)
                         stepper.increment = 1
@@ -2538,6 +2558,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         sourceGeneration = UUID()
         let distanceSearch = draft().image.qualitySearch?.rawValue ?? inherited[.imgQualitySearch]
         textFields[.imgJxlDistance]?.isEnabled = distanceSearch != "adaptive"
+        let avifQualityMode = draft().values[.fastQualitySearch] ?? inherited[.fastQualitySearch]
+        let avifQualityEnabled = avifQualityMode == "fixed"
+        textFields[.fastAvifQuality]?.isEnabled = avifQualityEnabled
+        updateStepper(for: .fastAvifQuality)
+        steppers[.fastAvifQuality]?.isEnabled = avifQualityEnabled && (steppers[.fastAvifQuality]?.isEnabled ?? false)
         if let toggle = toggles[.imgQualitySearch], let distanceSearch,
            MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
             toggle.title = distanceSearch == "mode-default"
@@ -3133,15 +3158,28 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 throw HostError(message: "Invalid JXL distance was accepted")
             }
             restore(MediaSettings())
+            var avifOnly = MediaSettings()
+            avifOnly.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "80", .fastAvifSpeed: "4"]
+            let ordinaryArguments = try avifOnly.arguments(operation: .adjacent, processing: .imagesOnly)
+            guard !ordinaryArguments.contains("--img-avif-quality"),
+                  !ordinaryArguments.contains("--img-avif-speed"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-quality"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-speed") else {
+                throw HostError(message: "Fast AVIF quality or speed leaked into standard IMG")
+            }
         }
         if fast {
             guard popups[.fastJxlEffort] == nil, popups[.fastJxlSearch] == nil,
                   (popups[.fastJpegEffort] != nil) == !avif, (toggles[.fastJpegSearch] != nil) == !avif,
-                  (popups[.fastQualitySearch] != nil) == avif else {
+                  (popups[.fastQualitySearch] != nil) == avif,
+                  (textFields[.fastAvifQuality] != nil) == avif,
+                  (popups[.fastAvifSpeed] != nil) == avif,
+                  textFields[.fastAvifSpeed] == nil else {
                 throw HostError(message: "Fast IMG displayed an ineffective encoder decision")
             }
             var settings = MediaSettings()
-            settings.values = [.fastJpegEffort: "11", .fastJpegSearch: "adaptive", .fastQualitySearch: "adaptive"]
+            settings.values = [.fastJpegEffort: "11", .fastJpegSearch: "adaptive", .fastQualitySearch: "fixed",
+                               .fastAvifQuality: "10", .fastAvifSpeed: "0"]
             restore(settings)
             let operation: OperationMode = avif ? .fastImgAvif : .fastImgJxl
             let arguments = try settings.arguments(operation: operation, processing: .imagesOnly)
@@ -3151,8 +3189,91 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                   !arguments.contains("--img-jxl-distance"),
                   arguments.contains("--img-jpeg-effort") == !avif,
                   arguments.contains("--img-jpeg-effort-search") == !avif,
-                  arguments.contains("--img-quality-search") == avif else {
+                  arguments.contains("--img-quality-search") == avif,
+                  arguments.contains("--img-avif-quality") == avif,
+                  arguments.contains("--img-avif-speed") == avif,
+                   (!avif || (arguments.contains("10") && arguments.contains("0")
+                       && textFields[.fastAvifQuality]?.isEnabled == true
+                       && steppers[.fastAvifQuality]?.isEnabled == true
+                       && textFields[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title
+                       && steppers[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title)),
+                  textFields[.fastAvifQuality]?.isEnabled != true || settings.fastImage.qualitySearch == .fixed else {
                 throw HostError(message: "Fast encoder decisions differed between preview and processing")
+            }
+            if avif {
+                let previousInherited = inherited
+                let previousInheritedSources = inheritedSources
+                let previousInheritedMixed = inheritedMixed
+                let preferenceSuite = "MFBGuiAVIFSettingsSelfTest.\(UUID().uuidString)"
+                let avifPreferences = UserDefaults(suiteName: preferenceSuite)!
+                defer { avifPreferences.removePersistentDomain(forName: preferenceSuite) }
+                var preferenceSettings = MediaSettings()
+                preferenceSettings.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "10", .fastAvifSpeed: "0"]
+                try preferenceSettings.save(to: avifPreferences)
+                let reloaded = MediaSettings(preferences: avifPreferences)
+                guard reloaded.fastImage.avifQuality == 10, reloaded.fastImage.avifSpeed == 0,
+                      reloaded.image.avifQuality == nil, reloaded.image.avifSpeed == nil else {
+                    throw HostError(message: "Fast AVIF preferences did not round-trip independently")
+                }
+                for mode in ["adaptive", "mode-default"] {
+                    settings.values[.fastQualitySearch] = mode
+                    settings.values[.fastAvifQuality] = "85"
+                    restore(settings)
+                    let inactive = try settings.arguments(operation: .fastImgAvif, processing: .imagesOnly)
+                    guard textFields[.fastAvifQuality]?.isEnabled == false,
+                          steppers[.fastAvifQuality]?.isEnabled == false,
+                          settings.values[.fastAvifQuality] == "85",
+                          popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "0",
+                          !inactive.contains("--img-avif-quality"), inactive.contains("--img-avif-speed"),
+                          inactive.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                            == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: true) else {
+                        throw HostError(message: "AVIF Q was lost, enabled, or emitted under an inactive quality mode")
+                    }
+                }
+                for (field, invalid) in [(MediaSetting.fastAvifQuality, "0"), (.fastAvifQuality, "9"),
+                                         (.fastAvifQuality, "101"), (.fastAvifQuality, "q"),
+                                         (.fastAvifSpeed, "-1"),
+                                         (.fastAvifSpeed, "11"), (.fastAvifSpeed, "1.5")] {
+                    var invalidSettings = MediaSettings()
+                    invalidSettings.values[.fastQualitySearch] = "fixed"
+                    invalidSettings.values[field] = invalid
+                    restore(invalidSettings)
+                    guard draft().values[field] == invalid else {
+                        throw HostError(message: "Invalid AVIF value was silently replaced")
+                    }
+                    do { try invalidSettings.validate() }
+                    catch { continue }
+                    throw HostError(message: "Invalid AVIF value was accepted")
+                }
+                var inheritedSettings = MediaSettings()
+                inheritedSettings.values = [.fastAvifQuality: "80", .fastAvifSpeed: "4"]
+                inherited = [.fastQualitySearch: "mode-default"]
+                restore(inheritedSettings)
+                guard textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastQualitySearch] == nil,
+                      draft().values[.fastAvifQuality] == "80",
+                      popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "4",
+                      !(try inheritedSettings.arguments(operation: .fastImgAvif, processing: .imagesOnly))
+                        .contains("--img-quality-search") else {
+                    throw HostError(message: "Unknown or inherited AVIF policy fabricated a GUI override or discarded Q")
+                }
+                inherited.removeAll()
+                inheritedSources.removeAll()
+                inheritedMixed.removeAll()
+                let defaults = MediaSettings()
+                restore(defaults)
+                guard textFields[.fastAvifQuality]?.stringValue.isEmpty == true,
+                      popups[.fastAvifSpeed]?.indexOfSelectedItem == -1,
+                      popups[.fastQualitySearch]?.indexOfSelectedItem == 0,
+                      textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastAvifQuality] == nil, draft().values[.fastAvifSpeed] == nil else {
+                    throw HostError(message: "Unknown AVIF defaults fabricated GUI overrides or enabled Q")
+                }
+                inherited = previousInherited
+                inheritedSources = previousInheritedSources
+                inheritedMixed = previousInheritedMixed
             }
             restore(MediaSettings())
         }

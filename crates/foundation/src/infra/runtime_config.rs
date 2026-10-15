@@ -141,6 +141,10 @@ pub struct ImgPolicy {
     pub allow_size_tolerance: bool,
     /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
     pub size_tolerance_bytes: u64,
+    /// Fixed AVIF quality used by Fast IMG AVIF; progressive AVIF requires at least Q10.
+    pub avif_quality: u8,
+    /// Final AVIF encoder speed used by Fast IMG AVIF delivery.
+    pub avif_speed: u8,
     pub jpeg_effort: u8,
     /// Override distance only where the private media policy permits lossy encoding.
     pub jxl_distance: Option<f32>,
@@ -240,6 +244,8 @@ impl Default for ImgPolicy {
             quality_heuristic: false,
             allow_size_tolerance: false,
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            avif_quality: 100,
+            avif_speed: 0,
             jpeg_effort: 11,
             jxl_distance: None,
             jxl_effort: None,
@@ -459,6 +465,11 @@ impl RuntimeConfig {
                 .is_none_or(|distance| distance.is_finite() && (0.0..=25.0).contains(&distance)),
             "img.jxl_distance must be finite and within 0..25 when specified"
         );
+        ensure!(
+            (10..=100).contains(&self.img.avif_quality),
+            "img.avif_quality must be 10..100 because progressive AVIF requires Q10 or higher"
+        );
+        ensure!(self.img.avif_speed <= 10, "img.avif_speed must be 0..10");
         ensure!(
             (1..=1000).contains(&self.photos.native_batch_size),
             "photos.native_batch_size must be 1..1000"
@@ -1066,6 +1077,42 @@ mod tests {
             old_config.img.size_tolerance_bytes,
             crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_avif_quality_and_speed_validate_encoder_bounds() -> Result<()> {
+        let defaults = RuntimeConfig::default();
+        assert_eq!(defaults.img.avif_quality, 100);
+        assert_eq!(defaults.img.avif_speed, 0);
+        defaults.validate()?;
+        let empty_config: RuntimeConfig = serde_json::from_value(json!({}))?;
+        assert_eq!(empty_config.img.avif_quality, 100);
+        assert_eq!(empty_config.img.avif_speed, 0);
+
+        for (quality, speed) in [(10, 0), (100, 10)] {
+            let config: RuntimeConfig = serde_json::from_value(json!({
+                "img": {"avif_quality": quality, "avif_speed": speed}
+            }))?;
+            config.validate()?;
+            assert_eq!(config.img.avif_quality, quality);
+            assert_eq!(config.img.avif_speed, speed);
+        }
+
+        for (field, value) in [
+            ("avif_quality", 0),
+            ("avif_quality", 9),
+            ("avif_quality", 101),
+            ("avif_speed", 11),
+        ] {
+            let config: RuntimeConfig = serde_json::from_value(json!({
+                "img": {field: value}
+            }))?;
+            assert!(
+                config.validate().is_err(),
+                "{field}={value} must be rejected"
+            );
+        }
         Ok(())
     }
 

@@ -42,6 +42,8 @@ img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
 img run /path/to/images --jxl-effort 8
 img run /path/to/images --jxl-effort-search adaptive --jxl-effort 8 --quality-search fixed
 img fast-img /path/to/images --jpeg-effort-search adaptive --jpeg-effort 11
+img fast-img /path/to/images --strategy avif --quality-search fixed --avif-quality 80 --avif-speed 6
+img --avif-quality 10 --avif-speed 0 config show --effective
 img fast-img /path/to/images --fallback-policy same-semantics --tool-policy single
 img fast-img /path/to/images --shortest-path --photos-backend native \
   --photos-import-root Archive --photos-album-name Family \
@@ -113,6 +115,29 @@ same-semantics compatibility retries remain governed by `fallback_policy`.
 Fast AVIF keeps its own Q search and locator/final Speed domains; JXL D/E does
 not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
 
+- **Fast AVIF fixed Q.** `img.avif_quality` accepts integers 10..100 (default 100).
+  The existing progressive-output policy requires Q at least 10; the encoder's
+  general non-progressive 0..100 range is not this route's supported range.
+  It is active only when `img.quality_search=fixed`; the selected Q is probed once
+  in the final speed domain, not silently lowered on failure or oversize. With
+  `mode-default` or `adaptive`, the stored Q is inactive and the existing bounded
+  search starts at Q100. A true-lossless candidate may still be accepted first
+  for a confirmed-lossless source; existing AVIF retains its no-reencode route.
+- **Fast AVIF final Speed.** `img.avif_speed` accepts integers 0..10 (default 0,
+  slowest; 10 is fastest). It applies to true-lossless probes, final-domain Q
+  probes and refinement. The existing fast locator remains Speed6; its temporary
+  candidate is discarded and its coordinate must be re-probed at the selected
+  final Speed. This is a speed selection, not Speed exploration or a JXL E value.
+  No runtime or compression benefit is guaranteed by changing it.
+
+`--avif-quality` and `--avif-speed` are valid for `img fast-img --strategy avif`
+and `img config` inspection, not ordinary IMG, Fast JXL or unrelated commands.
+The launcher uses `--img-avif-quality` and `--img-avif-speed` in Fast AVIF mode.
+Explicit Speed0 survives all boundaries. Q100 is the encoder's highest quality
+setting, not a guarantee of RGB mathematical losslessness for arbitrary inputs.
+All existing health, pixel, payload-size, metadata and delivery checks remain
+mandatory; a fixed Q request can fail them and must preserve the source.
+
 CLI flags and GUI preferences enter the same typed resolver. Existing
 `--explore`, `--match-quality`, `--ultimate` and `--archive` interfaces are not
 retired by this work. Explicit typed search preferences control their own
@@ -126,6 +151,11 @@ independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Standard IMG preferences are never
 copied into Fast IMG on read; each workflow uses its own saved overrides and the
 backend's effective configuration. Existing independent preferences stay intact.
+Fast AVIF adds **Manual quality** with a Q10..100 input and a Speed0..10 popup.
+Automatic or inherited AVIF-rule selection disables the Q input without deleting
+its saved value. Selecting manual quality reactivates it. Reset removes only the
+GUI overrides; effective source loading and validation still use the same worker
+resolver as execution. These controls are absent from standard IMG and Fast JXL.
 The ordinary Image tab keeps D and E values separate from their independent
 exploration checkboxes. E-only remains available without D exploration; D-only
 does not silently search E. Inactive fixed-D drafts remain saved, while D search
