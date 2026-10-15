@@ -180,11 +180,12 @@ struct Args {
     #[arg(long, value_enum)]
     img_tool_policy: Option<ToolPolicy>,
 
-    /// JPEG reversible recompression effort, from 1 through 11.
+    /// JPEG reversible recompression effort, from 1 through 11; full search compares all efforts.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
     img_jpeg_effort: Option<u8>,
+    /// JPEG search: fixed uses one effort, adaptive compares selected efforts, full compares all E1..E11.
     #[arg(long, value_enum)]
-    img_jpeg_effort_search: Option<foundation::runtime_config::EffortSearch>,
+    img_jpeg_effort_search: Option<foundation::runtime_config::JpegEffortSearch>,
 
     /// Override pixel distance only where the private media policy permits lossy encoding.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
@@ -1998,11 +1999,10 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
         command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
     }
     if let Some(strategy) = args.img_jpeg_effort_search {
-        let value = match strategy {
-            foundation::runtime_config::EffortSearch::Fixed => "fixed",
-            foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
-        };
-        command.extend(["--jpeg-effort-search".to_owned(), value.to_owned()]);
+        command.extend([
+            "--jpeg-effort-search".to_owned(),
+            strategy.as_str().to_owned(),
+        ]);
     }
     if let Some(distance) = args.img_jxl_distance {
         command.extend(["--jxl-distance".to_owned(), distance.to_string()]);
@@ -5196,7 +5196,7 @@ mod tests {
         fast.img_jxl_distance = Some(0.0);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = None;
-        fast.img_jpeg_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
+        fast.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Adaptive);
         validate_media_options(&fast)?;
         let (command, _) = fast_img_launch_command(&fast, Path::new("/repo"), input.path())?;
         assert!(
@@ -5208,6 +5208,30 @@ mod tests {
         assert!(!command.args.contains(&"--ultimate".to_owned()));
         assert!(!command.args.contains(&"--extreme-precision".to_owned()));
         assert!(!command.args.contains(&"--jxl-distance".to_owned()));
+        for mode in [LaunchMode::Images, LaunchMode::FastImg] {
+            let mut full = fast.clone();
+            full.mode = mode;
+            full.img_jpeg_effort = Some(1);
+            full.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Full);
+            validate_media_options(&full)?;
+            let command = if full.mode == LaunchMode::FastImg {
+                fast_img_launch_command(&full, Path::new("/repo"), input.path())?.0
+            } else {
+                rust_run_command(Path::new("/repo"), "img", &full, input.path())?
+            };
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--jpeg-effort-search", "full"])
+            );
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--jpeg-effort", "1"])
+            );
+        }
         fast.img_jxl_distance = Some(0.4);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = Some(0.0);
@@ -5222,6 +5246,8 @@ mod tests {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", &value]).is_ok());
         }
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "adaptive"]).is_ok());
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "full"]).is_ok());
+        assert!(Args::try_parse_from(["mfb", "--img-jxl-effort-search", "full"]).is_err());
         for value in ["-0.1", "25.1", "NaN", "inf"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-distance", value]).is_err());
         }

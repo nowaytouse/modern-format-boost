@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Algorithm-first settings and the in-app processing guide (2026-10-16)
+
+- Replace the question-mark URL shortcut with a native, searchable processing
+  guide: private archive policy, media routing, distinct D/E/Q searches, mandatory
+  delivery verification, Photos custody and partial-result/recovery semantics.
+  The guide stays in the app and shows the selected workflow as context. Use an
+  inline native Find bar with live matches; retain the standard window close
+  action and add the missing Command-W menu shortcut.
+- Default to JPEG `full`, pixel Effort `adaptive` and guarded quality `adaptive`.
+  Fixed levels remain manual opt-outs; explicitly saved choices are preserved.
+  Normal E7 can still have only one permitted pixel effort. Source policy, PNG D0,
+  archive restrictions, modern-format retention and all delivery Gates remain.
+- Move the existing pure AVIF quality-boundary search and six regression tests
+  into Foundation without changing its search order or callback contracts.
+  Keep JPEG complete-file selection separate from pixel payload/D selection.
+  Discard larger/superseded pixel-E temporary files immediately, retaining only
+  the current winner and challenger, as the JPEG full search already does.
+- Add `jpeg_effort_search=full` to ordinary IMG and Fast JXL. Independently
+  encode E1..E11 without assuming monotonic sizes or unproven equivalent Efforts.
+  Compare complete JXL bytes after identical delivery metadata enrichment; ties
+  retain lower E. Manual E11 and existing bounded comparison remain available.
+- Reconstruct the first candidate and every smaller contender, skip redundant
+  selection decodes for larger/tied candidates, retain only best/challenger and
+  publish the existing winner without re-encoding. Final delivery Gates remain
+  mandatory, and final metadata must not change the selected file's bytes.
+- Bind candidate selection to source, XMP and cjxl executable content. Incomplete,
+  unsupported, cancelled or failed searches retain the source and cannot claim a
+  full-domain minimum. Full mode does not silently switch Effort or repair input.
+  Preserve complete backend error chains, including the original encoder stderr.
+- Replace the native JPEG search checkbox with fixed / selected levels / all 11
+  choices. Hide the inactive numeric E in full mode while retaining its saved
+  value, distinguish JPEG reconstruction from other-image D/E, and keep normal
+  IMG and Fast JXL profiles independent. CLI, launch and effective-config inputs
+  share the dedicated typed JPEG mode; pixel Effort does not accept `full`.
+- Reject source-alias metadata candidates before writing. The unused legacy
+  UltraHDR migration interface explicitly rejects full search; current ordinary
+  IMG/Fast JXL JPEG archival does not use that old representation.
+- Keep pause acknowledgment at the owning file transaction boundary; check
+  cancellation between candidates and before publication without retaining a
+  transaction while waiting for its own pause acknowledgment.
+- Validation: 33 focused Foundation regressions, 16 IMG CLI configuration tests,
+  two IMG conversion/label checks and launcher normal/Fast forwarding pass.
+  An independent all-eleven reference selected E9 at 678 complete bytes;
+  both normal/Fast conversion option sets delivered byte-identical winners and
+  passed final delivery proof. Changed post-selection metadata preserves the old
+  output. The native warnings-as-errors build, settings/guide self-test and
+  language-resource validation pass. Chinese dark and English light guide windows,
+  topic switching, actual Find matches and window closing were inspected. These
+  are targeted checks, not representative throughput or Photos acceptance.
+
 ### Conservative partial results and checkpoint-first recovery (2026-10-15)
 
 - Default the native window to a compact result overview with expandable original

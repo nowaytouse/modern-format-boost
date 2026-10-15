@@ -46,22 +46,22 @@ pub(super) struct RuntimeArgs {
     /// Whether alternate encoding/recovery tools may be attempted.
     #[arg(long, global = true, value_enum)]
     tool_policy: Option<ToolPolicy>,
-    /// Effort for reversible JPEG-to-JXL encoding; independent of direct pixel JXL effort.
+    /// Effort for fixed/sparse reversible JPEG-to-JXL encoding; full search always compares E1..E11.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(1..=11))]
     jpeg_effort: Option<u8>,
-    /// Compare verified JPEG-reconstruction candidates at different efforts.
+    /// JPEG search: full (default) compares E1..E11; adaptive compares selected efforts; fixed uses one.
     #[arg(long, global = true, value_enum)]
-    jpeg_effort_search: Option<runtime_config::EffortSearch>,
+    jpeg_effort_search: Option<runtime_config::JpegEffortSearch>,
     /// Override distance for media where the private policy permits lossy encoding.
     #[arg(long, global = true, value_parser = runtime_config::parse_jxl_distance)]
     jxl_distance: Option<f32>,
     /// Fixed effort for direct pixel JXL encoding, or the highest candidate when searching.
     #[arg(long, global = true, value_parser = runtime_config::parse_direct_jxl_effort)]
     jxl_effort: Option<u8>,
-    /// Compare verified direct encodes at fixed quality before distance exploration.
+    /// Direct JXL effort: adaptive (default) compares verified encodes; fixed uses one effort.
     #[arg(long, global = true, value_enum)]
     jxl_effort_search: Option<runtime_config::EffortSearch>,
-    /// Quality-parameter search, independent of source inference and effort search.
+    /// Quality search: adaptive (default) searches policy-eligible media; fixed disables the search.
     #[arg(long, global = true, value_enum)]
     quality_search: Option<runtime_config::QualitySearch>,
     #[command(flatten)]
@@ -352,15 +352,15 @@ mod tests {
         assert_eq!(loaded.config.img.avif_speed, 0);
         assert_eq!(
             loaded.config.img.jxl_effort_search,
-            runtime_config::EffortSearch::Fixed
+            runtime_config::EffortSearch::Adaptive
         );
         assert_eq!(
             loaded.config.img.jpeg_effort_search,
-            runtime_config::EffortSearch::Fixed
+            runtime_config::JpegEffortSearch::Full
         );
         assert_eq!(
             loaded.config.img.quality_search,
-            runtime_config::QualitySearch::ModeDefault
+            runtime_config::QualitySearch::Adaptive
         );
         Ok(())
     }
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(loaded.config.img.jpeg_effort, 11);
         assert_eq!(
             loaded.config.img.jpeg_effort_search,
-            runtime_config::EffortSearch::Adaptive
+            runtime_config::JpegEffortSearch::Adaptive
         );
         for key in [
             "img.jxl_effort_search",
@@ -517,6 +517,49 @@ mod tests {
         }
         assert!(
             crate::Cli::try_parse_from(["img", "config", "show", "--quality-search", "automatic"])
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_jpeg_search_is_available_to_both_image_commands() -> Result<()> {
+        for command in ["run", "fast-img"] {
+            let defaults = crate::Cli::try_parse_from(["img", command, "/unused", "--no-config"])?
+                .policy
+                .resolve(false)?;
+            assert_eq!(
+                defaults.config.img.jpeg_effort_search,
+                runtime_config::JpegEffortSearch::Full
+            );
+            let cli = crate::Cli::try_parse_from([
+                "img",
+                command,
+                "/unused",
+                "--no-config",
+                "--jpeg-effort",
+                "1",
+                "--jpeg-effort-search",
+                "full",
+            ])?;
+            if command == "fast-img" {
+                cli.policy.validate_fast_strategy("jxl")?;
+                assert!(cli.policy.validate_fast_strategy("avif").is_err());
+            }
+            let loaded = cli.policy.resolve(false)?;
+            assert_eq!(
+                loaded.config.img.jpeg_effort_search,
+                runtime_config::JpegEffortSearch::Full
+            );
+            assert_eq!(loaded.config.img.jpeg_effort, 1);
+            assert_eq!(
+                loaded.config.img.jxl_effort_search,
+                runtime_config::EffortSearch::Adaptive
+            );
+            assert_eq!(loaded.sources["img.jpeg_effort_search"], "CLI");
+        }
+        assert!(
+            crate::Cli::try_parse_from(["img", "run", "/unused", "--jxl-effort-search", "full"])
                 .is_err()
         );
         Ok(())

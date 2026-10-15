@@ -4,8 +4,8 @@
 //! Uses `foundation` for common functionality (anti-duplicate, `TaskResult`, etc.)
 //!
 //! **Unified Compress Check**: All image conversions measure encoded static
-//! payload after metadata commit. Complete-file sizes are telemetry only and
-//! are never used as a fallback decision budget.
+//! payload after metadata commit, never a complete-file fallback budget.
+//! Separately, full JPEG effort comparison ranks metadata-enriched complete files.
 //! Covered paths: `convert_to_jxl`, `convert_jpeg_to_jxl` (including fallback),
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
@@ -13,12 +13,16 @@ use crate::Rational;
 use crate::{ImgQualityError, Result};
 use foundation::ImagePrecisionProfile;
 use foundation::ToolBuilder;
+pub use foundation::avif_quality_search::AVIF_QUALITY_BINARY_PROBE_BUDGET;
+use foundation::avif_quality_search::{
+    AVIF_HANDOFF_QUALITY_FLOOR as JXL_AVIF_HANDOFF_QUALITY_FLOOR,
+    search_highest_fitting_avif_quality_with,
+};
 use foundation::ffprobe_json::ColorInfo;
 use foundation::image_analyzer::{ConversionColorContext, ConversionColorRole};
 use foundation::image_jpeg_analysis::is_jpeg_complete;
 use foundation::infra::runtime_config::{self, FallbackPolicy, ToolPolicy};
 use foundation::jxl_effort_policy::JxlEffortPlan;
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -174,6 +178,14 @@ fn commit_with_size_check(
         extra_info
     ));
 
+    let prepared_jpeg_hash =
+        if preserve_codec_embedded_metadata && jpeg_full_effort_search_enabled() {
+            Some(foundation::common_utils::calculate_blake3_hash(
+                temp_output,
+            )?)
+        } else {
+            None
+        };
     let mut rejected = None;
     let committed = foundation::conversion::commit_temp_to_output_with_metadata_checked(
         temp_output,
@@ -183,6 +195,15 @@ fn commit_with_size_check(
         pixel_audit.already_verified(),
         preserve_codec_embedded_metadata,
         |candidate| {
+            if let Some(expected) = &prepared_jpeg_hash {
+                let actual = foundation::common_utils::calculate_blake3_hash(candidate)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                if actual != *expected {
+                    return Err(std::io::Error::other(
+                        "JPEG full effort winner changed during final metadata delivery; minimum selection is no longer valid",
+                    ));
+                }
+            }
             if !options.compress() && !options.require_output_delivery() {
                 return Ok(true);
             }
@@ -1764,6 +1785,20 @@ fn alternate_tools_allowed() -> bool {
     runtime_config::active().is_none_or(|config| config.tools.policy == ToolPolicy::Fallback)
 }
 
+fn jpeg_full_effort_search_enabled() -> bool {
+    runtime_config::active().is_none_or(|config| {
+        config.img.jpeg_effort_search == runtime_config::JpegEffortSearch::Full
+    })
+}
+
+fn jpeg_search_sidecar_identity(input: &Path) -> anyhow::Result<Option<(PathBuf, String)>> {
+    foundation::metadata::find_xmp_sidecar(input)
+        .map(|sidecar| {
+            foundation::common_utils::calculate_blake3_hash(&sidecar).map(|hash| (sidecar, hash))
+        })
+        .transpose()
+}
+
 fn run_cjxl_jpeg_encode_with_effort(
     input: &Path,
     temp_output: &Path,
@@ -1804,9 +1839,65 @@ fn run_cjxl_jpeg_encode_with_effort(
         effort,
         options.allow_expert_options(),
         options.apple_compat(),
-        same_semantics_retry_allowed(),
+        same_semantics_retry_allowed() && !jpeg_full_effort_search_enabled(),
         run,
     )
+}
+
+fn run_cjxl_jpeg_full_effort_search(
+    input: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+    max_threads: usize,
+) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    use anyhow::Context;
+    let tool = foundation::common_utils::resolve_tool_path("cjxl")
+        .context("JPEG full effort search requires cjxl")?;
+    let tool_hash = foundation::common_utils::calculate_blake3_hash(&tool)?;
+    let sidecar = jpeg_search_sidecar_identity(input)?;
+    log_detail!(&format!(
+        "JPEG full effort search: E1..E11, exact requested efforts, complete JXL bytes after delivery metadata; cjxl_blake3={tool_hash}; compatibility retries disabled"
+    ));
+    foundation::jxl_effort_policy::run_jpeg_full_effort_search(
+        input,
+        temp_output,
+        |effort, candidate| {
+            anyhow::ensure!(
+                jpeg_search_sidecar_identity(input)? == sidecar,
+                "JPEG full effort search incomplete: XMP sidecar changed"
+            );
+            let observation = run_cjxl_jpeg_encode_with_effort(
+                input,
+                candidate,
+                options,
+                max_threads,
+                None,
+                effort,
+            )?;
+            anyhow::ensure!(
+                observation.status.success(),
+                "JPEG full effort search incomplete at E{effort}: {}",
+                cjxl_failure_summary("full effort candidate", &observation)
+            );
+            foundation::conversion::enrich_reconstructible_jxl_candidate(input, candidate)?;
+            anyhow::ensure!(
+                jpeg_search_sidecar_identity(input)? == sidecar,
+                "JPEG full effort search incomplete: XMP sidecar changed during metadata delivery"
+            );
+            anyhow::ensure!(
+                foundation::common_utils::resolve_tool_path("cjxl").as_ref() == Some(&tool)
+                    && foundation::common_utils::calculate_blake3_hash(&tool)? == tool_hash,
+                "JPEG full effort search incomplete: cjxl executable changed"
+            );
+            Ok(observation)
+        },
+        |observation| observation.status.success(),
+        |candidate| {
+            foundation::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
+            Ok(())
+        },
+    )
+    .map(|(observation, _)| observation)
 }
 
 fn run_cjxl_jpeg_encode_attempts(
@@ -1941,6 +2032,16 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
     let plan = jpeg_lossless_encode_plan(mode, options);
     match plan.as_slice() {
         [JxlEffortPlan::Single(effort)] => {
+            if jpeg_full_effort_search_enabled()
+                && matches!(
+                    mode,
+                    JpegLosslessTranscodePlanMode::Policy
+                        | JpegLosslessTranscodePlanMode::AggressiveE11
+                )
+                && allow_jpeg_reconstruction != Some(0)
+            {
+                return run_cjxl_jpeg_full_effort_search(input, temp_output, options, max_threads);
+            }
             let efforts = if matches!(
                 mode,
                 JpegLosslessTranscodePlanMode::Policy
@@ -2642,7 +2743,11 @@ pub fn convert_jpeg_to_jxl(
 
     let output_cmd = match result {
         Ok(out) => out,
-        Err(e) if aggressive_e11 && same_semantics_retry_allowed() => {
+        Err(e)
+            if aggressive_e11
+                && same_semantics_retry_allowed()
+                && !jpeg_full_effort_search_enabled() =>
+        {
             let failure =
                 format!("cjxl aggressive e11 JPEG lossless transcode process failed: {e}");
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
@@ -2666,8 +2771,9 @@ pub fn convert_jpeg_to_jxl(
             ));
         }
         Err(e) => {
+            cleanup_temp_output(&temp_output, input);
             return Err(ImgQualityError::ConversionError(format!(
-                "cjxl JPEG lossless transcode process failed: {e}"
+                "cjxl JPEG lossless transcode process failed: {e:#}"
             )));
         }
     };
@@ -3785,10 +3891,6 @@ pub fn finalize_meme_avif_probe(
     .map_err(ImgQualityError::IoError)
 }
 
-const JXL_TO_AVIF_COARSE_STEP: u8 = 10;
-const JXL_TO_AVIF_MIN_QUALITY: u8 = 0;
-pub const AVIF_QUALITY_BINARY_PROBE_BUDGET: usize = 7;
-const JXL_AVIF_HANDOFF_QUALITY_FLOOR: u8 = 75;
 const JXL_AVIF_HANDOFF_EXHAUSTED_REASON: &str = "jxl_avif_handoff_exhausted";
 
 fn jxl_pre_avif_distance() -> f32 {
@@ -3806,132 +3908,6 @@ const fn avif_handoff_selection_label(quality: u8) -> &'static str {
     } else {
         "emergency AVIF fallback"
     }
-}
-
-fn search_highest_fitting_avif_quality_with<Probe>(
-    input_size: u64,
-    size_policy: Option<foundation::exploration_policy::SizePolicy>,
-    mut probe: Probe,
-) -> (Option<u8>, usize)
-where
-    Probe: FnMut(u8) -> std::result::Result<u64, String>,
-{
-    if size_policy.is_none() {
-        return match probe(100) {
-            Ok(_) => (Some(100), 1),
-            Err(_) => (None, 1),
-        };
-    }
-
-    let mut probe_count = 0;
-    let mut first_fitting = None;
-    let mut lowest_oversize = None;
-    let mut failed_qualities = BTreeSet::new();
-    let mut probe_quality = |quality: u8| {
-        probe_count += 1;
-        match probe(quality) {
-            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
-                first_fitting = Some(quality);
-                true
-            }
-            Ok(_) => {
-                lowest_oversize = Some(quality);
-                false
-            }
-            Err(_) => {
-                failed_qualities.insert(quality);
-                false
-            }
-        }
-    };
-
-    // q75 is a pivot in AVIF's own quality domain. It does not inherit or
-    // reinterpret a JXL distance: it only decides which half of AVIF's search
-    // interval needs expensive speed-0 probes.
-    let pivot_fits = probe_quality(JXL_AVIF_HANDOFF_QUALITY_FLOOR);
-    drop(probe_quality);
-    if pivot_fits {
-        // 101 is an exclusive sentinel, never passed to the encoder.
-        lowest_oversize = Some(101);
-    } else if failed_qualities.contains(&JXL_AVIF_HANDOFF_QUALITY_FLOOR) {
-        // The pivot supplied no ordering evidence; fall back to the complete
-        // coarse scan rather than guessing which interval contains the answer.
-        lowest_oversize = None;
-        let mut quality = 100;
-        loop {
-            probe_count += 1;
-            match probe(quality) {
-                Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
-                    first_fitting = Some(quality);
-                    break;
-                }
-                Ok(_) => lowest_oversize = Some(quality),
-                Err(_) => {
-                    failed_qualities.insert(quality);
-                }
-            }
-
-            if quality < JXL_TO_AVIF_MIN_QUALITY + JXL_TO_AVIF_COARSE_STEP {
-                break;
-            }
-            quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
-        }
-    } else {
-        let mut quality = JXL_AVIF_HANDOFF_QUALITY_FLOOR.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
-        loop {
-            probe_count += 1;
-            match probe(quality) {
-                Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
-                    first_fitting = Some(quality);
-                    break;
-                }
-                Ok(_) => lowest_oversize = Some(quality),
-                Err(_) => {
-                    failed_qualities.insert(quality);
-                }
-            }
-
-            if quality == JXL_TO_AVIF_MIN_QUALITY {
-                break;
-            }
-            quality = quality.saturating_sub(JXL_TO_AVIF_COARSE_STEP);
-        }
-    }
-
-    let Some(mut best_quality) = first_fitting else {
-        return (None, probe_count);
-    };
-    if best_quality == 100 {
-        return (Some(best_quality), probe_count);
-    }
-
-    for _ in 0..AVIF_QUALITY_BINARY_PROBE_BUDGET {
-        let Some(oversize_quality) = lowest_oversize else {
-            break;
-        };
-        if u16::from(best_quality) + 1 >= u16::from(oversize_quality) {
-            break;
-        }
-        let midpoint = best_quality + (oversize_quality - best_quality) / 2;
-        let Some(candidate) = (best_quality.saturating_add(1)..oversize_quality)
-            .filter(|quality| !failed_qualities.contains(quality))
-            .min_by_key(|quality| (quality.abs_diff(midpoint), std::cmp::Reverse(*quality)))
-        else {
-            break;
-        };
-        probe_count += 1;
-        match probe(candidate) {
-            Ok(size) if size_policy.is_none_or(|policy| policy.fits(size, input_size)) => {
-                best_quality = candidate;
-            }
-            Ok(_) => lowest_oversize = Some(candidate),
-            Err(_) => {
-                failed_qualities.insert(candidate);
-            }
-        }
-    }
-
-    (Some(best_quality), probe_count)
 }
 
 fn measure_avif_probe_payload(
@@ -6683,6 +6659,151 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_full_search_matches_all_final_metadata_candidates_and_shared_delivery()
+    -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_JPEG_FULL_SEARCH";
+        if std::env::var_os(CHILD).is_none() {
+            for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
+                if !test_tool_available(tool) {
+                    eprintln!("JPEG full-search integration requires {tool}; not exercised");
+                    return Ok(());
+                }
+            }
+            let isolated = tempdir()?;
+            let status = Command::new(std::env::current_exe()?)
+                .args(["--exact", "lossless_converter::tests::jpeg_full_search_matches_all_final_metadata_candidates_and_shared_delivery"])
+                .env(CHILD, "1")
+                .env("MFB_HOME_ROOT", isolated.path())
+                .env("MFB_LOG_DIR", isolated.path().join("logs"))
+                .status()?;
+            anyhow::ensure!(status.success(), "JPEG full-search integration failed");
+            return Ok(());
+        }
+        let mut config = runtime_config::RuntimeConfig::default();
+        config.img.jpeg_effort = 1;
+        config.img.jpeg_effort_search = runtime_config::JpegEffortSearch::Full;
+        config.img.fallback_policy = FallbackPolicy::SameSemantics;
+        runtime_config::install(config)?;
+        let root = tempdir()?;
+        let input = root.path().join("synthetic.jpg");
+        let magick = foundation::common_utils::resolve_tool_path("magick")
+            .ok_or_else(|| anyhow::anyhow!("missing magick"))?;
+        anyhow::ensure!(
+            Command::new(magick)
+                .args([
+                    "-size",
+                    "128x96",
+                    "gradient:#123456-#abcdef",
+                    "-quality",
+                    "57"
+                ])
+                .arg(&input)
+                .status()?
+                .success(),
+            "synthetic JPEG generation failed"
+        );
+        let sidecar = input.with_extension("xmp");
+        fs::write(&sidecar, br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Synthetic full-effort regression</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#)?;
+        let source_hash = foundation::common_utils::calculate_blake3_hash(&input)?;
+        let sidecar_hash = foundation::common_utils::calculate_blake3_hash(&sidecar)?;
+        let mut options = ConvertOptions {
+            output_dir: Some(root.path().join("normal")),
+            child_threads: 1,
+            ..ConvertOptions::default()
+        };
+        options.flags = ConvertFlags::FORCE
+            | ConvertFlags::APPLE_COMPAT
+            | ConvertFlags::ULTIMATE
+            | ConvertFlags::REQUIRE_JPEG_RECONSTRUCTION
+            | ConvertFlags::REQUIRE_OUTPUT_DELIVERY;
+        fs::create_dir(options.output_dir.as_ref().unwrap())?;
+        let mut reference: Option<(u8, Vec<u8>)> = None;
+        for effort in 1..=11 {
+            let candidate = root.path().join("reference.jxl");
+            let encoded =
+                run_cjxl_jpeg_encode_with_effort(&input, &candidate, &options, 1, None, effort)?;
+            anyhow::ensure!(
+                encoded.status.success(),
+                "reference E{effort}: {}",
+                encoded.stderr
+            );
+            foundation::conversion::enrich_reconstructible_jxl_candidate(&input, &candidate)?;
+            foundation::fast_img::verify_jxl_roundtrip_integrity(&input, &candidate)?;
+            let bytes = fs::read(&candidate)?;
+            if reference
+                .as_ref()
+                .is_none_or(|(_, best)| bytes.len() < best.len())
+            {
+                reference = Some((effort, bytes));
+            }
+            fs::remove_file(candidate)?;
+        }
+        let (expected_effort, expected_bytes) = reference.unwrap();
+        for mode in ["normal", "fast"] {
+            let directory = root.path().join(mode);
+            fs::create_dir_all(&directory)?;
+            options.output_dir = Some(directory);
+            options.flags.set(ConvertFlags::ULTIMATE, mode == "fast");
+            let result = convert_jpeg_to_jxl(&input, &options, None)?;
+            anyhow::ensure!(
+                result.success && !result.skipped,
+                "{mode}: {}",
+                result.message
+            );
+            let output = PathBuf::from(result.output_path.unwrap());
+            assert_eq!(
+                fs::read(&output)?,
+                expected_bytes,
+                "{mode}: final metadata changed candidate ranking or the winner was re-encoded"
+            );
+            foundation::fast_img::verify_final_jxl_delivery_integrity(&input, &output)?;
+        }
+        let prepared = root.path().join("prepared-winner.jxl");
+        fs::write(&prepared, &expected_bytes)?;
+        let original_sidecar = fs::read(&sidecar)?;
+        fs::write(
+            &sidecar,
+            String::from_utf8(original_sidecar.clone())?.replace(
+                "Synthetic full-effort regression",
+                "Changed after selection",
+            ),
+        )?;
+        let delivered = options.output_dir.as_ref().unwrap().join("synthetic.jxl");
+        let changed_metadata = commit_jpeg_to_jxl_success(
+            &input,
+            &prepared,
+            &delivered,
+            fs::metadata(&input)?.len(),
+            &options,
+            "JPEG full search mutation regression",
+            JpegTranscodeProof::BitstreamReconstruction,
+        );
+        assert!(
+            changed_metadata.is_err(),
+            "changed final metadata invalidates minimum selection"
+        );
+        assert_eq!(
+            fs::read(&delivered)?,
+            expected_bytes,
+            "failed delivery must retain the prior output"
+        );
+        fs::write(&sidecar, original_sidecar)?;
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&input)?,
+            source_hash
+        );
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&sidecar)?,
+            sidecar_hash
+        );
+        eprintln!(
+            "JPEG full-search synthetic reference: covered=11/11, selected=E{expected_effort}, complete_bytes={}",
+            expected_bytes.len()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn jpeg_reconstruction_final_delivery_preserves_orientation_and_bitstream() {
         for tool in ["magick", "cjxl", "djxl", "jxlinfo", "exiftool"] {
             if !test_tool_available(tool) {
@@ -7765,109 +7886,11 @@ mod tests {
     }
 
     #[test]
-    fn jxl_to_avif_search_finds_exact_highest_quality_boundary() {
-        let mut probes = Vec::new();
-        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
-            1_000,
-            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
-            |quality| {
-                probes.push(quality);
-                Ok(if quality <= 89 { 900 } else { 1_100 })
-            },
-        );
-
-        assert_eq!(quality, Some(89));
-        assert_eq!(probe_count, 6);
-        assert_eq!(probes, vec![75, 88, 94, 91, 89, 90]);
-    }
-
-    #[test]
-    fn jxl_to_avif_failed_probe_does_not_become_an_oversize_boundary() {
-        let (quality, _) = search_highest_fitting_avif_quality_with(
-            1_000,
-            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
-            |quality| {
-                if quality == 90 {
-                    Err("temporary encoder failure".to_string())
-                } else {
-                    Ok(if quality <= 89 { 900 } else { 1_100 })
-                }
-            },
-        );
-
-        assert_eq!(quality, Some(89));
-    }
-
-    #[test]
-    fn jxl_to_avif_failed_q75_pivot_falls_back_to_full_avif_search() {
-        let mut probes = Vec::new();
-        let (quality, _) = search_highest_fitting_avif_quality_with(
-            1_000,
-            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
-            |quality| {
-                probes.push(quality);
-                if quality == JXL_AVIF_HANDOFF_QUALITY_FLOOR {
-                    Err("q75 probe failed".to_string())
-                } else {
-                    Ok(if quality <= 89 { 900 } else { 1_100 })
-                }
-            },
-        );
-
-        assert_eq!(quality, Some(89));
-        assert_eq!(&probes[..3], &[75, 100, 90]);
-    }
-
-    #[test]
-    fn jxl_to_avif_search_exhausts_before_preserving_source() {
-        assert_eq!(JXL_TO_AVIF_MIN_QUALITY, 0);
-        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
-            1_000,
-            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
-            |_quality| Ok(1_000),
-        );
-
-        assert_eq!(quality, None);
-        assert_eq!(probe_count, 9);
-    }
-
-    #[test]
-    fn jxl_to_avif_search_uses_verified_q0_as_emergency_final_fallback() {
-        let mut probes = Vec::new();
-        let (quality, probe_count) = search_highest_fitting_avif_quality_with(
-            1_000,
-            Some(foundation::exploration_policy::SizePolicy::StrictlySmaller),
-            |quality| {
-                probes.push(quality);
-                Ok(if quality == 0 { 900 } else { 1_100 })
-            },
-        );
-
-        assert_eq!(quality, Some(0));
-        assert_eq!(
-            avif_handoff_selection_label(quality.unwrap_or_default()),
-            "emergency AVIF fallback"
-        );
-        assert_eq!(probe_count, 11);
-        assert_eq!(probes, vec![75, 65, 55, 45, 35, 25, 15, 5, 0, 2, 1]);
-    }
-
-    #[test]
-    fn required_delivery_accepts_verified_oversized_q100_avif() {
-        let mut probes = Vec::new();
-        let (quality, probe_count) =
-            search_highest_fitting_avif_quality_with(1_000, None, |quality| {
-                probes.push(quality);
-                Ok(1_100)
-            });
-
-        assert_eq!(quality, Some(100));
-        assert_eq!(probe_count, 1);
-        assert_eq!(probes, vec![100]);
-        assert_eq!(
-            avif_handoff_selection_label(quality.unwrap_or_default()),
-            "high-quality handoff"
-        );
+    fn avif_handoff_labels_distinguish_high_quality_from_emergency_delivery() {
+        assert_eq!(avif_handoff_selection_label(0), "emergency AVIF fallback");
+        assert_eq!(avif_handoff_selection_label(74), "emergency AVIF fallback");
+        assert_eq!(avif_handoff_selection_label(75), "high-quality handoff");
+        assert_eq!(avif_handoff_selection_label(100), "high-quality handoff");
     }
 
     #[test]

@@ -2,17 +2,17 @@
 //!
 //! The policy is intentionally centralized so JPEG bitstream encode and
 //! direct JXL encode paths do not drift. Effort is an encoder policy, not a
-//! quality-search axis: opt-in effort search selects one domain before quality search.
+//! quality-search axis: effort search selects one domain before quality search by default.
 //!
 //! ## Encoder tiers
-//! Direct pixel encoding retains mode defaults for callers without runtime config;
+//! Direct pixel encoding uses bounded search by default with these mode ceilings;
 //! explicit runtime targets can select 1 through 11 (e11 needs the expert switch).
 //!   - Normal   → e7  (`ultimate = false`)
 //!   - Ultimate → e10 (`ultimate = true`)
 //!
-//! JPEG bitstream transcode is a separate primitive. libjxl's e11 path is
-//! optimized for lossless JPEG reconstruction and is selected for that context;
-//! an unsupported expert switch permits the verified production fallback.
+//! JPEG bitstream transcode is separate: full search compares e1 through e11.
+//! Manual fixed/bounded modes retain their verified compatibility fallback;
+//! full search never substitutes a different effort for an unavailable candidate.
 //! Pixel e11 is explicit only, because it can be disproportionately slow.
 //!
 //! `archive` is a product mode, not a third encoder tier. Normalize it to the
@@ -28,18 +28,31 @@ use crate::constants;
 #[must_use]
 pub fn quality_search_enabled(default: bool) -> bool {
     crate::runtime_config::active()
-        .map_or(default, |config| config.img.quality_search.enabled(default))
+        .map_or_else(crate::runtime_config::QualitySearch::default, |config| {
+            config.img.quality_search
+        })
+        .enabled(default)
 }
 
 /// Compare bounded efforts at a fixed quality before entering one distance-search domain.
 #[must_use]
 pub fn effort_candidates(kind: JxlEffortContext, selected: u8) -> Vec<u8> {
-    use crate::runtime_config::EffortSearch;
-    let strategy = crate::runtime_config::active().map(|config| match kind {
-        JxlEffortContext::DirectEncode => config.img.jxl_effort_search,
-        JxlEffortContext::JpegLosslessTranscode => config.img.jpeg_effort_search,
+    use crate::runtime_config::{EffortSearch, JpegEffortSearch};
+    let config = crate::runtime_config::active();
+    let jpeg_search = config.map_or_else(JpegEffortSearch::default, |config| {
+        config.img.jpeg_effort_search
     });
-    if strategy != Some(EffortSearch::Adaptive) {
+    let adaptive = match kind {
+        JxlEffortContext::DirectEncode => {
+            config.map_or_else(EffortSearch::default, |config| config.img.jxl_effort_search)
+                == EffortSearch::Adaptive
+        }
+        JxlEffortContext::JpegLosslessTranscode => jpeg_search == JpegEffortSearch::Adaptive,
+    };
+    if kind == JxlEffortContext::JpegLosslessTranscode && jpeg_search == JpegEffortSearch::Full {
+        return (1..=11).collect();
+    }
+    if !adaptive {
         return vec![selected];
     }
     let domain: &[u8] = match kind {
@@ -115,7 +128,12 @@ pub fn run_effort_search<T>(
             .as_ref()
             .is_none_or(|(_, _, previous_size, _)| size < *previous_size)
         {
+            if let Some((_, _, _, previous)) = best.take() {
+                std::fs::remove_file(previous).context("remove superseded effort candidate")?;
+            }
             best = Some((observation, *effort, size, candidate));
+        } else {
+            std::fs::remove_file(candidate).context("remove larger effort candidate")?;
         }
     }
     let (observation, effort, size, candidate) =
@@ -131,6 +149,137 @@ pub fn run_effort_search<T>(
         efforts.len()
     ));
     Ok((observation, effort))
+}
+
+/// Compare every independent JPEG reconstruction effort using complete candidate files.
+///
+/// The run callback must finish identical archive metadata preparation for each effort.
+/// Only contenders are decoded; all eleven encodes must complete before publication.
+/// # Errors
+/// Any incomplete candidate, failed reconstruction, changed input or changed winner
+/// rejects the full search without publishing a partial minimum.
+pub fn run_jpeg_full_effort_search<T>(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    mut run: impl FnMut(u8, &std::path::Path) -> anyhow::Result<T>,
+    successful: impl Fn(&T) -> bool,
+    mut verify_reconstruction: impl FnMut(&std::path::Path) -> anyhow::Result<()>,
+) -> anyhow::Result<(T, u8)> {
+    use anyhow::Context;
+    anyhow::ensure!(
+        input != output,
+        "JPEG effort staging must not replace its source"
+    );
+    if output.try_exists()? {
+        anyhow::ensure!(
+            !crate::checkpoint::files_alias_same_inode(input, output)?,
+            "JPEG effort staging aliases its source"
+        );
+    }
+    let identity = crate::common_utils::calculate_blake3_hash(input)?;
+    let scratch = tempfile::Builder::new()
+        .prefix("mfb-jpeg-full-effort-")
+        .tempdir_in(output.parent().context("JPEG full effort output parent")?)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        scratch.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )?;
+    let result = (|| {
+        let mut best = None;
+        for effort in 1..=11 {
+            // Pausing here would retain the file guard needed by the outer pause acknowledgment.
+            anyhow::ensure!(
+                !crate::batch_control::is_cancelled()?,
+                "JPEG full effort search cancelled; no candidate selected"
+            );
+            let candidate = scratch.path().join(format!("e{effort}.jxl"));
+            let started = std::time::Instant::now();
+            let observation = run(effort, &candidate)
+                .with_context(|| format!("JPEG full effort search incomplete at e{effort}"))?;
+            anyhow::ensure!(
+                successful(&observation),
+                "JPEG full effort search incomplete: e{effort} encoding failed"
+            );
+            let metadata = std::fs::symlink_metadata(&candidate)
+                .with_context(|| format!("JPEG full effort search incomplete: e{effort} output"))?;
+            anyhow::ensure!(
+                metadata.file_type().is_file() && metadata.len() > 0,
+                "JPEG full effort search incomplete: e{effort} output is not a nonempty regular file"
+            );
+            anyhow::ensure!(
+                !crate::checkpoint::files_alias_same_inode(input, &candidate)?,
+                "JPEG full effort search incomplete: e{effort} candidate aliases its source"
+            );
+            let size = metadata.len();
+            anyhow::ensure!(
+                crate::common_utils::calculate_blake3_hash(input)? == identity,
+                "JPEG full effort search incomplete: input changed after e{effort}"
+            );
+            let contender = best
+                .as_ref()
+                .is_none_or(|(_, _, best_size, _, _)| size < *best_size);
+            if contender {
+                let candidate_hash = crate::common_utils::calculate_blake3_hash(&candidate)?;
+                verify_reconstruction(&candidate).with_context(|| {
+                    format!("JPEG full effort search incomplete: e{effort} reconstruction")
+                })?;
+                anyhow::ensure!(
+                    std::fs::symlink_metadata(&candidate)?.file_type().is_file()
+                        && crate::common_utils::calculate_blake3_hash(&candidate)?
+                            == candidate_hash,
+                    "JPEG full effort search incomplete: e{effort} candidate changed during verification"
+                );
+                anyhow::ensure!(
+                    crate::common_utils::calculate_blake3_hash(input)? == identity,
+                    "JPEG full effort search incomplete: input changed during e{effort} verification"
+                );
+                if let Some((_, _, _, previous, _)) = best.take() {
+                    std::fs::remove_file(previous)
+                        .context("remove superseded JPEG effort candidate")?;
+                }
+                best = Some((observation, effort, size, candidate, candidate_hash));
+            } else {
+                std::fs::remove_file(candidate).context("remove larger JPEG effort candidate")?;
+            }
+            crate::log_detail!(&format!(
+                "JPEG full effort candidate e{effort}: file={size}B, reconstruction_verified={contender}, elapsed_ms={}",
+                started.elapsed().as_millis()
+            ));
+        }
+        let (observation, effort, size, candidate, verified_hash) =
+            best.context("JPEG full effort search has no verified candidate")?;
+        anyhow::ensure!(
+            !crate::batch_control::is_cancelled()?,
+            "JPEG full effort search cancelled before publication"
+        );
+        anyhow::ensure!(
+            crate::common_utils::calculate_blake3_hash(input)? == identity,
+            "JPEG full effort search incomplete: input changed before selection"
+        );
+        let metadata = std::fs::symlink_metadata(&candidate)?;
+        anyhow::ensure!(
+            metadata.file_type().is_file()
+                && metadata.len() == size
+                && crate::common_utils::calculate_blake3_hash(&candidate)? == verified_hash,
+            "JPEG full effort search incomplete: verified winner changed before selection"
+        );
+        std::fs::rename(candidate, output).context("publish complete JPEG effort search winner")?;
+        crate::log_detail!(&format!(
+            "JPEG full effort selected e{effort}: file={size}B, covered=11/11, equivalent_efforts_skipped=0, winning_file_reused=true; final delivery verification remains required"
+        ));
+        Ok((observation, effort))
+    })();
+    let cleanup = scratch
+        .close()
+        .context("clean owned JPEG effort search scratch");
+    match (result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(cleanup)) => {
+            Err(error.context(format!("scratch cleanup also failed: {cleanup:#}")))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +371,304 @@ mod tests {
     use super::*;
 
     #[test]
+    fn jpeg_full_search_covers_all_efforts_and_reuses_nonmonotonic_minimum() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::write(&source, b"synthetic JPEG input")?;
+        let mut encoded = Vec::new();
+        let mut verified = Vec::new();
+        let sizes = [95, 95, 90, 90, 90, 91, 89, 85, 70, 72, 72];
+        let (observation, effort) = run_jpeg_full_effort_search(
+            &source,
+            &output,
+            |effort, candidate| {
+                encoded.push(effort);
+                std::fs::write(candidate, vec![effort; sizes[usize::from(effort - 1)]])?;
+                assert!(std::fs::read_dir(candidate.parent().unwrap())?.count() <= 2);
+                Ok(effort)
+            },
+            |_| true,
+            |candidate| {
+                verified.push(std::fs::read(candidate)?[0]);
+                Ok(())
+            },
+        )?;
+        assert_eq!(encoded, (1..=11).collect::<Vec<_>>());
+        assert_eq!(verified, [1, 3, 7, 8, 9]);
+        assert_eq!((observation, effort), (9, 9));
+        assert_eq!(std::fs::read(&output)?, vec![9; 70]);
+        assert_eq!(std::fs::read_dir(root.path())?.count(), 2);
+        let mut decodes = 0;
+        let ((), effort) = run_jpeg_full_effort_search(
+            &source,
+            &output,
+            |effort, candidate| {
+                std::fs::write(candidate, vec![effort; 20])?;
+                Ok(())
+            },
+            |()| true,
+            |_| {
+                decodes += 1;
+                Ok(())
+            },
+        )?;
+        assert_eq!(effort, 1, "same-size ties retain lower effort");
+        assert_eq!(
+            decodes, 1,
+            "larger/equal later candidates need no reconstruction"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn jpeg_full_search_rejects_incomplete_or_changed_candidates_without_publishing()
+    -> anyhow::Result<()> {
+        for cause in [
+            "launch",
+            "failed",
+            "missing",
+            "empty",
+            "directory",
+            "verify",
+            "source",
+            "candidate",
+            "winner",
+        ] {
+            let root = tempfile::tempdir()?;
+            let source = root.path().join("source");
+            let output = root.path().join("output");
+            std::fs::write(&source, b"synthetic JPEG input")?;
+            std::fs::write(&output, b"previous staging")?;
+            let winner = std::cell::RefCell::new(None::<std::path::PathBuf>);
+            let result = run_jpeg_full_effort_search(
+                &source,
+                &output,
+                |effort, candidate| {
+                    if effort == 3 && cause == "launch" {
+                        anyhow::bail!("synthetic encoder failure");
+                    }
+                    if effort == 3 && cause == "missing" {
+                        return Ok(true);
+                    }
+                    if effort == 3 && cause == "directory" {
+                        std::fs::create_dir(candidate)?;
+                        return Ok(true);
+                    }
+                    let size = if effort == 1 {
+                        30
+                    } else if effort == 2 {
+                        20
+                    } else {
+                        40
+                    };
+                    std::fs::write(
+                        candidate,
+                        vec![
+                            effort;
+                            if effort == 3 && cause == "empty" {
+                                0
+                            } else {
+                                size
+                            }
+                        ],
+                    )?;
+                    if effort == 10 && cause == "source" {
+                        std::fs::write(&source, b"changed JPEG input")?;
+                    }
+                    if effort == 10 && cause == "winner" {
+                        std::fs::write(winner.borrow().as_ref().unwrap(), vec![b'z'; 20])?;
+                    }
+                    Ok(!(effort == 3 && cause == "failed"))
+                },
+                |success| *success,
+                |candidate| {
+                    if candidate.ends_with("e2.jxl") && cause == "verify" {
+                        anyhow::bail!("reconstruction mismatch");
+                    }
+                    if candidate.ends_with("e2.jxl") && cause == "candidate" {
+                        std::fs::write(candidate, vec![b'z'; 20])?;
+                    }
+                    *winner.borrow_mut() = Some(candidate.to_path_buf());
+                    Ok(())
+                },
+            );
+            assert!(
+                result.is_err(),
+                "{cause} must not publish a partial minimum"
+            );
+            assert_eq!(std::fs::read(&output)?, b"previous staging");
+            assert_eq!(
+                std::fs::read_dir(root.path())?.count(),
+                2,
+                "{cause}: owned scratch leaked"
+            );
+        }
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        std::fs::write(&source, b"synthetic JPEG input")?;
+        assert!(
+            run_jpeg_full_effort_search(&source, &source, |_, _| Ok(()), |()| true, |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&source)?, b"synthetic JPEG input");
+        Ok(())
+    }
+
+    #[test]
+    fn jpeg_full_search_defers_pause_until_transaction_end_and_honors_cancellation()
+    -> anyhow::Result<()> {
+        use anyhow::Context;
+        const CHILD: &str = "MFB_TEST_JPEG_FULL_CONTROL_BOUNDARY";
+        if std::env::var_os(CHILD).is_some() {
+            let control = std::path::PathBuf::from(
+                std::env::var_os("MFB_BATCH_CONTROL_FILE").context("isolated control path")?,
+            );
+            let root = control.parent().context("isolated control parent")?;
+            let source = root.join("source");
+            let output = root.join("output");
+            let ack = root.join("control.ack");
+            std::fs::write(&source, b"synthetic JPEG input")?;
+            let transaction = crate::batch_control::begin_transaction()?;
+            let mut encoded = Vec::new();
+            run_jpeg_full_effort_search(
+                &source,
+                &output,
+                |effort, candidate| {
+                    encoded.push(effort);
+                    if effort == 1 {
+                        std::fs::write(&control, "paused\npause-at-file-boundary")?;
+                    }
+                    std::fs::write(candidate, vec![effort; 20])?;
+                    assert!(
+                        !ack.try_exists()?,
+                        "pause acknowledged inside a file transaction"
+                    );
+                    Ok(())
+                },
+                |()| true,
+                |_| Ok(()),
+            )?;
+            assert_eq!(encoded, (1..=11).collect::<Vec<_>>());
+            assert!(!ack.try_exists()?);
+            drop(transaction);
+            let previous = std::fs::read(&output)?;
+            for cancel_effort in [2, 11] {
+                std::fs::write(&control, "running\nstart-next-file")?;
+                let _transaction = crate::batch_control::begin_transaction()?;
+                let mut encoded = Vec::new();
+                let result = run_jpeg_full_effort_search(
+                    &source,
+                    &output,
+                    |effort, candidate| {
+                        encoded.push(effort);
+                        std::fs::write(candidate, vec![effort; 10])?;
+                        if effort == cancel_effort {
+                            std::fs::write(&control, "cancelled\ncancel-current-file")?;
+                        }
+                        Ok(())
+                    },
+                    |()| true,
+                    |_| Ok(()),
+                );
+                assert!(
+                    result.is_err(),
+                    "cancellation must reject the current winner"
+                );
+                assert_eq!(encoded, (1..=cancel_effort).collect::<Vec<_>>());
+                assert_eq!(std::fs::read(&output)?, previous);
+                assert!(!ack.try_exists()?);
+            }
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let control = root.path().join("control");
+        #[cfg(unix)]
+        std::fs::set_permissions(
+            root.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )?;
+        std::fs::write(&control, "running\nisolated-file-transaction")?;
+        let name = format!(
+            "{}::jpeg_full_search_defers_pause_until_transaction_end_and_honors_cancellation",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").context("test module path")?;
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        command
+            .args(["--exact", name])
+            .env(CHILD, "1")
+            .env("MFB_BATCH_CONTROL_FILE", control)
+            .env("MFB_HOME_ROOT", root.path())
+            .env("MFB_LOG_DIR", root.path().join("logs"));
+        let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
+            .wait_liveness_timeout(
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(5),
+                "JPEG effort search file transaction pause/cancel regression",
+            )?;
+        anyhow::ensure!(
+            output.status.success(),
+            "isolated JPEG effort control regression failed: {} {}",
+            output.stdout,
+            output.stderr
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn installed_jpeg_full_search_keeps_all_efforts_independent_of_fixed_value()
+    -> anyhow::Result<()> {
+        use crate::runtime_config::{EffortSearch, JpegEffortSearch, RuntimeConfig};
+        use anyhow::Context;
+        const CHILD: &str = "MFB_TEST_INSTALLED_JPEG_FULL_SEARCH";
+        if std::env::var_os(CHILD).is_some() {
+            assert!(crate::runtime_config::active().is_none());
+            assert_eq!(
+                effort_candidates(JxlEffortContext::JpegLosslessTranscode, 1),
+                (1..=11).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                effort_candidates(JxlEffortContext::DirectEncode, 9),
+                [7, 8, 9]
+            );
+            assert!(quality_search_enabled(false));
+            let mut config = RuntimeConfig::default();
+            config.img.jpeg_effort_search = JpegEffortSearch::Full;
+            config.img.jxl_effort_search = EffortSearch::Adaptive;
+            crate::runtime_config::install(config)?;
+            for selected in [1, 5, 9, 11] {
+                assert_eq!(
+                    effort_candidates(JxlEffortContext::JpegLosslessTranscode, selected),
+                    (1..=11).collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(
+                effort_candidates(JxlEffortContext::DirectEncode, 9),
+                [7, 8, 9]
+            );
+            return Ok(());
+        }
+        let name = format!(
+            "{}::installed_jpeg_full_search_keeps_all_efforts_independent_of_fixed_value",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").context("test module path")?;
+        let root = tempfile::tempdir()?;
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", name])
+            .env(CHILD, "1")
+            .env("MFB_HOME_ROOT", root.path())
+            .env("MFB_LOG_DIR", root.path().join("logs"))
+            .status()?;
+        anyhow::ensure!(
+            status.success(),
+            "isolated JPEG full search config test failed"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn effort_search_selects_verified_payload_and_preserves_prior_output_on_failure()
     -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -233,6 +680,7 @@ mod tests {
             &output,
             &[7, 8, 10],
             |effort, candidate| {
+                assert!(std::fs::read_dir(candidate.parent().unwrap())?.count() <= 1);
                 std::fs::write(candidate, vec![b'x'; if effort == 7 { 40 } else { 20 }])?;
                 Ok(effort)
             },
@@ -400,7 +848,7 @@ mod tests {
             config.img.jxl_effort = Some(effort);
             config.img.jpeg_effort = 9;
             config.img.jxl_effort_search = crate::runtime_config::EffortSearch::Adaptive;
-            config.img.jpeg_effort_search = crate::runtime_config::EffortSearch::Adaptive;
+            config.img.jpeg_effort_search = crate::runtime_config::JpegEffortSearch::Adaptive;
             config.tools.paths.insert(
                 "cjxl".into(),
                 std::path::PathBuf::from(

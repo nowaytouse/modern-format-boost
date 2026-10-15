@@ -152,7 +152,8 @@ pub struct ImgPolicy {
     pub jxl_effort: Option<u8>,
     /// Compare verified encodes at fixed quality before distance exploration.
     pub jxl_effort_search: EffortSearch,
-    pub jpeg_effort_search: EffortSearch,
+    /// Select reversible JPEG candidates independently of direct pixel encoding.
+    pub jpeg_effort_search: JpegEffortSearch,
     pub quality_search: QualitySearch,
     pub fallback_policy: FallbackPolicy,
 }
@@ -186,17 +187,42 @@ pub fn parse_jxl_distance(value: &str) -> std::result::Result<f32, String> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffortSearch {
-    #[default]
     Fixed,
+    #[default]
     Adaptive,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum QualitySearch {
+pub enum JpegEffortSearch {
+    #[value(help = "Use the selected JPEG effort only")]
+    Fixed,
+    #[value(
+        help = "Compare selected efforts up to the selected JPEG effort; not an exhaustive search"
+    )]
+    Adaptive,
     #[default]
+    #[value(help = "Compare every JPEG effort E1 through E11; ignores the selected JPEG effort")]
+    Full,
+}
+
+impl JpegEffortSearch {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Adaptive => "adaptive",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum QualitySearch {
     ModeDefault,
     Fixed,
+    #[default]
     Adaptive,
 }
 
@@ -249,9 +275,9 @@ impl Default for ImgPolicy {
             jpeg_effort: 11,
             jxl_distance: None,
             jxl_effort: None,
-            jxl_effort_search: EffortSearch::Fixed,
-            jpeg_effort_search: EffortSearch::Fixed,
-            quality_search: QualitySearch::ModeDefault,
+            jxl_effort_search: EffortSearch::Adaptive,
+            jpeg_effort_search: JpegEffortSearch::Full,
+            quality_search: QualitySearch::Adaptive,
             fallback_policy: FallbackPolicy::Strict,
         }
     }
@@ -890,8 +916,9 @@ mod tests {
         let mut config = RuntimeConfig::default();
         assert_eq!(config.img.jxl_effort, None);
         assert_eq!(config.img.jxl_distance, None);
-        assert_eq!(config.img.jxl_effort_search, EffortSearch::Fixed);
-        assert_eq!(config.img.jpeg_effort_search, EffortSearch::Fixed);
+        assert_eq!(config.img.jxl_effort_search, EffortSearch::Adaptive);
+        assert_eq!(config.img.jpeg_effort_search, JpegEffortSearch::Full);
+        assert_eq!(config.img.quality_search, QualitySearch::Adaptive);
         assert_eq!(
             serde_json::to_value(&config)?["img"]["jxl_effort"],
             Value::Null
@@ -947,7 +974,56 @@ mod tests {
         config.validate()?;
         let restored: RuntimeConfig =
             serde_json::from_value(json!({"img":{"jpeg_effort_search":"adaptive"}}))?;
-        assert_eq!(restored.img.jpeg_effort_search, EffortSearch::Adaptive);
+        assert_eq!(restored.img.jpeg_effort_search, JpegEffortSearch::Adaptive);
+        Ok(())
+    }
+
+    #[test]
+    fn jpeg_full_search_round_trips_independently_of_pixel_search() -> Result<()> {
+        let restored: RuntimeConfig = serde_json::from_value(json!({
+            "img": {
+                "jpeg_effort": 1,
+                "jpeg_effort_search": "full",
+                "jxl_effort_search": "fixed"
+            }
+        }))?;
+        restored.validate()?;
+        assert_eq!(restored.img.jpeg_effort_search, JpegEffortSearch::Full);
+        assert_eq!(restored.img.jpeg_effort, 1);
+        assert_eq!(restored.img.jxl_effort_search, EffortSearch::Fixed);
+        let serialized = serde_json::to_value(&restored)?;
+        assert_eq!(serialized["img"]["jpeg_effort_search"], "full");
+        assert_eq!(JpegEffortSearch::Full.as_str(), "full");
+        assert!(
+            serde_json::from_value::<RuntimeConfig>(json!({
+                "img": {"jxl_effort_search": "full"}
+            }))
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn search_defaults_do_not_override_explicit_fixed_or_mode_default_choices() -> Result<()> {
+        let empty: RuntimeConfig = serde_json::from_value(json!({"img": {}}))?;
+        assert_eq!(empty.img.jxl_effort_search, EffortSearch::default());
+        assert_eq!(empty.img.jpeg_effort_search, JpegEffortSearch::default());
+        assert_eq!(empty.img.quality_search, QualitySearch::default());
+        for quality in ["fixed", "mode-default"] {
+            let saved = json!({
+                "img": {
+                    "jxl_effort_search": "fixed",
+                    "jpeg_effort_search": "fixed",
+                    "quality_search": quality
+                }
+            });
+            let restored: RuntimeConfig = serde_json::from_value(saved.clone())?;
+            restored.validate()?;
+            let serialized = serde_json::to_value(restored)?;
+            for key in ["jxl_effort_search", "jpeg_effort_search", "quality_search"] {
+                assert_eq!(serialized["img"][key], saved["img"][key]);
+            }
+        }
         Ok(())
     }
 
