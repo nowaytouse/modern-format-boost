@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Bounded distance-search evidence (2026-10-16)
+
+- Retain the JXL screening report when no shortlist exists or D0 already fits,
+  instead of losing its log through an empty optional result. Record floor,
+  ladder, discovery and binary requests separately from the supplied baseline;
+  include the measurement budget and actual stop condition.
+- Reject empty baseline/probe payloads and invalid baseline coordinates. Remove
+  the invalid-winner NaN/MAX sentinel path; invalid final distance or telemetry
+  cannot become eligible for delivery merely by sealing/clamping it.
+- Preserve actual D0 and sub-floor precision values in diagnostic text; invalid
+  values are marked invalid, not printed as D0.001. Record finalist failures and
+  refinement termination separately, retaining a verified candidate after a
+  failed refinement without claiming a continuous/global optimum. Probe requests
+  are explicitly not presented as encoder subprocess counts. Final search logs
+  compare pure payload with pure payload and report the container bytes separately.
+- Keep the existing candidate order, same-effort domains, quality-first ranking,
+  size policy and final delivery verification. Cross-stage artifact reuse,
+  representative throughput and complete per-file persistent manifests remain
+  separate work.
+- Validation: 23 Foundation distance-search regressions, seven IMG probe/ranking
+  checks and two existing delivery contracts pass, including the shared probe's
+  legal D2.5 pre-AVIF handoff, empty/failed probes, non-monotonic test curves and
+  invalid evidence sealing. These are focused deterministic checks, not a
+  representative encoder benchmark or real-media/Photos acceptance.
+
 ### Algorithm-first settings and the in-app processing guide (2026-10-16)
 
 - Replace the question-mark URL shortcut with a native, searchable processing

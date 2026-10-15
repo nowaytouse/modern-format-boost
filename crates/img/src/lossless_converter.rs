@@ -4689,8 +4689,15 @@ where
     Direct: FnMut(f32) -> std::result::Result<u64, String>,
     Fallback: FnMut(f32) -> std::result::Result<u64, String>,
 {
-    match direct_encode(distance) {
-Ok(size) => Ok(size),
+    if !(foundation::constants::JXL_MIN_DISTANCE..=foundation::constants::JXL_MAX_DISTANCE)
+        .contains(&distance)
+    {
+        return Err(format!(
+            "JXL exploration probe requires a finite in-range distance, got {distance}"
+        ));
+    }
+    let size = match direct_encode(distance) {
+        Ok(size) => Ok(size),
         Err(direct_err) if !allow_alternate_tools => Err(format!(
             "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled by tools.policy=single",
             foundation::jxl_explorer::format_distance_for_log(distance)
@@ -4699,13 +4706,25 @@ Ok(size) => Ok(size),
             "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled (requires --allow_expert_options)",
             foundation::jxl_explorer::format_distance_for_log(distance)
         )),
-        Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
-format!(
-"JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}",
-foundation::jxl_explorer::format_distance_for_log(distance)
-)
-}),
-}
+        Err(direct_err) => fallback_encode(distance).and_then(|size| {
+            if size == 0 {
+                Err("zero payload bytes".to_string())
+            } else {
+                Ok(size)
+            }
+        }).map_err(|fallback_err| {
+            format!(
+                "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}",
+                foundation::jxl_explorer::format_distance_for_log(distance)
+            )
+        }),
+    }?;
+    if size == 0 {
+        return Err(format!(
+            "JXL exploration probe at d={distance} returned zero payload bytes"
+        ));
+    }
+    Ok(size)
 }
 
 fn compare_jxl_finalists(
@@ -4815,7 +4834,7 @@ fn try_explore_jxl_distance_in_domain(
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
-        "Ultimate Exploration: one effort domain, distance screening, shortlist verification",
+        "Distance search: one effort domain, screening, shortlist verification",
     );
     // Active policy: must be consistent with d0 check and SizeToleranceCheck.
     // Resolves the same way as jxl_d0_misses_active_size_policy.
@@ -4848,33 +4867,36 @@ fn try_explore_jxl_distance_in_domain(
         },
     );
 
-    let Some(screening) = (match screening {
+    let report = match screening {
         Ok(result) => result,
         Err(err) => {
             foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                 "jxl_explore_screening_abort",
                 input,
                 format!(
-                    "ultimate JXL distance screening at e{exploration_effort} aborted; reverting to d0 baseline: {err}"
+                    "JXL distance screening at e{exploration_effort} aborted; reverting to d0 baseline: {err}"
                 ),
             );
             return Ok(None);
         }
-    }) else {
-        return Ok(None);
     };
 
-    for line in &screening.log {
+    for line in &report.log {
         log_detail!(&format!(
             "{} {}",
             foundation::infra::static_logs::messages::LABEL_PHASE_1,
             line
         ));
     }
+    let Some(screening) = report.screening else {
+        return Ok(None);
+    };
 
     let mut best_final: Option<(usize, u64, std::path::PathBuf)> = None;
     let mut finalized_sizes = Vec::with_capacity(screening.finalists.len());
     let mut total_iterations = screening.iterations;
+    let mut finalist_failures = 0u32;
+    let mut finalist_log = Vec::new();
 
     for (finalist_idx, finalist) in screening.finalists.iter().enumerate() {
         log_detail!(&format!(
@@ -4948,23 +4970,30 @@ fn try_explore_jxl_distance_in_domain(
                 }
             }
             Err(err) => {
+                finalist_failures += 1;
                 foundation::media_conversion_gate::delivery_remove_file_or_audit(
                     "jxl failed finalist cleanup",
                     &candidate_output,
                 );
+                let failure = format!(
+                    "finalist pass failed (e{exploration_effort}, d={}): {err}",
+                    foundation::jxl_explorer::format_distance_for_log(finalist.distance)
+                );
                 foundation::media_conversion_gate::delivery_jxl_path_fallback_audit(
                     "jxl_explore_finalist_failed",
                     input,
-                    format!(
-                        "finalist pass failed (e{exploration_effort}, d={}): {err}",
-                        foundation::jxl_explorer::format_distance_for_log(finalist.distance)
-                    ),
+                    &failure,
                 );
+                finalist_log.push(failure);
             }
         }
     }
 
     let Some((best_idx, best_size, best_path)) = best_final else {
+        log_detail!(&format!(
+            "JXL finalist summary: attempts={} failed={finalist_failures}; no verified finalist; keep baseline",
+            screening.finalists.len(),
+        ));
         log_detail!(foundation::infra::static_logs::messages::JXL_FINALIST_FAILURE_KEEP_BASELINE);
         return Ok(None);
     };
@@ -5000,6 +5029,9 @@ fn try_explore_jxl_distance_in_domain(
     // distance wins even when it is larger than the current accepted output.
     let mut accepted_distance = best_candidate.distance;
     let mut accepted_size = best_size;
+    let mut refinement_iterations = 0u32;
+    let mut refinement_stop = "local-bracket-precision";
+    let mut refinement_log = Vec::new();
     {
         let floor = foundation::constants::JXL_EXPLORE_FLOOR;
         let precision = foundation::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION;
@@ -5011,7 +5043,6 @@ fn try_explore_jxl_distance_in_domain(
             .map(|(distance, _)| *distance)
             .max_by(f32::total_cmp)
             .unwrap_or(floor);
-        let mut refinement_iterations = 0u32;
 
         if accepted_distance - lower_bound >= precision {
             log_detail!(&format!(
@@ -5034,6 +5065,7 @@ fn try_explore_jxl_distance_in_domain(
             if candidate_distance <= lower_bound + f32::EPSILON
                 || candidate_distance >= accepted_distance - f32::EPSILON
             {
+                refinement_stop = "no-new-coordinate";
                 break;
             }
 
@@ -5103,13 +5135,22 @@ fn try_explore_jxl_distance_in_domain(
                         "jxl continued failed candidate cleanup",
                         &candidate_output,
                     );
-                    log_detail!(&format!(
+                    let failure = format!(
                         "Quality refinement probe failed at d={}: {err}",
                         foundation::jxl_explorer::format_distance_for_log(candidate_distance)
-                    ));
+                    );
+                    log_detail!(&failure);
+                    refinement_log.push(failure);
+                    refinement_stop = "probe-failed-retained-verified-candidate";
                     break;
                 }
             }
+        }
+        if refinement_iterations == MAX_REFINEMENT_ITERATIONS
+            && accepted_distance - lower_bound >= precision
+            && refinement_stop == "local-bracket-precision"
+        {
+            refinement_stop = "probe-budget-exhausted";
         }
 
         if refinement_iterations > 0 && accepted_distance < best_candidate.distance {
@@ -5125,7 +5166,25 @@ fn try_explore_jxl_distance_in_domain(
         }
     }
 
-    let mut log = screening.log.clone();
+    let mut log = report.log;
+    log.extend(finalist_log);
+    log.extend(refinement_log);
+    let summary = format!(
+        "JXL exploration summary: supplied_measurements={} screening_probe_calls={} \
+         finalist_attempts={} finalist_failures={finalist_failures} refinement_attempts={} \
+         refinement_budget={} refinement_stop={refinement_stop}; calls are probe requests, \
+         not encoder subprocess counts; selected the best verified tested candidate, not a global optimum",
+        report.diagnostics.supplied_measurements,
+        report.diagnostics.probe_calls(),
+        screening.finalists.len(),
+        refinement_iterations,
+        MAX_REFINEMENT_ITERATIONS,
+    );
+    foundation::log_info!(
+        foundation::infra::static_logs::messages::LABEL_JXL,
+        &summary
+    );
+    log.push(summary);
     log.push(format!(
         "Accepted e{} candidate d={} -> {} of input",
         exploration_effort,
@@ -5169,7 +5228,7 @@ fn try_explore_jxl_distance_in_domain(
             "jxl_explore_delivery_rejected",
             input,
             format!(
-                "ultimate JXL explore sealed but failed strict delivery (size={}, distance={}, iterations={})",
+                "JXL search result failed delivery evidence checks (size={}, distance={}, iterations={})",
                 result.output_size,
                 foundation::jxl_explorer::format_distance_for_log(result.accepted_distance),
                 result.iterations
@@ -5181,16 +5240,19 @@ fn try_explore_jxl_distance_in_domain(
     foundation::log_info!(
         foundation::infra::static_logs::messages::LABEL_JXL,
         &format!(
-            "Ultimate JXL exploration accepted d={} in one e{} effort domain ({} of input)",
+            "JXL distance search accepted d={} in one e{} effort domain ({} pure-media ratio; artifact={}B)",
             foundation::jxl_explorer::format_distance_for_log(result.accepted_distance),
             exploration_effort,
-            format_output_size_ratio_pct(input_size, result.output_size),
+            format_output_size_ratio_pct(input_size, accepted_size),
+            result.output_size,
         )
     );
     log_detail!(&format!(
-        "TELEMETRY: outcome_distance={} outcome_pct={} profile={} pressure_stops={:.4}",
+        "TELEMETRY: outcome_distance={} outcome_payload_pct={} source_payload_bytes={input_size} \
+         output_payload_bytes={accepted_size} artifact_bytes={} profile={} pressure_stops={:.4}",
         foundation::jxl_explorer::format_distance_for_log(result.accepted_distance),
-        format_output_size_ratio_pct_plain(input_size, result.output_size),
+        format_output_size_ratio_pct_plain(input_size, accepted_size),
+        result.output_size,
         result.profile_label,
         result.pressure_stops
     ));
@@ -7620,6 +7682,63 @@ mod tests {
                 "Format '{fmt}' appears in both preprocess and direct format lists; configuration error"
             );
         }
+    }
+
+    #[test]
+    fn jxl_exploration_probe_rejects_invalid_distance_and_empty_direct_or_fallback_payload() {
+        for distance in [
+            f32::NAN,
+            f32::INFINITY,
+            -0.1,
+            foundation::constants::JXL_MAX_DISTANCE + 1.0,
+        ] {
+            let error = run_jxl_exploration_probe_with(
+                distance,
+                true,
+                true,
+                &mut |_| panic!("invalid coordinate must not launch the encoder"),
+                &mut |_| panic!("invalid coordinate must not launch fallback"),
+            )
+            .expect_err("invalid distance");
+            assert!(error.contains("finite in-range distance"));
+        }
+        // The shared probe also serves the existing pre-AVIF D2.5 handoff.
+        for distance in [
+            0.0,
+            jxl_pre_avif_distance(),
+            foundation::constants::JXL_MAX_DISTANCE,
+        ] {
+            let size = run_jxl_exploration_probe_with(
+                distance,
+                false,
+                false,
+                &mut |actual| {
+                    assert_eq!(actual, distance);
+                    Ok(123)
+                },
+                &mut |_| panic!("a valid direct probe needs no fallback"),
+            )
+            .expect("the shared probe retains its full legal codec range");
+            assert_eq!(size, 123);
+        }
+        let error = run_jxl_exploration_probe_with(0.1, true, true, &mut |_| Ok(0), &mut |_| {
+            panic!("zero payload is not permission to switch tools")
+        })
+        .expect_err("empty direct payload");
+        assert!(error.contains("zero payload"));
+        let error = run_jxl_exploration_probe_with(
+            0.1,
+            true,
+            true,
+            &mut |_| Err("direct failure".to_string()),
+            &mut |_| Ok(0),
+        )
+        .expect_err("empty fallback payload");
+        assert!(
+            error.contains("zero payload")
+                && error.contains("direct failure")
+                && error.contains("ImageMagick fallback")
+        );
     }
 
     #[test]

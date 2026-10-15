@@ -65,6 +65,23 @@ algorithm regression. Ladder screening, finalist selection,
 binary search and refinement remain in the same selected E domain. Among fitting
 candidates the lower D is preferred; file size breaks ties at equal D.
 Source admission and the minimum source-size gate still apply.
+
+Distance screening returns its bounded-search report even when there is no
+shortlist. It distinguishes the caller-supplied baseline measurement from floor,
+ladder, discovery and binary probe requests, and records the measurement budget
+and actual stop condition. A probe request is not an encoder-process count: a
+request may include compatibility work or fail before launching an encoder.
+Empty payload measurements and invalid baseline coordinates are rejected rather
+than treated as evidence of a fitting or oversized candidate. Invalid final
+distance/telemetry evidence is not clamped into a valid delivery result.
+
+The final log separately records finalist attempts/failures, refinement attempts
+and whether refinement stopped at local precision, its budget, an unavailable new
+coordinate or a failed probe. A failed refinement can retain an already verified
+candidate under the existing rules, but its failure stays visible. The selected
+result is the best verified tested candidate; local binary-search precision does
+not prove monotonic file sizes, a continuous global optimum or full media delivery.
+
 `mode-default` retains the historical mode trigger and the manual D where that
 route does not explore. Explicit adaptive D search leaves the saved manual D
 inactive without replacing it. The native checkbox distinguishes inherited
