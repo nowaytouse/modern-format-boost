@@ -131,6 +131,14 @@ exploration checkboxes. E-only remains available without D exploration; D-only
 does not silently search E. Inactive fixed-D drafts remain saved, while D search
 uses the policy's D0 baseline. Fast JXL shows JPEG E, not pixel D; Fast AVIF shows
 its separate quality selection. Each workflow retains independent preferences.
+The ordinary labels use quality (D), compression level (E) and lossless JPEG
+transcoding rather than algorithm names. When E comparison is enabled, the
+numeric control is labelled "Compare up to level (E)" instead of implying a final
+effort. Turning it off restores the fixed-level label without changing the
+saved value or worker arguments. Unspecified D/E display "Follow archive rules"
+only after configuration is known; a failed lookup remains unknown.
+The D checkbox distinguishes the inherited conditional policy from an explicit
+automatic choice, and accessible labels follow the same visible state.
 An unchanged inherited control does not save an override;
 explicit selection retains one, and reset removes it without changing JSON.
 Search locates the original setting by localized label, section or choice. In

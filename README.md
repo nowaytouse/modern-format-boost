@@ -1441,6 +1441,13 @@ the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
 Photos batch sizes expand on demand; failure policies and configuration sources
 belong to Developer mode, enabled from About.
 The Image tab separates parameter values from independent D and E exploration.
+New users can keep **Follow archive rules**. Quality (D) controls permitted
+distortion; compression level (E) controls encoding work, not a quality rating.
+With **Compare compression levels** enabled, **Compare up to level (E)** marks
+the highest permitted comparison level, not a promised final effort. JPEG
+lossless transcoding retains its own independent controls and reconstruction
+requirements. Short tooltips explain the applicable scope without requiring
+knowledge of search internals or configuration provenance.
 Unset overrides retain the existing private source/mode policy: Normal E7,
 Ultimate/archive E10, PNG E10 and ordinary JPEG reconstruction E11.
 Protected pixel sources keep D0 by policy; settings do not authorize weakening

@@ -2433,6 +2433,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             text.stringValue = displayed[field] ?? ""
             if field.isCache {
                 text.placeholderString = localized(inheritedMixed.contains(field) ? "settings.performance.per_pipeline" : "settings.automatic")
+            } else if field.isDistance {
+                text.placeholderString = localized(inheritedSources[field] == nil ? "result.unknown" : "settings.private_policy")
             }
             updateStepper(for: field)
         }
@@ -2443,6 +2445,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             toggle.isEnabled = enabled != nil
             toggle.title = field.title
             if let value, enabled == nil { toggle.title = localized("settings.invalid", field.title, value) }
+            toggle.setAccessibilityLabel(toggle.title)
         }
         for (field, popup) in popups {
             for index in popup.itemArray.indices.reversed()
@@ -2535,9 +2538,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         sourceGeneration = UUID()
         let distanceSearch = draft().image.qualitySearch?.rawValue ?? inherited[.imgQualitySearch]
         textFields[.imgJxlDistance]?.isEnabled = distanceSearch != "adaptive"
-        if let distanceSearch, MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
-            toggles[.imgQualitySearch]?.title = distanceSearch == "mode-default"
+        if let toggle = toggles[.imgQualitySearch], let distanceSearch,
+           MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
+            toggle.title = distanceSearch == "mode-default"
                 ? localized("settings.distance.mode-default") : MediaSetting.imgQualitySearch.title
+            toggle.setAccessibilityLabel(toggle.title)
+        }
+        for (field, searchField) in [(MediaSetting.imgJxlEffort, MediaSetting.imgJxlSearch),
+                                     (.imgJpegEffort, .imgJpegSearch), (.fastJpegEffort, .fastJpegSearch)] {
+            guard let popup = popups[field], let label = rows[field]?.cell(at: 0).contentView as? NSTextField else { continue }
+            let title = toggles[searchField]?.state == .on
+                ? localized(field.isPixelEffort ? "settings.effort.comparison" : "settings.jpeg_effort.comparison") : field.title
+            label.stringValue = title
+            popup.setAccessibilityLabel(title)
         }
         for (field, row) in rows {
             row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
@@ -2836,13 +2849,17 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             inherited.removeAll()
             inheritedSources.removeAll()
             restore(MediaSettings())
-            guard popup.titleOfSelectedItem == localized("result.unknown") else {
+            guard popup.titleOfSelectedItem == localized("result.unknown"),
+                  toggles[.imgQualitySearch]?.accessibilityLabel() == toggles[.imgQualitySearch]?.title else {
                 throw HostError(message: "Unavailable JXL pixel configuration was presented as automatic")
             }
             inheritedSources[field] = "default"
+            inheritedSources[.imgJxlDistance] = "default"
             restore(MediaSettings())
             guard popup.titleOfSelectedItem == localized("settings.private_policy"),
-                  draft().values[field] == nil else {
+                  draft().values[field] == nil,
+                  textFields[.imgJxlDistance]?.placeholderString == localized("settings.private_policy"),
+                  draft().image.jxlDistance == nil else {
                 throw HostError(message: "Null JXL pixel effort invented a resolved target")
             }
         }
@@ -3040,7 +3057,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             var settings = MediaSettings()
             settings.values = [.imgJxlDistance: "0.25", .imgJxlSearch: "adaptive", .imgJxlEffort: "8", .imgJpegEffort: "11", .imgJpegSearch: "fixed", .imgQualitySearch: "fixed"]
             restore(settings)
-            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == MediaSetting.imgJxlEffort.title,
+            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == localized("settings.effort.comparison"),
                   rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
                   toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .off,
                   distance.stringValue == "0.25", draft().values == settings.values else {
@@ -3074,6 +3091,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     guard toggles[.imgQualitySearch]?.state == (distanceSearch == "adaptive" ? .on : .off),
                           toggles[.imgJxlSearch]?.state == (effortSearch == "adaptive" ? .on : .off),
                           draft().values == settings.values,
+                          popups[.imgJxlEffort]?.accessibilityLabel() == (effortSearch == "adaptive"
+                            ? localized("settings.effort.comparison") : MediaSetting.imgJxlEffort.title),
                           rows[.imgJxlDistance]?.isHidden == false, rows[.imgJxlEffort]?.isHidden == false else {
                         throw HostError(message: "Independent distance and effort exploration combinations were lost")
                     }
@@ -3126,7 +3145,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             restore(settings)
             let operation: OperationMode = avif ? .fastImgAvif : .fastImgJxl
             let arguments = try settings.arguments(operation: operation, processing: .imagesOnly)
-            guard arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+            guard (avif || popups[.fastJpegEffort]?.accessibilityLabel() == localized("settings.jpeg_effort.comparison")),
+                  arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
                     == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif),
                   !arguments.contains("--img-jxl-distance"),
                   arguments.contains("--img-jpeg-effort") == !avif,

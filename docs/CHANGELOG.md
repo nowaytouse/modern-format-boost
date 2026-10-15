@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Make image settings easier to understand (2026-10-15)
+
+- Use quality, compression level, automatic selection and JPEG lossless
+  transcoding labels in Chinese, English and Japanese. Archive-rule defaults
+  no longer require understanding configuration inheritance or private-policy
+  terminology. Detailed algorithm contracts remain in technical documentation.
+- Relabel numeric E as the highest comparison level when comparison is enabled,
+  and restore the fixed-level label when disabled. Accessible labels track the
+  same state. Unknown configuration remains unknown rather than inventing D0/E10.
+- Clarify that D0 is lossless, E is not a quality rating, E comparison may take
+  longer and Q100 is not a universal mathematical-losslessness guarantee.
+  Remove stale "old policy" and universal flag-conflict claims from mode help.
+  These are presentation changes; typed values, defaults and worker arguments
+  are unchanged. Completed GUI requirements move out of the temporary backlog.
+- Validation: Swift warnings-as-errors and native self-test pass, including
+  comparison/fixed label transitions, accessible names, retained values and
+  preview/worker argument consistency. Chinese, English and Japanese strings
+  pass resource parsing; native dark Chinese/English and light Japanese windows
+  were checked with comparison both enabled and disabled. No installed App,
+  source media, Photos library, dependency or processing algorithm was changed.
+
 ### Restore historical IMG algorithm boundaries (2026-10-15)
 
 - Audit `a8df1539` as the algorithm reference, with `dea69c6b` cross-checks.
