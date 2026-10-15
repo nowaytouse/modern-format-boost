@@ -60,6 +60,13 @@ conversion rates are unavailable rather than 100 percent. Combined processor
 totals describe processing outcomes, not necessarily unique input files or Photos
 assets, and conversion byte totals exclude skipped/reused/passthrough input.
 Matching output cardinalities do not replace identity or content verification.
+Attempt rates include their denominator and rounded precision, for example
+`1829/1830 (99.95%)`; ignored items are reported separately. The native Fast IMG
+overview separates successful outcomes, encoded files, local Photos verification,
+source-path retention and primary cleanup. Missing or contradictory final
+receipts remain unconfirmed; a nonzero file-failure exit is not hidden. Local
+Photos verification does not establish iCloud synchronization, and primary
+cleanup does not establish that every leftover output folder was removed.
 See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
 receipt uniqueness, error handling and regression boundaries.
 

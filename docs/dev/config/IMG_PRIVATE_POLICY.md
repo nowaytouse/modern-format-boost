@@ -46,7 +46,11 @@ that an exhaustive optimum was found, and E exploration is not a speed optimizer
 JPEG E comparison independently proves exact reconstruction for every candidate.
 
 The existing Distance Explorer starts from the encoded D0 baseline when the
-active size policy requires further work. Ladder screening, finalist selection,
+active size policy requires further work. That measurement is explicitly D0:
+when it does not fit, the explorer separately encodes D0.001 before using that
+floor for planning or early exit. Historical `a8df1539` also mislabeled the D0
+size as D0.001; correcting this old coordinate defect is not evidence of a recent
+algorithm regression. Ladder screening, finalist selection,
 binary search and refinement remain in the same selected E domain. Among fitting
 candidates the lower D is preferred; file size breaks ties at equal D.
 Source admission and the minimum source-size gate still apply.
@@ -59,6 +63,12 @@ Both explorations enabled means sequential E selection followed by D exploration
 in that domain. It does not mean exhaustive joint search. Low-E assistance for
 high-E distance search is a separate research proposal, not this implementation.
 It must not replace the historical explorer without comparative evidence.
+
+All screening, finalist and refinement probes obey the same alternative-encoder
+permission: `tools.policy=single` blocks switching to ImageMagick even when
+expert options are enabled. Required detection, decoding, metadata and final
+verification tools are not disabled by that policy. Tool permission does not
+authorize otherwise forbidden repairs or weaken the route's fidelity checks.
 
 ## Fast IMG
 

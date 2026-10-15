@@ -470,8 +470,8 @@ impl DragDropSession {
             file,
             "Conversion Success Rate: {}",
             summary
-                .success_rate_percent()
-                .map_or_else(|| "N/A".to_owned(), |rate| format!("{rate}%"))
+                .success_rate()
+                .map_or_else(|| "N/A".to_owned(), |rate| rate.to_string())
         )?;
         if let Some(state) = summary.integrity_state {
             writeln!(
@@ -5788,6 +5788,24 @@ mod tests {
     }
 
     #[test]
+    fn session_log_reports_rounded_success_ratio() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 1_829,
+            skipped: 4,
+            ignored: 7,
+            failed: 1,
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        });
+        session.finish_log(&summary, None).unwrap();
+        let log = fs::read_to_string(&session.session_log).unwrap();
+        assert!(log.contains("Conversion Success Rate: 1829/1830 (99.95%)"));
+    }
+
+    #[test]
     fn session_log_retains_file_counts_and_reports_integrity_separately() {
         let temp = tempfile::tempdir().unwrap();
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
@@ -5808,7 +5826,7 @@ mod tests {
         session.finish_log(&summary, None).unwrap();
         let log = fs::read_to_string(&session.session_log).unwrap();
         assert!(log.contains("Total: 3 succeeded, 2 skipped, 4 ignored, 1 failed, 5 unprocessed"));
-        assert!(log.contains("Conversion Success Rate: 75%"));
+        assert!(log.contains("Conversion Success Rate: 3/4 (75.00%)"));
         assert!(log.contains("Integrity: WARNINGS; issues=56"));
         let audit = fs::read_to_string(&session.session_audit).unwrap();
         assert!(audit.contains("images_ignore=4 images_fail=1 images_unprocessed=5"));

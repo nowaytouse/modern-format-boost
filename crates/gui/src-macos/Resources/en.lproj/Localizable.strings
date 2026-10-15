@@ -158,7 +158,7 @@
 "log.backend_start" = "Starting processor backend at: %@";
 "log.task_start" = "Starting task";
 "log.photos_preflight" = "Photos import preflight stopped: %@";
-"log.omitted" = "[MFB UI] omitted %llu process log entries while the UI was busy";
+"log.omitted" = "[MFB UI] %llu log entries were not displayed to keep the interface responsive; review full logs in processing history.";
 "log.critical_overflow" = "Some result or error records could not reach the interface. Task completion cannot be confirmed; review the backend logs.";
 "alert.resume.title" = "Unfinished task found";
 "alert.resume.info" = "Resume its verified progress or start a separate fresh run?";
@@ -327,10 +327,10 @@
 "settings.config_invalid" = "The backend returned an invalid configuration.";
 "settings.vidConfig" = "VID configuration file";
 "settings.vidConfig.help" = "Independent JSON for standard video processing. The video tab shows the codec resolved by the worker; explicit GUI choices take precedence without modifying the file.";
-"settings.imgToolPolicy" = "Tool selection";
-"settings.imgToolPolicy.help" = "Within permitted encoding paths, use only the preferred tool or allow alternatives. This does not relax fallback or verification requirements.";
-"settings.value.fallback" = "Allow alternative tools";
-"settings.value.single" = "Preferred tool only";
+"settings.imgToolPolicy" = "Alternative encoding tools";
+"settings.imgToolPolicy.help" = "Controls switching tools for encoding or recovery, not required detection, decoding, metadata or verification tools. Alternatives still require permission for compatibility retries or repairs; verification is not relaxed.";
+"settings.value.fallback" = "Allow alternatives";
+"settings.value.single" = "Do not switch tools";
 "settings.performance.per_pipeline" = "Use each pipeline's configuration";
 "error.vid_backend_missing" = "The video worker is missing. Refresh the complete application bundle.";
 "history.effective_config" = "Worker effective configuration";
@@ -376,6 +376,11 @@
 "result.invalid" = "Batch result is malformed or unsupported; counts are unavailable.";
 "result.incomplete" = "Process exited; some result counts were not reported";
 "result.unfinished" = "Processing ended with unfinished items";
+"result.attention_count" = "Partially completed · Items needing attention: %@";
+"result.unconfirmed" = "Results not fully confirmed · Review processing history";
+"result.delivery_facts" = "Encoded %@ · Verified in local Photos %@ · Source files retained %@";
+"result.cleanup_primary" = "Primary cleanup completed; other leftover folders were not checked. Local Photos verification does not confirm iCloud sync.";
+"result.cleanup_unknown" = "Finalization needs review; other folders were not automatically removed. Local Photos verification does not confirm iCloud sync.";
 "settings.unavailable" = "This operation has no configurable media encoding settings.";
 
 "history.title" = "Processing History";

@@ -158,7 +158,7 @@
 "log.backend_start" = "バックエンドプロセッサーを起動しています: %@";
 "log.task_start" = "処理を開始";
 "log.photos_preflight" = "写真への読み込み事前確認を停止しました: %@";
-"log.omitted" = "[MFB UI] UI の処理中に %llu 件のログを省略しました";
+"log.omitted" = "[MFB UI] 応答性を保つため %llu 件のログを表示していません。完全なログは処理履歴で確認してください。";
 "log.critical_overflow" = "結果またはエラーの記録をすべて受信できなかったため、処理の完了を確認できません。バックエンドのログを確認してください。";
 "alert.resume.title" = "未完了のタスクが見つかりました";
 "alert.resume.info" = "検証済みの進捗を再開するか、別の出力先で新しく開始しますか？";
@@ -327,10 +327,10 @@
 "settings.config_invalid" = "バックエンドの設定が無効です。";
 "settings.vidConfig" = "VID 設定ファイル";
 "settings.vidConfig.help" = "標準動画処理の独立 JSON 設定。動画タブには処理側が解決した形式を表示し、GUI の明示指定を優先します。ファイルは変更しません。";
-"settings.imgToolPolicy" = "ツールの選択方針";
-"settings.imgToolPolicy.help" = "許可された符号化経路内で、優先ツールだけを使うか代替ツールを許可します。回退と検証の条件は緩和しません。";
-"settings.value.fallback" = "代替ツールを許可";
-"settings.value.single" = "優先ツールのみ";
+"settings.imgToolPolicy" = "代替エンコードツール";
+"settings.imgToolPolicy.help" = "符号化や復旧でのツール切り替えを制御します。必要な識別・デコード・メタデータ・検証ツールは禁止しません。代替には互換再試行や修復の許可が別途必要で、検証条件は緩和しません。";
+"settings.value.fallback" = "代替を許可";
+"settings.value.single" = "切り替えを禁止";
 "settings.performance.per_pipeline" = "画像と動画の設定を個別に使用";
 "error.vid_backend_missing" = "動画処理ツールがありません。アプリ全体の成果物を更新してください。";
 "history.effective_config" = "処理側の実効設定";
@@ -376,6 +376,11 @@
 "result.invalid" = "バッチ結果の形式が無効または未対応のため、件数を確認できません。";
 "result.incomplete" = "プロセス終了、一部の結果件数は未報告";
 "result.unfinished" = "処理終了、未完了の項目があります";
+"result.attention_count" = "一部完了 · %@ 件の対応が必要です";
+"result.unconfirmed" = "結果を完全に確認できません · 処理履歴を確認してください";
+"result.delivery_facts" = "エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
+"result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
+"result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "settings.unavailable" = "この操作に対応するメディアのエンコード設定はありません。";
 
 "history.title" = "処理履歴";

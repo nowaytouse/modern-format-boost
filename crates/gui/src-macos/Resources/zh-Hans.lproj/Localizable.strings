@@ -158,7 +158,7 @@
 "log.backend_start" = "正在启动后端处理器：%@";
 "log.task_start" = "开始处理";
 "log.photos_preflight" = "“照片”导入预检已停止：%@";
-"log.omitted" = "[MFB 界面] 界面繁忙时省略了 %llu 条处理日志";
+"log.omitted" = "[MFB 界面] 为保持响应，未显示 %llu 条日志；请到处理记录核查完整日志。";
 "log.critical_overflow" = "界面未能接收完整的结果或错误记录，无法确认任务是否完整完成。请查看后端日志。";
 "alert.resume.title" = "发现未完成的任务";
 "alert.resume.info" = "继续已验证的进度，还是在独立目录中重新开始？";
@@ -327,10 +327,10 @@
 "settings.config_invalid" = "后端返回的配置无效。";
 "settings.vidConfig" = "VID 配置文件";
 "settings.vidConfig.help" = "为标准视频处理指定独立 JSON 配置。视频分页显示处理端解析的输出格式；界面中的明确选择优先，文件本身不会被修改。";
-"settings.imgToolPolicy" = "工具选择策略";
-"settings.imgToolPolicy.help" = "在允许的编码路径内，选择只使用首选工具，或允许备选工具。此项不放宽编码回退与核验要求。";
-"settings.value.fallback" = "允许备选工具";
-"settings.value.single" = "仅首选工具";
+"settings.imgToolPolicy" = "备用编码工具";
+"settings.imgToolPolicy.help" = "仅控制编码或恢复时是否允许换工具；不禁用必要的格式识别、解码、元数据或核验工具。允许备用工具仍须满足兼容重试与修复条件，不会降低核验要求。";
+"settings.value.fallback" = "允许使用";
+"settings.value.single" = "禁止换工具";
 "settings.performance.per_pipeline" = "分别使用图像和视频配置";
 "error.vid_backend_missing" = "应用缺少视频处理工具，请刷新完整应用产物。";
 "history.effective_config" = "处理端生效配置";
@@ -376,6 +376,11 @@
 "result.invalid" = "批次结果格式无效或不受支持，结果计数不可用。";
 "result.incomplete" = "进程已结束，但未报告全部结果计数";
 "result.unfinished" = "处理已结束，仍有未完成项目";
+"result.attention_count" = "部分完成 · %@ 项需要处理";
+"result.unconfirmed" = "结果无法完整确认 · 请查看处理记录";
+"result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
+"result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
+"result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
 "settings.unavailable" = "当前操作没有可配置的媒体编码选项。";
 
 "history.title" = "处理记录";

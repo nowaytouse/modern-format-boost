@@ -4696,6 +4696,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
     run_jxl_exploration_probe_with(
         distance,
         flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS),
+        alternate_tools_allowed(),
         &mut direct_encode,
         &mut fallback_encode,
     )
@@ -4704,6 +4705,7 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
 fn run_jxl_exploration_probe_with<Direct, Fallback>(
     distance: f32,
     allow_expert_options: bool,
+    allow_alternate_tools: bool,
     direct_encode: &mut Direct,
     fallback_encode: &mut Fallback,
 ) -> std::result::Result<u64, String>
@@ -4713,6 +4715,10 @@ where
 {
     match direct_encode(distance) {
 Ok(size) => Ok(size),
+        Err(direct_err) if !allow_alternate_tools => Err(format!(
+            "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled by tools.policy=single",
+            foundation::jxl_explorer::format_distance_for_log(distance)
+        )),
         Err(direct_err) if !allow_expert_options => Err(format!(
             "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback disabled (requires --allow_expert_options)",
             foundation::jxl_explorer::format_distance_for_log(distance)
@@ -4840,7 +4846,7 @@ fn try_explore_jxl_distance_in_domain(
     let active_policy = options.effective_size_policy();
     let screening = foundation::jxl_explorer::screen_jxl_candidates(
         input_size,
-        initial_output_size,
+        (0.0, initial_output_size),
         active_policy,
         |distance| {
             let candidate_output =
@@ -7511,7 +7517,7 @@ mod tests {
             Ok(88)
         };
 
-        let size = run_jxl_exploration_probe_with(0.2, true, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.2, true, true, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("fallback should recover the exploration probe: {e:?}"));
 
         assert_eq!(size, 88);
@@ -7533,7 +7539,7 @@ mod tests {
             Ok(55)
         };
 
-        let size = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
+        let size = run_jxl_exploration_probe_with(0.1, false, false, &mut direct, &mut fallback)
             .unwrap_or_else(|e| panic!("direct cjxl probe should win: {e:?}"));
 
         assert_eq!(size, 77);
@@ -7550,11 +7556,21 @@ mod tests {
             Ok(55)
         };
 
-        let error = run_jxl_exploration_probe_with(0.1, false, &mut direct, &mut fallback)
+        let error = run_jxl_exploration_probe_with(0.1, false, true, &mut direct, &mut fallback)
             .expect_err("default exploration must not invoke ImageMagick");
 
         assert!(error.contains("--allow_expert_options"));
         assert_eq!(fallback_calls.get(), 0);
+    }
+
+    #[test]
+    fn jxl_exploration_single_tool_policy_blocks_fallback_even_for_expert_options() {
+        let mut direct = |_| Err("direct cjxl failed".to_string());
+        let mut fallback = |_| panic!("single-tool policy forbids an alternate encoder");
+        let error = run_jxl_exploration_probe_with(0.1, true, false, &mut direct, &mut fallback)
+            .expect_err("single-tool exploration must not invoke ImageMagick");
+        assert!(error.contains("tools.policy=single"));
+        assert!(error.contains("direct cjxl failed"));
     }
 
     #[test]
@@ -7739,7 +7755,7 @@ mod tests {
             .map(|offset| start + offset)
             .unwrap();
         let exploration = &source[start..end];
-        assert!(exploration.contains("input_size,\n        initial_output_size,"));
+        assert!(exploration.contains("input_size,\n        (0.0, initial_output_size),"));
         assert_eq!(
             exploration.matches("effort: exploration_effort,").count(),
             3

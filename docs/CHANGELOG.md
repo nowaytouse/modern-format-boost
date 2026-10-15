@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Correct search evidence and partial-result presentation (2026-10-15)
+
+- Keep the historical JXL ladder, bracket refinement, selected-effort domain and
+  quality-first selection. Bind the initial payload measurement to its real D:
+  measure D0.001 separately when D0 does not fit. The same D0/floor mismatch also
+  existed at `a8df1539`; this is not evidence of a recent algorithm regression.
+- Apply alternative-tool permission at the shared JXL probe entry. Single-tool
+  policy blocks ImageMagick fallback even with expert options enabled, without
+  disabling required decoding, metadata or verification tools.
+- Add a compact native final overview with independent processing, local Photos,
+  source-path retention and primary-cleanup facts. Keep individual file failures
+  distinct from whole-process failure; missing or contradictory receipts remain
+  unconfirmed. Check normal termination, worker/launcher exit agreement, required
+  nullable fields and sticky integrity/Photos conflicts instead of trusting a
+  green-looking percentage or a generic process-exit message.
+- Add `failed_sources_retained` to Fast IMG results so a retained successful
+  source cannot stand in for a missing failed source. Unbound failures or source
+  inspection errors remain unknown. Existence is not a new source-content hash
+  proof, and no cleanup or media-repair contract is weakened.
+- Preserve actionable media diagnostics over generic exit boilerplate; generic
+  backup advice is not a current-run warning. Clarify alternative encoding-tool
+  scope and display-only log omission in Chinese, English and Japanese. Report
+  attempt rates with numerator/denominator and rounded precision, such as
+  `1829/1830 (99.95%)`, excluding ignored/skipped outcomes.
+- Validation: 19 Foundation explorer, 28 IMG library search/tool-boundary,
+  seven Fast IMG receipt and four launcher/summary regressions pass. The final
+  optimized warnings-as-errors Swift build, native self-test, three localization
+  parsers, edited Rust formatting and whitespace checks pass. Synthetic native
+  Chinese dark and English/Japanese light result windows were inspected, including
+  malformed-receipt rejection and full-width layout. Existing lockfile changes
+  were preserved and used by these tests; no extra dependency update, CI run,
+  representative performance test, installed-App replacement or Photos/media
+  operation was performed.
+
 ### Complete Fast AVIF numeric quality and speed settings (2026-10-15)
 
 - Add typed `img.avif_quality` and `img.avif_speed`, matching worker flags,

@@ -35,7 +35,7 @@ impl std::fmt::Display for FileFailures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "fast-img {} recorded {} failed source(s); failed sources retained",
+            "fast-img {} recorded {} failed source(s); see the result report for source retention",
             if self.originals != 0 {
                 "original-media delivery"
             } else {
@@ -58,6 +58,7 @@ struct Report {
     encoded: usize,
     photos_verified: usize,
     source_retained: Option<usize>,
+    failed_sources_retained: Option<usize>,
     retention_unknown_reason: Option<String>,
     primary_cleanup_complete: bool,
     finalization_error: Option<String>,
@@ -141,13 +142,25 @@ impl Report {
             .chain(marker.skipped_sources.keys().map(String::as_str))
             .chain(tier2)
             .collect::<BTreeSet<_>>();
-        let retention = sources.iter().try_fold(0usize, |count, rel| {
-            marker
-                .src_dir
-                .join(rel)
-                .try_exists()
-                .map(|exists| count + usize::from(exists))
-        });
+        let retention = sources
+            .iter()
+            .try_fold((0usize, 0usize), |(count, failures), rel| {
+                marker.src_dir.join(rel).try_exists().map(|exists| {
+                    (
+                        count + usize::from(exists),
+                        failures + usize::from(exists && marker.failed_sources.contains_key(*rel)),
+                    )
+                })
+            });
+        let failed_sources_retained = match &retention {
+            Ok((_, count))
+                if probe_failures == 0
+                    && !recorded_failures.is_some_and(|failures| failures.originals > 0) =>
+            {
+                Some(*count)
+            }
+            _ => None,
+        };
         let (source_retained, retention_unknown_reason) = match retention {
             Err(error) => (
                 None,
@@ -157,7 +170,7 @@ impl Report {
                 None,
                 Some("source inventory has unclassified or unaccounted entries".into()),
             ),
-            Ok(count) => (Some(count), None),
+            Ok((count, _)) => (Some(count), None),
         };
         Ok(Self {
             schema_version: 1,
@@ -169,6 +182,7 @@ impl Report {
             encoded: marker.blake3_log.len(),
             photos_verified,
             source_retained,
+            failed_sources_retained,
             retention_unknown_reason,
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
             finalization_error: None,
@@ -296,6 +310,66 @@ mod tests {
             assert!(!infrastructure.is::<FileFailures>());
             assert!(infrastructure.to_string().contains("backend unavailable"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_source_retention_is_not_inferred_from_retained_successes() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 1);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::fs::write(marker.src_dir.join("0.jpg"), b"successful source")?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, Some(1));
+        assert_eq!(report.failed_sources_retained, Some(0));
+
+        std::fs::write(marker.src_dir.join("invalid.jpg"), b"failed source")?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, Some(2));
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed, 1);
+        assert_eq!(serde_json::to_value(&report)?["failed_sources_retained"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn unbound_failures_have_no_failed_source_retention_proof() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::fs::write(marker.src_dir.join("invalid.jpg"), b"failed source")?;
+        let probe_failure = Report::from_marker(&marker, true, &[], 1, None)?;
+        assert_eq!(probe_failure.failed, 2);
+        assert_eq!(probe_failure.failed_sources_retained, None);
+        let originals = [ModernLossyStaticCandidate {
+            path: marker.src_dir.join("original.jxl"),
+            rel_path: "original.jxl".into(),
+            format: foundation::image::format_detect::FormatKind::Jxl,
+            blake3: "original-hash".into(),
+        }];
+        let original_failure = Report::from_marker(
+            &marker,
+            true,
+            &originals,
+            0,
+            Some(&FileFailures::originals(1)),
+        )?;
+        assert_eq!(original_failure.failed, 2);
+        assert_eq!(original_failure.failed_sources_retained, None);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_source_inspection_error_is_unknown_not_missing_or_retained() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::os::unix::fs::symlink("invalid.jpg", marker.src_dir.join("invalid.jpg"))?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, None);
+        assert_eq!(report.failed_sources_retained, None);
+        assert!(report.retention_unknown_reason.is_some());
         Ok(())
     }
 
