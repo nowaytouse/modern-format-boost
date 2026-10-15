@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Clear Recovery And Tool Permissions (2026-10-16)
+
+- Replace ambiguous encoding-fallback/alternative-tool labels with **Encoding
+  retries and repair** and **Permitted encoding tools** in English, Simplified
+  Chinese and Japanese. Visible scope notes distinguish permitted operations,
+  tool switching and batch failure handling without relying on hover text.
+- Link image Settings directly to a native guide topic explaining conditional
+  JPEG compatibility retries, same-encoder ICC repair, alternate D-search probes
+  and the stricter full-JPEG-search boundary. Permission is not evidence of actual
+  execution, availability or archival success.
+- Align worker/launcher CLI help and configuration documentation without changing
+  flag names, saved values, search defaults, recovery permissions or safety Gates.
+
 ### Bounded distance-search evidence (2026-10-16)
 
 - Retain the JXL screening report when no shortlist exists or D0 already fits,

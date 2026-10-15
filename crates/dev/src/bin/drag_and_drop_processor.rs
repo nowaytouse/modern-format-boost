@@ -172,11 +172,11 @@ struct Args {
     #[command(flatten)]
     cache: foundation::runtime_config::cache_args::CacheArgs,
 
-    /// Permitted image encoding attempts, independent of batch failure handling.
+    /// Permit supported image compatibility retries or repairs; separate from tool permission and batch continuation.
     #[arg(long, value_enum)]
     img_fallback_policy: Option<FallbackPolicy>,
 
-    /// Whether image encoding can attempt configured fallback tools.
+    /// Permit alternate image encoding/recovery tools, not repairs by itself; required analysis, decoding, metadata and verification tools remain available.
     #[arg(long, value_enum)]
     img_tool_policy: Option<ToolPolicy>,
 

@@ -253,7 +253,7 @@
 "settings.invalid" = "%@ 的值无效：%@";
 "settings.choose_config" = "选择图片配置文件";
 "settings.imgConfig" = "配置文件";
-"settings.imgFallback" = "编码回退策略";
+"settings.imgFallback" = "编码重试与修复";
 "settings.imgJpegEffort" = "JPEG 固定压缩档位（E）";
 "settings.imgJxlDistance" = "其他图像画质（D）";
 "settings.imgJxlDistance.help" = "D0 无损，数值越大允许失真越多，可输入 0–25。仅影响归档规则允许有损的来源：PNG 仍保持无损，JPEG 仍可逆转码。自动选择 D 时暂不使用此手动值；按归档规则时，由现有条件决定是否搜索，不搜索时使用手动值或规则默认值。";
@@ -300,7 +300,8 @@
 "settings.vidErrorMode" = "标准视频：单个文件失败时";
 "settings.failure.inherited" = "继承设置：%@";
 "settings.imgConfig.help" = "可选的图片运行时 JSON，包含工具和 Photos 配置。GUI 中明确指定的选项优先，配置文件本身不会被修改。";
-"settings.imgFallback.help" = "决定允许尝试哪些编码路径，不决定文件失败后是否终止整批。严格回退不等于遇错即停。";
+"settings.imgFallback.help" = "控制已支持的 JPEG 兼容重试、ICC 修补等恢复操作；不控制所有内部重试。它不决定能否换工具，也不决定失败后是否继续整批。所有操作仍受具体媒体和核验条件限制。";
+"settings.imgFallback.note" = "选择允许的兼容重试与修复操作；与换工具、整批是否继续无关。";
 "settings.imgJpegEffort.help" = "仅手动固定或部分比较使用这里保存的 E1–E11 数值，初始值为 E11。默认比较全部 11 档，不使用此数值。E 改变编码工作量，不改变 JPEG 画质；仍须逐字节还原原 JPEG。";
 "settings.imgHeuristic.help" = "估算原图质量，辅助选择合适的图片质量。";
 "settings.imgDatabase.help" = "明确允许或禁止图片质量数据库访问；此项不配置数据库连接。";
@@ -311,9 +312,9 @@
 "settings.imgErrorMode.help" = "继承图像的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
 "settings.vidErrorMode.help" = "继承视频的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
 "settings.vidCodec.help" = "AV1 编码会关闭视频的 Apple 兼容模式；HEVC 保留现有 Apple 兼容路径。";
-"settings.value.strict" = "严格：仅请求的编码路径";
-"settings.value.same-semantics" = "允许相同语义的替代路径";
-"settings.value.repair" = "允许显式修复路径";
+"settings.value.strict" = "不启用额外兼容重试或修复";
+"settings.value.same-semantics" = "允许保真兼容重试";
+"settings.value.repair" = "兼容重试及受控修复";
 "settings.value.true" = "启用";
 "settings.value.false" = "禁用";
 "settings.value.log-and-continue" = "记录失败并继续";
@@ -331,10 +332,12 @@
 "settings.config_invalid" = "后端返回的配置无效。";
 "settings.vidConfig" = "VID 配置文件";
 "settings.vidConfig.help" = "为标准视频处理指定独立 JSON 配置。视频分页显示处理端解析的输出格式；界面中的明确选择优先，文件本身不会被修改。";
-"settings.imgToolPolicy" = "备用编码工具";
-"settings.imgToolPolicy.help" = "仅控制编码或恢复时是否允许换工具；不禁用必要的格式识别、解码、元数据或核验工具。允许备用工具仍须满足兼容重试与修复条件，不会降低核验要求。";
-"settings.value.fallback" = "允许使用";
-"settings.value.single" = "禁止换工具";
+"settings.imgToolPolicy" = "编码工具使用范围";
+"settings.imgToolPolicy.help" = "仅控制受管辖的候选编码与恢复能否换用其他编码工具，不影响必要的识别、解码、元数据与核验工具。允许换工具不代表已经调用，也不自动授权修复；各路径仍须满足专家选项、恢复许可等实际条件。";
+"settings.imgToolPolicy.note" = "选择能否换用其他编码工具；不影响必要的识别、解码与核验。";
+"settings.value.fallback" = "允许按条件换用工具";
+"settings.value.single" = "仅主编码工具";
+"settings.recovery.guide" = "了解重试、修复与换工具";
 "settings.performance.per_pipeline" = "分别使用图像和视频配置";
 "error.vid_backend_missing" = "应用缺少视频处理工具，请刷新完整应用产物。";
 "history.effective_config" = "处理端生效配置";
@@ -641,6 +644,16 @@
 "settings.cache.preview_changed" = "设置或数据库选择已改变，请重新读取预览再继续。";
 
 "helpguide.title" = "MFB 如何处理你的媒体";
+"helpguide.tools.title" = "6. 重试、修复与换工具";
+"helpguide.tools.intro" = "先区分两个问题：允许尝试什么恢复操作，以及允许哪些编码工具执行。这些是许可，不是已执行或已确认可用的证明。";
+"helpguide.tools.1.title" = "编码重试与修复：允许做什么";
+"helpguide.tools.1.body" = "不开启额外恢复时，不启用该设置管辖的兼容重试或修复。保真兼容重试可在支持的 JPEG 编码故障下调整参数，例如符合条件时由 E11 重试 E10，仍须完整重建原 JPEG。受控修复进一步允许已实现的异常处理，例如识别到特定 ICC D50 错误后修补临时色彩配置再重试。它不是任意损坏媒体的修复承诺，也不控制所有内部重试。";
+"helpguide.tools.2.title" = "编码工具使用范围：允许谁来做";
+"helpguide.tools.2.body" = "仅主编码工具会禁止受此设置管辖的替代编码或恢复工具；允许按条件换用工具，则仍须满足对应路径的其他许可。例如 D 搜索探针的 ImageMagick 替代需要工具许可和专家选项，不能仅看恢复菜单来判断。ffprobe 的识别、必要解码、ExifTool 的元数据处理及 djxl 的重建核验，不会因为选择仅主编码工具而一并禁用。";
+"helpguide.tools.3.title" = "两个设置组合后，实际会怎样";
+"helpguide.tools.3.body" = "允许换工具，但不启用额外恢复：不会因此解锁被禁止的 JPEG 或 ICC 修复。允许受控修复，但仅主编码工具：符合条件的 ICC 修补仍可用同一个 cjxl 重试，但不会因此获准调用第二编码工具。JPEG 全部 11 档比较还有更严格的边界：不以换参数或修复输入来补齐失败档位，任一档无法完成就记录比较未完成、保留原件。具体是否适用及工具是否可用，要在执行时确认。";
+"helpguide.tools.4.title" = "单文件失败、整批继续和最终核验是另外的事";
+"helpguide.tools.4.body" = "普通 IMG/VID 可在开发者设置中选择单文件失败后记录并继续，或停止当前批次；Fast IMG 使用自身的断点与失败处理规则。不启用兼容重试不等于遇错即停。成功换工具或完成修复，也不等于归档成功。当前路径要求的像素、颜色、元数据、原 JPEG 字节重建及交付核验仍须通过；无法证明安全就保留原件，不改称成功或正常跳过。";
 "helpguide.context" = "选择一个主题，了解处理规则、搜索算法和安全检查。";
 "helpguide.topics" = "处理指南主题";
 "helpguide.content" = "处理指南内容";

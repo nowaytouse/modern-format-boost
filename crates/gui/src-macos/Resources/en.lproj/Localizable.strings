@@ -253,7 +253,7 @@
 "settings.invalid" = "Invalid %@: %@";
 "settings.choose_config" = "Choose image configuration file";
 "settings.imgConfig" = "Configuration file";
-"settings.imgFallback" = "Encoding fallback";
+"settings.imgFallback" = "Encoding retries and repair";
 "settings.imgJpegEffort" = "Fixed JPEG level (E)";
 "settings.imgJxlDistance" = "Other image quality (D)";
 "settings.imgJxlDistance.help" = "D0 is lossless; higher values allow more distortion, from 0 to 25. Applies only where archive rules allow lossy encoding: PNG stays lossless and JPEG stays reversible. Automatic D selection keeps this manual value inactive. Archive-rule mode searches only when required; otherwise it uses this value or the rule default.";
@@ -300,7 +300,8 @@
 "settings.vidErrorMode" = "Standard video: file failure";
 "settings.failure.inherited" = "Inherited: %@";
 "settings.imgConfig.help" = "Optional image runtime JSON, including tool and Photos settings. GUI overrides take precedence; the file is not modified.";
-"settings.imgFallback.help" = "Controls permitted encoding attempts, not whether a failed file stops the batch. Strict does not mean fail-fast.";
+"settings.imgFallback.help" = "Controls supported JPEG compatibility retries, ICC patching and related recovery, not every internal retry. Separate from permission to switch tools and from batch failure handling. Media-specific requirements and verification still apply.";
+"settings.imgFallback.note" = "Which compatibility retries and repairs are permitted; not tool choice or batch continuation.";
 "settings.imgJpegEffort.help" = "Only the manual or partial-comparison choice uses this saved E1–E11 value (initially E11). The default compares all eleven levels and does not use this value. E changes encoding work, not JPEG quality; exact reconstruction remains required.";
 "settings.imgHeuristic.help" = "Estimate source quality to guide image quality selection.";
 "settings.imgDatabase.help" = "Explicitly allow or deny image quality database access; this does not configure a connection.";
@@ -311,9 +312,9 @@
 "settings.imgErrorMode.help" = "Inherit the image configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
 "settings.vidErrorMode.help" = "Inherit the video configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
 "settings.vidCodec.help" = "AV1 disables Apple compatibility for video encoding; HEVC keeps the existing Apple-compatible route.";
-"settings.value.strict" = "Strict: requested route only";
-"settings.value.same-semantics" = "Allow same-semantics alternatives";
-"settings.value.repair" = "Allow explicit repair routes";
+"settings.value.strict" = "No extra compatibility retries or repair";
+"settings.value.same-semantics" = "Allow fidelity-preserving compatibility retries";
+"settings.value.repair" = "Compatibility retries and guarded repair";
 "settings.value.true" = "Enabled";
 "settings.value.false" = "Disabled";
 "settings.value.log-and-continue" = "Record failure and continue";
@@ -331,10 +332,12 @@
 "settings.config_invalid" = "The backend returned an invalid configuration.";
 "settings.vidConfig" = "VID configuration file";
 "settings.vidConfig.help" = "Independent JSON for standard video processing. The video tab shows the codec resolved by the worker; explicit GUI choices take precedence without modifying the file.";
-"settings.imgToolPolicy" = "Alternative encoding tools";
-"settings.imgToolPolicy.help" = "Controls switching tools for encoding or recovery, not required detection, decoding, metadata or verification tools. Alternatives still require permission for compatibility retries or repairs; verification is not relaxed.";
-"settings.value.fallback" = "Allow alternatives";
-"settings.value.single" = "Do not switch tools";
+"settings.imgToolPolicy" = "Permitted encoding tools";
+"settings.imgToolPolicy.help" = "Controls alternative tools for governed candidate encoding and recovery, not required detection, decoding, metadata or verification tools. Permission is not proof of use and does not itself authorize repair; each route still needs its actual expert, recovery or other permissions.";
+"settings.imgToolPolicy.note" = "Whether another encoding tool may be used; required detection, decoding and checks remain.";
+"settings.value.fallback" = "Allow alternatives when eligible";
+"settings.value.single" = "Primary encoding tool only";
+"settings.recovery.guide" = "About retries, repair and tool switching";
 "settings.performance.per_pipeline" = "Use each pipeline's configuration";
 "error.vid_backend_missing" = "The video worker is missing. Refresh the complete application bundle.";
 "history.effective_config" = "Worker effective configuration";
@@ -641,6 +644,16 @@
 "history.batch_issues.phase_unknown" = "Stage not recorded";
 
 "helpguide.title" = "How MFB Processes Your Media";
+"helpguide.tools.title" = "6. Retries, repair and tools";
+"helpguide.tools.intro" = "Separate what recovery may do from which encoding tools may do it. Permission is not evidence that an operation ran or that a tool is available.";
+"helpguide.tools.1.title" = "Encoding retries and repair: permitted operations";
+"helpguide.tools.1.body" = "No extra recovery disables the compatibility retries and repairs governed by this setting. Fidelity-preserving retries may adjust parameters after supported JPEG failures, such as eligible E11-to-E10 retries, while still requiring exact original-JPEG reconstruction. Guarded repair additionally permits implemented recovery, such as patching a temporary color profile after a specific ICC D50 error. It does not promise to repair arbitrary damaged media or govern every internal retry.";
+"helpguide.tools.2.title" = "Permitted encoding tools: who may perform them";
+"helpguide.tools.2.body" = "Primary only forbids governed alternative encoding or recovery tools. Alternatives still require the route's other permissions. For example, an ImageMagick alternative in a D-search probe needs tool permission and expert mode; the recovery menu alone does not determine it. ffprobe detection, required decoding, ExifTool metadata work and djxl reconstruction checks are not all disabled by selecting the primary encoder only.";
+"helpguide.tools.3.title" = "How the two choices work together";
+"helpguide.tools.3.body" = "Alternatives allowed, extra recovery disabled: forbidden JPEG or ICC repairs remain forbidden. Guarded repair allowed, primary tool only: an eligible ICC patch may still retry the same cjxl, but does not authorize a second encoder. Full eleven-level JPEG comparison has a stricter boundary: it never changes candidate parameters or repairs input to fill a failed level. Any incomplete level leaves the comparison incomplete and retains the source. Applicability and tool availability must be confirmed at execution.";
+"helpguide.tools.4.title" = "Batch continuation and final verification are separate";
+"helpguide.tools.4.body" = "For standard IMG/VID, Developer settings select whether to record a file failure and continue or stop the batch; Fast IMG uses its own checkpointed failure handling. Disabling compatibility retries does not mean fail-fast. Switching tools or completing repair is not archival success. Pixel, color, metadata, exact original-JPEG reconstruction and delivery checks required by the current route remain mandatory. If safety cannot be proved, retain the source instead of relabeling failure as success or an intentional skip.";
 "helpguide.context" = "Choose a topic to see the processing rules, searches and safety checks.";
 "helpguide.topics" = "Processing guide topics";
 "helpguide.content" = "Processing guide content";

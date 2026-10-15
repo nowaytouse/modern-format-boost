@@ -86,6 +86,11 @@ Image and Fast IMG tool selection (`single`/`fallback`) lives in their processin
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
 IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
+**Encoding retries and repair** selects supported recovery operations; **Permitted
+encoding tools** separately authorizes alternative encoders. Both have visible
+scope notes and a direct link to the native guide's retry, ICC repair and tool-use
+examples. Neither controls batch continuation or disables required verification.
+These are clearer labels for the existing configuration, not new processing modes.
 Search Settings by a localized option name, section or choice, then jump directly
 to its existing control. Developer mode also accepts configuration keys and flags.
 Search preserves unsaved edits and reveals applicable advanced Photos fields.

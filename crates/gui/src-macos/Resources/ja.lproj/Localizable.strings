@@ -253,7 +253,7 @@
 "settings.invalid" = "%@ が無効です：%@";
 "settings.choose_config" = "画像の設定ファイルを選択";
 "settings.imgConfig" = "設定ファイル";
-"settings.imgFallback" = "エンコードのフォールバック";
+"settings.imgFallback" = "エンコード再試行と修復";
 "settings.imgJpegEffort" = "JPEGの固定圧縮レベル（E）";
 "settings.imgJxlDistance" = "その他の画像の画質（D）";
 "settings.imgJxlDistance.help" = "D0は可逆で、大きい値ほど歪みを許容します（0〜25）。有損を許可する入力だけに適用し、PNGは可逆、JPEGは可逆変換を維持します。Dの自動選択では手動値を保持したまま使いません。規則に従う場合は必要な時だけ探索し、それ以外は手動値または規則の既定値を使います。";
@@ -300,7 +300,8 @@
 "settings.vidErrorMode" = "標準動画：ファイル失敗時";
 "settings.failure.inherited" = "継承した設定：%@";
 "settings.imgConfig.help" = "ツールと Photos の設定を含む画像用ランタイム JSON。GUI の明示指定を優先し、ファイル自体は変更しません。";
-"settings.imgFallback.help" = "許可するエンコード経路を指定します。失敗時のバッチ停止方針とは別で、厳格モードは即時停止を意味しません。";
+"settings.imgFallback.help" = "実装済みの JPEG 互換再試行や ICC 補正などを許可します。すべての内部再試行を制御するものではなく、ツール切り替えやバッチ続行とは別です。メディアごとの条件と検証は必要です。";
+"settings.imgFallback.note" = "許可する互換再試行と修復を選択。ツール切り替えやバッチ続行とは別です。";
 "settings.imgJpegEffort.help" = "保存したE1〜E11（初期値E11）は手動固定または一部比較だけで使います。初期設定では全11段階を比較し、この値を使いません。Eは符号化の作業量であり、JPEG画質を変えません。元JPEGの完全なバイト復元が必要です。";
 "settings.imgHeuristic.help" = "元画像の品質を推定し、画質設定に役立てます。";
 "settings.imgDatabase.help" = "画像品質データベースへのアクセスを許可または禁止します。接続先の設定ではありません。";
@@ -311,9 +312,9 @@
 "settings.imgErrorMode.help" = "画像の有効な設定を継承するか、明示指定します。回復可能な失敗は元ファイルを保持し、スキップと別に集計します。致命的なエラーでは常に停止します。";
 "settings.vidErrorMode.help" = "動画の有効な設定を継承するか、明示指定します。回復可能な失敗は元ファイルを保持し、スキップと別に集計します。致命的なエラーでは常に停止します。";
 "settings.vidCodec.help" = "AV1 は動画の Apple 互換モードを無効にします。HEVC は既存の Apple 互換経路を維持します。";
-"settings.value.strict" = "厳格：指定された経路のみ";
-"settings.value.same-semantics" = "同等の意味を持つ代替経路";
-"settings.value.repair" = "明示的な修復経路を許可";
+"settings.value.strict" = "追加の互換再試行・修復なし";
+"settings.value.same-semantics" = "保真条件を維持する互換再試行";
+"settings.value.repair" = "互換再試行と条件付き修復";
 "settings.value.true" = "有効";
 "settings.value.false" = "無効";
 "settings.value.log-and-continue" = "失敗を記録して続行";
@@ -331,10 +332,12 @@
 "settings.config_invalid" = "バックエンドの設定が無効です。";
 "settings.vidConfig" = "VID 設定ファイル";
 "settings.vidConfig.help" = "標準動画処理の独立 JSON 設定。動画タブには処理側が解決した形式を表示し、GUI の明示指定を優先します。ファイルは変更しません。";
-"settings.imgToolPolicy" = "代替エンコードツール";
-"settings.imgToolPolicy.help" = "符号化や復旧でのツール切り替えを制御します。必要な識別・デコード・メタデータ・検証ツールは禁止しません。代替には互換再試行や修復の許可が別途必要で、検証条件は緩和しません。";
-"settings.value.fallback" = "代替を許可";
-"settings.value.single" = "切り替えを禁止";
+"settings.imgToolPolicy" = "使用可能なエンコードツール";
+"settings.imgToolPolicy.help" = "対象となる候補エンコードや復旧での代替ツールを許可します。必要な識別・デコード・メタデータ・検証は対象外です。許可は実行済みや修復許可を意味せず、各経路の専門設定や復旧条件も必要です。";
+"settings.imgToolPolicy.note" = "別のエンコードツールを使えるかを選択。必要な識別・デコード・検証は維持します。";
+"settings.value.fallback" = "条件を満たす場合に代替を許可";
+"settings.value.single" = "主エンコードツールのみ";
+"settings.recovery.guide" = "再試行・修復・ツール切り替えについて";
 "settings.performance.per_pipeline" = "画像と動画の設定を個別に使用";
 "error.vid_backend_missing" = "動画処理ツールがありません。アプリ全体の成果物を更新してください。";
 "history.effective_config" = "処理側の実効設定";
@@ -641,6 +644,16 @@
 "settings.cache.preview_changed" = "設定またはデータベースの選択が変わりました。新しいプレビューを読み込んでください。";
 
 "helpguide.title" = "MFB のメディア処理について";
+"helpguide.tools.title" = "6. 再試行・修復・ツール";
+"helpguide.tools.intro" = "許可する復旧操作と、使用できるエンコードツールは別です。許可は実行済みや利用可能と確認済みの証明ではありません。";
+"helpguide.tools.1.title" = "再試行と修復：何を許可するか";
+"helpguide.tools.1.body" = "追加の復旧なしでは、この設定が管理する互換再試行と修復を有効にしません。互換再試行は、対応する JPEG 障害でパラメータを変更できます。例えば条件を満たす E11 から E10 への再試行でも、元 JPEG の完全なバイト復元が必要です。条件付き修復では、特定の ICC D50 エラーで一時プロファイルを補正するなどの実装済み操作も許可します。あらゆる破損メディアの修復や、すべての内部再試行を制御する機能ではありません。";
+"helpguide.tools.2.title" = "ツールの範囲：誰が実行できるか";
+"helpguide.tools.2.body" = "主ツールのみでは、対象となる代替エンコード・復旧ツールを禁止します。代替を許可しても、経路ごとの条件が必要です。D 検索の ImageMagick 代替にはツール許可と専門設定が必要で、復旧メニューだけでは判断できません。ffprobe による識別、必要なデコード、ExifTool のメタデータ処理、djxl の復元検証を一括で禁止するものではありません。";
+"helpguide.tools.3.title" = "二つの選択を組み合わせると";
+"helpguide.tools.3.body" = "代替を許可して追加復旧を無効にしても、禁止された JPEG・ICC 修復は実行しません。修復を許可して主ツールのみにした場合、条件を満たす ICC 補正は同じ cjxl で再試行できますが、第二のエンコーダーは許可されません。JPEG 全11段階比較ではさらに、失敗段階を埋めるためのパラメータ変更や入力修復を行いません。一段階でも完了できなければ比較未完了として元ファイルを保持します。適用条件と利用可能性は実行時に確認します。";
+"helpguide.tools.4.title" = "バッチ続行と最終検証は別";
+"helpguide.tools.4.body" = "標準 IMG/VID では、単一ファイルの失敗を記録して続けるか停止するかを開発者設定で選びます。Fast IMG は独自のチェックポイントと失敗処理を使います。互換再試行なしは即時停止を意味しません。ツール変更や修復の完了だけでは保存成功になりません。経路が要求する画素・色・メタデータ・元 JPEG の完全復元・受け渡し検証は必須です。安全を証明できなければ元ファイルを保持し、成功や意図的スキップに置き換えません。";
 "helpguide.context" = "項目を選ぶと、処理方針、探索、検証の仕組みを確認できます。";
 "helpguide.topics" = "処理ガイドの項目";
 "helpguide.content" = "処理ガイドの内容";

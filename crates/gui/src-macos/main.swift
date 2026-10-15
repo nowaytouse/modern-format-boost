@@ -1581,6 +1581,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var cacheLoaded = false
     private var cacheBusy = false
     private var toolEditor: ToolPathsPanel?
+    private var processingGuide: ProcessingGuideController?
     private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
@@ -1683,8 +1684,20 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                let fieldView: NSView
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy].contains(field) {
+                    let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
+                    note.font = .systemFont(ofSize: 11)
+                    note.textColor = .secondaryLabelColor
+                    let stack = NSStackView(views: [control, note])
+                    stack.orientation = .vertical
+                    stack.alignment = .leading
+                    stack.spacing = 3
+                    note.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                    fieldView = stack
+                } else { fieldView = control }
                 var cells: [NSView] = toggles[field] == nil
-                    ? [NSTextField(labelWithString: field.title), control] : [control, NSView()]
+                    ? [NSTextField(labelWithString: field.title), fieldView] : [control, NSView()]
                 if developer && field.runtimeKey != nil {
                     let source = NSButton()
                     source.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
@@ -1703,6 +1716,16 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 rows[field] = row
                 fieldSections[field] = section
                 row.yPlacement = .center
+            }
+            if section == "img" {
+                let guide = NSButton(title: localized("settings.recovery.guide"), target: self, action: #selector(showRecoveryGuide))
+                guide.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: nil)
+                guide.imagePosition = .imageLeading
+                guide.isBordered = false
+                guide.alignment = .left
+                guide.contentTintColor = .linkColor
+                guide.setAccessibilityLabel(guide.title)
+                grid.addRow(with: developer ? [NSView(), guide, NSView()] : [NSView(), guide]).yPlacement = .center
             }
             if section == "cache" { addCacheRows(to: grid) }
             if section == "developer" {
@@ -2365,6 +2388,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if tabViewItem?.identifier as? String == "cache", !cacheLoaded && !validatingLayout { refreshCache() }
     }
 
+    @objc private func showRecoveryGuide() {
+        if processingGuide == nil { processingGuide = ProcessingGuideController() }
+        processingGuide?.show(relativeTo: panel, topic: "tools")
+    }
+
     private func updatePanelSize() {
         guard let section = tabs.selectedTabViewItem?.identifier as? String,
               let grid = grids[section], let tabHeight else { return }
@@ -2831,6 +2859,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         validatingLayout = true
         defer { validatingLayout = false }
         try validateEncodingScopesForSelfTest()
+        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy] {
+            guard let row = rows[field] else { continue }
+            guard let stack = row.cell(at: 1).contentView as? NSStackView,
+                  let note = stack.arrangedSubviews.last as? NSTextField,
+                  note.stringValue == localized("settings.\(field.labelKey).note"),
+                  popups[field]?.accessibilityLabel() == field.title else {
+                throw HostError(message: "Encoding recovery and tool permissions lost their visible explanation")
+            }
+        }
         var pixelEffort = MediaSettings()
         pixelEffort.values = [.imgJxlEffort: "8", .fastJxlEffort: "10", .imgJpegEffort: "11"]
         try pixelEffort.validate()

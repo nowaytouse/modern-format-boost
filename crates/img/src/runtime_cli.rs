@@ -40,10 +40,10 @@ pub(super) struct RuntimeArgs {
     /// Final AVIF encoder speed for Fast IMG AVIF, in the backend's 0..10 range.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(0..=10))]
     avif_speed: Option<u8>,
-    /// JPEG retries and intermediate recovery; integrity verification always remains required.
+    /// Permit supported compatibility retries or repairs; separate from tool permission and batch continuation.
     #[arg(long, global = true, value_enum)]
     fallback_policy: Option<FallbackPolicy>,
-    /// Whether alternate encoding/recovery tools may be attempted.
+    /// Permit alternate encoding/recovery tools, not repairs by itself; required analysis, decoding, metadata and verification tools remain available.
     #[arg(long, global = true, value_enum)]
     tool_policy: Option<ToolPolicy>,
     /// Effort for fixed/sparse reversible JPEG-to-JXL encoding; full search always compares E1..E11.

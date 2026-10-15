@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
-        ("policy", 4), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4),
+        ("policy", 4), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -33,7 +33,7 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
 
     required init?(coder: NSCoder) { nil }
 
-    func show(relativeTo parent: NSWindow?, context: String = "") {
+    func show(relativeTo parent: NSWindow?, context: String = "", topic: String? = nil) {
         window?.title = text("helpguide.title")
         header.stringValue = text("helpguide.title")
         footer.stringValue = text("helpguide.boundary")
@@ -42,6 +42,9 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
         findButton.toolTip = text("helpguide.find")
         findButton.setAccessibilityLabel(text("helpguide.find"))
         navigation.reloadData()
+        if let topic, let row = Self.sections.firstIndex(where: { $0.0 == topic }) {
+            navigation.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
         displaySection(max(0, navigation.selectedRow))
         contextLabel.stringValue = context.isEmpty ? text("helpguide.context") : context
         window?.appearance = parent?.appearance
@@ -207,6 +210,8 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
                 userInfo: [NSLocalizedDescriptionKey: reason]) }
         }
         var keys = ["helpguide.title", "helpguide.context", "helpguide.topics", "helpguide.content", "helpguide.boundary", "helpguide.find"]
+        keys += ["settings.imgFallback", "settings.imgFallback.note", "settings.imgToolPolicy",
+                 "settings.imgToolPolicy.note", "settings.recovery.guide"]
         for (section, count) in sections {
             keys += ["helpguide.\(section).title", "helpguide.\(section).intro"]
             for index in 1...count {
@@ -254,6 +259,9 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             try require(window.styleMask.contains(.closable)
                 && window.standardWindowButton(.closeButton) != nil,
                 "Processing guide standard close control is missing")
+            controller.show(relativeTo: nil, topic: "tools")
+            try require(controller.textView.string.hasPrefix(translate("helpguide.tools.title")),
+                "Recovery guide shortcut did not select the tools topic")
             controller.close()
         }
     }

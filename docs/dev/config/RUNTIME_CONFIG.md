@@ -331,7 +331,7 @@ chosen after runtime fallback are not yet part of this record.
 | `img.quality_search` | `adaptive` | Guarded standard D search or separate Fast AVIF Q search. `fixed` is the manual opt-out; explicit `mode-default` retains the historical trigger. Source/size admission remains mandatory. Not source-quality inference. |
 | `img.fallback_policy` | `strict` | `strict`: no compatibility/repair retries for a requested encode. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. Full JPEG comparison never changes candidate parameters or repairs input. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
-| `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |
+| `tools.policy` | `fallback` | `single` forbids governed alternate image encoding/recovery tools. `fallback` permits alternatives only with the route's other required permissions; it does not itself authorize repair. Required detection, decoding, metadata and verification are unaffected. |
 | `tools.paths` | `{}` | Tool-name to absolute executable-path overrides, also accepted as repeated `--tool NAME=PATH` flags. Existing tool health checks still apply. |
 | `performance.mode` | `adaptive` | Shared IMG/VID memory-aware scheduling. `relaxed`, `balanced`, and `tight` request fixed tiers without removing memory safety caps. `--performance` overrides JSON; legacy `MFB_PERF_TIER` remains lower priority. |
 | `photos.backend` | `native` | Requires PhotoKit with a proven target library. `auto` opts into observable AppleScript fallback before import intent; `applescript` explicitly selects compatibility. `photokit` is an alias for `native`. |
@@ -345,6 +345,31 @@ chosen after runtime fallback are not yet part of this record.
 | `photos.native_min_batch_size` | `50` | Adaptive lower bound, at least 1 and no greater than the upper bound. |
 | `photos.native_max_batch_size` | `1000` | Adaptive upper bound, at most 1000. Initial transaction size must fall within these bounds when adaptation is enabled. |
 | `photos.target_batch_seconds` | `10` | Verified-cycle latency target, 1 through 600 seconds. |
+
+### Recovery Operations Versus Encoding Tools
+
+The GUI calls `img.fallback_policy` **Encoding retries and repair**, and
+`tools.policy` **Permitted encoding tools**. CLI names and saved values are
+unchanged. These permissions do not select batch continuation or prove that an
+operation ran, a tool is available, or a file passed verification.
+
+- JPEG compatibility retries use `same-semantics` or `repair`; a supported E11 to
+  E10 retry still requires exact reconstruction from the original JPEG bytes.
+- The supported ICC D50 repair requires `repair` and its specific error trigger.
+  It patches a temporary profile and retries the same `cjxl`, so `single` does
+  not by itself forbid that operation.
+- A D-search probe's alternate ImageMagick encoder requires tool permission and
+  expert opt-in. `img.fallback_policy` is not a universal switch over all internal
+  retries or alternate probes. External pixel recovery has additional repair
+  permission requirements.
+- Full E1..E11 JPEG comparison does not change parameters or repair input to fill
+  a failed level. Recovery permission never relaxes that boundary or mandatory
+  original-byte reconstruction and delivery checks.
+
+The native guide explains these cases directly from Settings. Per-file executed
+tool identities and recovery outcomes remain distinct from the saved permission.
+
+### Photos Import And Verification Windows
 
 Native import and verification windows can have unequal sizes. Only committed
 identifiers are queued, never media bytes; the pending identifier count stays
