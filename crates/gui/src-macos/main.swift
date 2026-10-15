@@ -4232,9 +4232,23 @@ func hasPartialProcessingSuccess(succeeded: [Int?], failed: [Int?], countsComple
 
 private func hasMandatoryVerificationFailure(_ line: String) -> Bool {
     let raw = LogTone.message(line)
-    if let count = countStatusValue(in: raw), count.uppercased() != "MATCH" { return true }
-    return raw.range(of: #"(?i)^(?:Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*CLEAN\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#,
+    if let count = countStatusValue(in: raw), !["MATCH", "EXPLAINED"].contains(count.uppercased()) { return true }
+    return raw.range(of: #"(?i)^(?:Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#,
                      options: .regularExpression) != nil
+}
+
+private func hasSeriousProcessingDiagnostic(_ line: String) -> Bool {
+    let raw = LogTone.message(line).replacingOccurrences(of: #"(?i)^(?:\[ERROR\]\s*|Error:\s*)"#,
+        with: "", options: .regularExpression)
+    return hasMandatoryVerificationFailure(raw)
+        || raw.range(of: #"(?i)^(?:\[FATAL\]|fatal(?: error)?:|thread .*panicked|panic:|No space left on device|Permission denied|database is (?:locked|corrupt)|SQLite.*(?:corrupt|malformed))"#,
+                     options: .regularExpression) != nil
+        || raw.hasPrefix("[LOG] final processing summary write failed:")
+        || raw.hasPrefix("write final processing summary")
+}
+
+private func processDiagnosticColor(_ line: String, confirmedFileFailure: Bool = false) -> NSColor {
+    confirmedFileFailure && !hasSeriousProcessingDiagnostic(line) ? .systemOrange : .systemRed
 }
 
 private struct BatchResults {
@@ -4249,6 +4263,8 @@ private struct BatchResults {
         let photosVerified: Int
         let sourceRetained: Int?
         let failedSourcesRetained: Int?
+        let failedSourcesVerified: Int?
+        let failedSourceVerificationError: String?
         let retentionUnknownReason: String?
         let primaryCleanupComplete: Bool
         let finalizationError: String?
@@ -4261,6 +4277,7 @@ private struct BatchResults {
                   encoded >= 0, encoded <= deliveryCapacity,
                   photosVerified >= 0, photosVerified <= deliveryCapacity else { return false }
             if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
+            if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
             if let sourceRetained {
                 return sourceRetained >= 0 && sourceRetained <= total && retentionUnknownReason == nil
                     && failedSourcesRetained.map { $0 <= sourceRetained } != false
@@ -4315,7 +4332,9 @@ private struct BatchResults {
               totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
               let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
               pending == fastDeliveryCount(\.unprocessed),
-              fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed }),
+              fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
+                  && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
+                  && ($0.failed == 0 || $0.primaryCleanupComplete) }),
               workerExitCodes.count == fastDeliveries.count,
               zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in code == (report.failed > 0 ? 1 : 0) }),
               let successes = fastDeliveryCount(\.succeeded),
@@ -4331,7 +4350,7 @@ private struct BatchResults {
     }
 
     mutating func observeMandatoryEvidence(_ line: String) {
-        if hasMandatoryVerificationFailure(line) { mandatoryEvidenceConflict = true }
+        if hasSeriousProcessingDiagnostic(line) { mandatoryEvidenceConflict = true }
     }
 
     mutating func markMandatoryEvidenceConflict() { mandatoryEvidenceConflict = true }
@@ -4345,7 +4364,8 @@ private struct BatchResults {
         let payload = raw.dropFirst(prefix.count)
         guard payload.utf8.count <= 32_768, fastDeliveries.count < 4_096,
               let fields = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-              ["source_retained", "failed_sources_retained", "retention_unknown_reason", "finalization_error"].allSatisfy({ fields[$0] != nil }),
+              ["source_retained", "failed_sources_retained", "failed_sources_verified", "failed_source_verification_error",
+               "retention_unknown_reason", "finalization_error"].allSatisfy({ fields[$0] != nil }),
               let event = try? decoder.decode(FastDelivery.self, from: Data(payload.utf8)), event.isValid else {
             fastDeliveryInvalid = true
             return true
@@ -4384,6 +4404,23 @@ private struct BatchResults {
         return localized("result.counts", counts[0], counts[1], counts[2], counts[3])
             + " · " + localized("result.unprocessed", count(invalid ? nil
                 : processingCountTotal(Array(pendingTotals.values))))
+    }
+
+    var compactSummary: String {
+        guard !isIncomplete,
+              let succeeded = processingCountTotal(totals.values.map { $0[0] }),
+              let skipped = processingCountTotal(totals.values.map { $0[1] }),
+              let failed = processingCountTotal(totals.values.map { $0[2] }),
+              let ignored = processingCountTotal(totals.values.map { $0[3] }),
+              let pending = processingCountTotal(Array(pendingTotals.values)) else {
+            return localized("result.review_details")
+        }
+        var parts = [localized("result.completed_count", String(succeeded))]
+        for (count, key) in [(failed, "result.failed_count"), (pending, "result.pending_count"),
+                             (skipped, "result.skipped_count"), (ignored, "result.excluded_count")] where count > 0 {
+            parts.append(localized(key, String(count)))
+        }
+        return parts.joined(separator: " · ")
     }
 
     mutating func ingest(_ line: String) -> String? {
@@ -4593,11 +4630,13 @@ enum LogTone: Equatable {
             return .muted
         }
         // The stderr transport prefix is not evidence of an error.
-        if let count = countStatusValue(in: line) { return count.uppercased() == "MATCH" ? .result : .failure }
-        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
+        if let count = countStatusValue(in: line) {
+            return count.uppercased() == "MATCH" ? .result : count.uppercased() == "EXPLAINED" ? .warning : .failure
+        }
+        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
             return .failure
         }
-        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):)"#, options: .regularExpression) != nil { return .warning }
+        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):|^\s*Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
         if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
         if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS|PHASE)\s*\])"#, options: .regularExpression) != nil { return .stage }
         if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
@@ -4688,7 +4727,7 @@ private struct LatestDiagnostics {
             + (scalars.count > 4_096 ? "…" : "")
         switch tone {
         case .failure:
-            let isSafety = hasMandatoryVerificationFailure(message)
+            let isSafety = hasSeriousProcessingDiagnostic(message)
             guard !failureIsSafety || isSafety else { return false }
             let isSummary = countStatusValue(in: message) != nil
                 || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?(?:exiting with failures\b|fast-img exited with (?:code|status)\b|fast-img (?:batch|original-media delivery) recorded \d+ failed source))"#,
@@ -5511,6 +5550,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let commandField = NSTextField()
     private let logView = NSTextView()
     private let logScroll = NSScrollView()
+    private let logDetailsButton = NSButton(title: "", target: nil, action: nil)
+    private let mainLayout = NSStackView()
+    private var logDetailsExpanded = false
+    private var processEndedWithError = false
+    private var hasConfirmedFileFailures = false
     private let countStatusLabel = NSTextField(labelWithString: "")
     private var countStatus: String?
     private let statusLabel = NSTextField(labelWithString: "")
@@ -5929,6 +5973,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .lineBorder
         logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        logDetailsButton.target = self
+        logDetailsButton.action = #selector(toggleLogDetails)
+        logDetailsButton.bezelStyle = .inline
+        logDetailsButton.imagePosition = .imageLeading
+        logDetailsButton.alignment = .left
 
         countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         countStatusLabel.isHidden = true
@@ -5998,10 +6047,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
         statusRow.spacing = 8
-        let stack = NSStackView(views: [
+        let stack = mainLayout
+        for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logScroll, latestDiagnosticsRow, statusRow,
-        ])
+            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
+        ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -6009,7 +6059,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -6018,12 +6068,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -16),
         ])
         applyLocalization()
         selectSavedPreferences()
         restoreOptions(for: .adjacent)
         configurationChanged()
+        updateLogPresentation()
     }
 
     private func configureHost() {
@@ -6192,6 +6243,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func clearBatchLog() {
+        processEndedWithError = false
+        hasConfirmedFileFailures = false
         logView.string = ""
         logPhase = PhaseLogPresentation()
         diagnosticLogFolder.reset()
@@ -6207,6 +6260,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         countStatus = nil
         countStatusLabel.isHidden = true
         appendLog(localized("log.history", resolvedHistoryDirectory.path))
+        updateLogPresentation()
     }
 
     @objc private func openHistory() {
@@ -6648,7 +6702,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
             let tone = LogTone.classify(String(line))
             result.append(NSAttributedString(string: String(line), attributes: [
-                .foregroundColor: tone.color, .font: tone.font,
+                .foregroundColor: tone == .failure ? processDiagnosticColor(String(line), confirmedFileFailure: hasConfirmedFileFailures) : tone.color,
+                .font: tone.font,
             ]))
         }
         return result
@@ -6657,7 +6712,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func refreshCountStatus() {
         guard let countStatus else { countStatusLabel.isHidden = true; return }
         countStatusLabel.stringValue = localized("status.count", countStatus)
-        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal : .systemRed
+        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal
+            : countStatus.uppercased() == "EXPLAINED" ? .systemOrange : .systemRed
         countStatusLabel.isHidden = false
     }
 
@@ -6671,7 +6727,35 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.toolTip = label.stringValue
             label.setAccessibilityLabel(label.stringValue)
         }
-        latestDiagnosticsRow.isHidden = latestDiagnostics.failure == nil && latestDiagnostics.warning == nil
+        latestFailureLabel.textColor = latestDiagnostics.failure.map {
+            processDiagnosticColor($0, confirmedFileFailure: hasConfirmedFileFailures)
+        } ?? .systemOrange
+        latestDiagnosticsRow.isHidden = !logDetailsExpanded || (latestDiagnostics.failure == nil && latestDiagnostics.warning == nil)
+    }
+
+    @objc private func toggleLogDetails() {
+        logDetailsExpanded.toggle()
+        updateLogPresentation()
+        if !batchOverview.isHidden { refreshBatchOverview() }
+    }
+
+    private func updateLogPresentation() {
+        logScroll.isHidden = !logDetailsExpanded
+        statusLabel.isHidden = !batchOverview.isHidden && !logDetailsExpanded
+        logDetailsButton.title = localized(logDetailsExpanded ? "log.details.hide" : "log.details.show")
+        logDetailsButton.image = NSImage(systemSymbolName: logDetailsExpanded ? "chevron.down" : "chevron.right",
+                                        accessibilityDescription: nil)
+        logDetailsButton.setAccessibilityLabel(logDetailsButton.title)
+        logDetailsButton.setAccessibilityExpanded(logDetailsExpanded)
+        refreshLatestDiagnostics()
+        let height: CGFloat = logDetailsExpanded ? mainWindowContentSize.height
+            : max(360, ceil(mainLayout.fittingSize.height) + 48)
+        let size = NSSize(width: mainWindowContentSize.width, height: height)
+        if window.contentView?.bounds.size != size {
+            window.contentMinSize = size
+            window.contentMaxSize = size
+            window.setContentSize(size)
+        }
     }
 
     private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
@@ -6720,6 +6804,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
         defer { refreshBatchOverview() }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
@@ -6816,15 +6901,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         let expectsFastDelivery = lastRequest.map {
             !$0.dryRun && [.fastImgJxl, .fastImgAvif].contains($0.operationMode)
         } ?? batchResults.hasFastDelivery
-        guard !host.isRunning, !batchResults.totals.isEmpty || batchResults.hasFastDelivery || expectsFastDelivery else {
+        guard !host.isRunning, !batchResults.totals.isEmpty || batchResults.hasFastDelivery || expectsFastDelivery || processEndedWithError else {
             batchOverview.isHidden = true
             return
         }
         let photos = lastRequest?.shortestPath ?? false
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: processExit ?? host.lastExitStatus,
             exitedNormally: exitedNormally ?? host.lastExitWasNormal)
+        let previousConfirmation = hasConfirmedFileFailures
+        hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
+        if previousConfirmation != hasConfirmedFileFailures, let storage = logView.textStorage {
+            storage.setAttributedString(styledLog(storage.string))
+        }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
             || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed)
+            || (processEndedWithError && batchResults.totals.isEmpty)
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
         let title: String
@@ -6832,21 +6923,36 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if uncertain { title = localized("result.unconfirmed") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
         else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
-        else if batchResults.hasFailure { title = localized("result.finished_with_failures") }
+        else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
+        else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
-        batchOverviewTitle.textColor = uncertain || (!batchResults.hasPartialSuccess && batchResults.hasFailure)
-            ? .systemRed : batchResults.hasPartialSuccess ? .systemOrange : .labelColor
-        batchOverviewCounts.stringValue = batchResults.summary ?? localized("result.incomplete")
+        batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
+            : uncertain ? .systemRed : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+        batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
+            : batchResults.compactSummary
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
         batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
-        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery
+        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || !logDetailsExpanded
         if batchResults.hasFastDelivery {
             let usable = !batchResults.fastDeliveryInvalid
             batchOverviewDelivery.stringValue = localized("result.delivery_facts",
                 value(usable ? batchResults.fastDeliveryCount(\.encoded) : nil),
                 value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
                 value(usable ? processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained)) : nil))
+            if !logDetailsExpanded {
+                if uncertain {
+                    batchOverviewDelivery.stringValue = localized("result.review_details")
+                } else if failures.map({ $0 > 0 }) == true {
+                    let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
+                    batchOverviewDelivery.stringValue = photos ? localized("result.photos_with_retained",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)), retained)
+                        : localized("result.failed_sources_kept", retained)
+                } else if photos {
+                    batchOverviewDelivery.stringValue = localized("result.photos_local_count",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)))
+                } else { batchOverviewDelivery.isHidden = true }
+            }
             let cleanup = usable && !batchResults.fastDeliveries.isEmpty
                 && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
             batchOverviewCleanup.stringValue = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
@@ -6856,6 +6962,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.setAccessibilityLabel(label.stringValue)
         }
         batchOverview.isHidden = false
+        updateLogPresentation()
         fileProgressRow.isHidden = true
         if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
@@ -6980,6 +7087,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshDiagnostics()
         refreshStatus()
         refreshProcessingStatus()
+        updateLogPresentation()
     }
 
     private func updateOptionTitles() {
@@ -7214,12 +7322,18 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func validateFastDeliveryForSelfTest() throws {
         let previousRequest = lastRequest
-        defer { lastRequest = previousRequest }
+        let previousDetails = logDetailsExpanded
+        defer {
+            lastRequest = previousRequest
+            logDetailsExpanded = previousDetails
+            updateLogPresentation()
+        }
         lastRequest = ProcessorRequest(targetPath: "/synthetic/results", processingMode: .imagesOnly,
                                        operationMode: .fastImgJxl, shortestPath: true)
         let receipt: [String: Any] = ["schema_version": 1, "succeeded": 1829, "skipped": 0,
             "ignored": 2693, "failed": 1, "unprocessed": 0, "encoded": 1163,
             "photos_verified": 1829, "source_retained": 1, "failed_sources_retained": 1,
+            "failed_sources_verified": 1, "failed_source_verification_error": NSNull(),
             "retention_unknown_reason": NSNull(),
             "primary_cleanup_complete": true, "finalization_error": NSNull()]
         let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1829,"skipped":0,"failed":1,"ignored":2693,"unprocessed":0,"exit_code":1}"#
@@ -7237,7 +7351,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         for (key, value) in [("photos_verified", 1828 as Any), ("source_retained", 0 as Any),
                              ("succeeded", 1830 as Any), ("finalization_error", "cleanup failed" as Any),
-                             ("encoded", -1 as Any), ("failed", Int.max as Any), ("failed_sources_retained", 0 as Any)] {
+                             ("encoded", -1 as Any), ("failed", Int.max as Any), ("failed_sources_retained", 0 as Any),
+                             ("primary_cleanup_complete", false as Any)] {
             var changed = receipt
             changed[key] = value
             var invalid = BatchResults()
@@ -7247,7 +7362,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 throw HostError(message: "Contradictory delivery fact was accepted: \(key)")
             }
         }
-        for missing in ["finalization_error", "failed_sources_retained", "retention_unknown_reason"] {
+        for missing in ["finalization_error", "failed_sources_retained", "retention_unknown_reason",
+                        "failed_sources_verified", "failed_source_verification_error"] {
             var changed = receipt
             changed.removeValue(forKey: missing)
             var incomplete = BatchResults()
@@ -7257,7 +7373,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 throw HostError(message: "A missing nullable receipt field was treated as proof: \(missing)")
             }
         }
-        for evidence in ["Count status: MISMATCH", "Integrity Issues: 1", "[GATE 3] verification FAIL"] {
+        for evidence in ["Count status: MISMATCH", "Integrity Issues: 1", "[GATE 3] verification FAIL",
+                         "[LOG] final processing summary write failed: disk full",
+                         "Error: write final processing summary; processing also failed: fast-img exited with code 1"] {
             var conflict = BatchResults()
             _ = conflict.ingest(batch)
             _ = try conflict.ingestFastDelivery(line(receipt))
@@ -7286,6 +7404,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard diagnostics.failure?.contains("h_1727272547459.jpeg") == true, diagnostics.warning == nil else {
             throw HostError(message: "Generic exit or backup advice displaced an actionable media error")
         }
+        logDetailsExpanded = false
         clearBatchLog()
         appendLog(try line(receipt))
         appendLog(batch)
@@ -7294,12 +7413,37 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
         guard !batchOverview.isHidden,
               batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
-              batchOverviewDelivery.stringValue.contains("1829"), batchOverviewDelivery.stringValue.contains("1163"),
+              batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
               batchOverviewCleanup.stringValue == localized("result.cleanup_primary"),
-              !logView.string.contains("MFB_FAST_IMG_RESULT="), logScroll.frame.height >= 260,
+              batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              !logView.string.contains("MFB_FAST_IMG_RESULT="),
+              window.contentView!.bounds.height < mainWindowContentSize.height,
               batchOverview.frame.width >= logScroll.frame.width - 1 else {
             throw HostError(message: "Independent partial-result overview lost counts or overflowed the native layout")
         }
+        let compact = batchOverviewCounts.stringValue
+        guard compact == batchResults.compactSummary, !compact.contains(" 0"),
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed", confirmedFileFailure: true) == .systemOrange,
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed") == .systemRed,
+              processDiagnosticColor("Integrity Issues: 1") == .systemRed,
+              processDiagnosticColor("[FATAL] disk unavailable") == .systemRed,
+              processDiagnosticColor("Error: No space left on device") == .systemRed,
+              !hasMandatoryVerificationFailure("Count status: EXPLAINED (1 fewer; all 1 listed below)"),
+              !hasMandatoryVerificationFailure("Integrity: WARNINGS"),
+              LogTone.classify("Count status: EXPLAINED (1 fewer; all 1 listed below)") == .warning,
+              LogTone.classify("Integrity: WARNINGS") == .warning else {
+            throw HostError(message: "Expected file failures were not separated from serious diagnostics")
+        }
+        logDetailsExpanded = true
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !logScroll.isHidden, logScroll.frame.height >= 260,
+              !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
+            throw HostError(message: "Expanding details lost original diagnostics or disclosure accessibility")
+        }
+        logDetailsExpanded = false
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
         appendLog("MFB_FAST_IMG_RESULT={}")
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
         refreshBatchOverview(processExit: 1, exitedNormally: true)
@@ -7465,6 +7609,16 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func validateInterfaceForSelfTest() throws {
+        guard !logDetailsExpanded, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              logDetailsButton.accessibilityLabel() == localized("log.details.show") else {
+            throw HostError(message: "Ordinary startup did not collapse technical processing details")
+        }
+        logDetailsExpanded = true
+        updateLogPresentation()
+        defer {
+            logDetailsExpanded = false
+            updateLogPresentation()
+        }
         try validateDiagnosticFoldingForSelfTest()
         try validateStatusLocalizationForSelfTest()
         try validateGateActivityForSelfTest()

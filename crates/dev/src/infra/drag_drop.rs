@@ -1199,16 +1199,64 @@ pub fn count_fast_img_jxl_outputs(output_dir: &Path) -> Result<(usize, u64)> {
     Ok((count, total_size))
 }
 
-fn fast_img_marker_entry_out_rel(source_rel: &str, entry: &Value) -> String {
-    if let Some(out_rel) = entry.get("out_rel").and_then(Value::as_str)
-        && !out_rel.trim().is_empty()
+/// A partial exit only authorizes independent verification, never cleanup by itself.
+pub fn fast_img_partial_cleanup_verified(
+    text: &str,
+    stats: &crate::infra::process_stream::ProcessorStats,
+) -> Option<usize> {
+    if stats.exit_code != 1
+        || stats.failed == 0
+        || !stats.counts_complete()
+        || stats.unprocessed != Some(0)
     {
-        return out_rel.to_string();
+        return None;
     }
-    Path::new(source_rel)
-        .with_extension("JXL")
-        .to_string_lossy()
-        .into_owned()
+    let mut reports = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("MFB_FAST_IMG_RESULT="));
+    let payload = reports.next()?;
+    if payload.len() > 16_384 || reports.next().is_some() {
+        return None;
+    }
+    let report: Value = match serde_json::from_str(payload) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("[WARN] invalid fast-img partial-cleanup receipt: {error}");
+            return None;
+        }
+    };
+    let count = |key| {
+        let value = report.get(key)?.as_u64()?;
+        match usize::try_from(value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                eprintln!("[WARN] fast-img partial-cleanup count {key} is out of range: {error}");
+                None
+            }
+        }
+    };
+    if count("schema_version") != Some(1)
+        || count("succeeded") != Some(stats.succeeded)
+        || count("failed") != Some(stats.failed)
+        || count("skipped") != Some(stats.skipped)
+        || count("ignored") != Some(stats.ignored)
+        || count("unprocessed") != Some(0)
+        || count("photos_verified") != Some(stats.succeeded)
+        || count("encoded").is_none_or(|encoded| encoded > stats.succeeded)
+        || count("failed_sources_retained") != Some(stats.failed)
+        || count("failed_sources_verified") != Some(stats.failed)
+        || report
+            .get("primary_cleanup_complete")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || !report.get("finalization_error")?.is_null()
+        || !report.get("retention_unknown_reason")?.is_null()
+        || !report.get("failed_source_verification_error")?.is_null()
+        || count("source_retained").is_none_or(|retained| retained < stats.failed)
+    {
+        return None;
+    }
+    Some(stats.failed)
 }
 
 fn fast_img_safe_output_path(output_root: &Path, rel: &str) -> Result<PathBuf> {
@@ -1233,40 +1281,145 @@ fn fast_img_safe_output_path(output_root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
-fn fast_img_marker_cleanup_targets(output_dir: &Path, verify_bin: &Path) -> Result<Vec<PathBuf>> {
-    let (marker, marker_path, marker_error) = load_fast_img_marker_json(verify_bin, output_dir)?;
-    if let Some(err) = marker_error {
-        bail!("{err}");
-    }
-    let marker = marker.context("fast-img marker missing for optimized directory")?;
-    let marker_path = marker_path.context("fast-img marker path missing")?;
-    let blake3_log = marker
-        .get("blake3_log")
-        .and_then(Value::as_object)
-        .with_context(|| {
-            format!(
-                "fast-img marker has invalid blake3_log: {}",
-                marker_path.display()
-            )
-        })?;
+fn fast_img_marker_cleanup_targets(output_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+    use foundation::pipeline::verification::{FastImgStageName, read_marker};
+    let marker = read_marker(output_dir).context("read fast-img cleanup ownership checkpoint")?;
+    anyhow::ensure!(
+        marker.stage == FastImgStageName::CleanupComplete
+            && !marker.tier2_in_progress
+            && marker.gate1_checks.count.0
+            && marker.gate1_checks.blake3.0
+            && marker.gate1_checks.metadata.0
+            && marker.gate1_checks.size.0
+            && marker.gate1_checks.orient.0
+            && marker.gate1_checks.decode.0
+            && marker.gate2_checks.count.0
+            && marker.gate2_checks.blake3_sample.0
+            && marker.gate2_checks.no_error.0
+            && marker.gate3_checks.count_x3.0
+            && marker.gate3_checks.sync.0
+            && marker.gate3_checks.quarantine.0
+            && marker.gate3_checks.chain.0,
+        "fast-img cleanup refused an incomplete or unverified checkpoint"
+    );
     let mut targets = Vec::new();
-    for (source_rel, entry) in blake3_log {
-        let entry_obj = entry
-            .as_object()
-            .with_context(|| format!("fast-img marker entry is not an object for {source_rel}"))?;
-        let library_asset = entry_obj.get("library_asset");
-        if library_asset.is_none() || library_asset.unwrap().is_null() {
-            bail!(
-                "fast-img cleanup aborted: JXL output was not successfully imported to Photos/iCloud (missing library_asset proof for {source_rel})"
-            );
-        }
-        targets.push(fast_img_safe_output_path(
-            output_dir,
-            &fast_img_marker_entry_out_rel(source_rel, entry),
-        )?);
+    for (source_rel, entry) in &marker.blake3_log {
+        anyhow::ensure!(
+            entry.out.len() == 64
+                && entry.out.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && entry.library_asset.as_ref() == Some(&entry.out),
+            "fast-img cleanup missing matching Photos custody hash for {source_rel}"
+        );
+        let relative = entry.out_rel.as_ref().map_or_else(
+            || {
+                Path::new(source_rel)
+                    .with_extension("JXL")
+                    .to_string_lossy()
+                    .into_owned()
+            },
+            Clone::clone,
+        );
+        let target = fast_img_safe_output_path(output_dir, &relative)?;
+        targets.push((target, entry.out.clone()));
     }
     targets.sort();
     Ok(targets)
+}
+
+#[cfg(unix)]
+fn remove_verified_fast_img_output(root: &Path, target: &Path, expected: &str) -> Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let relative = target.strip_prefix(root)?;
+    let mut parent = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        anyhow::ensure!(
+            matches!(component, std::path::Component::Normal(_)),
+            "unsafe cleanup path"
+        );
+        let name = CString::new(component.as_os_str().as_bytes())?;
+        let is_file = components.peek().is_none();
+        let flags = libc::O_RDONLY
+            | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | if is_file {
+                libc::O_NONBLOCK
+            } else {
+                libc::O_DIRECTORY
+            };
+        // Resolve every component relative to an already opened directory; never follow links.
+        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+        anyhow::ensure!(
+            fd >= 0,
+            "open cleanup path {}: {}",
+            target.display(),
+            io::Error::last_os_error()
+        );
+        let mut file = unsafe { fs::File::from_raw_fd(fd) };
+        if !is_file {
+            parent = file;
+            continue;
+        }
+        let before = file.metadata()?;
+        anyhow::ensure!(
+            before.is_file(),
+            "cleanup target is not a regular file: {}",
+            target.display()
+        );
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_reader(&mut file)?;
+        let after = file.metadata()?;
+        anyhow::ensure!(
+            hasher.finalize().to_hex().as_str() == expected
+                && before.len() == after.len()
+                && before.mtime() == after.mtime()
+                && before.mtime_nsec() == after.mtime_nsec()
+                && before.ctime() == after.ctime()
+                && before.ctime_nsec() == after.ctime_nsec(),
+            "fast-img cleanup refused changed output {}",
+            target.display()
+        );
+        let current_fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+        anyhow::ensure!(
+            current_fd >= 0,
+            "recheck cleanup target {}: {}",
+            target.display(),
+            io::Error::last_os_error()
+        );
+        let current = unsafe { fs::File::from_raw_fd(current_fd) }.metadata()?;
+        anyhow::ensure!(
+            current.dev() == after.dev()
+                && current.ino() == after.ino()
+                && current.len() == after.len()
+                && current.ctime() == after.ctime()
+                && current.ctime_nsec() == after.ctime_nsec(),
+            "fast-img cleanup target replaced: {}",
+            target.display()
+        );
+        anyhow::ensure!(
+            unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0,
+            "remove cleanup target {}: {}",
+            target.display(),
+            io::Error::last_os_error()
+        );
+        return Ok(());
+    }
+    bail!("fast-img cleanup target has no file name")
+}
+
+#[cfg(not(unix))]
+fn remove_verified_fast_img_output(_root: &Path, target: &Path, _expected: &str) -> Result<()> {
+    bail!(
+        "verified output cleanup requires no-follow directory handles: {}",
+        target.display()
+    )
 }
 
 fn fast_img_prune_empty_dirs(
@@ -1287,30 +1440,80 @@ fn fast_img_prune_empty_dirs(
     )
 }
 
-/// Remove marker-recorded JXL outputs after shortest-path iCloud import (Python
-/// parity).
-pub fn delete_fast_img_shortest_path_output_dir(
-    output_dir: &Path,
-    verify_bin: &Path,
-) -> Result<bool> {
+pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> Result<usize> {
+    use foundation::pipeline::verification::{FastImgStageName, matching_working_copy_markers};
+    let mut removed = 0;
+    for marker in matching_working_copy_markers(source, strategy)? {
+        if marker.stage != FastImgStageName::CleanupComplete || marker.tier2_in_progress {
+            continue;
+        }
+        if !marker.working_copy.try_exists()? {
+            continue;
+        }
+        let _lock = foundation::process_lock::acquire_output_dir_lock(&marker.working_copy)?;
+        let current = foundation::pipeline::verification::read_marker(&marker.working_copy)?;
+        anyhow::ensure!(
+            current == marker
+                && current.stage == FastImgStageName::CleanupComplete
+                && !current.tier2_in_progress,
+            "checkpoint changed before empty-output cleanup"
+        );
+        fast_img_marker_cleanup_targets(&marker.working_copy)?;
+        match fs::remove_dir(&marker.working_copy) {
+            Ok(()) => {
+                removed += 1;
+                println!(
+                    "[CLEANUP ] removed empty checkpoint-owned output {}",
+                    marker.working_copy.display()
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+                ) => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "remove empty checkpoint-owned output {}",
+                        marker.working_copy.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// Remove only unchanged, marker-recorded outputs after verified local Photos delivery.
+pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> Result<bool> {
     if !output_dir.exists() {
         return Ok(true);
     }
-    if !output_dir.is_dir() {
+    if !fs::symlink_metadata(output_dir)?.file_type().is_dir() {
         bail!(
             "fast-img cleanup target is not a directory: {}",
             output_dir.display()
         );
     }
+    let canonical_output = output_dir
+        .canonicalize()
+        .context("canonicalize fast-img cleanup output")?;
+    let output_dir = canonical_output.as_path();
+    let _lock = foundation::process_lock::acquire_output_dir_lock(output_dir)?;
     let mut deleted = 0usize;
     let mut already_absent = 0usize;
     let mut prune_candidates = std::collections::HashSet::from([output_dir.to_path_buf()]);
-    for target in fast_img_marker_cleanup_targets(output_dir, verify_bin)? {
+    for (target, expected) in fast_img_marker_cleanup_targets(output_dir)? {
         if !target.exists() {
             already_absent += 1;
-            if let Some(parent) = target.parent() {
-                prune_candidates.insert(parent.to_path_buf());
-            }
+            prune_candidates.extend(
+                target
+                    .ancestors()
+                    .skip(1)
+                    .take_while(|path| path.starts_with(output_dir))
+                    .map(Path::to_path_buf),
+            );
             continue;
         }
         if !target.is_file() {
@@ -1330,25 +1533,24 @@ pub fn delete_fast_img_shortest_path_output_dir(
                 target.display()
             );
         }
-        fs::remove_file(&target)
+        remove_verified_fast_img_output(output_dir, &target, &expected)
             .with_context(|| format!("remove fast-img cleanup target {}", target.display()))?;
         deleted += 1;
-        if let Some(parent) = target.parent() {
-            prune_candidates.insert(parent.to_path_buf());
-        }
+        prune_candidates.extend(
+            target
+                .ancestors()
+                .skip(1)
+                .take_while(|path| path.starts_with(output_dir))
+                .map(Path::to_path_buf),
+        );
     }
     prune_candidates.insert(output_dir.to_path_buf());
-    for entry in WalkDir::new(output_dir).into_iter().filter_map(Result::ok) {
-        if entry.file_type().is_dir() {
-            prune_candidates.insert(entry.path().to_path_buf());
-        }
-    }
     let pruned = fast_img_prune_empty_dirs(output_dir, &prune_candidates)?;
     let fully_removed = !output_dir.exists();
     if fully_removed {
         println!(
             "   {} Shortest Path cleanup: removed {deleted} imported output file(s) and empty output \
-             folder after verified iCloud import: {}",
+             folder after verified local Photos import: {}",
             pick_symbol("✓", "[OK]"),
             output_dir.display()
         );
@@ -1374,6 +1576,139 @@ fn read_line(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_output_cleanup_requires_checkpoint_gates_and_keeps_unknown_contents() {
+        use foundation::pipeline::verification::{
+            FastImgStageName, WorkingCopyMarker, write_marker_atomic,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let output = root.path().join("source_optimized");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&output).unwrap();
+        let previous = std::env::var_os("MFB_HOME_ROOT");
+        unsafe {
+            std::env::set_var("MFB_HOME_ROOT", root.path().join("state"));
+        }
+        let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 0);
+        marker.stage = FastImgStageName::CleanupComplete;
+        write_marker_atomic(&marker).unwrap();
+        assert!(prune_completed_fast_img_empty_outputs(&source, "jxl").is_err());
+        assert!(output.exists());
+        for check in [
+            &mut marker.gate1_checks.count,
+            &mut marker.gate1_checks.blake3,
+            &mut marker.gate1_checks.metadata,
+            &mut marker.gate1_checks.size,
+            &mut marker.gate1_checks.orient,
+            &mut marker.gate1_checks.decode,
+            &mut marker.gate2_checks.count,
+            &mut marker.gate2_checks.blake3_sample,
+            &mut marker.gate2_checks.no_error,
+            &mut marker.gate3_checks.count_x3,
+            &mut marker.gate3_checks.sync,
+            &mut marker.gate3_checks.quarantine,
+            &mut marker.gate3_checks.chain,
+        ] {
+            *check = true.into();
+        }
+        write_marker_atomic(&marker).unwrap();
+        let unknown = output.join("user.txt");
+        fs::write(&unknown, b"user data").unwrap();
+        assert_eq!(
+            prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(),
+            0
+        );
+        assert_eq!(fs::read(&unknown).unwrap(), b"user data");
+        fs::remove_file(unknown).unwrap();
+        assert_eq!(
+            prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(),
+            1
+        );
+        assert_eq!(
+            prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(),
+            0
+        );
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("MFB_HOME_ROOT", previous);
+            } else {
+                std::env::remove_var("MFB_HOME_ROOT");
+            }
+        }
+    }
+
+    #[test]
+    fn partial_cleanup_requires_complete_current_receipt_and_retained_original_proof() {
+        let stats = crate::infra::process_stream::ProcessorStats {
+            succeeded: 2,
+            failed: 1,
+            reported: [true; 4],
+            unprocessed: Some(0),
+            exit_code: 1,
+            ..Default::default()
+        };
+        let receipt = serde_json::json!({"schema_version": 1, "succeeded": 2, "skipped": 0,
+            "ignored": 0, "failed": 1, "unprocessed": 0, "photos_verified": 2, "encoded": 2,
+            "failed_sources_retained": 1, "failed_sources_verified": 1, "source_retained": 1,
+            "primary_cleanup_complete": true, "finalization_error": null,
+            "retention_unknown_reason": null, "failed_source_verification_error": null});
+        let event = |value: &serde_json::Value| format!("MFB_FAST_IMG_RESULT={value}");
+        assert_eq!(
+            fast_img_partial_cleanup_verified(&event(&receipt), &stats),
+            Some(1)
+        );
+        for (key, value) in [
+            ("failed_sources_verified", serde_json::Value::Null),
+            ("primary_cleanup_complete", false.into()),
+            ("photos_verified", 1.into()),
+            ("finalization_error", "marker persistence failed".into()),
+        ] {
+            let mut invalid = receipt.clone();
+            invalid[key] = value;
+            assert_eq!(
+                fast_img_partial_cleanup_verified(&event(&invalid), &stats),
+                None,
+                "{key}"
+            );
+        }
+        assert_eq!(
+            fast_img_partial_cleanup_verified(
+                &format!("{}\n{}", event(&receipt), event(&receipt)),
+                &stats
+            ),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_cleanup_rechecks_content_and_refuses_symlink_components() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("owned.JXL");
+        fs::write(&target, b"original").unwrap();
+        let expected = blake3::hash(b"original").to_hex().to_string();
+        fs::write(&target, b"user replacement").unwrap();
+        assert!(remove_verified_fast_img_output(root.path(), &target, &expected).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"user replacement");
+        let external = tempfile::tempdir().unwrap();
+        fs::write(external.path().join("owned.JXL"), b"original").unwrap();
+        std::os::unix::fs::symlink(external.path(), root.path().join("linked")).unwrap();
+        assert!(
+            remove_verified_fast_img_output(
+                root.path(),
+                &root.path().join("linked/owned.JXL"),
+                &expected
+            )
+            .is_err()
+        );
+        assert!(external.path().join("owned.JXL").exists());
+        fs::write(&target, b"original").unwrap();
+        remove_verified_fast_img_output(root.path(), &target, &expected).unwrap();
+        assert!(!target.exists());
+    }
 
     #[test]
     fn read_only_inventory_retains_every_visible_entry_and_selected_source() {

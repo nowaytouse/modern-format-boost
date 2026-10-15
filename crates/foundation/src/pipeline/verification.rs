@@ -2613,13 +2613,13 @@ impl WorkingCopyMarker {
         expected_working_copy: &Path,
     ) -> Result<(), String> {
         self.validate_relative_path_contract()?;
-        let expected = expected_working_copy.canonicalize().map_err(|err| {
+        let expected = canonical_working_copy_path(expected_working_copy).map_err(|err| {
             format!(
                 "canonicalize expected fast-img working copy {} failed: {err}",
                 expected_working_copy.display()
             )
         })?;
-        let recorded = self.working_copy.canonicalize().map_err(|err| {
+        let recorded = canonical_working_copy_path(&self.working_copy).map_err(|err| {
             format!(
                 "canonicalize recorded fast-img working copy {} failed: {err}",
                 self.working_copy.display()
@@ -2698,6 +2698,26 @@ impl WorkingCopyMarker {
     }
 }
 
+fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => path.canonicalize(),
+        Ok(_) => Err(std::io::Error::other(format!(
+            "fast-img output is not a real directory: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("fast-img output has no parent"))?;
+            let name = path
+                .file_name()
+                .ok_or_else(|| std::io::Error::other("fast-img output has no file name"))?;
+            Ok(parent.canonicalize()?.join(name))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[must_use]
 pub fn working_copy_dir(src: &Path) -> PathBuf {
     let name = if let Some(name) = src.file_name() {
@@ -2713,9 +2733,100 @@ pub fn working_copy_dir(src: &Path) -> PathBuf {
     src.with_file_name(format!("{name}_optimized"))
 }
 
-#[must_use]
-pub fn resolve_working_copy_dir(src: &Path) -> PathBuf {
-    resolve_working_copy_dir_inner(src, true)
+pub fn matching_working_copy_markers(
+    src: &Path,
+    strategy: &str,
+) -> std::io::Result<Vec<WorkingCopyMarker>> {
+    let source = canonical_working_copy_path(src)?;
+    let state_dir = fast_img_marker_state_dir();
+    let entries = match std::fs::read_dir(&state_dir) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let mut markers = Vec::new();
+    for entry in entries.into_iter().flatten() {
+        let path = entry?.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let data = std::fs::read(&path)?;
+        let header: serde_json::Value =
+            serde_json::from_slice(&data).map_err(std::io::Error::other)?;
+        if header
+            .get("strategy")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("jxl")
+            != strategy
+        {
+            continue;
+        }
+        let Some(recorded_source) = header.get("src_dir").and_then(serde_json::Value::as_str)
+        else {
+            return Err(std::io::Error::other(
+                "fast-img checkpoint has no source identity",
+            ));
+        };
+        let recorded_source = Path::new(recorded_source);
+        if recorded_source != src && recorded_source != source {
+            let matches = match recorded_source.canonicalize() {
+                Ok(recorded) => recorded == source,
+                Err(error) => {
+                    tracing::debug!(path = %recorded_source.display(), %error,
+                        "checkpoint source alias could not be resolved; not selected for this source");
+                    false
+                }
+            };
+            if !matches {
+                continue;
+            }
+        }
+        let marker: WorkingCopyMarker =
+            serde_json::from_value(header).map_err(std::io::Error::other)?;
+        if marker_path_for_working_copy(&marker.working_copy) != path {
+            return Err(std::io::Error::other(
+                "fast-img checkpoint identity/path mismatch",
+            ));
+        }
+        parse_marker_for_working_copy(&data, &marker.working_copy)?;
+        if marker.working_copy == source || marker.working_copy.starts_with(&source) {
+            return Err(std::io::Error::other(
+                "fast-img checkpoint output overlaps its source",
+            ));
+        }
+        markers.push(marker);
+    }
+    Ok(markers)
+}
+
+pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<PathBuf> {
+    let mut newest = None;
+    let mut ambiguous = false;
+    for marker in matching_working_copy_markers(src, strategy)? {
+        let started = chrono::DateTime::parse_from_rfc3339(&marker.started_at)
+            .map_err(std::io::Error::other)?;
+        match &newest {
+            Some((previous, previous_path))
+                if *previous == started && *previous_path != marker.working_copy =>
+            {
+                ambiguous = true;
+            }
+            Some((previous, _)) if *previous > started => {}
+            _ => {
+                newest = Some((started, marker.working_copy));
+                ambiguous = false;
+            }
+        }
+    }
+    if ambiguous {
+        return Err(std::io::Error::other(
+            "fast-img newest matching checkpoints have ambiguous start times",
+        ));
+    }
+    Ok(newest.map_or_else(
+        || resolve_working_copy_dir_inner(src, false),
+        |(_, path)| path,
+    ))
 }
 
 /// Select a new adjacent working copy without consuming any prior marker.
@@ -3218,10 +3329,11 @@ mod working_copy_tests {
     fn working_copy_collision_uses_numbered_optimized_dir_without_marker() {
         let root = TempDir::new().unwrap();
         let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
         std::fs::create_dir_all(root.path().join("Photos_optimized")).unwrap();
 
         assert_eq!(
-            resolve_working_copy_dir(&src),
+            resolve_working_copy_dir(&src, "jxl").unwrap(),
             root.path().join("Photos_optimized_2")
         );
     }
@@ -3239,12 +3351,57 @@ mod working_copy_tests {
             state.path().to_str().expect("utf-8 state path"),
         );
         let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
         let wc = root.path().join("Photos_optimized");
         let marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
         std::fs::create_dir_all(&wc).unwrap();
         write_marker_atomic(&marker).unwrap();
 
-        assert_eq!(resolve_working_copy_dir(&src), wc);
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), wc);
+    }
+
+    #[test]
+    #[serial]
+    fn working_copy_resume_uses_newest_matching_checkpoint_before_free_path() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let src = root.path().join("Photos");
+        std::fs::create_dir(&src).unwrap();
+        let src = src.canonicalize().unwrap();
+        let base = working_copy_dir(&src);
+        let newer = base.with_file_name("Photos_optimized_2");
+        for (path, started) in [
+            (&base, "2026-10-10T10:00:00+00:00"),
+            (&newer, "2026-10-15T10:00:00+00:00"),
+        ] {
+            let mut marker = WorkingCopyMarker::new(src.clone(), path.clone(), 1);
+            marker.started_at = started.to_owned();
+            write_marker_atomic(&marker).unwrap();
+        }
+        assert!(!base.exists());
+        assert!(!newer.exists());
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), newer);
+        assert_eq!(read_marker(&newer).unwrap().working_copy, newer);
+        assert_eq!(
+            resolve_working_copy_dir(&src, "avif").unwrap(),
+            newer.with_file_name("Photos_optimized_3")
+        );
+        let mut older_tie = read_marker(&base).unwrap();
+        older_tie.working_copy = base.with_file_name("Photos_optimized_3");
+        write_marker_atomic(&older_tie).unwrap();
+        assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), newer);
+
+        let mut ambiguous = read_marker(&base).unwrap();
+        ambiguous.started_at = "2026-10-15T10:00:00+00:00".to_owned();
+        write_marker_atomic(&ambiguous).unwrap();
+        assert!(resolve_working_copy_dir(&src, "jxl").is_err());
     }
 
     #[test]
@@ -3392,7 +3549,7 @@ mod working_copy_tests {
         );
         let src = root.path().join("Photos");
         std::fs::create_dir_all(&src).unwrap();
-        let wc = resolve_working_copy_dir(&src);
+        let wc = resolve_working_copy_dir(&src, "jxl").unwrap();
         let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
         marker.stage = FastImgStageName::OutputPrepared;
 

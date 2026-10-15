@@ -921,6 +921,8 @@ mod tests {
         header[8..12].copy_from_slice(b"isom");
         fs::write(&wrong_ext, header).unwrap_or_else(|e| panic!("error: {e:?}"));
 
+        let saved_time = filetime::FileTime::from_unix_time(1_500_000_000, 0);
+        filetime::set_file_mtime(temp.path(), saved_time).expect("set synthetic directory date");
         let checked = check_extension_mismatch_readonly(&wrong_ext)
             .unwrap_or_else(|e| panic!("error: {e:?}"));
 
@@ -929,5 +931,11 @@ mod tests {
         // It should NOT rename the file
         assert!(wrong_ext.exists());
         assert!(!temp.path().join("video_readonly.mp4").exists());
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(
+                &fs::metadata(temp.path()).expect("source directory metadata")
+            ),
+            saved_time
+        );
     }
 }

@@ -210,10 +210,13 @@ private struct HistoryVerification: Decodable, Equatable {
     let count_status: String?
     let source_path: String?
     let output_path: String?
+    var failed_sources_verified: Int? = nil
+    var primary_cleanup_complete: Bool? = nil
 
     var valid: Bool {
         schema_version == 1 && [issue_count, source_count, optimized_count, skipped_count, failed_count,
                                source_remaining_count, verified_deleted_count].allSatisfy { $0 >= 0 }
+            && (failed_sources_verified.map { $0 >= 0 && $0 <= failed_count } ?? true)
     }
 }
 
@@ -452,6 +455,13 @@ private struct HistoryEntry {
         (summary?.img.failed ?? 0) > 0 || (summary?.vid.failed ?? 0) > 0
             || hasProcessorError
     }
+    var hasVerificationFailure: Bool {
+        (summary?.integrity.issue_count ?? 0) > 0
+            || (verification?.issue_count ?? 0) > 0 || verification?.count_status?.hasPrefix("MISMATCH") == true
+            || inputVerifications.values.contains {
+                $0.issue_count > 0 || $0.count_status?.hasPrefix("MISMATCH") == true
+            }
+    }
     var hasVerificationWarnings: Bool {
         verification?.has_warnings == true || verification?.count_status?.hasPrefix("MISMATCH") == true
             || (verification?.issue_count ?? 0) > 0
@@ -460,15 +470,28 @@ private struct HistoryEntry {
     }
     var hasPending: Bool { (summary?.img.unprocessed ?? 0) > 0 || (summary?.vid.unprocessed ?? 0) > 0 }
     var hasPartialSuccess: Bool {
-        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, context?.dry_run == false,
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure, context?.dry_run == false,
               let summary, summary.valid, summary.img.complete, summary.vid.complete, !hasPending,
-              let outcome = finished?.outcome, ["completed", "failed"].contains(outcome) else { return false }
+              context?.mode == "fast-img", context?.inputs.count == 1, !summary.vid.active,
+              summary.img.exit_code == 1, let failed = summary.img.failed, failed > 0,
+              let verification, verification.issue_count == 0, verification.failed_count == failed,
+              verification.failed_sources_verified == failed, verification.primary_cleanup_complete == true,
+              verification.source_path == context?.inputs.first,
+              let output = verification.output_path, output.hasPrefix("/"),
+              context?.output.map({ $0 == output }) ?? true,
+              let countStatus = verification.count_status,
+              countStatus == "MATCH" || countStatus == "EXPLAINED"
+                || ((countStatus.hasPrefix("MATCH (") || countStatus.hasPrefix("EXPLAINED (")) && countStatus.hasSuffix(")")),
+              let finished,
+              (finished.outcome == "completed" && finished.error == nil)
+                || (finished.outcome == "failed" && finished.error == "fast-img exited with code 1") else { return false }
         let active = [summary.img, summary.vid].filter(\.active)
         return hasPartialProcessingSuccess(succeeded: active.map(\.succeeded), failed: active.map(\.failed),
                                            countsComplete: true)
     }
     var statusKey: String {
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
+        if hasVerificationFailure { return "result.unconfirmed" }
         if hasPartialSuccess { return "history.status.partial" }
         if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
@@ -487,6 +510,7 @@ private struct HistoryEntry {
         !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings
     }
     var statusColor: NSColor {
+        if hasVerificationFailure { return .systemRed }
         if hasPartialSuccess { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
@@ -1355,7 +1379,9 @@ private enum HistoryStore {
              "source_count": value.source_count, "optimized_count": value.optimized_count, "skipped_count": value.skipped_count,
              "failed_count": value.failed_count, "source_remaining_count": value.source_remaining_count,
              "verified_deleted_count": value.verified_deleted_count, "count_status": nullable(value.count_status),
-             "source_path": nullable(value.source_path), "output_path": nullable(value.output_path)]
+             "source_path": nullable(value.source_path), "output_path": nullable(value.output_path),
+             "failed_sources_verified": nullable(value.failed_sources_verified),
+             "primary_cleanup_complete": nullable(value.primary_cleanup_complete)]
         }
         let contextObject: [String: Any] = ["schema_version": context.schema_version, "inputs": context.inputs,
             "output": nullable(context.output), "backup": nullable(context.backup), "mode": context.mode,
@@ -2253,7 +2279,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         case "status": label.stringValue = localized(entry.statusKey); resultColor = entry.statusColor
         case "verification":
             label.stringValue = entry.verification?.count_status ?? localized("result.unknown")
-            resultColor = entry.verification?.count_status?.hasPrefix("MISMATCH") == true ? .systemRed : .secondaryLabelColor
+            resultColor = entry.hasVerificationFailure ? .systemRed : .secondaryLabelColor
         case "succeeded": label.stringValue = entry.succeededLabel; label.alignment = .right
         default: return nil
         }
@@ -3711,12 +3737,64 @@ func runProcessingHistorySelfTests() throws {
     mixedSummary["img"] = mixedMedia
     mixedSummary["failed_files"] = ["/synthetic/failed.jpg"]
     let mixedEvent = try payload("MFB_HISTORY_SUMMARY", mixedSummary)
+    let fastContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+        "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false])
+    let fileFailureFinish = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed", "error": "fast-img exited with code 1"])
+    let preservedReceipt: [String: Any] = ["schema_version": 1, "has_warnings": false, "issue_count": 0,
+        "source_count": 4, "optimized_count": 2, "skipped_count": 1, "failed_count": 1,
+        "source_remaining_count": 1, "verified_deleted_count": 2, "count_status": "MATCH",
+        "source_path": "/synthetic/input", "output_path": "/synthetic/output",
+        "failed_sources_verified": 1, "primary_cleanup_complete": true]
+    let preservedEvent = try payload("MFB_HISTORY_VERIFICATION", preservedReceipt)
     for finish in [completed, failed] {
         let mixed = try parsed([context, mixedEvent, finish]).entries[0]
-        try require(mixed.statusKey == "history.status.partial" && mixed.needsAttention
+        try require(!mixed.hasPartialSuccess && mixed.needsAttention
                     && mixed.summary?.img.exit_code == 1 && mixed.summary?.failed_files == ["/synthetic/failed.jpg"]
+                    && mixed.statusColor == .systemRed
                     && mixed.succeededLabel == "2" && mixed.finished?.outcome == (finish == completed ? "completed" : "failed"),
-                    "Partial history hid preserved success, failed items, or terminal evidence")
+                    "Counts without preservation proof became a confirmed partial result")
+    }
+    for finish in [completed, fileFailureFinish] {
+        let mixed = try parsed([fastContext, mixedEvent, preservedEvent, finish]).entries[0]
+        try require(mixed.hasPartialSuccess && mixed.statusKey == "history.status.partial"
+                    && mixed.statusColor == .systemOrange && mixed.succeededLabel == "2",
+                    "Verified file failures lost their safe partial result")
+    }
+    for (key, value) in [("failed_sources_verified", NSNull() as Any), ("failed_sources_verified", 0),
+                          ("primary_cleanup_complete", false), ("source_path", "/synthetic/other"),
+                          ("output_path", "/synthetic/other"), ("count_status", "UNKNOWN")] {
+        var incomplete = preservedReceipt
+        incomplete[key] = value
+        let entry = try parsed([fastContext, mixedEvent, try payload("MFB_HISTORY_VERIFICATION", incomplete), fileFailureFinish]).entries[0]
+        try require(!entry.hasPartialSuccess && entry.succeededLabel == "2",
+                    "Missing or unbound preservation evidence became a safe partial result")
+    }
+    let infrastructureFailure = try parsed([fastContext, mixedEvent, preservedEvent, failed]).entries[0]
+    try require(!infrastructureFailure.hasPartialSuccess && infrastructureFailure.statusColor == .systemRed,
+                "A later session failure was hidden behind earlier file preservation proof")
+    var integritySummary = mixedSummary
+    integritySummary["integrity"] = ["state": "WARNINGS", "issue_count": 1]
+    let integrityFailure = try parsed([context, try payload("MFB_HISTORY_SUMMARY", integritySummary), failed]).entries[0]
+    try require(!integrityFailure.hasPartialSuccess && integrityFailure.statusKey == "result.unconfirmed"
+                && integrityFailure.statusColor == .systemRed && integrityFailure.succeededLabel == "2",
+                "Preserved successful items hid a known integrity issue in a partial batch")
+    for (issueCount, countStatus) in [(0, "MATCH"), (1, "MATCH"), (0, "MISMATCH (1 invariant issue)")] {
+        let receipt = HistoryVerification(schema_version: 1, has_warnings: true, issue_count: issueCount,
+            source_count: 4, optimized_count: 2, skipped_count: 1, failed_count: 1,
+            source_remaining_count: 1, verified_deleted_count: 2, count_status: countStatus,
+            source_path: "/synthetic/input", output_path: "/synthetic/output",
+            failed_sources_verified: 1, primary_cleanup_complete: true)
+        let serious = issueCount > 0 || countStatus.hasPrefix("MISMATCH")
+        for perInput in [false, true] {
+            var entry = try parsed([fastContext, mixedEvent, preservedEvent, fileFailureFinish]).entries[0]
+            if perInput { entry.inputVerifications["/synthetic/input"] = receipt }
+            else { entry.verification = receipt }
+            try require(entry.hasPartialSuccess != serious && entry.hasVerificationFailure == serious
+                        && entry.statusKey == (serious ? "result.unconfirmed" : "history.status.partial")
+                        && entry.statusColor == (serious ? .systemRed : .systemOrange)
+                        && entry.succeededLabel == "2",
+                        "History confused a warning-only partial result with failed verification evidence")
+        }
     }
     let cancelledMixed = try parsed([context, mixedEvent, cancelled]).entries[0]
     let unfinishedMixed = try parsed([context, mixedEvent]).entries[0]
@@ -3748,8 +3826,8 @@ func runProcessingHistorySelfTests() throws {
     var combinedSummary = summaryValue
     combinedSummary["vid"] = failedVideo
     let combined = try parsed([context, try payload("MFB_HISTORY_SUMMARY", combinedSummary), failed]).entries[0]
-    try require(combined.hasPartialSuccess && combined.summary?.img.succeeded == 2 && combined.summary?.vid.failed == 1,
-                "Partial history only considered one active pipeline")
+    try require(!combined.hasPartialSuccess && combined.summary?.img.succeeded == 2 && combined.summary?.vid.failed == 1,
+                "Unverified video failures borrowed another pipeline's preservation proof")
     let batches = try parsed([context, summary, completed, context, failed])
     try require(batches.entries.count == 2 && batches.entries[1].summary == nil && batches.entries[1].statusKey == "history.status.failed",
                 "History merged independent batches or leaked counts")
@@ -3871,7 +3949,7 @@ func runProcessingHistorySelfTests() throws {
         warningReceipt["count_status"] = countStatus
         let warningEntry = try parsed([restoreContext, summary, try payload("MFB_HISTORY_VERIFICATION", warningReceipt), completed]).entries[0]
         let warningComparison = ProcessingHistoryPanel.renderComparison([warningEntry, warningEntry])
-        try require(warningEntry.statusKey == "history.status.verification_warnings"
+        try require(warningEntry.statusKey == "result.unconfirmed" && warningEntry.statusColor == .systemRed
                     && warningComparison.contains(localized("history.detail.verification_state") + ": WARNINGS")
                     && !warningComparison.contains(localized("history.detail.verification_state") + ": CLEAN"),
                     "History comparison hid a verifier issue or count mismatch behind CLEAN")
@@ -3946,7 +4024,7 @@ func runProcessingHistorySelfTests() throws {
     changedReceipt["issue_count"] = 1
     let mixedWarning = try parsed([multiContext, mixedPlan, try payload("MFB_HISTORY_VERIFICATION", changedReceipt), summary, completed]).entries[0]
     try require(mixedWarning.verification == nil && mixedWarning.hasVerificationWarnings
-                && mixedWarning.statusKey == "history.status.verification_warnings",
+                && mixedWarning.statusKey == "result.unconfirmed" && mixedWarning.statusColor == .systemRed,
                 "A per-input warning disappeared when the batch inventory was unavailable")
     let multiPreview = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": sources,
         "mode": "standard", "dry_run": true, "in_place": false, "shortest_path": false])
@@ -4189,8 +4267,8 @@ func runProcessingHistorySelfTests() throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: databaseURL.path)
     let databaseLoaded = try HistoryStore.load(directory: directory)
     let expectedStatuses = ["history.status.completed", "history.status.failed", "history.status.cancelled",
-        "history.status.preview", "history.status.unfinished", "history.status.partial",
-        "history.status.verification_warnings", "history.status.incomplete", "history.status.incomplete"]
+        "history.status.preview", "history.status.unfinished", "history.status.file_failures",
+        "result.unconfirmed", "history.status.incomplete", "history.status.incomplete"]
     try require(databaseLoaded.entries.map(\.statusKey).sorted() == expectedStatuses.sorted(),
                 "Database history changed counted terminal states")
     try require(databaseLoaded.entries.filter { $0.stamp == "test" }.count == 1

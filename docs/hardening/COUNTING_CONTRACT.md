@@ -60,13 +60,21 @@ all entries ever stored in a checkpoint.
   `failed_sources_retained` field counts existing paths specifically bound to
   recorded failures. Unbound probe/original-delivery failures and inspection
   errors leave it unknown. Neither existence count rechecks source content.
+  `failed_sources_verified` separately counts bound failed regular files whose
+  current BLAKE3 matches the recorded source, rejecting symlink components.
+  Missing hashes, changed files, unbound failures or inspection errors yield null
+  and `failed_source_verification_error`, not an invented zero or safety claim.
 - A confirmed native partial result requires complete, consistent final receipts,
-  observed retention of every bound failed source, the required local Photos
+   verified original hashes for every bound failed source, completed primary
+   cleanup, the required local Photos
   count, matching worker and normally-exited launcher status, and no mandatory
   verification conflict. Missing nullable contract keys are not explicit nulls;
   malformed, missing, signal-terminated or conflicting results remain unconfirmed.
   Integrity alarms are sticky and outrank ordinary per-file diagnostics. This
   presentation never changes the worker's nonzero exit or authorizes deletion.
+  History additionally requires its source/output-bound verification receipt and
+  no later session/cleanup failure. Old receipts without this proof stay unconfirmed
+  as safe partial completion; their original counts and failures remain visible.
 - `primary_cleanup_complete` covers only the owning primary workflow. It is not
   proof that all output folders were removed; local Photos verification is not
   iCloud synchronization evidence.

@@ -11,8 +11,9 @@ use dev::infra::drag_drop::{
     ContentScan, FastImgAction, ProcessingFilter, ScanRoute, acquire_global_lock,
     adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
     count_fast_img_jxl_outputs, create_directory_structure,
-    delete_fast_img_shortest_path_output_dir, fast_img_retained_file_names,
-    fast_img_session_size_metrics, run_unified_verification, safety_check, scan_content,
+    delete_fast_img_shortest_path_output_dir, fast_img_partial_cleanup_verified,
+    fast_img_retained_file_names, fast_img_session_size_metrics,
+    prune_completed_fast_img_empty_outputs, run_unified_verification, safety_check, scan_content,
     sync_non_media_files,
 };
 use dev::infra::elapsed_spinner::{print_elapsed, update_terminal_title};
@@ -363,6 +364,7 @@ impl DragDropSession {
         verify: &dev::infra::drag_drop::VerifyOutcome,
         source: &Path,
         output: &Path,
+        failed_sources_verified: Option<usize>,
     ) -> Result<()> {
         let counts = verify
             .integrity_summary
@@ -387,6 +389,8 @@ impl DragDropSession {
                 "source_remaining_count": counts.source_remaining_count,
                 "verified_deleted_count": counts.verified_deleted_count,
                 "count_status": counts.count_status,
+                "failed_sources_verified": failed_sources_verified,
+                "primary_cleanup_complete": failed_sources_verified.map(|_| true),
             }),
         )
     }
@@ -1728,7 +1732,7 @@ fn run_post_adjacent_steps(
         },
     )?;
     merge_verification_outcome(summary, &verify)?;
-    session.record_history_verification(&verify, target, &output)?;
+    session.record_history_verification(&verify, target, &output, None)?;
     Ok(())
 }
 
@@ -1738,6 +1742,7 @@ fn run_fast_img_post_success(
     session: &DragDropSession,
     summary: &mut PipelineSummary,
     output_dir: &Path,
+    failed_sources_verified: Option<usize>,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
     let (_, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
@@ -1751,7 +1756,7 @@ fn run_fast_img_post_success(
         pick_symbol("🔍", "[CHECK]")
     );
     let target = args.inputs.first().context("input required")?;
-    let verify = run_unified_verification(
+    let mut verify = run_unified_verification(
         &verify_bin,
         target,
         Some(output_dir),
@@ -1770,7 +1775,6 @@ fn run_fast_img_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
-    session.record_history_verification(&verify, target, output_dir)?;
     let counts = verify
         .integrity_summary
         .as_ref()
@@ -1780,7 +1784,7 @@ fn run_fast_img_post_success(
         counts.optimized_count, counts.skipped_count, counts.failed_count
     );
     if args.shortest_path && verify.warnings == Some(false) {
-        match delete_fast_img_shortest_path_output_dir(output_dir, &verify_bin) {
+        match delete_fast_img_shortest_path_output_dir(output_dir) {
             Ok(true) => {
                 summary.fast_img_size_after_override = summary
                     .fast_img_session_output_bytes
@@ -1805,7 +1809,29 @@ fn run_fast_img_post_success(
                 );
             }
         }
+        if let Err(error) = prune_completed_fast_img_empty_outputs(
+            &fast_img_source_root_for_run(target)?,
+            args.strategy.as_deref().unwrap_or("jxl"),
+        ) {
+            summary.integrity_state = Some("WARNINGS");
+            summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+            eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
+        }
     }
+    if summary.integrity_state == Some("WARNINGS") {
+        verify.warnings = Some(true);
+        verify.issue_count = summary.integrity_issue_count;
+        if let Some(counts) = verify.integrity_summary.as_mut() {
+            counts.has_warnings = true;
+            counts.issue_count = summary.integrity_issue_count;
+        }
+    }
+    session.record_history_verification(
+        &verify,
+        target,
+        output_dir,
+        failed_sources_verified.filter(|_| verify.warnings == Some(false)),
+    )?;
     Ok(())
 }
 
@@ -1841,7 +1867,7 @@ fn run_fast_img_restore_post_success(
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
     summary.integrity_issue_count = verify.issue_count;
-    session.record_history_verification(&verify, target, output_dir)?;
+    session.record_history_verification(&verify, target, output_dir, None)?;
     let counts = verify
         .integrity_summary
         .as_ref()
@@ -1871,7 +1897,10 @@ fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf
     let live_output = if args.no_resume {
         foundation::pipeline::verification::resolve_fresh_working_copy_dir(&source_root)
     } else {
-        foundation::pipeline::verification::resolve_working_copy_dir(&source_root)
+        foundation::pipeline::verification::resolve_working_copy_dir(
+            &source_root,
+            args.strategy.as_deref().unwrap_or("jxl"),
+        )?
     };
     if let Some(configured) = &args.output
         && configured != &live_output
@@ -2706,12 +2735,17 @@ fn run_drag_drop_inner(
             match run_fast_img_task(args, &root, session.expect("session")) {
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
+                    let mut failed_sources_verified = None;
                     match dev::infra::history_store::read_session_output_since(
                         &session.expect("session").log_dir,
                         &session.expect("session").stamp,
                         output_cursor.context("fast-img run has no processing output boundary")?,
                     ) {
                         Ok(text) => {
+                            if args.shortest_path {
+                                failed_sources_verified =
+                                    fast_img_partial_cleanup_verified(&text, &stats);
+                            }
                             let metrics = fast_img_session_size_metrics(&text);
                             summary.fast_img_session_source_bytes = metrics.source_bytes_actual;
                             summary.fast_img_session_output_bytes = metrics.output_bytes_actual;
@@ -2730,23 +2764,20 @@ fn run_drag_drop_inner(
                             pick_symbol("⚠️", "[WARN]")
                         ),
                     }
-                    if stats.exit_code != 0 {
-                        if fail_fast {
-                            bail!("fast-img exited with code {}", stats.exit_code);
-                        }
-                        if first_error.is_none() {
-                            first_error = Some(anyhow::anyhow!(
-                                "fast-img exited with code {}",
-                                stats.exit_code
-                            ));
-                        }
-                    } else {
+                    if stats.exit_code != 0 && first_error.is_none() {
+                        first_error = Some(anyhow::anyhow!(
+                            "fast-img exited with code {}",
+                            stats.exit_code
+                        ));
+                    }
+                    if stats.exit_code == 0 || failed_sources_verified.is_some() {
                         let verified = run_fast_img_post_success(
                             args,
                             &root,
                             session.expect("session"),
                             &mut summary,
                             &output,
+                            failed_sources_verified,
                         );
                         if verified.is_err() {
                             summary.img.exit_code = 1;
@@ -3002,7 +3033,10 @@ fn run_drag_drop_inner(
         if first_error.is_none() {
             return Err(error).context("write final processing summary");
         }
-        eprintln!("[LOG] final processing summary write failed: {error:#}");
+        return Err(error).context(format!(
+            "write final processing summary; processing also failed: {}",
+            first_error.as_ref().expect("checked")
+        ));
     }
     print_elapsed(started.elapsed());
     eprintln!(
@@ -4220,6 +4254,15 @@ mod tests {
     use serial_test::serial;
     use std::path::{Path, PathBuf};
 
+    fn fast_img_plan_fixture() -> (tempfile::TempDir, foundation::common_utils::EnvGuard) {
+        let input = tempfile::tempdir().unwrap();
+        let guard = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            input.path().to_str().unwrap(),
+        );
+        (input, guard)
+    }
+
     fn history_payloads(session: &DragDropSession, name: &str) -> Vec<serde_json::Value> {
         let prefix = format!("{name}=");
         let connection = rusqlite::Connection::open_with_flags(
@@ -4372,7 +4415,12 @@ mod tests {
             ..Default::default()
         };
         session
-            .record_history_verification(&verify, &args.inputs[0], args.output.as_deref().unwrap())
+            .record_history_verification(
+                &verify,
+                &args.inputs[0],
+                args.output.as_deref().unwrap(),
+                None,
+            )
             .unwrap();
         let receipt = history_payloads(&session, "MFB_HISTORY_VERIFICATION")
             .pop()
@@ -5000,7 +5048,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn fast_avif_numeric_settings_are_isolated_and_forwarded_exactly() -> Result<()> {
+        let (input, _guard) = fast_img_plan_fixture();
         for arguments in [
             vec!["mfb", "--mode", "images", "--img-avif-quality", "10"],
             vec![
@@ -5053,8 +5103,7 @@ mod tests {
             "/synthetic/input",
         ])?;
         validate_media_options(&args)?;
-        let (command, _) =
-            fast_img_launch_command(&args, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        let (command, _) = fast_img_launch_command(&args, Path::new("/repo"), input.path())?;
         assert!(
             command
                 .args
@@ -5081,8 +5130,7 @@ mod tests {
             "/synthetic/input",
         ])?;
         validate_media_options(&args)?;
-        let (command, _) =
-            fast_img_launch_command(&args, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        let (command, _) = fast_img_launch_command(&args, Path::new("/repo"), input.path())?;
         assert!(
             command
                 .args
@@ -5101,7 +5149,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn jxl_pixel_effort_is_independent_scoped_and_forwarded() -> Result<()> {
+        let (input, _guard) = fast_img_plan_fixture();
         let args = Args::try_parse_from([
             "mfb",
             "--mode",
@@ -5148,8 +5198,7 @@ mod tests {
         fast.img_jxl_distance = None;
         fast.img_jpeg_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
         validate_media_options(&fast)?;
-        let (command, _) =
-            fast_img_launch_command(&fast, Path::new("/repo"), Path::new("/synthetic/input"))?;
+        let (command, _) = fast_img_launch_command(&fast, Path::new("/repo"), input.path())?;
         assert!(
             command
                 .args
@@ -5614,9 +5663,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cache_policy_is_forwarded_only_to_supported_processing_modes() {
+        let (input, _guard) = fast_img_plan_fixture();
         for mode in ["images", "videos", "fast-img", "fast-vid"] {
-            let args = Args::try_parse_from([
+            let mut args = Args::try_parse_from([
                 "mfb",
                 "--mode",
                 mode,
@@ -5627,6 +5678,7 @@ mod tests {
                 "synthetic-input",
             ])
             .unwrap();
+            args.inputs = vec![input.path().to_path_buf()];
             let commands = plan_cli_invocations(&args, Path::new("/tmp"), None).unwrap();
             assert!(!commands.is_empty());
             for command in commands {
@@ -5936,7 +5988,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn gui_fast_img_mode_survives_images_only_filter() {
+        let (input, _guard) = fast_img_plan_fixture();
         let parsed = Args::try_parse_from([
             "drag_and_drop_processor",
             "--images-only",
@@ -5948,7 +6002,8 @@ mod tests {
             "/input/Album",
         ])
         .expect("parse GUI FastImg command");
-        let args = apply_mode_overrides(parsed);
+        let mut args = apply_mode_overrides(parsed);
+        args.inputs = vec![input.path().to_path_buf()];
         let commands = plan_cli_invocations(&args, Path::new("/repo"), None)
             .expect("plan GUI FastImg command");
 

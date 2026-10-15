@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Conservative partial results and checkpoint-first recovery (2026-10-15)
+
+- Default the native window to a compact result overview with expandable original
+  diagnostics. Safe per-file failures use amber only with complete, consistent
+  delivery evidence, finished primary cleanup and verified failed-original hashes.
+  Gate, infrastructure, missing-proof and contradictory outcomes remain prominent
+  but concise. History and diagnostic exports retain the additional proof fields;
+  old count-only records cannot claim confirmed safe partial completion.
+- Add nullable failed-original content verification separately from source-path
+  existence observations. Missing or changed originals, symlink components and
+  unbound original-delivery failures remain unknown; nonzero exits are preserved.
+- Resolve the newest matching source/strategy checkpoint before allocating another
+  numbered output, including when an earlier output directory was already removed.
+  Source/output locks cover reconciliation and recovery before directory creation;
+  equal newest timestamps block ambiguous selection instead of guessing.
+- Allow independently proven Fast IMG file-failure batches to run final delivery
+  verification and safe output cleanup. Require complete Gates, Photos custody
+  hashes and per-file content rechecks through no-follow directory handles; retain
+  unknown/modified files. Empty-directory cleanup requires unchanged checkpoint
+  ownership and completed Gates, never a matching folder-name prefix.
+- Keep default IMG extension admission read-only. Preserve source directory date
+  snapshots after proven MFB cleanup, using actual successful unlink receipts and
+  rejecting observed external changes before restoration. State, locks and scratch
+  remain outside the selected source tree. This does not forge ctime, guarantee an
+  atomic snapshot against external writers or promise zero filesystem traces.
+- Fix the previous CI's impossible fallible integer-widening conversions and
+  simplify the failed-original predicate without suppressing either audit/lint.
+- Validation: 15 inventory/cleanup, 67 launcher and 20 IMG receipt/recovery/
+  conversion regressions pass. Foundation snapshot (5), lock (7), working-copy
+  (15), read-only admission (1) and actual-unlink receipt (2) checks pass. These
+  sets overlap; they are not a single unique-test total. The edited Rust files
+  pass formatting, and Foundation/IMG/dev all-target Clippy passes with default
+  features disabled and warnings denied. The native warnings-as-errors build,
+  self-test and localization parsing pass; synthetic dark/light Chinese and
+  light English/Japanese result windows were inspected. Production residual
+  directories were inventoried read-only, not removed; no Photos operation,
+  cloud-sync acceptance or representative performance benchmark was performed.
+
 ### Correct search evidence and partial-result presentation (2026-10-15)
 
 - Keep the historical JXL ladder, bracket refinement, selected-effort domain and

@@ -250,11 +250,13 @@ Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.
 
-The live result and Processing History distinguish partial completion from an
-all-file failure when complete recorded counts contain both successes and failures.
-Failures remain actionable, with their original exit codes and reasons; cancellation,
-unfinished work and incomplete evidence do not become partial success. The final
-live summary uses checked receipt totals, preserving unknown counts instead of zero.
+The live result defaults to a compact overview; expand processing details to inspect
+the original diagnostics, counts and exit status. Amber partial completion requires
+consistent Fast IMG receipts, passed delivery/cleanup checks and content-hash proof
+that every recorded failed original remains in place. Counts alone, old records,
+Gate conflicts, session failures or missing evidence cannot establish this state.
+Processing History uses the same conservative evidence boundary. Failures retain
+their nonzero exits and reasons; unknown counts are never filled with zero.
 
 Select two runs in Processing History to compare recorded outcomes, versions,
 paths, count checks and current-run size measurements in the existing detail pane.
@@ -1577,16 +1579,29 @@ primary sources are cleaned before starting independent modern-original import;
 failed/unproven inputs remain intact. Exit 1 denotes per-file failures and exit 2
 denotes infrastructure or safety-gate failures, without clearing known counters.
 
-FastImg records durable stage, relative-path and BLAKE3 evidence in an adjacent
-working copy. State handling is explicit:
+FastImg stores durable stage, relative-path and BLAKE3 evidence under its central
+state directory, bound to the adjacent output. State handling is explicit:
 
-- a matching interrupted task requires `--retry` (or interactive consent);
+- the latest matching source/strategy checkpoint is resolved before allocating a
+  new numbered output; unchanged interrupted work resumes after identity checks;
 - `--no-resume` creates an isolated adjacent task instead of reusing state;
 - changed paths, counts or source hashes invalidate reuse;
 - an interrupted Photos import is reconciled against the live library before
   progress resumes;
 - an encode/import error may use bounded retry internally, but that is separate
   from resuming a process that exited or lost power.
+
+One safely isolated file failure does not block cleanup of independently verified
+Photos-delivered outputs. Cleanup checks checkpoint ownership, completed Gates and
+current output hashes; unknown or changed contents stay in place. A primary-cleanup
+receipt does not mean that every historical output folder was removed.
+
+IMG admission checks the real format without renaming a disguised source. Runtime
+state, locks and scratch stay outside the source tree. After verified cleanup, MFB
+restores source-directory date snapshots only when observed changes are attributable
+to its recorded removals. External changes or uncertain ownership retain current
+dates with a diagnostic. Filesystem ctime and parent directories outside the selected
+input are not promised to remain unchanged.
 
 ### Detailed Options
 
@@ -1608,8 +1623,9 @@ heuristic, fallback, tool-path and Photos naming/backend settings.
 - `img fast-img --shortest-path`: for both JXL and AVIF strategies, runs local
   verification, verified Photos import, UUID/hash custody Gates 2/3, and only
   then permits source/output cleanup. No second import flag is required.
-- `img fast-img --retry`: resumes only after the stored source identity and
-  live delivery state match. `--no-resume` starts an isolated task.
+- `img fast-img --retry`: explicitly requests recovery after the stored source
+  identity and live delivery state match. A normal rerun also recognizes an
+  unchanged interrupted task. `--no-resume` starts an isolated task.
 - `img restore-jpeg INPUT` has no behavior mode to choose. A normal file or
   folder restores every byte-exact JPEG and its validated XMP delivery; JXL
   that needs backup recovery or manual review stays untouched and receives a
@@ -1813,10 +1829,11 @@ non-AVIF inputs and never re-encodes an existing AVIF.
 
 **8. What happens after interruption or power loss?**
 
-FastImg does not confuse an encoder retry with task resumption. On the next run,
-the user explicitly resumes with `--retry` (or starts isolated with
-`--no-resume`); stored hashes and paths are rechecked, and Photos state is
-reconciled before continuing an interrupted import.
+FastImg does not confuse an encoder retry with task resumption. The next normal
+run resolves the latest matching checkpoint before choosing an output directory;
+stored hashes and paths are rechecked, and live Photos state is reconciled before
+continuing an interrupted import. `--retry` explicitly requests recovery, while
+`--no-resume` creates an isolated task without overwriting earlier output.
 
 **9. Is JXL universally supported?**
 

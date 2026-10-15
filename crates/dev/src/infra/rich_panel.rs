@@ -357,8 +357,8 @@ impl PipelineSummary {
         if attempts == 0 {
             return None;
         }
-        let numerator = u128::try_from(succeeded).ok()?.checked_mul(10_000)?;
-        let denominator = u128::try_from(attempts).ok()?;
+        let numerator = (succeeded as u128).checked_mul(10_000)?;
+        let denominator = attempts as u128;
         let remainder = numerator % denominator;
         let mut basis_points = numerator / denominator;
         if remainder >= denominator - remainder {

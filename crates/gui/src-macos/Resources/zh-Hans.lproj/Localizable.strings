@@ -377,6 +377,17 @@
 "result.incomplete" = "进程已结束，但未报告全部结果计数";
 "result.unfinished" = "处理已结束，仍有未完成项目";
 "result.attention_count" = "部分完成 · %@ 项需要处理";
+"result.completed_count" = "已完成 %@ 项";
+"result.failed_count" = "%@ 项未成功";
+"result.pending_count" = "%@ 项未完成";
+"result.skipped_count" = "跳过 %@ 项";
+"result.excluded_count" = "%@ 项未纳入处理";
+"result.review_details" = "请查看处理详情或历史记录。";
+"result.failed_sources_kept" = "%@ 个未成功的源文件仍在原位。";
+"result.photos_local_count" = "照片本地已核验 %@ 项。";
+"result.photos_with_retained" = "照片本地已核验 %@ 项 · %@ 个未成功的源文件仍在原位";
+"log.details.show" = "查看处理详情";
+"log.details.hide" = "收起处理详情";
 "result.unconfirmed" = "结果无法完整确认 · 请查看处理记录";
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
