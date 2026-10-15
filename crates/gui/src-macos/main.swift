@@ -274,9 +274,9 @@ private struct ProcessorRequest {
 }
 
 private enum MediaSetting: String, CaseIterable {
-    case imgConfig, imgFallback, imgJpegEffort, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
+    case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -288,9 +288,33 @@ private enum MediaSetting: String, CaseIterable {
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
+    var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
+    var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
+    var isDistance: Bool { self == .imgJxlDistance }
+    var isSearch: Bool { [.imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch, .fastQualitySearch].contains(self) }
+    var isSearchToggle: Bool { [.imgJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch].contains(self) }
+    func searchEnabled(_ value: String) -> Bool? {
+        if value == "adaptive" { return true }
+        if value == "fixed" { return false }
+        if self == .imgQualitySearch && value == "mode-default" { return true }
+        return nil
+    }
+    func choiceTitle(_ value: String) -> String {
+        if isEffort || isDistance { return value }
+        if self == .fastAvifSpeed { return value }
+        if self == .imgJxlSearch || self == .fastJxlSearch || self == .imgJpegSearch || self == .fastJpegSearch { return localized("settings.effort.\(value)") }
+        if self == .imgQualitySearch { return localized("settings.distance.\(value)") }
+        if self == .fastQualitySearch { return localized("settings.avif.\(value)") }
+        return localized(isSearch && value == "adaptive" ? "settings.search.adaptive" : "settings.value.\(value)")
+    }
+    func appliesToFast(avif: Bool) -> Bool {
+        if self == .fastJxlEffort || self == .fastJxlSearch { return false }
+        if self == .fastJpegEffort || self == .fastJpegSearch { return !avif }
+        return ![.fastQualitySearch, .fastAvifQuality, .fastAvifSpeed].contains(self) || avif
+    }
     var isCache: Bool { self == .cacheMaxBytes || self == .cacheTtlSeconds }
     var isShared: Bool { self == .performance || isCache }
-    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode, .imgToolPolicy, .fastToolPolicy, .vidForceMsSsimLong].contains(self) }
+    var isDeveloper: Bool { [.imgConfig, .fastConfig, .vidConfig, .imgErrorMode, .vidErrorMode].contains(self) }
     var section: String {
         if self == .performance { return "performance" }
         if isCache { return "cache" }
@@ -307,6 +331,13 @@ private enum MediaSetting: String, CaseIterable {
         case .imgConfig, .fastConfig: "--img-config"
         case .imgFallback, .fastFallback: "--img-fallback-policy"
         case .imgJpegEffort, .fastJpegEffort: "--img-jpeg-effort"
+        case .imgJxlDistance: "--img-jxl-distance"
+        case .imgJxlEffort, .fastJxlEffort: "--img-jxl-effort"
+        case .imgJxlSearch, .fastJxlSearch: "--img-jxl-effort-search"
+        case .imgJpegSearch, .fastJpegSearch: "--img-jpeg-effort-search"
+        case .imgQualitySearch, .fastQualitySearch: "--img-quality-search"
+        case .fastAvifQuality: "--img-avif-quality"
+        case .fastAvifSpeed: "--img-avif-speed"
         case .imgHeuristic, .fastHeuristic: "--img-quality-heuristic"
         case .imgDatabase, .fastDatabase: "--img-allow-database"
         case .imgSizeTolerance: "--img-allow-size-tolerance"
@@ -337,6 +368,10 @@ private enum MediaSetting: String, CaseIterable {
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
+        case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
+        case .imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch: ["fixed", "adaptive"]
+        case .imgQualitySearch, .fastQualitySearch: ["mode-default", "fixed", "adaptive"]
+        case .fastAvifSpeed: (0...10).map(String.init)
         case .vidCodec: ["hevc", "av1"]
         case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
         case .photosBackend: ["auto", "native", "applescript"]
@@ -345,12 +380,12 @@ private enum MediaSetting: String, CaseIterable {
     }
     var range: ClosedRange<Int>? {
         switch self {
-        case .imgJpegEffort, .fastJpegEffort: 1...11
         case .photosNativeBatch, .photosVerificationBatch, .photosMinimumBatch, .photosMaximumBatch: 1...1000
         case .photosAppleScriptBatch: 1...50
         case .photosTargetSeconds: 1...600
         case .cacheMaxBytes, .cacheTtlSeconds: 1...Int.max
         case .imgSizeToleranceBytes: 0...Int.max
+        case .fastAvifQuality: 10...100
         default: nil
         }
     }
@@ -361,6 +396,13 @@ private enum MediaSetting: String, CaseIterable {
         case .cacheTtlSeconds: "cache.path_tree_ttl_seconds"
         case .imgFallback, .fastFallback: "img.fallback_policy"
         case .imgJpegEffort, .fastJpegEffort: "img.jpeg_effort"
+        case .imgJxlDistance: "img.jxl_distance"
+        case .imgJxlEffort, .fastJxlEffort: "img.jxl_effort"
+        case .imgJxlSearch, .fastJxlSearch: "img.jxl_effort_search"
+        case .imgJpegSearch, .fastJpegSearch: "img.jpeg_effort_search"
+        case .imgQualitySearch, .fastQualitySearch: "img.quality_search"
+        case .fastAvifQuality: "img.avif_quality"
+        case .fastAvifSpeed: "img.avif_speed"
         case .imgHeuristic, .fastHeuristic: "img.quality_heuristic"
         case .imgDatabase, .fastDatabase: "img.allow_database"
         case .imgSizeTolerance: "img.allow_size_tolerance"
@@ -388,7 +430,13 @@ private enum MediaSetting: String, CaseIterable {
         switch self {
         case .fastConfig: "fastConfig"
         case .fastFallback: "imgFallback"
-        case .fastJpegEffort: "imgJpegEffort"
+        case .fastJpegEffort: "fastJpegEffort"
+        case .fastJpegSearch: "imgJpegSearch"
+        case .fastJxlEffort: "imgJxlEffort"
+        case .fastJxlSearch: "imgJxlSearch"
+        case .fastQualitySearch: "fastQualitySearch"
+        case .fastAvifQuality: "fastAvifQuality"
+        case .fastAvifSpeed: "fastAvifSpeed"
         case .fastHeuristic: "imgHeuristic"
         case .fastDatabase: "imgDatabase"
         case .fastToolPolicy: "imgToolPolicy"
@@ -407,6 +455,8 @@ private enum FileFailurePolicy: String { case recordAndContinue = "log-and-conti
 private enum VideoCodec: String { case hevc, av1 }
 private enum ToolSelectionPolicy: String { case fallback, single }
 private enum PhotosImportBackend: String { case auto, native, applescript }
+private enum EffortSearchMode: String { case fixed, adaptive }
+private enum QualitySearchMode: String { case modeDefault = "mode-default", fixed, adaptive }
 
 private enum ToolPipeline: String, CaseIterable {
     case image, fastImage, video
@@ -418,6 +468,13 @@ private struct ImageSettings {
     var configurationFile: String?
     var fallback: ImageFallback?
     var jpegEffort: Int?
+    var jpegEffortSearch: EffortSearchMode?
+    var jxlDistance: Float?
+    var jxlEffort: Int?
+    var jxlEffortSearch: EffortSearchMode?
+    var qualitySearch: QualitySearchMode?
+    var avifQuality: Int?
+    var avifSpeed: Int?
     var qualityHeuristic: Bool?
     var allowDatabase: Bool?
     var toolPolicy: ToolSelectionPolicy?
@@ -463,12 +520,22 @@ private struct MediaSettings {
                 .cacheMaxBytes: cacheMaxBytes.map(String.init), .cacheTtlSeconds: cacheTtlSeconds.map(String.init),
                 .imgConfig: image.configurationFile, .imgFallback: image.fallback?.rawValue,
                 .imgJpegEffort: image.jpegEffort.map(String.init), .imgHeuristic: image.qualityHeuristic.map(String.init),
+                .imgJxlEffort: image.jxlEffort.map(String.init),
+                .imgJxlDistance: image.jxlDistance.map { $0.rounded() == $0 ? String(Int($0)) : String($0) },
+                .imgJxlSearch: image.jxlEffortSearch?.rawValue,
+                .imgJpegSearch: image.jpegEffortSearch?.rawValue,
+                .imgQualitySearch: image.qualitySearch?.rawValue,
                 .imgDatabase: image.allowDatabase.map(String.init), .imgErrorMode: imageFailure?.rawValue,
                 .imgSizeTolerance: imageSizeTolerance.map(String.init),
                 .imgSizeToleranceBytes: imageSizeToleranceBytes.map(String.init),
                 .imgToolPolicy: image.toolPolicy?.rawValue,
                 .fastConfig: fastImage.configurationFile, .fastFallback: fastImage.fallback?.rawValue,
                 .fastJpegEffort: fastImage.jpegEffort.map(String.init), .fastHeuristic: fastImage.qualityHeuristic.map(String.init),
+                .fastJxlEffort: fastImage.jxlEffort.map(String.init),
+                .fastJpegSearch: fastImage.jpegEffortSearch?.rawValue,
+                .fastJxlSearch: fastImage.jxlEffortSearch?.rawValue,
+                .fastQualitySearch: fastImage.qualitySearch?.rawValue,
+                .fastAvifQuality: fastImage.avifQuality.map(String.init), .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
@@ -491,7 +558,9 @@ private struct MediaSettings {
             toolPaths = paths
             invalidToolPipelines = invalidPaths
             for (field, value) in newValue {
-                if let range = field.range {
+                if field.isDistance {
+                    guard let number = Float(value), number.isFinite, (0...25).contains(number) else { invalidValues[field] = value; continue }
+                } else if let range = field.range {
                     guard let number = Int(value), range.contains(number) else { invalidValues[field] = value; continue }
                 } else if !field.choices.isEmpty, !field.choices.contains(value) {
                     invalidValues[field] = value
@@ -504,6 +573,11 @@ private struct MediaSettings {
                 case .imgConfig: image.configurationFile = value
                 case .imgFallback: image.fallback = ImageFallback(rawValue: value)
                 case .imgJpegEffort: image.jpegEffort = Int(value)
+                case .imgJxlDistance: image.jxlDistance = Float(value)
+                case .imgJxlEffort: image.jxlEffort = Int(value)
+                case .imgJxlSearch: image.jxlEffortSearch = EffortSearchMode(rawValue: value)
+                case .imgJpegSearch: image.jpegEffortSearch = EffortSearchMode(rawValue: value)
+                case .imgQualitySearch: image.qualitySearch = QualitySearchMode(rawValue: value)
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
                 case .imgSizeTolerance: imageSizeTolerance = Bool(value)
@@ -513,6 +587,12 @@ private struct MediaSettings {
                 case .fastConfig: fastImage.configurationFile = value
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
+                case .fastJpegSearch: fastImage.jpegEffortSearch = EffortSearchMode(rawValue: value)
+                case .fastJxlEffort: fastImage.jxlEffort = Int(value)
+                case .fastJxlSearch: fastImage.jxlEffortSearch = EffortSearchMode(rawValue: value)
+                case .fastQualitySearch: fastImage.qualitySearch = QualitySearchMode(rawValue: value)
+                case .fastAvifQuality: fastImage.avifQuality = Int(value)
+                case .fastAvifSpeed: fastImage.avifSpeed = Int(value)
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
                 case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
@@ -583,6 +663,8 @@ private struct MediaSettings {
             guard let value = values[field] else { continue }
             let valid: Bool
             switch field {
+            case .imgJxlDistance:
+                valid = Float(value).map { $0.isFinite && (0...25).contains($0) } ?? false
             case .imgConfig, .fastConfig, .vidConfig:
                 var isDirectory: ObjCBool = false
                 valid = value.hasPrefix("/")
@@ -616,17 +698,25 @@ private struct MediaSettings {
         }
     }
 
+    private func argumentValue(for field: MediaSetting) -> String? {
+        if field == .imgJxlDistance && image.qualitySearch == .adaptive { return nil }
+        if field == .fastAvifQuality,
+           fastImage.qualitySearch == .adaptive || fastImage.qualitySearch == .modeDefault { return nil }
+        return values[field]
+    }
+
     func arguments(operation: OperationMode, processing: ProcessingMode) throws -> [String] {
         let fastImages = operation.backendMode == "fast-img"
         let images = operation == .adjacent && processing != .videosOnly
         let videos = operation == .adjacent && processing != .imagesOnly
         let fields = MediaSetting.allCases.filter {
+            if $0.isFastImage && !$0.appliesToFast(avif: operation == .fastImgAvif) { return false }
             if $0.isShared { return images || videos || fastImages || ($0.isCache && operation == .fastVid) }
             return $0.isImage ? images : ($0.isFastImage || $0.isPhotos ? fastImages : videos)
         }
         try validate(fields)
         var arguments = fields.flatMap { field -> [String] in
-            guard let value = values[field] else { return [] }
+            guard let value = argumentValue(for: field) else { return [] }
             return field.arguments(value)
         }
         if images || fastImages { arguments += toolArguments(fastImages ? .fastImage : .image, flag: "--img-tool") }
@@ -634,12 +724,13 @@ private struct MediaSettings {
         return arguments
     }
 
-    func runtimeArguments(fast: Bool, inheritedOnly: Bool) -> [String] {
+    func runtimeArguments(fast: Bool, inheritedOnly: Bool, avif: Bool = false) -> [String] {
         var arguments = MediaSetting.allCases.filter {
             ($0.isShared || (fast ? ($0.isFastImage || $0.isPhotos) : $0.isImage))
+                && (!fast || !$0.isFastImage || $0.appliesToFast(avif: avif))
                 && (!inheritedOnly || $0 == (fast ? .fastConfig : .imgConfig))
         }.flatMap { field -> [String] in
-            guard let value = values[field] else { return [] }
+            guard let value = inheritedOnly ? values[field] : argumentValue(for: field) else { return [] }
             return field.arguments(value).map { argument in
                 argument.hasPrefix("--img-") ? "--" + argument.dropFirst(6) : argument
             }
@@ -694,8 +785,16 @@ private struct EffectiveRuntimeSettings {
                 }
                 if value is NSNull { continue }
                 if let number = value as? NSNumber {
-                    result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
-                        ? (number.boolValue ? "true" : "false") : number.stringValue
+                    if section == "img" && key == "jxl_distance" {
+                        let distance = number.floatValue
+                        guard CFGetTypeID(number) != CFBooleanGetTypeID(), distance.isFinite, (0...25).contains(distance) else {
+                            throw HostError(message: localized("settings.config_invalid"))
+                        }
+                        result["img.jxl_distance"] = distance.rounded() == distance ? String(Int(distance)) : String(distance)
+                    } else {
+                        result["\(section).\(key)"] = CFGetTypeID(number) == CFBooleanGetTypeID()
+                            ? (number.boolValue ? "true" : "false") : number.stringValue
+                    }
                 } else if let text = value as? String { result["\(section).\(key)"] = text }
             }
         }
@@ -1410,7 +1509,7 @@ private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDeleg
 }
 
 @MainActor
-private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
+private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSComboBoxDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private enum SearchDestination: Equatable {
         case setting(MediaSetting)
         case cache
@@ -1435,6 +1534,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var rows: [MediaSetting: NSGridRow] = [:]
     private let developer: Bool
     private let fast: Bool
+    private let avif: Bool
     private let videos: Bool
     private let advanced = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(wrappingLabelWithString: "")
@@ -1477,11 +1577,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var toolEditor: ToolPathsPanel?
     private var validatingLayout = false
 
-    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
+    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
         self.developer = developer
         self.fast = fast
+        self.avif = avif
         self.videos = videos
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 300),
                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -1505,6 +1606,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         tabs.delegate = self
         for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"] {
             let fields = MediaSetting.allCases.filter { field in
+                if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
                 if field == .performance { return section == "performance" }
                 if field.isCache { return section == "cache" }
                 if field.isDeveloper {
@@ -1519,12 +1621,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             let tab = NSTabViewItem(identifier: section)
             tab.label = localized("settings.section.\(section)")
             let grid = NSGridView()
-            grid.rowSpacing = 10
+            grid.rowSpacing = 8
             grid.columnSpacing = 12
             for field in fields {
                 let control: NSView
-                if field == .photosAdaptive || field == .photosPreserveTree {
+                if field.isSearchToggle || field == .photosAdaptive || field == .photosPreserveTree {
                     let toggle = NSButton(checkboxWithTitle: field.title, target: self, action: #selector(updateVisibility))
+                    if field.isSearchToggle { toggle.action = #selector(changeSearch(_:)) }
                     toggle.allowsMixedState = false
                     toggles[field] = toggle
                     control = toggle
@@ -1533,13 +1636,20 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     popup.target = self
                     popup.action = #selector(updateVisibility)
                     for value in field.choices {
-                        popup.addItem(withTitle: localized("settings.value.\(value)"))
+                        popup.addItem(withTitle: field.choiceTitle(value))
                         popup.lastItem?.representedObject = value
                     }
                     popups[field] = popup
                     control = popup
                 } else {
-                    let text = NSTextField()
+                    let text: NSTextField
+                    if field == .imgJxlDistance {
+                        let combo = NSComboBox()
+                        combo.addItems(withObjectValues: ["0", "0.1", "0.25", "0.5", "1", "2"])
+                        combo.isEditable = true
+                        combo.completes = false
+                        text = combo
+                    } else { text = NSTextField() }
                     text.delegate = self
                     text.placeholderString = field.range == nil ? localized("settings.automatic") : ""
                     text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1550,7 +1660,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                         control = text
                     } else if let range = field.range {
                         text.widthAnchor.constraint(equalToConstant: 100).isActive = true
+                        text.setAccessibilityLabel(field.title)
+                        text.toolTip = localized("settings.\(field.labelKey).help")
                         let stepper = NSStepper()
+                        stepper.setAccessibilityLabel(field.title)
+                        stepper.toolTip = text.toolTip
                         stepper.minValue = Double(range.lowerBound)
                         stepper.maxValue = Double(range.upperBound)
                         stepper.increment = 1
@@ -1705,7 +1819,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             guard rows[field] != nil, isApplicable(field) else { return nil }
             let destination = SearchDestination.setting(field)
             var words = [searchTitle(destination), localized("settings.\(field.labelKey).help")]
-            words += field.choices.flatMap { [$0, localized("settings.value.\($0)")] }
+            words += field.choices.flatMap { [$0, field.choiceTitle($0)] }
             if developer { words += [field.runtimeKey ?? "", field.flag] }
             return matches(words.joined(separator: " ")) ? destination : nil
         }
@@ -2339,15 +2453,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             text.stringValue = displayed[field] ?? ""
             if field.isCache {
                 text.placeholderString = localized(inheritedMixed.contains(field) ? "settings.performance.per_pipeline" : "settings.automatic")
+            } else if field.isDistance {
+                text.placeholderString = localized(inheritedSources[field] == nil ? "result.unknown" : "settings.private_policy")
             }
             updateStepper(for: field)
         }
         for (field, toggle) in toggles {
             let value = displayed[field]
-            toggle.state = value == "true" ? .on : .off
-            toggle.isEnabled = value.flatMap(Bool.init) != nil
+            let enabled = field.isSearchToggle ? value.flatMap(field.searchEnabled) : value.flatMap(Bool.init)
+            toggle.state = enabled == true ? .on : .off
+            toggle.isEnabled = enabled != nil
             toggle.title = field.title
-            if let value, Bool(value) == nil { toggle.title = localized("settings.invalid", field.title, value) }
+            if let value, enabled == nil { toggle.title = localized("settings.invalid", field.title, value) }
+            toggle.setAccessibilityLabel(toggle.title)
         }
         for (field, popup) in popups {
             for index in popup.itemArray.indices.reversed()
@@ -2355,11 +2473,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 popup.removeItem(at: index)
             }
             popup.selectItem(at: -1)
-            if field.isFailurePolicy {
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
                 let inheritedValue = inherited[field].map {
-                    field.choices.contains($0) ? localized("settings.value.\($0)") : localized("settings.invalid", field.title, $0)
-                } ?? localized("result.unknown")
-                popup.insertItem(withTitle: localized("settings.failure.inherited", inheritedValue), at: 0)
+                    field.choices.contains($0) ? field.choiceTitle($0) : localized("settings.invalid", field.title, $0)
+                } ?? localized(field.isEffort && inheritedSources[field] != nil ? "settings.private_policy" : "result.unknown")
+                let title = field.isEffort || field.isSearch ? inheritedValue : localized("settings.failure.inherited", inheritedValue)
+                // NSPopUpButton merges equal titles; inheritance and an explicit equal value are distinct.
+                popup.menu?.insertItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""), at: 0)
                 if settings.values[field] == nil { popup.selectItem(at: 0); continue }
             }
             if field == .performance && inheritedMixed.contains(field) {
@@ -2394,11 +2514,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         for (field, toggle) in toggles {
-            let value = toggle.state == .on ? "true" : "false"
-            if toggle.isEnabled && value != displayed[field] { settings.values[field] = value }
+            let enabled = field.isSearchToggle ? displayed[field].flatMap(field.searchEnabled) : displayed[field].flatMap(Bool.init)
+            if toggle.isEnabled && (toggle.state == .on) != enabled {
+                settings.values[field] = field.isSearchToggle
+                    ? (toggle.state == .on ? "adaptive" : "fixed") : (toggle.state == .on ? "true" : "false")
+            }
         }
         for (field, popup) in popups {
-            if field.isFailurePolicy {
+            if field.isFailurePolicy || field.isEffort || field.isSearch || field.isDistance {
                 settings.values[field] = popup.selectedItem?.representedObject as? String
                 continue
             }
@@ -2414,6 +2537,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     private func isApplicable(_ field: MediaSetting) -> Bool {
+        if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
         let backend = (popups[.photosBackend]?.selectedItem?.representedObject as? String) ?? displayed[.photosBackend]
         let adaptive = toggles[.photosAdaptive]?.state == .on
         if field == .photosAppleScriptBatch && backend == "native" { return false }
@@ -2423,8 +2547,36 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         return true
     }
 
+    @objc private func changeSearch(_ sender: NSButton) {
+        guard let field = toggles.first(where: { $0.value === sender })?.key else { return }
+        var settings = draft()
+        settings.values[field] = sender.state == .on ? "adaptive" : "fixed"
+        restore(settings)
+    }
+
     @objc private func updateVisibility() {
         sourceGeneration = UUID()
+        let distanceSearch = draft().image.qualitySearch?.rawValue ?? inherited[.imgQualitySearch]
+        textFields[.imgJxlDistance]?.isEnabled = distanceSearch != "adaptive"
+        let avifQualityMode = draft().values[.fastQualitySearch] ?? inherited[.fastQualitySearch]
+        let avifQualityEnabled = avifQualityMode == "fixed"
+        textFields[.fastAvifQuality]?.isEnabled = avifQualityEnabled
+        updateStepper(for: .fastAvifQuality)
+        steppers[.fastAvifQuality]?.isEnabled = avifQualityEnabled && (steppers[.fastAvifQuality]?.isEnabled ?? false)
+        if let toggle = toggles[.imgQualitySearch], let distanceSearch,
+           MediaSetting.imgQualitySearch.searchEnabled(distanceSearch) != nil {
+            toggle.title = distanceSearch == "mode-default"
+                ? localized("settings.distance.mode-default") : MediaSetting.imgQualitySearch.title
+            toggle.setAccessibilityLabel(toggle.title)
+        }
+        for (field, searchField) in [(MediaSetting.imgJxlEffort, MediaSetting.imgJxlSearch),
+                                     (.imgJpegEffort, .imgJpegSearch), (.fastJpegEffort, .fastJpegSearch)] {
+            guard let popup = popups[field], let label = rows[field]?.cell(at: 0).contentView as? NSTextField else { continue }
+            let title = toggles[searchField]?.state == .on
+                ? localized(field.isPixelEffort ? "settings.effort.comparison" : "settings.jpeg_effort.comparison") : field.title
+            label.stringValue = title
+            popup.setAccessibilityLabel(title)
+        }
         for (field, row) in rows {
             row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
         }
@@ -2447,6 +2599,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if [.imgConfig, .fastConfig, .vidConfig].contains(field) {
             inheritedGeneration = UUID()
         }
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let combo = notification.object as? NSComboBox,
+              let value = combo.objectValueOfSelectedItem as? String else { return }
+        combo.stringValue = value
+        sourceGeneration = UUID()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -2486,7 +2645,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 requests = [("VID", "vid", settings.videoRuntimeArguments(inheritedOnly: false))]
             } else {
                 let useFast = field.isFastImage || field.isPhotos || (field.isShared && fast)
-                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false))]
+                requests = [(useFast ? "Fast IMG" : "IMG", "img", settings.runtimeArguments(fast: useFast, inheritedOnly: false, avif: avif))]
             }
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let result = Result {
@@ -2574,7 +2733,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             applyGeneration = UUID()
             let generation = applyGeneration
             let standardArgs = settings.runtimeArguments(fast: false, inheritedOnly: false)
-            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false)
+            let fastArgs = settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif)
             let videoArgs = settings.videoRuntimeArguments(inheritedOnly: false)
             let needsStandard = !fast && !videos
             let needsVideo = !fast
@@ -2658,6 +2817,78 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     func validateForSelfTest() throws {
         validatingLayout = true
         defer { validatingLayout = false }
+        try validateEncodingScopesForSelfTest()
+        var pixelEffort = MediaSettings()
+        pixelEffort.values = [.imgJxlEffort: "8", .fastJxlEffort: "10", .imgJpegEffort: "11"]
+        try pixelEffort.validate()
+        let imageArguments = try pixelEffort.arguments(operation: .adjacent, processing: .imagesOnly)
+        let fastArguments = try pixelEffort.arguments(operation: .fastImgJxl, processing: .imagesOnly)
+        guard imageArguments.contains("8"), imageArguments.contains("--img-jxl-effort"),
+              !fastArguments.contains("--img-jxl-effort"), !fastArguments.contains("8"),
+              !pixelEffort.runtimeArguments(fast: false, inheritedOnly: true).contains("--jxl-effort"),
+              pixelEffort.runtimeArguments(fast: false, inheritedOnly: false).contains("--jxl-effort"),
+              !(try pixelEffort.arguments(operation: .adjacent, processing: .videosOnly)).contains("--img-jxl-effort") else {
+            throw HostError(message: "JXL pixel effort does not preserve independent scopes and inheritance")
+        }
+        for effort in ["1", "9", "11"] {
+            pixelEffort.values[.imgJxlEffort] = effort
+            try pixelEffort.validate()
+        }
+        for invalid in ["0", "12", "1.5"] {
+            pixelEffort.values[.imgJxlEffort] = invalid
+            do { try pixelEffort.validate(); throw HostError(message: "Invalid JXL pixel effort accepted") }
+            catch { guard error.localizedDescription != "Invalid JXL pixel effort accepted" else { throw error } }
+        }
+        if !fast && !videos {
+            let previousInherited = inherited
+            let previousSources = inheritedSources
+            let previousMixed = inheritedMixed
+            defer {
+                inherited = previousInherited
+                inheritedSources = previousSources
+                inheritedMixed = previousMixed
+                restore(MediaSettings())
+            }
+            let key = "img.jxl_effort"
+            let standard = EffectiveRuntimeSettings(values: [key: "8"], sources: [key: "/synthetic/img.json"],
+                sourceChain: [key: ["default", "/synthetic/img.json"]])
+            let fastImage = EffectiveRuntimeSettings(values: [key: "10"], sources: [key: "/synthetic/fast.json"],
+                sourceChain: [key: ["default", "/synthetic/fast.json"]])
+            setInheritedValues(standard: standard, fast: fastImage, video: standard)
+            restore(MediaSettings())
+            restore(MediaSettings())
+            let field: MediaSetting = fast ? .fastJxlEffort : .imgJxlEffort
+            guard let popup = popups[field], popup.numberOfItems == 12, popup.indexOfSelectedItem == 0,
+                  (sourceButtons[field] != nil) == developer, fieldSections[field] == "img",
+                  inherited[field] == (fast ? "10" : "8"), draft().values[field] == nil else {
+                throw HostError(message: "JXL pixel effort inheritance used the wrong pipeline or fabricated an override")
+            }
+            popup.selectItem(at: fast ? 10 : 8)
+            guard draft().values[field] == inherited[field] else {
+                throw HostError(message: "Explicit JXL pixel effort equal to inheritance lost its override")
+            }
+            popup.selectItem(at: 0)
+            guard draft().values[field] == nil else {
+                throw HostError(message: "Returning to JXL pixel effort inheritance retained an override")
+            }
+            inherited.removeAll()
+            inheritedSources.removeAll()
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("result.unknown"),
+                  toggles[.imgQualitySearch]?.accessibilityLabel() == toggles[.imgQualitySearch]?.title else {
+                throw HostError(message: "Unavailable JXL pixel configuration was presented as automatic")
+            }
+            inheritedSources[field] = "default"
+            inheritedSources[.imgJxlDistance] = "default"
+            restore(MediaSettings())
+            guard popup.titleOfSelectedItem == localized("settings.private_policy"),
+                  draft().values[field] == nil,
+                  textFields[.imgJxlDistance]?.placeholderString == localized("settings.private_policy"),
+                  draft().image.jxlDistance == nil else {
+                throw HostError(message: "Null JXL pixel effort invented a resolved target")
+            }
+        }
+        restore(MediaSettings())
         try validateCacheForSelfTest()
         try validateCachePolicyForSelfTest()
         try validatePhotosForSelfTest()
@@ -2691,24 +2922,25 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         settings.values = [fallback: "strict", effort: "9", database: "false",
                            .vidCodec: "av1", .vidErrorMode: "fail-fast"]
         restore(settings)
-        guard draft().values == settings.values, textFields[effort]?.stringValue == "9" else {
+        guard draft().values == settings.values, popups[effort]?.selectedItem?.representedObject as? String == "9" else {
             throw HostError(message: "Settings controls did not restore explicit overrides")
         }
-        textFields[effort]?.stringValue = "10"
-        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textFields[effort]))
-        guard steppers[effort]?.integerValue == 10, steppers[effort]?.isEnabled == true else {
-            throw HostError(message: "Numeric editing left a stale stepper value")
+        guard let jpegPopup = popups[effort], jpegPopup.numberOfItems == 12,
+              fieldSections[effort] == "img", steppers[effort] == nil else {
+            throw HostError(message: "JPEG effort choices are missing or outside image settings")
         }
-        steppers[effort]?.integerValue = 9
-        if let stepper = steppers[effort] { stepNumber(stepper) }
-        guard textFields[effort]?.stringValue == "9" else {
-            throw HostError(message: "Stepper did not continue from the edited number")
+        jpegPopup.selectItem(at: 11)
+        guard draft().values[effort] == "11" else {
+            throw HostError(message: "JPEG effort 11 did not reach the settings draft")
         }
-        textFields[effort]?.stringValue = "12"
-        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textFields[effort]))
-        guard steppers[effort]?.isEnabled == false, draft().values[effort] == "12" else {
-            throw HostError(message: "Invalid numeric edit was silently replaced")
+        var invalidEffort = settings
+        invalidEffort.values[effort] = "12"
+        restore(invalidEffort)
+        guard draft().values[effort] == "12" else {
+            throw HostError(message: "Invalid saved JPEG effort was silently replaced")
         }
+        do { try draft().validate(); throw HostError(message: "Invalid JPEG effort accepted") }
+        catch { guard error.localizedDescription != "Invalid JPEG effort accepted" else { throw error } }
         restore(settings)
         try draft().save(to: preferences)
         guard MediaSettings(preferences: preferences).values == settings.values else {
@@ -2716,7 +2948,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         tabs.selectTabViewItem(at: 0)
         resetTab()
-        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], textFields[effort]?.stringValue.isEmpty == true else {
+        guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], popups[effort]?.indexOfSelectedItem == 0 else {
             throw HostError(message: "Resetting image settings changed video settings")
         }
         for index in 0..<tabs.numberOfTabViewItems {
@@ -2774,7 +3006,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         inherited[effort] = "11"
         inherited[database] = "true"
         restore(MediaSettings())
-        guard textFields[effort]?.stringValue == "11",
+        guard popups[effort]?.indexOfSelectedItem == 0,
               popups[database]?.selectedItem?.representedObject as? String == "true",
               draft().values.isEmpty, toggles.values.allSatisfy({ !$0.allowsMixedState }) else {
             throw HostError(message: "Effective values must not create overrides or mixed states")
@@ -2823,19 +3055,231 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 throw HostError(message: "Performance inheritance used the wrong pipeline")
             }
         }
-        if developer {
+        if !videos {
             let tool: MediaSetting = fast ? .fastToolPolicy : .imgToolPolicy
-            if !videos {
-                guard popups[tool] != nil,
-                      inherited[tool] == (fast ? "fallback" : "single") else {
-                    throw HostError(message: "Developer tool policy is missing or inherited from another pipeline")
-                }
+            guard popups[tool] != nil, fieldSections[tool] == "img",
+                  inherited[tool] == (fast ? "fallback" : "single") else {
+                throw HostError(message: "Image tool policy is missing or inherited from another pipeline")
             }
         }
         inherited.removeAll()
         inheritedSources.removeAll()
         inheritedMixed.removeAll()
         restore(MediaSettings())
+    }
+
+    func validateEncodingScopesForSelfTest() throws {
+        if !videos && !fast {
+            guard [.imgJxlEffort, .imgJpegEffort, .imgToolPolicy]
+                .allSatisfy({ fieldSections[$0] == "img" && popups[$0] != nil }),
+                  [.imgJxlSearch, .imgJpegSearch, .imgQualitySearch]
+                    .allSatisfy({ fieldSections[$0] == "img" && toggles[$0] != nil }),
+                  let distance = textFields[.imgJxlDistance] as? NSComboBox,
+                  distance.isEditable, distance.numberOfItems == 6,
+                  fieldSections[.imgJxlDistance] == "img" else {
+                throw HostError(message: "Image decisions escaped the ordinary image settings tab")
+            }
+            var settings = MediaSettings()
+            settings.values = [.imgJxlDistance: "0.25", .imgJxlSearch: "adaptive", .imgJxlEffort: "8", .imgJpegEffort: "11", .imgJpegSearch: "fixed", .imgQualitySearch: "fixed"]
+            restore(settings)
+            guard (rows[.imgJxlEffort]?.cell(at: 0).contentView as? NSTextField)?.stringValue == localized("settings.effort.comparison"),
+                  rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .off,
+                  distance.stringValue == "0.25", draft().values == settings.values else {
+                throw HostError(message: "Effort-only exploration hid or changed a fixed distance")
+            }
+            distance.stringValue = "0.125"
+            guard draft().image.jxlDistance == 0.125 else { throw HostError(message: "Manual JXL distance did not reach the draft") }
+            distance.stringValue = "0.25"
+            let arguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            let runtimeArguments = draft().runtimeArguments(fast: false, inheritedOnly: false)
+            guard arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == runtimeArguments,
+                  arguments.contains("0.25"), arguments.contains("8") else {
+                throw HostError(message: "Distance or effort differed between preview and processing")
+            }
+            settings.values[.imgQualitySearch] = "adaptive"
+            restore(settings)
+            let exploration = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard rows[.imgJxlSearch]?.isHidden == false, rows[.imgJxlDistance]?.isHidden == false,
+                  toggles[.imgJxlSearch]?.state == .on, toggles[.imgQualitySearch]?.state == .on,
+                  draft().image.jxlDistance == 0.25, draft().image.jxlEffort == 8,
+                  !exploration.contains("--img-jxl-distance"), !exploration.contains("0.25"),
+                  exploration.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "Distance exploration did not preserve the draft and use its policy baseline")
+            }
+            for distanceSearch in ["fixed", "adaptive"] {
+                for effortSearch in ["fixed", "adaptive"] {
+                    settings.values[.imgQualitySearch] = distanceSearch
+                    settings.values[.imgJxlSearch] = effortSearch
+                    restore(settings)
+                    guard toggles[.imgQualitySearch]?.state == (distanceSearch == "adaptive" ? .on : .off),
+                          toggles[.imgJxlSearch]?.state == (effortSearch == "adaptive" ? .on : .off),
+                          draft().values == settings.values,
+                          popups[.imgJxlEffort]?.accessibilityLabel() == (effortSearch == "adaptive"
+                            ? localized("settings.effort.comparison") : MediaSetting.imgJxlEffort.title),
+                          rows[.imgJxlDistance]?.isHidden == false, rows[.imgJxlEffort]?.isHidden == false else {
+                        throw HostError(message: "Independent distance and effort exploration combinations were lost")
+                    }
+                }
+            }
+            settings.values[.imgQualitySearch] = "mode-default"
+            restore(settings)
+            guard toggles[.imgQualitySearch]?.state == .on, draft().image.qualitySearch == .modeDefault else {
+                throw HostError(message: "The private policy default was replaced by a GUI search override")
+            }
+            let policyArguments = try draft().arguments(operation: .adjacent, processing: .imagesOnly)
+            guard draft().image.jxlDistance == 0.25, distance.isEnabled,
+                  toggles[.imgQualitySearch]?.title == localized("settings.distance.mode-default"),
+                  policyArguments.contains("--img-jxl-distance"), policyArguments.contains("0.25"),
+                  policyArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == draft().runtimeArguments(fast: false, inheritedOnly: false) else {
+                throw HostError(message: "The private policy default lost its editable fixed distance or canonical arguments")
+            }
+            toggles[.imgQualitySearch]?.performClick(nil)
+            toggles[.imgQualitySearch]?.performClick(nil)
+            guard draft().image.qualitySearch == .adaptive, !distance.isEnabled,
+                  draft().image.jxlDistance == 0.25,
+                  !(try draft().arguments(operation: .adjacent, processing: .imagesOnly)).contains("--img-jxl-distance") else {
+                throw HostError(message: "Explicitly enabling distance exploration fell back to inherited mode semantics")
+            }
+            toggles[.imgQualitySearch]?.state = .off
+            guard draft().image.qualitySearch == .fixed, draft().image.jxlDistance == 0.25 else {
+                throw HostError(message: "Disabling distance exploration lost the saved fixed value")
+            }
+            for invalid in ["-0.1", "25.1", "nan", "inf", "distance"] {
+                settings.values[.imgJxlDistance] = invalid
+                restore(settings)
+                guard draft().values[.imgJxlDistance] == invalid else {
+                    throw HostError(message: "Invalid saved JXL distance was silently replaced")
+                }
+                do { try settings.validate() }
+                catch { continue }
+                throw HostError(message: "Invalid JXL distance was accepted")
+            }
+            restore(MediaSettings())
+            var avifOnly = MediaSettings()
+            avifOnly.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "80", .fastAvifSpeed: "4"]
+            let ordinaryArguments = try avifOnly.arguments(operation: .adjacent, processing: .imagesOnly)
+            guard !ordinaryArguments.contains("--img-avif-quality"),
+                  !ordinaryArguments.contains("--img-avif-speed"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-quality"),
+                  !avifOnly.runtimeArguments(fast: false, inheritedOnly: false).contains("--avif-speed") else {
+                throw HostError(message: "Fast AVIF quality or speed leaked into standard IMG")
+            }
+        }
+        if fast {
+            guard popups[.fastJxlEffort] == nil, popups[.fastJxlSearch] == nil,
+                  (popups[.fastJpegEffort] != nil) == !avif, (toggles[.fastJpegSearch] != nil) == !avif,
+                  (popups[.fastQualitySearch] != nil) == avif,
+                  (textFields[.fastAvifQuality] != nil) == avif,
+                  (popups[.fastAvifSpeed] != nil) == avif,
+                  textFields[.fastAvifSpeed] == nil else {
+                throw HostError(message: "Fast IMG displayed an ineffective encoder decision")
+            }
+            var settings = MediaSettings()
+            settings.values = [.fastJpegEffort: "11", .fastJpegSearch: "adaptive", .fastQualitySearch: "fixed",
+                               .fastAvifQuality: "10", .fastAvifSpeed: "0"]
+            restore(settings)
+            let operation: OperationMode = avif ? .fastImgAvif : .fastImgJxl
+            let arguments = try settings.arguments(operation: operation, processing: .imagesOnly)
+            guard (avif || popups[.fastJpegEffort]?.accessibilityLabel() == localized("settings.jpeg_effort.comparison")),
+                  arguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                    == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: avif),
+                  !arguments.contains("--img-jxl-distance"),
+                  arguments.contains("--img-jpeg-effort") == !avif,
+                  arguments.contains("--img-jpeg-effort-search") == !avif,
+                  arguments.contains("--img-quality-search") == avif,
+                  arguments.contains("--img-avif-quality") == avif,
+                  arguments.contains("--img-avif-speed") == avif,
+                   (!avif || (arguments.contains("10") && arguments.contains("0")
+                       && textFields[.fastAvifQuality]?.isEnabled == true
+                       && steppers[.fastAvifQuality]?.isEnabled == true
+                       && textFields[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title
+                       && steppers[.fastAvifQuality]?.accessibilityLabel() == MediaSetting.fastAvifQuality.title)),
+                  textFields[.fastAvifQuality]?.isEnabled != true || settings.fastImage.qualitySearch == .fixed else {
+                throw HostError(message: "Fast encoder decisions differed between preview and processing")
+            }
+            if avif {
+                let previousInherited = inherited
+                let previousInheritedSources = inheritedSources
+                let previousInheritedMixed = inheritedMixed
+                let preferenceSuite = "MFBGuiAVIFSettingsSelfTest.\(UUID().uuidString)"
+                let avifPreferences = UserDefaults(suiteName: preferenceSuite)!
+                defer { avifPreferences.removePersistentDomain(forName: preferenceSuite) }
+                var preferenceSettings = MediaSettings()
+                preferenceSettings.values = [.fastQualitySearch: "fixed", .fastAvifQuality: "10", .fastAvifSpeed: "0"]
+                try preferenceSettings.save(to: avifPreferences)
+                let reloaded = MediaSettings(preferences: avifPreferences)
+                guard reloaded.fastImage.avifQuality == 10, reloaded.fastImage.avifSpeed == 0,
+                      reloaded.image.avifQuality == nil, reloaded.image.avifSpeed == nil else {
+                    throw HostError(message: "Fast AVIF preferences did not round-trip independently")
+                }
+                for mode in ["adaptive", "mode-default"] {
+                    settings.values[.fastQualitySearch] = mode
+                    settings.values[.fastAvifQuality] = "85"
+                    restore(settings)
+                    let inactive = try settings.arguments(operation: .fastImgAvif, processing: .imagesOnly)
+                    guard textFields[.fastAvifQuality]?.isEnabled == false,
+                          steppers[.fastAvifQuality]?.isEnabled == false,
+                          settings.values[.fastAvifQuality] == "85",
+                          popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "0",
+                          !inactive.contains("--img-avif-quality"), inactive.contains("--img-avif-speed"),
+                          inactive.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 })
+                            == settings.runtimeArguments(fast: true, inheritedOnly: false, avif: true) else {
+                        throw HostError(message: "AVIF Q was lost, enabled, or emitted under an inactive quality mode")
+                    }
+                }
+                for (field, invalid) in [(MediaSetting.fastAvifQuality, "0"), (.fastAvifQuality, "9"),
+                                         (.fastAvifQuality, "101"), (.fastAvifQuality, "q"),
+                                         (.fastAvifSpeed, "-1"),
+                                         (.fastAvifSpeed, "11"), (.fastAvifSpeed, "1.5")] {
+                    var invalidSettings = MediaSettings()
+                    invalidSettings.values[.fastQualitySearch] = "fixed"
+                    invalidSettings.values[field] = invalid
+                    restore(invalidSettings)
+                    guard draft().values[field] == invalid else {
+                        throw HostError(message: "Invalid AVIF value was silently replaced")
+                    }
+                    do { try invalidSettings.validate() }
+                    catch { continue }
+                    throw HostError(message: "Invalid AVIF value was accepted")
+                }
+                var inheritedSettings = MediaSettings()
+                inheritedSettings.values = [.fastAvifQuality: "80", .fastAvifSpeed: "4"]
+                inherited = [.fastQualitySearch: "mode-default"]
+                restore(inheritedSettings)
+                guard textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastQualitySearch] == nil,
+                      draft().values[.fastAvifQuality] == "80",
+                      popups[.fastAvifSpeed]?.selectedItem?.representedObject as? String == "4",
+                      !(try inheritedSettings.arguments(operation: .fastImgAvif, processing: .imagesOnly))
+                        .contains("--img-quality-search") else {
+                    throw HostError(message: "Unknown or inherited AVIF policy fabricated a GUI override or discarded Q")
+                }
+                inherited.removeAll()
+                inheritedSources.removeAll()
+                inheritedMixed.removeAll()
+                let defaults = MediaSettings()
+                restore(defaults)
+                guard textFields[.fastAvifQuality]?.stringValue.isEmpty == true,
+                      popups[.fastAvifSpeed]?.indexOfSelectedItem == -1,
+                      popups[.fastQualitySearch]?.indexOfSelectedItem == 0,
+                      textFields[.fastAvifQuality]?.isEnabled == false,
+                      steppers[.fastAvifQuality]?.isEnabled == false,
+                      draft().values[.fastAvifQuality] == nil, draft().values[.fastAvifSpeed] == nil else {
+                    throw HostError(message: "Unknown AVIF defaults fabricated GUI overrides or enabled Q")
+                }
+                inherited = previousInherited
+                inheritedSources = previousInheritedSources
+                inheritedMixed = previousInheritedMixed
+            }
+            restore(MediaSettings())
+        }
+        if !fast {
+            guard fieldSections[.vidForceMsSsimLong] == "vid" else { throw HostError(message: "Video quality decision escaped video settings") }
+        }
     }
 
     private func validateFailurePolicyForSelfTest() throws {
@@ -2920,6 +3364,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if !fast {
             guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "vid" }),
                   popups[.vidCodec] != nil,
+                   popups[.vidForceMsSsimLong] != nil, fieldSections[.vidForceMsSsimLong] == "vid",
                   !developer || (textFields[.vidConfig] != nil && popups[.vidErrorMode] != nil) else {
                 throw HostError(message: "Video configuration controls are missing")
             }
@@ -3785,7 +4230,62 @@ func hasPartialProcessingSuccess(succeeded: [Int?], failed: [Int?], countsComple
     return successes > 0 && failures > 0
 }
 
+private func hasMandatoryVerificationFailure(_ line: String) -> Bool {
+    let raw = LogTone.message(line)
+    if let count = countStatusValue(in: raw), !["MATCH", "EXPLAINED"].contains(count.uppercased()) { return true }
+    return raw.range(of: #"(?i)^(?:Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#,
+                     options: .regularExpression) != nil
+}
+
+private func hasSeriousProcessingDiagnostic(_ line: String) -> Bool {
+    let raw = LogTone.message(line).replacingOccurrences(of: #"(?i)^(?:\[ERROR\]\s*|Error:\s*)"#,
+        with: "", options: .regularExpression)
+    return hasMandatoryVerificationFailure(raw)
+        || raw.range(of: #"(?i)^(?:\[FATAL\]|fatal(?: error)?:|thread .*panicked|panic:|No space left on device|Permission denied|database is (?:locked|corrupt)|SQLite.*(?:corrupt|malformed))"#,
+                     options: .regularExpression) != nil
+        || raw.hasPrefix("[LOG] final processing summary write failed:")
+        || raw.hasPrefix("write final processing summary")
+}
+
+private func processDiagnosticColor(_ line: String, confirmedFileFailure: Bool = false) -> NSColor {
+    confirmedFileFailure && !hasSeriousProcessingDiagnostic(line) ? .systemOrange : .systemRed
+}
+
 private struct BatchResults {
+    struct FastDelivery: Decodable {
+        let schemaVersion: Int
+        let succeeded: Int
+        let skipped: Int
+        let ignored: Int
+        let failed: Int
+        let unprocessed: Int
+        let encoded: Int
+        let photosVerified: Int
+        let sourceRetained: Int?
+        let failedSourcesRetained: Int?
+        let failedSourcesVerified: Int?
+        let failedSourceVerificationError: String?
+        let retentionUnknownReason: String?
+        let primaryCleanupComplete: Bool
+        let finalizationError: String?
+
+        var counts: [Int?] { [succeeded, skipped, failed, ignored] }
+        var isValid: Bool {
+            guard schemaVersion == 1,
+                  let total = processingCountTotal(counts + [unprocessed]),
+                  let deliveryCapacity = processingCountTotal([succeeded, unprocessed]),
+                  encoded >= 0, encoded <= deliveryCapacity,
+                  photosVerified >= 0, photosVerified <= deliveryCapacity else { return false }
+            if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
+            if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
+            if let sourceRetained {
+                return sourceRetained >= 0 && sourceRetained <= total && retentionUnknownReason == nil
+                    && failedSourcesRetained.map { $0 <= sourceRetained } != false
+            }
+            return retentionUnknownReason?.isEmpty == false
+        }
+    }
+
     struct Event: Decodable {
         let schemaVersion: Int
         let media: String
@@ -3816,6 +4316,63 @@ private struct BatchResults {
     private(set) var hasUnprocessed = false
     private(set) var pendingTotalOverflowed = false
     private(set) var invalid = false
+    private(set) var fastDeliveries: [FastDelivery] = []
+    private(set) var fastDeliveryInvalid = false
+    private var workerExitCodes: [Int] = []
+    private(set) var mandatoryEvidenceConflict = false
+    var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    func fastDeliveryCount(_ key: KeyPath<FastDelivery, Int>) -> Int? {
+        processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
+    }
+
+    func fastDeliveryIsConfirmed(photos: Bool, processExit: Int32?, exitedNormally: Bool = true) -> Bool {
+        guard let processExit, exitedNormally, !mandatoryEvidenceConflict,
+              !isIncomplete, !fastDeliveryInvalid, !fastDeliveries.isEmpty,
+              totals.keys.allSatisfy({ $0 == "img" }), pendingTotals.count == 1,
+              let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
+              pending == fastDeliveryCount(\.unprocessed),
+              fastDeliveries.allSatisfy({ $0.finalizationError == nil && $0.failedSourcesRetained == $0.failed
+                  && $0.failedSourcesVerified == $0.failed && $0.failedSourceVerificationError == nil
+                  && ($0.failed == 0 || $0.primaryCleanupComplete) }),
+              workerExitCodes.count == fastDeliveries.count,
+              zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in code == (report.failed > 0 ? 1 : 0) }),
+              let successes = fastDeliveryCount(\.succeeded),
+              let failures = fastDeliveryCount(\.failed),
+              processingCountTotal(fastDeliveries.map(\.sourceRetained)) != nil else { return false }
+        for index in 0..<4 {
+            guard img[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) else { return false }
+        }
+        if photos, fastDeliveryCount(\.photosVerified) != successes { return false }
+        // A file-failure exit is expected; a crash or another exit must not inherit its safe verdict.
+        if processExit != (failures > 0 ? 1 : 0) { return false }
+        return true
+    }
+
+    mutating func observeMandatoryEvidence(_ line: String) {
+        if hasSeriousProcessingDiagnostic(line) { mandatoryEvidenceConflict = true }
+    }
+
+    mutating func markMandatoryEvidenceConflict() { mandatoryEvidenceConflict = true }
+
+    mutating func ingestFastDelivery(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        let prefix = "MFB_FAST_IMG_RESULT="
+        guard raw.hasPrefix(prefix) else { return false }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let payload = raw.dropFirst(prefix.count)
+        guard payload.utf8.count <= 32_768, fastDeliveries.count < 4_096,
+              let fields = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+              ["source_retained", "failed_sources_retained", "failed_sources_verified", "failed_source_verification_error",
+               "retention_unknown_reason", "finalization_error"].allSatisfy({ fields[$0] != nil }),
+              let event = try? decoder.decode(FastDelivery.self, from: Data(payload.utf8)), event.isValid else {
+            fastDeliveryInvalid = true
+            return true
+        }
+        fastDeliveries.append(event)
+        return true
+    }
     var isIncomplete: Bool {
         if invalid || pendingTotalOverflowed || totals.values.contains(where: { $0.contains(where: { $0 == nil }) }) {
             return true
@@ -3849,6 +4406,23 @@ private struct BatchResults {
                 : processingCountTotal(Array(pendingTotals.values))))
     }
 
+    var compactSummary: String {
+        guard !isIncomplete,
+              let succeeded = processingCountTotal(totals.values.map { $0[0] }),
+              let skipped = processingCountTotal(totals.values.map { $0[1] }),
+              let failed = processingCountTotal(totals.values.map { $0[2] }),
+              let ignored = processingCountTotal(totals.values.map { $0[3] }),
+              let pending = processingCountTotal(Array(pendingTotals.values)) else {
+            return localized("result.review_details")
+        }
+        var parts = [localized("result.completed_count", String(succeeded))]
+        for (count, key) in [(failed, "result.failed_count"), (pending, "result.pending_count"),
+                             (skipped, "result.skipped_count"), (ignored, "result.excluded_count")] where count > 0 {
+            parts.append(localized(key, String(count)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
     mutating func ingest(_ line: String) -> String? {
         let raw = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
         let prefix = "MFB_BATCH_RESULT="
@@ -3866,6 +4440,7 @@ private struct BatchResults {
         }
         hasFailure = hasFailure || (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0
         hasFileFailures = hasFileFailures || (event.failed ?? 0) > 0
+        if let code = event.exitCode { workerExitCodes.append(code) }
         if event.exitCode == nil { invalid = true }
         let previous = totals[event.media] ?? [0, 0, 0, 0]
         totals[event.media] = zip(previous, event.counts).map { left, right in
@@ -3892,7 +4467,8 @@ private struct BatchResults {
         let summary = localized("result.counts", count(event.succeeded), count(event.skipped),
                                 count(event.failed), count(event.ignored))
             + " · " + localized("result.unprocessed", count(event.unprocessed))
-        let tag = (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
+        let partial = (event.succeeded ?? 0) > 0 && (event.failed ?? 0) > 0 && event.unprocessed == 0
+        let tag = partial ? "WARN" : (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
             : (event.exitCode == nil || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
         return "[\(tag)] \(event.media.uppercased()): \(summary) (exit=\(count(event.exitCode)))"
     }
@@ -4049,12 +4625,18 @@ enum LogTone: Equatable {
     static func classify(_ line: String) -> Self {
         let line = message(line)
         if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
+        if line == "WARNING: Always keep a backup of your original media before optimization." { return .muted }
+        if line.range(of: #"(?i)^Error: fast-img exited with (?:code|status) \d+$"#, options: .regularExpression) != nil {
+            return .muted
+        }
         // The stderr transport prefix is not evidence of an error.
-        if let count = countStatusValue(in: line) { return count.uppercased() == "MATCH" ? .result : .failure }
-        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*CLEAN\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
+        if let count = countStatusValue(in: line) {
+            return count.uppercased() == "MATCH" ? .result : count.uppercased() == "EXPLAINED" ? .warning : .failure
+        }
+        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
             return .failure
         }
-        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):)"#, options: .regularExpression) != nil { return .warning }
+        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):|^\s*Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
         if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
         if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS|PHASE)\s*\])"#, options: .regularExpression) != nil { return .stage }
         if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
@@ -4133,6 +4715,7 @@ private struct LatestDiagnostics {
     private(set) var failure: String?
     private(set) var warning: String?
     private var failureIsSummary = false
+    private var failureIsSafety = false
 
     mutating func ingest(_ line: String) -> Bool {
         let tone = LogTone.classify(line)
@@ -4144,14 +4727,17 @@ private struct LatestDiagnostics {
             + (scalars.count > 4_096 ? "…" : "")
         switch tone {
         case .failure:
+            let isSafety = hasSeriousProcessingDiagnostic(message)
+            guard !failureIsSafety || isSafety else { return false }
             let isSummary = countStatusValue(in: message) != nil
-                || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?exiting with failures\b)"#,
+                || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?(?:exiting with failures\b|fast-img exited with (?:code|status)\b|fast-img (?:batch|original-media delivery) recorded \d+ failed source))"#,
                                  options: .regularExpression) != nil
             // A final aggregate must not hide the most recent actionable error.
-            guard !isSummary || failure == nil || failureIsSummary else { return false }
+            guard isSafety || !isSummary || failure == nil || failureIsSummary else { return false }
             guard failure != bounded else { return false }
             failure = bounded
             failureIsSummary = isSummary
+            failureIsSafety = isSafety
         case .warning:
             guard warning != bounded else { return false }
             warning = bounded
@@ -4516,6 +5102,7 @@ private final class NativeHost {
     private var controlToken = UUID().uuidString
     private(set) var controlState = "running"
     private(set) var lastExitStatus: Int32?
+    private(set) var lastExitWasNormal = false
     private let processLogs = ProcessLogBackpressure()
     private var pendingProcessCompletion: (() -> Void)?
 
@@ -4618,6 +5205,7 @@ private final class NativeHost {
         }
         controlState = "running"
         lastExitStatus = nil
+        lastExitWasNormal = false
         if processingRequiresPhotosAutomation(request), !photosAutomationAuthorized {
             pendingLaunch = true
             launchGeneration = UUID()
@@ -4682,7 +5270,8 @@ private final class NativeHost {
             process.waitUntilExit()
             readers.wait()
             let status = process.terminationStatus
-            DispatchQueue.main.async { self?.completeProcessingAfterLogs(status: status) }
+            let exitedNormally = process.terminationReason == .exit
+            DispatchQueue.main.async { self?.completeProcessingAfterLogs(status: status, exitedNormally: exitedNormally) }
         }
     }
 
@@ -4841,12 +5430,13 @@ private final class NativeHost {
         }
     }
 
-    private func completeProcessingAfterLogs(status: Int32) {
+    private func completeProcessingAfterLogs(status: Int32, exitedNormally: Bool = false) {
         let finish = { [weak self] in
             guard let self else { return }
             self.activeProcess = nil
             self.pendingLaunch = false
             self.lastExitStatus = status
+            self.lastExitWasNormal = exitedNormally
             self.removeControlFile()
             if status == 0 {
                 self.onCompletion?(.success(localized("status.completed")))
@@ -4960,6 +5550,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let commandField = NSTextField()
     private let logView = NSTextView()
     private let logScroll = NSScrollView()
+    private let logDetailsButton = NSButton(title: "", target: nil, action: nil)
+    private let mainLayout = NSStackView()
+    private var logDetailsExpanded = false
+    private var processEndedWithError = false
+    private var hasConfirmedFileFailures = false
     private let countStatusLabel = NSTextField(labelWithString: "")
     private var countStatus: String?
     private let statusLabel = NSTextField(labelWithString: "")
@@ -4975,6 +5570,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let latestFailureLabel = NSTextField(labelWithString: "")
     private let latestWarningLabel = NSTextField(labelWithString: "")
     private let latestDiagnosticsRow = NSStackView()
+    private let batchOverview = NSStackView()
+    private let batchOverviewTitle = NSTextField(labelWithString: "")
+    private let batchOverviewCounts = NSTextField(labelWithString: "")
+    private let batchOverviewDelivery = NSTextField(labelWithString: "")
+    private let batchOverviewCleanup = NSTextField(labelWithString: "")
     private let chooseButton = NSButton(title: "", target: nil, action: nil)
     private let backupButton = NSButton(title: "", target: nil, action: nil)
     private let backupRow = NSStackView()
@@ -5037,7 +5637,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func restoreOptions(for operation: OperationMode) {
         for (control, name) in optionControls {
             let saved = preferences.object(forKey: optionKey(name, for: operation)) as? Bool
-            let enabledByDefault = name == "verbose" || name == "archive"
+            let enabledByDefault = name == "verbose"
                 || (name == "fresh" && operation.capabilities.supportsResume)
                 || (name == "shortestPath" && operation.backendMode == "fast-img")
             control.state = (saved ?? enabledByDefault) ? .on : .off
@@ -5373,6 +5973,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         logScroll.hasVerticalScroller = true
         logScroll.borderType = .lineBorder
         logScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        logDetailsButton.target = self
+        logDetailsButton.action = #selector(toggleLogDetails)
+        logDetailsButton.bezelStyle = .inline
+        logDetailsButton.imagePosition = .imageLeading
+        logDetailsButton.alignment = .left
 
         countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         countStatusLabel.isHidden = true
@@ -5410,6 +6015,24 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         latestDiagnosticsRow.isHidden = true
 
+        batchOverview.orientation = .vertical
+        batchOverview.alignment = .leading
+        batchOverview.spacing = 3
+        for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
+            label.font = .systemFont(ofSize: label === batchOverviewTitle ? 14 : 12,
+                                     weight: label === batchOverviewTitle ? .semibold : .regular)
+            label.textColor = label === batchOverviewTitle ? .labelColor : .secondaryLabelColor
+            label.isSelectable = true
+            label.lineBreakMode = .byWordWrapping
+            label.maximumNumberOfLines = 2
+            label.cell?.wraps = true
+            label.cell?.usesSingleLineMode = false
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            batchOverview.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: batchOverview.widthAnchor).isActive = true
+        }
+        batchOverview.isHidden = true
+
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -5424,10 +6047,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
         statusRow.spacing = 8
-        let stack = NSStackView(views: [
+        let stack = mainLayout
+        for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, logScroll, latestDiagnosticsRow, statusRow,
-        ])
+            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
+        ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -5435,7 +6059,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -5444,12 +6068,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -16),
         ])
         applyLocalization()
         selectSavedPreferences()
         restoreOptions(for: .adjacent)
         configurationChanged()
+        updateLogPresentation()
     }
 
     private func configureHost() {
@@ -5618,10 +6243,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func clearBatchLog() {
+        processEndedWithError = false
+        hasConfirmedFileFailures = false
         logView.string = ""
         logPhase = PhaseLogPresentation()
         diagnosticLogFolder.reset()
         batchResults = BatchResults()
+        batchOverview.isHidden = true
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
@@ -5632,6 +6260,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         countStatus = nil
         countStatusLabel.isHidden = true
         appendLog(localized("log.history", resolvedHistoryDirectory.path))
+        updateLogPresentation()
     }
 
     @objc private func openHistory() {
@@ -5817,8 +6446,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         processingPopup.isEnabled = configurationControlsEnabled && capabilities.usesProcessingSelection
         processingRow?.isHidden = !capabilities.usesProcessingSelection
-        // The launcher always enables --ultimate for supported operations.
-        // Show the effective policy instead of an off switch it cannot honor.
         ultimateCheck.isEnabled = false
         ultimateCheck.state = capabilities.supportsUltimate ? .on : .off
         verboseCheck.state = .on
@@ -5826,7 +6453,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         shortestPathCheck.isEnabled = configurationControlsEnabled && capabilities.supportsShortestPath
         resumeCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
         freshCheck.isEnabled = configurationControlsEnabled && capabilities.supportsResume
-        archiveCheck.isEnabled = configurationControlsEnabled && capabilities.supportsArchive
+        let exposesArchive = capabilities.supportsArchive && selectedOperation != .adjacent
+        archiveCheck.isEnabled = configurationControlsEnabled && exposesArchive
         retryCheck.isEnabled = configurationControlsEnabled && capabilities.supportsRetry
         if selectedOperation.backendMode == "fast-img", resumeCheck.state == .on {
             retryCheck.state = .on
@@ -5841,7 +6469,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         freshCheck.isHidden = true
         retryCheck.isHidden = true
         shortestPathCheck.isHidden = !capabilities.supportsShortestPath
-        archiveCheck.isHidden = !developerMode || !capabilities.supportsArchive
+        archiveCheck.isHidden = !developerMode || !exposesArchive
         for control in [forceCheck, plainCheck, inPlaceCheck] {
             control.isHidden = !developerMode || !capabilities.supportsStandardOptions
         }
@@ -5870,7 +6498,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         if !capabilities.supportsShortestPath { shortestPathCheck.state = .off }
         if !capabilities.supportsResume { resumeCheck.state = .off }
         if !capabilities.supportsResume { freshCheck.state = .off }
-        if !capabilities.supportsArchive { archiveCheck.state = .off }
+        if !exposesArchive { archiveCheck.state = .off }
         if !capabilities.supportsRetry { retryCheck.state = .off }
         if !capabilities.supportsStandardOptions {
             for control in [forceCheck, plainCheck, inPlaceCheck] { control.state = .off }
@@ -5916,7 +6544,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             shortestPath: shortestPathCheck.state == .on,
             resume: developerMode && resumeCheck.state == .on,
             fresh: developerMode && freshCheck.state == .on,
-            archive: archiveCheck.state == .on,
+            archive: developerMode && archiveCheck.state == .on,
             retry: developerMode && retryCheck.state == .on,
             force: forceCheck.state == .on,
             dryRun: dryRunCheck.state == .on,
@@ -5959,6 +6587,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 continue
             }
             if gateActivity.ingest(line, now: now) {
+                if gateActivity.invalid || gateActivity.event?.state == "failed" { batchResults.markMandatoryEvidenceConflict() }
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
                 refreshFileProgress(now: now)
@@ -5981,6 +6610,11 @@ private final class AppController: NSObject, NSWindowDelegate {
                 displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
                 continue
             }
+            if batchResults.ingestFastDelivery(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            batchResults.observeMandatoryEvidence(line)
             var visibleLine = line
             if line.hasPrefix(HistoryFileFailure.prefix) {
                 do {
@@ -6026,7 +6660,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         if latestChanged { refreshLatestDiagnostics() }
         var diagnosticsChanged = false
         for line in text.split(separator: "\n") {
-            if photosDiagnostics.ingest(String(line)) { diagnosticsChanged = true }
+            if photosDiagnostics.ingest(String(line)) {
+                diagnosticsChanged = true
+                if photosDiagnostics.failed { batchResults.markMandatoryEvidenceConflict() }
+            }
         }
         if diagnosticsChanged { refreshDiagnostics() }
         for line in text.split(separator: "\n") where line.hasPrefix("MFB_LOG_DIRECTORY=") {
@@ -6065,7 +6702,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
             let tone = LogTone.classify(String(line))
             result.append(NSAttributedString(string: String(line), attributes: [
-                .foregroundColor: tone.color, .font: tone.font,
+                .foregroundColor: tone == .failure ? processDiagnosticColor(String(line), confirmedFileFailure: hasConfirmedFileFailures) : tone.color,
+                .font: tone.font,
             ]))
         }
         return result
@@ -6074,7 +6712,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func refreshCountStatus() {
         guard let countStatus else { countStatusLabel.isHidden = true; return }
         countStatusLabel.stringValue = localized("status.count", countStatus)
-        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal : .systemRed
+        countStatusLabel.textColor = countStatus.uppercased() == "MATCH" ? .systemTeal
+            : countStatus.uppercased() == "EXPLAINED" ? .systemOrange : .systemRed
         countStatusLabel.isHidden = false
     }
 
@@ -6088,7 +6727,35 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.toolTip = label.stringValue
             label.setAccessibilityLabel(label.stringValue)
         }
-        latestDiagnosticsRow.isHidden = latestDiagnostics.failure == nil && latestDiagnostics.warning == nil
+        latestFailureLabel.textColor = latestDiagnostics.failure.map {
+            processDiagnosticColor($0, confirmedFileFailure: hasConfirmedFileFailures)
+        } ?? .systemOrange
+        latestDiagnosticsRow.isHidden = !logDetailsExpanded || (latestDiagnostics.failure == nil && latestDiagnostics.warning == nil)
+    }
+
+    @objc private func toggleLogDetails() {
+        logDetailsExpanded.toggle()
+        updateLogPresentation()
+        if !batchOverview.isHidden { refreshBatchOverview() }
+    }
+
+    private func updateLogPresentation() {
+        logScroll.isHidden = !logDetailsExpanded
+        statusLabel.isHidden = !batchOverview.isHidden && !logDetailsExpanded
+        logDetailsButton.title = localized(logDetailsExpanded ? "log.details.hide" : "log.details.show")
+        logDetailsButton.image = NSImage(systemSymbolName: logDetailsExpanded ? "chevron.down" : "chevron.right",
+                                        accessibilityDescription: nil)
+        logDetailsButton.setAccessibilityLabel(logDetailsButton.title)
+        logDetailsButton.setAccessibilityExpanded(logDetailsExpanded)
+        refreshLatestDiagnostics()
+        let height: CGFloat = logDetailsExpanded ? mainWindowContentSize.height
+            : max(360, ceil(mainLayout.fittingSize.height) + 48)
+        let size = NSSize(width: mainWindowContentSize.width, height: height)
+        if window.contentView?.bounds.size != size {
+            window.contentMinSize = size
+            window.contentMaxSize = size
+            window.setContentSize(size)
+        }
     }
 
     private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
@@ -6137,9 +6804,14 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
+        defer { refreshBatchOverview() }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
-            photosDiagnostics.markFailed()
+            if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+                                                    processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal) {
+                photosDiagnostics.markFailed()
+            }
             refreshDiagnostics()
             setProcessing(false)
             if var retry = lastRequest, retry.operationMode.capabilities.supportsResume {
@@ -6172,12 +6844,17 @@ private final class AppController: NSObject, NSWindowDelegate {
                 appendLog("[DONE] \(message)" + countSummary)
             }
         case let .failure(error):
-            photosDiagnostics.markFailed()
+            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            if !deliveryConfirmed {
+                photosDiagnostics.markFailed()
+            }
             refreshDiagnostics()
             let failureMessage = batchResults.hasPartialSuccess
                 ? localized("result.partially_completed") + " · " + error.localizedDescription
                 : error.localizedDescription
-            appendLog("[FAIL] \(failureMessage)" + countSummary,
+            let tag = deliveryConfirmed && batchResults.hasPartialSuccess ? "WARN" : "FAIL"
+            appendLog("[\(tag)] \(failureMessage)" + countSummary,
                       captureDiagnostics: latestDiagnostics.failure == nil)
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
                 let alert = NSAlert()
@@ -6199,6 +6876,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
                 sawResumeDecision = false
                 batchResults = BatchResults()
+                batchOverview.isHidden = true
                 logPhase = PhaseLogPresentation()
                 diagnosticLogFolder.reset()
                 latestDiagnostics = LatestDiagnostics()
@@ -6219,10 +6897,82 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func refreshBatchOverview(processExit: Int32? = nil, exitedNormally: Bool? = nil) {
+        let expectsFastDelivery = lastRequest.map {
+            !$0.dryRun && [.fastImgJxl, .fastImgAvif].contains($0.operationMode)
+        } ?? batchResults.hasFastDelivery
+        guard !host.isRunning, !batchResults.totals.isEmpty || batchResults.hasFastDelivery || expectsFastDelivery || processEndedWithError else {
+            batchOverview.isHidden = true
+            return
+        }
+        let photos = lastRequest?.shortestPath ?? false
+        let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: processExit ?? host.lastExitStatus,
+            exitedNormally: exitedNormally ?? host.lastExitWasNormal)
+        let previousConfirmation = hasConfirmedFileFailures
+        hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
+        if previousConfirmation != hasConfirmedFileFailures, let storage = logView.textStorage {
+            storage.setAttributedString(styledLog(storage.string))
+        }
+        let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed)
+            || (processEndedWithError && batchResults.totals.isEmpty)
+        let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
+        let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
+        let title: String
+        if host.controlState == "cancelled" { title = localized("status.stopped") }
+        else if uncertain { title = localized("result.unconfirmed") }
+        else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
+        else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
+        else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
+        else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
+        else { title = localized("status.completed") }
+        batchOverviewTitle.stringValue = title
+        batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
+            : uncertain ? .systemRed : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+        batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
+            : batchResults.compactSummary
+        let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
+        batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
+        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || !logDetailsExpanded
+        if batchResults.hasFastDelivery {
+            let usable = !batchResults.fastDeliveryInvalid
+            batchOverviewDelivery.stringValue = localized("result.delivery_facts",
+                value(usable ? batchResults.fastDeliveryCount(\.encoded) : nil),
+                value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
+                value(usable ? processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained)) : nil))
+            if !logDetailsExpanded {
+                if uncertain {
+                    batchOverviewDelivery.stringValue = localized("result.review_details")
+                } else if failures.map({ $0 > 0 }) == true {
+                    let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
+                    batchOverviewDelivery.stringValue = photos ? localized("result.photos_with_retained",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)), retained)
+                        : localized("result.failed_sources_kept", retained)
+                } else if photos {
+                    batchOverviewDelivery.stringValue = localized("result.photos_local_count",
+                        value(batchResults.fastDeliveryCount(\.photosVerified)))
+                } else { batchOverviewDelivery.isHidden = true }
+            }
+            let cleanup = usable && !batchResults.fastDeliveries.isEmpty
+                && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
+            batchOverviewCleanup.stringValue = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
+        }
+        for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
+            label.toolTip = label.stringValue
+            label.setAccessibilityLabel(label.stringValue)
+        }
+        batchOverview.isHidden = false
+        updateLogPresentation()
+        fileProgressRow.isHidden = true
+        if uncertain { setLocalizedStatus("result.unconfirmed") }
+        else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
+    }
+
     @objc private func showSettings() {
         guard configurationControlsEnabled else { return }
         settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
             fast: selectedOperation.backendMode == "fast-img",
+            avif: selectedOperation == .fastImgAvif,
             videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
                 : selectedOperation.backendMode != "fast-img") { [weak self] in
             self?.configurationChanged()
@@ -6263,6 +7013,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         applyLocalization()
         (NSApp.delegate as? AppDelegate)?.configureMenus()
         updateMetadataSafetyNotice()
+        if !batchOverview.isHidden { refreshBatchOverview() }
     }
 
     @objc private func appearanceChanged() {
@@ -6336,6 +7087,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshDiagnostics()
         refreshStatus()
         refreshProcessingStatus()
+        updateLogPresentation()
     }
 
     private func updateOptionTitles() {
@@ -6568,6 +7320,147 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func validateFastDeliveryForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousDetails = logDetailsExpanded
+        defer {
+            lastRequest = previousRequest
+            logDetailsExpanded = previousDetails
+            updateLogPresentation()
+        }
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/results", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 1829, "skipped": 0,
+            "ignored": 2693, "failed": 1, "unprocessed": 0, "encoded": 1163,
+            "photos_verified": 1829, "source_retained": 1, "failed_sources_retained": 1,
+            "failed_sources_verified": 1, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(),
+            "primary_cleanup_complete": true, "finalization_error": NSNull()]
+        let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1829,"skipped":0,"failed":1,"ignored":2693,"unprocessed":0,"exit_code":1}"#
+        func line(_ fields: [String: Any]) throws -> String {
+            "MFB_FAST_IMG_RESULT=" + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        }
+        var reports = BatchResults()
+        _ = reports.ingest(batch)
+        guard try reports.ingestFastDelivery("ERR: " + line(receipt)),
+              reports.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: 9),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: nil),
+              !reports.fastDeliveryIsConfirmed(photos: true, processExit: 1, exitedNormally: false) else {
+            throw HostError(message: "Delivery receipts did not separate a file-failure exit from a crash")
+        }
+        for (key, value) in [("photos_verified", 1828 as Any), ("source_retained", 0 as Any),
+                             ("succeeded", 1830 as Any), ("finalization_error", "cleanup failed" as Any),
+                             ("encoded", -1 as Any), ("failed", Int.max as Any), ("failed_sources_retained", 0 as Any),
+                             ("primary_cleanup_complete", false as Any)] {
+            var changed = receipt
+            changed[key] = value
+            var invalid = BatchResults()
+            _ = invalid.ingest(batch)
+            _ = try invalid.ingestFastDelivery(line(changed))
+            guard !invalid.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Contradictory delivery fact was accepted: \(key)")
+            }
+        }
+        for missing in ["finalization_error", "failed_sources_retained", "retention_unknown_reason",
+                        "failed_sources_verified", "failed_source_verification_error"] {
+            var changed = receipt
+            changed.removeValue(forKey: missing)
+            var incomplete = BatchResults()
+            _ = incomplete.ingest(batch)
+            _ = try incomplete.ingestFastDelivery(line(changed))
+            guard !incomplete.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "A missing nullable receipt field was treated as proof: \(missing)")
+            }
+        }
+        for evidence in ["Count status: MISMATCH", "Integrity Issues: 1", "[GATE 3] verification FAIL",
+                         "[LOG] final processing summary write failed: disk full",
+                         "Error: write final processing summary; processing also failed: fast-img exited with code 1"] {
+            var conflict = BatchResults()
+            _ = conflict.ingest(batch)
+            _ = try conflict.ingestFastDelivery(line(receipt))
+            conflict.observeMandatoryEvidence(evidence)
+            conflict.observeMandatoryEvidence("Count status: MATCH")
+            guard !conflict.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Later matching counts hid mandatory verification failure")
+            }
+        }
+        var wrongExit = BatchResults()
+        _ = wrongExit.ingest(batch.replacingOccurrences(of: "\"exit_code\":1", with: "\"exit_code\":9"))
+        _ = try wrongExit.ingestFastDelivery(line(receipt))
+        guard !wrongExit.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+            throw HostError(message: "The worker's unexpected exit was ignored")
+        }
+        _ = reports.ingestFastDelivery("MFB_FAST_IMG_RESULT={}")
+        _ = try reports.ingestFastDelivery(line(receipt))
+        guard !reports.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+            throw HostError(message: "A later receipt erased malformed-result evidence")
+        }
+        var diagnostics = LatestDiagnostics()
+        _ = diagnostics.ingest("[FAIL] h_1727272547459.jpeg: end-of-image marker is missing; source remains unmodified")
+        _ = diagnostics.ingest("Error: fast-img exited with code 1")
+        _ = diagnostics.ingest("Error: fast-img batch recorded 1 failed source(s); failed sources retained")
+        _ = diagnostics.ingest("WARNING: Always keep a backup of your original media before optimization.")
+        guard diagnostics.failure?.contains("h_1727272547459.jpeg") == true, diagnostics.warning == nil else {
+            throw HostError(message: "Generic exit or backup advice displaced an actionable media error")
+        }
+        logDetailsExpanded = false
+        clearBatchLog()
+        appendLog(try line(receipt))
+        appendLog(batch)
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !batchOverview.isHidden,
+              batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
+              batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
+              batchOverviewCleanup.stringValue == localized("result.cleanup_primary"),
+              batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              !logView.string.contains("MFB_FAST_IMG_RESULT="),
+              window.contentView!.bounds.height < mainWindowContentSize.height,
+              batchOverview.frame.width >= logScroll.frame.width - 1 else {
+            throw HostError(message: "Independent partial-result overview lost counts or overflowed the native layout")
+        }
+        let compact = batchOverviewCounts.stringValue
+        guard compact == batchResults.compactSummary, !compact.contains(" 0"),
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed", confirmedFileFailure: true) == .systemOrange,
+              processDiagnosticColor("[FAIL] sample.jpeg: decoder failed") == .systemRed,
+              processDiagnosticColor("Integrity Issues: 1") == .systemRed,
+              processDiagnosticColor("[FATAL] disk unavailable") == .systemRed,
+              processDiagnosticColor("Error: No space left on device") == .systemRed,
+              !hasMandatoryVerificationFailure("Count status: EXPLAINED (1 fewer; all 1 listed below)"),
+              !hasMandatoryVerificationFailure("Integrity: WARNINGS"),
+              LogTone.classify("Count status: EXPLAINED (1 fewer; all 1 listed below)") == .warning,
+              LogTone.classify("Integrity: WARNINGS") == .warning else {
+            throw HostError(message: "Expected file failures were not separated from serious diagnostics")
+        }
+        logDetailsExpanded = true
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !logScroll.isHidden, logScroll.frame.height >= 260,
+              !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
+            throw HostError(message: "Expanding details lost original diagnostics or disclosure accessibility")
+        }
+        logDetailsExpanded = false
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        appendLog("MFB_FAST_IMG_RESULT={}")
+        processingCompleted(.failure(HostError(message: "synthetic exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+            throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
+        }
+        clearBatchLog()
+        guard batchOverview.isHidden, !batchResults.hasFastDelivery else {
+            throw HostError(message: "Delivery overview leaked into the next batch")
+        }
+        processingCompleted(.failure(HostError(message: "synthetic crash without final receipts")))
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"), !batchOverview.isHidden else {
+            throw HostError(message: "A missing final receipt was not shown as an unconfirmed result")
+        }
+        clearBatchLog()
+    }
+
     private func validateDiagnosticFoldingForSelfTest() throws {
         var folder = ConsecutiveDiagnosticLogFolder()
         let first = "[WARN] /tmp/clip-1.mov frame=17"
@@ -6716,6 +7609,16 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func validateInterfaceForSelfTest() throws {
+        guard !logDetailsExpanded, logScroll.isHidden, latestDiagnosticsRow.isHidden,
+              logDetailsButton.accessibilityLabel() == localized("log.details.show") else {
+            throw HostError(message: "Ordinary startup did not collapse technical processing details")
+        }
+        logDetailsExpanded = true
+        updateLogPresentation()
+        defer {
+            logDetailsExpanded = false
+            updateLogPresentation()
+        }
         try validateDiagnosticFoldingForSelfTest()
         try validateStatusLocalizationForSelfTest()
         try validateGateActivityForSelfTest()
@@ -6740,7 +7643,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               commandField.isHidden, watchCheck.isHidden,
               !watchCheck.isEnabled, operationPopup.itemArray.count == 6,
               !verboseCheck.isEnabled,
-              verboseCheck.state == .on, archiveCheck.state == .on, freshCheck.state == .on,
+              verboseCheck.state == .on, archiveCheck.state == .off, freshCheck.state == .on,
               !verboseCheck.title.contains("--verbose"), !freshCheck.title.contains("--no-resume")
         else { throw HostError(message: "Default options or developer gating failed") }
         content.layoutSubtreeIfNeeded()
@@ -6809,22 +7712,22 @@ private final class AppController: NSObject, NSWindowDelegate {
               LogTone.classify("[Summary] succeeded=3 failed=1") == .failure,
               logView.string.contains("ERR: Permission denied"),
               logView.string.contains("    Count status:    MATCH"),
-              latestDiagnostics.failure == "Permission denied"
+              latestDiagnostics.failure == "Count status:    MISMATCH"
         else { throw HostError(message: "Non-MATCH status hid preceding diagnostics") }
         appendLog("ERR: [WARN] synthetic metadata warning\nERR: frame=20 fps=10\nError: exiting with failures")
         appendLog(progressLine)
         content.layoutSubtreeIfNeeded()
-        guard latestDiagnostics.failure == "Permission denied",
+        guard latestDiagnostics.failure == "Count status:    MISMATCH",
               latestDiagnostics.warning == "[WARN] synthetic metadata warning",
               !latestDiagnosticsRow.isHidden, !latestFailureLabel.isHidden, !latestWarningLabel.isHidden,
-              latestFailureLabel.stringValue == localized("log.latest_failure", "Permission denied"),
+               latestFailureLabel.stringValue == localized("log.latest_failure", "Count status:    MISMATCH"),
               content.bounds.contains(content.convert(latestDiagnosticsRow.bounds, from: latestDiagnosticsRow)),
               logScroll.frame.height >= 260,
               batchResults.totals.isEmpty else {
             throw HostError(message: "Latest diagnostics lost their cause, altered counts or overflowed the main layout")
         }
         processingCompleted(.failure(HostError(message: "Worker exited with code 1")))
-        guard latestDiagnostics.failure == "Permission denied",
+        guard latestDiagnostics.failure == "Count status:    MISMATCH",
               logView.string.contains("Worker exited with code 1") else {
             throw HostError(message: "Completion boilerplate replaced the actionable error")
         }
@@ -6851,7 +7754,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               logView.string.contains(localized("log.phase.verification")),
               logView.string.contains("[GATE 1] verification FAIL"), fileProgressRow.isHidden,
               batchResults.hasFileFailures, countStatus == "MISMATCH",
-              latestDiagnostics.failure == "Permission denied",
+              latestDiagnostics.failure == "[GATE 1] verification FAIL",
               latestDiagnostics.warning == "[WARN] synthetic metadata warning" else {
             throw HostError(message: "Phase presentation lost results, warnings, count status or same-delivery output")
         }
@@ -6884,12 +7787,13 @@ private final class AppController: NSObject, NSWindowDelegate {
         appendLog("[ERROR] synthetic encoder failure\n"
             + #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":1,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
-        guard statusLabel.stringValue == localized("result.partially_completed"), batchResults.hasFailure,
+        guard statusLabel.stringValue == localized("result.attention_count", "1"), batchResults.hasFailure,
               latestDiagnostics.failure == "[ERROR] synthetic encoder failure",
               logView.string.contains("synthetic exit=1"),
               logView.string.contains("[RESULT] " + localized("result.counts", "3", "1", "1", "0")) else {
             throw HostError(message: "Partial completion hid the failure, exit status or final counts")
         }
+        try validateFastDeliveryForSelfTest()
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
         guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
@@ -6952,7 +7856,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         targetField.stringValue = "/tmp/media"
         let defaultArguments = try ProcessorCommand.arguments(from: request())
-        guard defaultArguments.contains("--verbose"), defaultArguments.contains("--archive"),
+        guard defaultArguments.contains("--verbose"), !defaultArguments.contains("--archive"),
+              defaultArguments.contains("--ultimate"), !defaultArguments.contains("--img-quality-search"),
               !defaultArguments.contains("--no-resume"), !defaultArguments.contains("--resume"),
               !defaultArguments.contains("--retry"), !defaultArguments.contains("--watch")
         else { throw HostError(message: "Default checkbox flags disagree with the command") }
@@ -6993,9 +7898,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerModeChanged()
         operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
         operationChanged()
-        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled,
+        guard ultimateCheck.state == .on, !ultimateCheck.isEnabled, ultimateCheck.isHidden,
               archiveCheck.isEnabled, retryCheck.isEnabled, !forceCheck.isEnabled,
-              verboseCheck.state == .on, archiveCheck.state == .on,
+              verboseCheck.state == .on, archiveCheck.state == .off,
               shortestPathCheck.state == .on, freshCheck.state == .on
         else { throw HostError(message: "Incorrect option capabilities or defaults") }
         guard try ProcessorCommand.arguments(from: request()).contains("--shortest-path") else {
@@ -7188,6 +8093,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private func runSelfTest() -> Int32 {
     do {
+        guard MediaSetting.fastQualitySearch.choices.allSatisfy({
+            MediaSetting.fastQualitySearch.choiceTitle($0) != localized("settings.value.\($0)")
+        }) else { throw HostError(message: "AVIF choices lost codec-specific quality meaning") }
         let cancelledQuery = PreflightQuery()
         cancelledQuery.cancel()
         do {
@@ -7216,14 +8124,14 @@ private func runSelfTest() -> Int32 {
         }
         try runProcessingHistorySelfTests()
         let sourceDocument: [String: Any] = [
-            "config": ["img": ["jpeg_effort": 9]],
-            "sources": ["img.jpeg_effort": "CLI"],
-            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"]],
+            "config": ["img": ["jpeg_effort": 9, "jxl_distance": 0.0]],
+            "sources": ["img.jpeg_effort": "CLI", "img.jxl_distance": "default"],
+            "source_chain": ["img.jpeg_effort": ["default", "/synthetic/project.json", "CLI"], "img.jxl_distance": ["default"]],
         ]
         let sourceData = try JSONSerialization.data(withJSONObject: sourceDocument)
         let sourceSettings = try EffectiveRuntimeSettings.decode(sourceData)
         let sourcePreview = try sourceSettings.originDescription(key: "img.jpeg_effort", guiOverride: true)
-        guard sourcePreview.contains("img.jpeg_effort = 9"),
+        guard sourcePreview.contains("img.jpeg_effort = 9"), sourceSettings["img.jxl_distance"] == "0",
               sourcePreview.contains("1. default\n2. /synthetic/project.json\n3. CLI (GUI)") else {
             throw HostError(message: "Configuration preview lost its real values or override order")
         }
@@ -7276,6 +8184,7 @@ private func runSelfTest() -> Int32 {
         )
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
+                                            .imgJxlDistance: "0.25", .imgJxlEffort: "8", .imgQualitySearch: "fixed", .imgJxlSearch: "adaptive",
                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
@@ -7319,6 +8228,8 @@ private func runSelfTest() -> Int32 {
         let imageEffective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: false))
         guard imageEffective["execution.error_mode"] == "log-and-continue",
+               imageEffective["img.jxl_distance"] == "0.25", imageEffective["img.jxl_effort"] == "8",
+               imageEffective["img.quality_search"] == "fixed", imageEffective["img.jxl_effort_search"] == "adaptive",
               imageEffective["img.allow_size_tolerance"] == "true",
                imageEffective["img.size_tolerance_bytes"] == "4096",
                imageEffective.sourceChain["img.size_tolerance_bytes"]?.last == "CLI",
@@ -7331,6 +8242,19 @@ private func runSelfTest() -> Int32 {
               !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
               !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
             throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
+        }
+        var explorationSettings = configured.mediaSettings
+        explorationSettings.values[.imgQualitySearch] = "adaptive"
+        let explorationArguments = try explorationSettings.arguments(operation: .adjacent, processing: .imagesOnly)
+        let explorationRuntimeArguments = explorationSettings.runtimeArguments(fast: false, inheritedOnly: false)
+        let explorationEffective = try queryRuntimeSettings(arguments: ["--no-config"]
+            + explorationRuntimeArguments)
+        guard explorationEffective["img.jxl_distance"] == nil, explorationEffective["img.jxl_effort"] == "8",
+              explorationEffective.sourceChain["img.jxl_effort"]?.last == "CLI",
+              explorationEffective["img.quality_search"] == "adaptive", explorationSettings.image.jxlDistance == 0.25,
+              !explorationArguments.contains("--img-jxl-distance"),
+              explorationArguments.map({ $0.hasPrefix("--img-") ? "--" + $0.dropFirst(6) : $0 }) == explorationRuntimeArguments else {
+            throw HostError(message: "Distance exploration preview lost its effort scope, inactive fixed distance, or canonical arguments")
         }
         configured.mediaSettings.values[.fastToolPolicy] = "single"
         let toolEffective = try queryRuntimeSettings(arguments: ["--no-config"]
@@ -7845,7 +8769,10 @@ private func runSelfTest() -> Int32 {
             try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, fast: true, applied: {}).validateForSelfTest()
             for developer in [false, true] {
+                let avifPanel = MediaSettingsPanel(preferences: preferences, developer: developer, fast: true, avif: true, applied: {})
+                try avifPanel.validateEncodingScopesForSelfTest()
                 let videoPanel = MediaSettingsPanel(preferences: preferences, developer: developer, videos: true, applied: {})
+                try videoPanel.validateEncodingScopesForSelfTest()
                 try videoPanel.validatePhotosForSelfTest()
                 try videoPanel.validateCachePolicyForSelfTest()
             }

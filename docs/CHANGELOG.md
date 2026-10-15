@@ -4,6 +4,247 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Conservative partial results and checkpoint-first recovery (2026-10-15)
+
+- Default the native window to a compact result overview with expandable original
+  diagnostics. Safe per-file failures use amber only with complete, consistent
+  delivery evidence, finished primary cleanup and verified failed-original hashes.
+  Gate, infrastructure, missing-proof and contradictory outcomes remain prominent
+  but concise. History and diagnostic exports retain the additional proof fields;
+  old count-only records cannot claim confirmed safe partial completion.
+- Add nullable failed-original content verification separately from source-path
+  existence observations. Missing or changed originals, symlink components and
+  unbound original-delivery failures remain unknown; nonzero exits are preserved.
+- Resolve the newest matching source/strategy checkpoint before allocating another
+  numbered output, including when an earlier output directory was already removed.
+  Source/output locks cover reconciliation and recovery before directory creation;
+  equal newest timestamps block ambiguous selection instead of guessing.
+- Allow independently proven Fast IMG file-failure batches to run final delivery
+  verification and safe output cleanup. Require complete Gates, Photos custody
+  hashes and per-file content rechecks through no-follow directory handles; retain
+  unknown/modified files. Empty-directory cleanup requires unchanged checkpoint
+  ownership and completed Gates, never a matching folder-name prefix.
+- Keep default IMG extension admission read-only. Preserve source directory date
+  snapshots after proven MFB cleanup, using actual successful unlink receipts and
+  rejecting observed external changes before restoration. State, locks and scratch
+  remain outside the selected source tree. This does not forge ctime, guarantee an
+  atomic snapshot against external writers or promise zero filesystem traces.
+- Fix the previous CI's impossible fallible integer-widening conversions and
+  simplify the failed-original predicate without suppressing either audit/lint.
+- Validation: 15 inventory/cleanup, 67 launcher and 20 IMG receipt/recovery/
+  conversion regressions pass. Foundation snapshot (5), lock (7), working-copy
+  (15), read-only admission (1) and actual-unlink receipt (2) checks pass. These
+  sets overlap; they are not a single unique-test total. The edited Rust files
+  pass formatting, and Foundation/IMG/dev all-target Clippy passes with default
+  features disabled and warnings denied. The native warnings-as-errors build,
+  self-test and localization parsing pass; synthetic dark/light Chinese and
+  light English/Japanese result windows were inspected. Production residual
+  directories were inventoried read-only, not removed; no Photos operation,
+  cloud-sync acceptance or representative performance benchmark was performed.
+
+### Correct search evidence and partial-result presentation (2026-10-15)
+
+- Keep the historical JXL ladder, bracket refinement, selected-effort domain and
+  quality-first selection. Bind the initial payload measurement to its real D:
+  measure D0.001 separately when D0 does not fit. The same D0/floor mismatch also
+  existed at `a8df1539`; this is not evidence of a recent algorithm regression.
+- Apply alternative-tool permission at the shared JXL probe entry. Single-tool
+  policy blocks ImageMagick fallback even with expert options enabled, without
+  disabling required decoding, metadata or verification tools.
+- Add a compact native final overview with independent processing, local Photos,
+  source-path retention and primary-cleanup facts. Keep individual file failures
+  distinct from whole-process failure; missing or contradictory receipts remain
+  unconfirmed. Check normal termination, worker/launcher exit agreement, required
+  nullable fields and sticky integrity/Photos conflicts instead of trusting a
+  green-looking percentage or a generic process-exit message.
+- Add `failed_sources_retained` to Fast IMG results so a retained successful
+  source cannot stand in for a missing failed source. Unbound failures or source
+  inspection errors remain unknown. Existence is not a new source-content hash
+  proof, and no cleanup or media-repair contract is weakened.
+- Preserve actionable media diagnostics over generic exit boilerplate; generic
+  backup advice is not a current-run warning. Clarify alternative encoding-tool
+  scope and display-only log omission in Chinese, English and Japanese. Report
+  attempt rates with numerator/denominator and rounded precision, such as
+  `1829/1830 (99.95%)`, excluding ignored/skipped outcomes.
+- Validation: 19 Foundation explorer, 28 IMG library search/tool-boundary,
+  seven Fast IMG receipt and four launcher/summary regressions pass. The final
+  optimized warnings-as-errors Swift build, native self-test, three localization
+  parsers, edited Rust formatting and whitespace checks pass. Synthetic native
+  Chinese dark and English/Japanese light result windows were inspected, including
+  malformed-receipt rejection and full-width layout. Existing lockfile changes
+  were preserved and used by these tests; no extra dependency update, CI run,
+  representative performance test, installed-App replacement or Photos/media
+  operation was performed.
+
+### Complete Fast AVIF numeric quality and speed settings (2026-10-15)
+
+- Add typed `img.avif_quality` and `img.avif_speed`, matching worker flags,
+  launcher forwarding, effective configuration sources and native GUI controls.
+  Manual Q accepts 10..100; the existing progressive-output policy rejects lower
+  qualities, as confirmed with the installed official encoder. Speed accepts
+  0..10, preserving explicit zero. Defaults remain Q100, automatic quality search
+  and final Speed0 rather than changing the historical processing policy.
+- Fixed mode probes its requested Q without lowering it on failure. Automatic
+  selection keeps saved manual Q inactive. Final-domain probes and true-lossless
+  attempts use the configured Speed; the existing Speed6 locator remains only a
+  coordinate hint whose candidate is discarded before final-domain verification.
+  Existing AVIF reuse, lossless-first admission, metadata policy, payload-size
+  requirements and delivery gates remain unchanged.
+- Keep AVIF controls out of standard IMG/Fast JXL and reject inapplicable CLI
+  options before processing. Rename fixed Q100 to manual quality in all three
+  languages; disable but retain Q during automatic selection, provide a Speed
+  popup, and label the numeric input and stepper for accessibility. Logs now
+  distinguish fixed/search modes and actual final Speed instead of always
+  announcing Q search at the hardcoded default.
+- Validation: 13 runtime configuration tests, 15 IMG runtime CLI tests, two
+  launcher tests, nine shared exploration tests, three AVIF evidence tests and
+  one isolated encoder regression pass. The latter runs four separate processes
+  for Q10/Speed10, Q80/Speed8, Q100/Speed0 and automatic search with saved Q10;
+  verified candidate hashes and unchanged synthetic JPEG bytes are checked.
+  Targeted worker/launcher and optimized warnings-as-errors Swift builds pass,
+  as do native self-tests and all three localization resource parsers. Native
+  Chinese/English dark and Japanese light settings windows were inspected,
+  including default Q100/Speed0 and saving/reloading Q80/Speed8 in a temporary
+  preference domain. No installed App, private media, Photos library or
+  dependency was changed; full CI and representative performance were not run.
+
+### Make image settings easier to understand (2026-10-15)
+
+- Use quality, compression level, automatic selection and JPEG lossless
+  transcoding labels in Chinese, English and Japanese. Archive-rule defaults
+  no longer require understanding configuration inheritance or private-policy
+  terminology. Detailed algorithm contracts remain in technical documentation.
+- Relabel numeric E as the highest comparison level when comparison is enabled,
+  and restore the fixed-level label when disabled. Accessible labels track the
+  same state. Unknown configuration remains unknown rather than inventing D0/E10.
+- Clarify that D0 is lossless, E is not a quality rating, E comparison may take
+  longer and Q100 is not a universal mathematical-losslessness guarantee.
+  Remove stale "old policy" and universal flag-conflict claims from mode help.
+  These are presentation changes; typed values, defaults and worker arguments
+  are unchanged. Completed GUI requirements move out of the temporary backlog.
+- Validation: Swift warnings-as-errors and native self-test pass, including
+  comparison/fixed label transitions, accessible names, retained values and
+  preview/worker argument consistency. Chinese, English and Japanese strings
+  pass resource parsing; native dark Chinese/English and light Japanese windows
+  were checked with comparison both enabled and disabled. No installed App,
+  source media, Photos library, dependency or processing algorithm was changed.
+
+### Restore historical IMG algorithm boundaries (2026-10-15)
+
+- Audit `a8df1539` as the algorithm reference, with `dea69c6b` cross-checks.
+  Restore source/mode effort defaults and the original same-effort Distance
+  Explorer. Remove the uncommitted cross-effort screening experiment rather than
+  presenting it as the existing E search or a proven acceleration.
+- Keep opt-in verified E payload comparison separate from D exploration,
+  defaulting E comparison off. E-only, D-only and sequential E-then-D remain
+  distinct. Fixed E is a target; explored E is a selected verified candidate.
+  Existing source admission, size policies and final delivery gates remain.
+- Preserve PNG/lossless D0, reversible JPEG and modern-lossy retention policies.
+  Restore route-specific HDR defaults rather than forcing all HDR to D0 or all
+  JPEG-related primitives to E11. Retain added health/reconstruction checks and
+  original same-semantics compatibility retries; existing CLI flags are not
+  mechanically retired.
+- Native settings separate values from independent exploration checkboxes,
+  remove pixel D from Fast JXL and show values without repeating configuration
+  provenance in ordinary controls. Fast AVIF keeps its existing Q/Speed search
+  and metadata policy; no unimplemented Q/Speed controls are advertised.
+- Preserve distinct inherited and explicit equal menu values. An intentional
+  checkbox change records an explicit search choice; reset restores inheritance.
+  Inactive manual D is retained without being forwarded to explicit D search.
+- Scope and behavioral differences are recorded in `IMG_PRIVATE_POLICY.md`.
+  This is a correction of algorithm/configuration boundaries, not completion of
+  the full private-strategy or preflight architecture.
+- Validation: 112 Foundation JXL tests, 99 IMG library tests, 13 IMG CLI tests,
+  the scoped launcher regression and 398 source contracts pass. Scoped strict
+  Clippy, formatting, locked worker builds, Swift warnings-as-errors and native
+  self-test pass. Dark standard IMG and light Fast JXL/AVIF settings were checked
+  in native windows, including independent search choices and retained Photos settings.
+  Synthetic CLI checks preserve PNG D0/E10 and JPEG E11 defaults; JPEG recovery
+  is byte-identical, PNG baseline/E7-E8 comparison outputs decode to identical RGB,
+  and lossy WebP is retained byte-for-byte with a skip rather than success count.
+  These checks are not representative throughput, full metadata/HDR, Photos,
+  production-media or cross-platform acceptance; no installed App was replaced.
+
+### Separate effort and quality search in native settings (2026-10-14)
+
+- Move normal image tool selection and JXL/JPEG effort controls into Image
+  settings, and long-video full quality checks into Videos. Keep configuration
+  files, failure policies and diagnostic tool paths in Developer. Numeric effort
+  menus distinguish pixel JXL 7/8/10 from reversible JPEG 1..11; adaptive mode
+  calls the numeric value a search limit. Localized search/help/accessibility
+  use that same meaning, without reusing the performance "recommended" label.
+- Add independent typed `jxl_effort_search`, `jpeg_effort_search` and
+  `quality_search`, with worker/launcher flags, effective sources and independent
+  standard/Fast GUI drafts. Defaults preserve single-effort encoding and existing
+  quality exploration. Adaptive effort compares bounded verified media payloads
+  at one quality, checking source hashes in multi-candidate plans and retaining lower requested effort on
+  ties; JPEG candidates require exact byte reconstruction. Errors do not publish
+  a partial winner. Existing compatibility retries and final delivery gates remain
+  required. This adds work, not a speed guarantee or globally optimal search.
+- Keep quality search separate from source-quality inference and effort selection.
+  Existing JXL source/size restrictions remain required. Fast JXL offers JPEG
+  effort/search only; Fast AVIF offers quality search, not ineffective pixel/JPEG
+  effort controls. Explicit unsupported launcher/worker options fail. Fixed AVIF
+  quality tries only q100, reports that exact attempted range, and does not label
+  its accepted candidate as an adaptive optimization.
+- Fix the shared debug builder's JPEG range mismatch found by actual synthetic
+  CLI testing: reversible JPEG permits all configured 1..11 efforts, with the
+  expert switch only at e11. Pixel policy remains restricted to 7/8/10 and explicit
+  expert e11; JPEG e9 is not permission for pixel e9. Extend the existing builder
+  regression across every JPEG effort instead of disabling its assertion.
+- Validation: 398 source contracts, 48 scoped Foundation JXL cases,
+  11 IMG runtime CLI cases and the scoped launcher forwarding case passed.
+  Scoped strict Foundation/IMG/launcher Clippy, locked worker builds, formatting,
+  Swift warnings-as-errors and Chinese/English/Japanese native self-tests passed.
+  Isolated native dark/light windows checked normal-user placement, applicable
+  Fast controls and independent standard adaptive-effort/fixed-quality save.
+  Synthetic PNG adaptive encoding succeeded and its decoded RGB24 frame payload
+  matched; synthetic JPEG adaptive 1/7/8 and fixed e9 both succeeded with one
+  successful file and zero failed/skipped/ignored/unprocessed files per run,
+  and both final JXL files reconstructed byte-identical source JPEGs. These small
+  fixtures are not complete metadata, real-media, HDR or platform acceptance.
+  Owned native QA app, preferences and synthetic data were removed afterward.
+- Confirm nightly run 38525291156 on fd2bb2de completed successfully; the two
+  older a8df1539 runs completed with their already-fixed contract failures.
+  This is previous-commit CI evidence, not CI acceptance of this change. No
+  dependency update, production media/Photos operation or installed-app replacement
+  was performed; adaptive mode's additional cost has not been benchmarked on a
+  representative real-media corpus.
+
+### CI contract fixes and direct JXL effort settings (2026-10-14)
+
+- Fix the four contract failures confirmed in nightly run 38496290025. GPU probe
+  identity now reads the real working directory through the shared strict entry,
+  preserving OS errors and invalidating an unavailable context without another
+  probe. Configured FFmpeg, environment and PATH precedence remains explicit.
+  The cancellation fixture publishes its PID receipt atomically and reports
+  read/parse failures after cleaning up its isolated process group.
+- Add nullable `img.jxl_effort`, IMG `--jxl-effort` and launcher
+  `--img-jxl-effort`, restricted to the existing production efforts 7, 8 and 10.
+  Omission inherits; null retains normal e7, ultimate/archive e10 and PNG e10.
+  Initial encoding, probes, guarded recovery and distance exploration use the
+  same selected effort. JPEG reconstruction keeps its independent policy,
+  including the public UltraHDR bitstream migration entry's unchanged defaults;
+  distance, media routing, fidelity checks and cleanup requirements are unchanged.
+- Add independent standard/Fast IMG effort menus in native Developer Settings,
+  with inheritance, reset, draft/cancel and real effective-source previews.
+  Explicitly choosing an inherited value preserves an override; returning to
+  inheritance removes only the GUI override. Unknown config remains unknown,
+  rather than being displayed as automatic; unsupported efforts and scopes fail.
+- Preserve the pre-existing lock-file refresh for equivalent 1.0.3, tokio 1.53.3
+  and zerocopy/derive 0.8.63. No additional dependency update was requested or run.
+- Validation: all 398 existing silent-fallback contracts passed, including the
+  four failed CI checks. Nine scoped JXL policy/config cases, two GPU cache cases,
+  the shared CWD case, the IMG CLI case and two launcher cases passed. Locked
+  worker builds, scoped Foundation/launcher/IMG strict Clippy, formatting, Swift
+  warnings-as-errors and three-language native self-tests passed. Isolated dark
+  and light windows checked actual worker-backed preview, standard preference
+  save, draft cancellation and independent Fast IMG inheritance. Run 38508869207
+  on the same old commit repeated the four failures; its overall result was still
+  pending when inspected. Post-push CI, production media/Photos, full-workspace,
+  cross-platform and encoding-speed acceptance were not performed; the installed
+  app was not replaced. Owned native QA artifacts and preferences were removed.
+
 ### Shared tool-path settings and destination capacity (2026-10-14)
 
 - Share explicit tool-path parsing and typed config overrides between IMG and VID.

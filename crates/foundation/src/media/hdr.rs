@@ -279,10 +279,28 @@ pub fn convert_heic_with_gainmap_to_jxl(
         );
     }
 
-    let status = builder
-        .build()
-        .status()
-        .context("Failed to execute cjxl for HDR synthesis")?;
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        actual_effort,
+    );
+    let (status, _) = crate::jxl_effort_policy::run_effort_search(
+        &tmp_file,
+        output,
+        &efforts,
+        |effort, candidate| {
+            builder
+                .output(candidate)
+                .effort(effort)
+                .build()
+                .status()
+                .context("Failed to execute cjxl for HDR synthesis")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !status.success() {
         if tmp_file.exists() {
@@ -296,6 +314,7 @@ pub fn convert_heic_with_gainmap_to_jxl(
         ));
     }
 
+    crate::jxl_utils::verify_jxl_health(output).map_err(anyhow::Error::msg)?;
     let mut artifacts = HdrArtifacts::default();
     let gainmap_png = encode_png_sidecar_bytes(&DynamicImage::ImageLuma16(gain.to_luma16()))
         .context("Failed to encode gainmap sidecar PNG")?;
@@ -449,10 +468,28 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         );
     }
 
-    let status = builder
-        .build()
-        .status()
-        .context("Failed to execute cjxl for HDR synthesis")?;
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::DirectEncode,
+        actual_effort,
+    );
+    let (status, _) = crate::jxl_effort_policy::run_effort_search(
+        &tmp_file,
+        output,
+        &efforts,
+        |effort, candidate| {
+            builder
+                .output(candidate)
+                .effort(effort)
+                .build()
+                .status()
+                .context("Failed to execute cjxl for HDR synthesis")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::jxl_utils::verify_jxl_health(candidate).map_err(anyhow::Error::msg)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !status.success() {
         if tmp_file.exists() {
@@ -466,6 +503,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         ));
     }
 
+    crate::jxl_utils::verify_jxl_health(output).map_err(anyhow::Error::msg)?;
     if tmp_file.exists() {
         crate::media_conversion_gate::delivery_remove_file_or_audit(
             "hdr_ultrahdr_tmp_cleanup",
@@ -497,7 +535,10 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     archive: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
-    let actual_effort = crate::jxl_effort_policy::encoder_effort_for_mode(ultimate, archive);
+    // JPEG bitstream migration retains its mode policy, not the pixel-encoding override.
+    let actual_effort = crate::constants::jxl_effort_for_mode(
+        crate::jxl_effort_policy::effective_ultimate(ultimate, archive),
+    );
 
     log_info!(
         crate::infra::static_logs::messages::LABEL_CONVERSION,
@@ -511,22 +552,49 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     let extracted = extract_ultrahdr_jpeg_payload(&data)
         .map_err(|e| anyhow!("Failed to extract gainmap for migration: {e}"))?;
 
-    let encode_status = CjxlBuilder::new()
-        .input(input)
-        .output(output)
-        .lossless_jpeg(true)
-        .distance(actual_distance)
-        .effort(actual_effort)
-        .apple_compat(apple_compat)
-        .build()
-        .status()
-        .context("Failed to spawn cjxl for UltraHDR migration")?;
+    let selected = match crate::runtime_config::active() {
+        Some(config)
+            if config.img.jpeg_effort_search == crate::runtime_config::EffortSearch::Adaptive =>
+        {
+            config.img.jpeg_effort
+        }
+        _ => actual_effort,
+    };
+    let efforts = crate::jxl_effort_policy::effort_candidates(
+        crate::jxl_effort_policy::JxlEffortContext::JpegLosslessTranscode,
+        selected,
+    );
+    let (encode_status, _) = crate::jxl_effort_policy::run_effort_search(
+        input,
+        output,
+        &efforts,
+        |effort, candidate| {
+            CjxlBuilder::new()
+                .input(input)
+                .output(candidate)
+                .lossless_jpeg(true)
+                .distance(actual_distance)
+                .effort(effort)
+                .apple_compat(apple_compat)
+                .build()
+                .status()
+                .context("Failed to spawn cjxl for UltraHDR migration")
+        },
+        std::process::ExitStatus::success,
+        |candidate| {
+            crate::fast_img::verify_jxl_roundtrip_integrity(input, candidate)?;
+            crate::image::static_payload::jxl(candidate)
+        },
+    )?;
 
     if !encode_status.success() {
         return Err(anyhow!(
             "Lossless JPEG recompression failed for UltraHDR migration"
         ));
     }
+
+    crate::fast_img::verify_jxl_roundtrip_integrity(input, output)
+        .context("UltraHDR migration JPEG reconstruction proof failed")?;
 
     crate::metadata::preserve_for_delivery(input, output)
         .context("Failed to preserve metadata for UltraHDR migration output")?;

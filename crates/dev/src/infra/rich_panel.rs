@@ -214,6 +214,27 @@ fn print_panel_table(
     }
 }
 
+/// Conversion rate over succeeded and failed attempts; skipped and ignored outcomes are excluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuccessRate {
+    pub succeeded: usize,
+    pub attempts: usize,
+    pub basis_points: u128,
+}
+
+impl std::fmt::Display for SuccessRate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}/{} ({}.{:02}%)",
+            self.succeeded,
+            self.attempts,
+            self.basis_points / 100,
+            self.basis_points % 100
+        )
+    }
+}
+
 /// Combined pipeline stats for summary table.
 #[derive(Debug, Clone, Default)]
 pub struct PipelineSummary {
@@ -329,28 +350,25 @@ impl PipelineSummary {
     }
 
     #[must_use]
-    pub fn success_rate_percent(&self) -> Option<usize> {
+    pub fn success_rate(&self) -> Option<SuccessRate> {
         let succeeded = self.total_count(0)?;
         let failed = self.total_count(3)?;
         let attempts = succeeded.checked_add(failed)?;
         if attempts == 0 {
             return None;
         }
-        let widen = |value: usize| match u128::try_from(value) {
-            Ok(value) => Some(value),
-            Err(error) => {
-                eprintln!("[SUMMARY] Cannot widen count {value} for percentage: {error}");
-                None
-            }
-        };
-        let percentage = (widen(succeeded)? * 100) / widen(attempts)?;
-        match usize::try_from(percentage) {
-            Ok(value) => Some(value),
-            Err(error) => {
-                eprintln!("[SUMMARY] Cannot represent success percentage {percentage}: {error}");
-                None
-            }
+        let numerator = (succeeded as u128).checked_mul(10_000)?;
+        let denominator = attempts as u128;
+        let remainder = numerator % denominator;
+        let mut basis_points = numerator / denominator;
+        if remainder >= denominator - remainder {
+            basis_points += 1;
         }
+        Some(SuccessRate {
+            succeeded,
+            attempts,
+            basis_points,
+        })
     }
 
     #[must_use]
@@ -441,7 +459,7 @@ fn totals_as_stats(summary: &PipelineSummary) -> ProcessorStats {
 pub fn print_summary_report(summary: &PipelineSummary) {
     draw_separator("Task Completed");
 
-    let rate = summary.success_rate_percent();
+    let rate = summary.success_rate();
 
     if colors_enabled() {
         println!("{BOLD}{GRAY}Optimization Summary Report{RESET}");
@@ -469,17 +487,17 @@ pub fn print_summary_report(summary: &PipelineSummary) {
         println!();
         if let Some(success_rate) = rate {
             let bar_len = 20usize;
-            let filled = (success_rate * bar_len) / 100;
+            let filled = ((success_rate.basis_points * bar_len as u128) / 10_000) as usize;
             let bar: String = "█".repeat(filled) + &"░".repeat(bar_len.saturating_sub(filled));
-            let rate_color = if success_rate >= 90 {
+            let rate_color = if success_rate.basis_points >= 9_000 {
                 GREEN
-            } else if success_rate >= 50 {
+            } else if success_rate.basis_points >= 5_000 {
                 YELLOW
             } else {
                 RED
             };
             println!(
-                "   {BOLD}{GRAY}Success Rate:{RESET} [{rate_color}]{bar}{RESET} {success_rate}%"
+                "   {BOLD}{GRAY}Success Rate:{RESET} [{rate_color}]{bar}{RESET} {success_rate}"
             );
         } else {
             println!("   {BOLD}{GRAY}Success Rate:{RESET} N/A");
@@ -506,7 +524,7 @@ pub fn print_summary_report(summary: &PipelineSummary) {
         );
         println!(
             "Success rate: {}",
-            rate.map_or_else(|| "N/A".to_owned(), |n| format!("{n}%"))
+            rate.map_or_else(|| "N/A".to_owned(), |rate| rate.to_string())
         );
     }
     println!(
@@ -692,7 +710,13 @@ mod tests {
         summary.add_image_stats(&first);
         assert_eq!(summary.total_count(0), Some(4));
         assert_eq!(summary.total_unprocessed(), Some(2));
-        assert_eq!(summary.success_rate_percent(), Some(80));
+        assert_eq!(
+            summary
+                .success_rate()
+                .map(|rate| rate.to_string())
+                .as_deref(),
+            Some("4/5 (80.00%)")
+        );
         let next = ProcessorStats {
             succeeded: usize::MAX,
             reported: [true, false, true, true],
@@ -703,8 +727,28 @@ mod tests {
         assert_eq!(summary.total_count(0), None);
         assert_eq!(summary.total_count(1), None);
         assert_eq!(summary.total_unprocessed(), None);
-        assert_eq!(summary.success_rate_percent(), None);
+        assert_eq!(summary.success_rate(), None);
         assert_eq!(summary.img.exit_code, 1);
+    }
+
+    #[test]
+    fn success_rate_rounds_ratio_and_excludes_skipped_and_ignored() {
+        let mut summary = PipelineSummary::default();
+        summary.add_image_stats(&ProcessorStats {
+            succeeded: 1_829,
+            skipped: 4,
+            ignored: 7,
+            failed: 1,
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        });
+        assert_eq!(
+            summary
+                .success_rate()
+                .map(|rate| rate.to_string())
+                .as_deref(),
+            Some("1829/1830 (99.95%)")
+        );
     }
 
     #[test]
@@ -717,11 +761,14 @@ mod tests {
             ..ProcessorStats::default()
         };
         summary.add_image_stats(&stats);
-        assert_eq!(summary.success_rate_percent(), None);
+        assert_eq!(summary.success_rate(), None);
         stats.skipped = 0;
         stats.succeeded = usize::MAX;
         let mut large = PipelineSummary::default();
         large.add_image_stats(&stats);
-        assert_eq!(large.success_rate_percent(), Some(100));
+        assert_eq!(
+            large.success_rate().map(|rate| rate.basis_points),
+            Some(10_000)
+        );
     }
 }

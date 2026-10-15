@@ -3,6 +3,12 @@
 Status: current-policy inventory and responsibility boundaries, 2026-10-11.
 This is readiness work, not a generalized product or a new processing pipeline.
 
+The 2026-10-15 IMG correction uses `a8df1539` as the historical algorithm
+reference. [Current Private IMG Policy](../dev/config/IMG_PRIVATE_POLICY.md)
+records source/mode defaults, source-specific exceptions and fixed versus
+sequential exploration. A settings preference does not replace those archival
+rules. Cross-effort D assistance is not part of this first closure.
+
 ## Current Decisions
 
 | Decision | Classification | Current Owner |

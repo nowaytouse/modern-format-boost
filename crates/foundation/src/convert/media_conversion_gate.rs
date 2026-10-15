@@ -6660,16 +6660,18 @@ pub fn delivery_safety_relative_base_or_root(context: &str) -> PathBuf {
     })
 }
 
+/// Current working directory, preserving the operating-system error on failure.
+pub fn delivery_cwd_or_err(context: &str) -> Result<PathBuf, String> {
+    std::env::current_dir().map_err(|err| format!("{context}: current_dir unavailable ({err})"))
+}
+
 /// Current working directory when available (strict-gated audit on failure).
 #[must_use]
 pub fn delivery_cwd_or_audit(context: &str) -> Option<PathBuf> {
-    match std::env::current_dir() {
+    match delivery_cwd_or_err(context) {
         Ok(cwd) => Some(cwd),
         Err(err) => {
-            delivery_strict_batch_audit(
-                "cwd_unavailable",
-                format!("{context}: current_dir unavailable ({err})"),
-            );
+            delivery_strict_batch_audit("cwd_unavailable", err);
             None
         }
     }
@@ -8024,6 +8026,13 @@ mod tests {
     use super::*;
     use crate::types::CheckResult;
     use serial_test::serial;
+
+    #[test]
+    fn delivery_cwd_result_preserves_observed_directory() {
+        let expected = std::env::current_dir().expect("test working directory");
+        assert_eq!(delivery_cwd_or_err("unit_test").unwrap(), expected);
+        assert_eq!(delivery_cwd_or_audit("unit_test"), Some(expected));
+    }
 
     #[test]
     fn analysis_error_yields_ignore_verdict() {

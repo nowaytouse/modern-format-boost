@@ -60,6 +60,13 @@ conversion rates are unavailable rather than 100 percent. Combined processor
 totals describe processing outcomes, not necessarily unique input files or Photos
 assets, and conversion byte totals exclude skipped/reused/passthrough input.
 Matching output cardinalities do not replace identity or content verification.
+Attempt rates include their denominator and rounded precision, for example
+`1829/1830 (99.95%)`; ignored items are reported separately. The native Fast IMG
+overview separates successful outcomes, encoded files, local Photos verification,
+source-path retention and primary cleanup. Missing or contradictory final
+receipts remain unconfirmed; a nonzero file-failure exit is not hidden. Local
+Photos verification does not establish iCloud synchronization, and primary
+cleanup does not establish that every leftover output folder was removed.
 See the [counting contract](docs/hardening/COUNTING_CONTRACT.md) for scope,
 receipt uniqueness, error handling and regression boundaries.
 
@@ -69,13 +76,13 @@ Settings now has a dedicated **Videos** tab. Standard VID supports independent
 `--config`/`--no-config`, `vid config show --effective`, and `vid config validate`.
 The typed `vid.codec` preference defaults to HEVC; AV1 defaults to non-Apple
 delivery, while an explicitly conflicting Apple-compatibility request is rejected.
-Developer settings also expose long-video fusion quality checks through typed
+The ordinary Videos tab exposes long-video fusion quality checks through typed
 `vid.force_ms_ssim_long` (default `false`). Standard VID accepts
 `--force-ms-ssim-long[=true|false]`; omission inherits configuration, and explicit
 `false` overrides an enabled file setting. The launcher uses the independent
 `--vid-force-ms-ssim-long` override. This can increase validation time; it does not
 change codec routing or reduce other checks, and is not a Fast GIF option.
-Image and Fast IMG tool selection (`single`/`fallback`) lives in Developer settings
+Image and Fast IMG tool selection (`single`/`fallback`) lives in their processing tabs
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
 IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
@@ -243,11 +250,13 @@ Reduction, growth and unchanged sizes are explicit. Missing or invalid size data
 cannot erase valid processing counts or a failed result, and a smaller output is
 not presented as proof that disk space was freed.
 
-The live result and Processing History distinguish partial completion from an
-all-file failure when complete recorded counts contain both successes and failures.
-Failures remain actionable, with their original exit codes and reasons; cancellation,
-unfinished work and incomplete evidence do not become partial success. The final
-live summary uses checked receipt totals, preserving unknown counts instead of zero.
+The live result defaults to a compact overview; expand processing details to inspect
+the original diagnostics, counts and exit status. Amber partial completion requires
+consistent Fast IMG receipts, passed delivery/cleanup checks and content-hash proof
+that every recorded failed original remains in place. Counts alone, old records,
+Gate conflicts, session failures or missing evidence cannot establish this state.
+Processing History uses the same conservative evidence boundary. Failures retain
+their nonzero exits and reasons; unknown counts are never filled with zero.
 
 Select two runs in Processing History to compare recorded outcomes, versions,
 paths, count checks and current-run size measurements in the existing detail pane.
@@ -888,8 +897,11 @@ adapter.
 The gear button remains available in every idle workflow. Its **Photos** tab
 always exposes import preferences, including the backend, import and verification
 batch sizes, adaptive bounds, folder and album names. Image controls
-are contextual: standard IMG and Fast IMG independently configure JPEG
-transcoding effort, fallback, database access and quality inference. Developer
+are contextual: standard IMG offers fixed D or guarded distance search, pixel
+JXL effort and independent verified E comparison, JPEG effort, fallback,
+database access and quality inference. Fast JXL offers JPEG effort/search,
+while Fast AVIF offers quality search; controls
+that do not affect the selected workflow are not shown or forwarded. Developer
 mode additionally exposes configuration-file overrides and standard image/video
 failure handling. Inherited image/Photos values are read
 from the actual backend, and Apply validates both image profiles before saving.
@@ -1424,6 +1436,8 @@ img config path
 img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+img run /path/to/images --jxl-effort 8
+img run /path/to/images --jxl-effort 8 --quality-search adaptive --jxl-effort-search fixed
 vid --performance adaptive run /path/to/videos
 ```
 
@@ -1435,6 +1449,35 @@ The GUI shows effective choices directly, keeps image settings contextual to
 the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
 Photos batch sizes expand on demand; failure policies and configuration sources
 belong to Developer mode, enabled from About.
+The Image tab separates parameter values from independent D and E exploration.
+New users can keep **Follow archive rules**. Quality (D) controls permitted
+distortion; compression level (E) controls encoding work, not a quality rating.
+With **Compare compression levels** enabled, **Compare up to level (E)** marks
+the highest permitted comparison level, not a promised final effort. JPEG
+lossless transcoding retains its own independent controls and reconstruction
+requirements. Short tooltips explain the applicable scope without requiring
+knowledge of search internals or configuration provenance.
+Unset overrides retain the existing private source/mode policy: Normal E7,
+Ultimate/archive E10, PNG E10 and ordinary JPEG reconstruction E11.
+Protected pixel sources keep D0 by policy; settings do not authorize weakening
+their fidelity requirements. Fixed E is an encoder target. Opt-in E exploration
+compares verified payloads at one quality, preferring lower E on equal sizes.
+D exploration retains the original D0 baseline, ladder, binary search and
+refinement in one selected E domain. Both enabled means sequential E-then-D,
+not unvalidated low-E assistance or globally optimal joint search.
+Fast JXL shows JPEG E, not a pixel D control. Fast AVIF keeps distinct Q/Speed
+semantics and its separate metadata policy. It now accepts fixed Q10..100 and
+final Speed0..10, independently of standard IMG settings. Automatic Q search
+keeps the saved manual quality inactive. Defaults remain automatic search with
+final Speed0 and a Speed6 locator; locator coordinates are re-probed in the
+selected final domain. Lossless-first admission and native AVIF reuse remain
+unchanged, and fixed Q is not silently lowered to manufacture success. The
+existing progressive-output policy requires Q at least 10.
+Preview and execution share typed
+preferences; GUI reset does not rewrite configuration files. Existing CLI
+interfaces and route-specific compatibility retries remain available.
+See [the private IMG policy](docs/dev/config/IMG_PRIVATE_POLICY.md) for the
+historical algorithm reference, route exceptions and current verification scope.
 JPEG retries now default to `strict`; `same-semantics` permits original-byte
 compatibility retries, and `repair` enables existing guarded recovery paths.
 No preference disables exact reconstruction, metadata checks or Photos custody
@@ -1536,16 +1579,29 @@ primary sources are cleaned before starting independent modern-original import;
 failed/unproven inputs remain intact. Exit 1 denotes per-file failures and exit 2
 denotes infrastructure or safety-gate failures, without clearing known counters.
 
-FastImg records durable stage, relative-path and BLAKE3 evidence in an adjacent
-working copy. State handling is explicit:
+FastImg stores durable stage, relative-path and BLAKE3 evidence under its central
+state directory, bound to the adjacent output. State handling is explicit:
 
-- a matching interrupted task requires `--retry` (or interactive consent);
+- the latest matching source/strategy checkpoint is resolved before allocating a
+  new numbered output; unchanged interrupted work resumes after identity checks;
 - `--no-resume` creates an isolated adjacent task instead of reusing state;
 - changed paths, counts or source hashes invalidate reuse;
 - an interrupted Photos import is reconciled against the live library before
   progress resumes;
 - an encode/import error may use bounded retry internally, but that is separate
   from resuming a process that exited or lost power.
+
+One safely isolated file failure does not block cleanup of independently verified
+Photos-delivered outputs. Cleanup checks checkpoint ownership, completed Gates and
+current output hashes; unknown or changed contents stay in place. A primary-cleanup
+receipt does not mean that every historical output folder was removed.
+
+IMG admission checks the real format without renaming a disguised source. Runtime
+state, locks and scratch stay outside the source tree. After verified cleanup, MFB
+restores source-directory date snapshots only when observed changes are attributable
+to its recorded removals. External changes or uncertain ownership retain current
+dates with a diagnostic. Filesystem ctime and parent directories outside the selected
+input are not promised to remain unchanged.
 
 ### Detailed Options
 
@@ -1567,8 +1623,9 @@ heuristic, fallback, tool-path and Photos naming/backend settings.
 - `img fast-img --shortest-path`: for both JXL and AVIF strategies, runs local
   verification, verified Photos import, UUID/hash custody Gates 2/3, and only
   then permits source/output cleanup. No second import flag is required.
-- `img fast-img --retry`: resumes only after the stored source identity and
-  live delivery state match. `--no-resume` starts an isolated task.
+- `img fast-img --retry`: explicitly requests recovery after the stored source
+  identity and live delivery state match. A normal rerun also recognizes an
+  unchanged interrupted task. `--no-resume` starts an isolated task.
 - `img restore-jpeg INPUT` has no behavior mode to choose. A normal file or
   folder restores every byte-exact JPEG and its validated XMP delivery; JXL
   that needs backup recovery or manual review stays untouched and receives a
@@ -1772,10 +1829,11 @@ non-AVIF inputs and never re-encodes an existing AVIF.
 
 **8. What happens after interruption or power loss?**
 
-FastImg does not confuse an encoder retry with task resumption. On the next run,
-the user explicitly resumes with `--retry` (or starts isolated with
-`--no-resume`); stored hashes and paths are rechecked, and Photos state is
-reconciled before continuing an interrupted import.
+FastImg does not confuse an encoder retry with task resumption. The next normal
+run resolves the latest matching checkpoint before choosing an output directory;
+stored hashes and paths are rechecked, and live Photos state is reconciled before
+continuing an interrupted import. `--retry` explicitly requests recovery, while
+`--no-resume` creates an isolated task without overwriting earlier output.
 
 **9. Is JXL universally supported?**
 

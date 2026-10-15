@@ -16,12 +16,14 @@ use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 use foundation::fast_img::{
     IntegrityResult, PhotosImportCandidate, apply_library_assets_to_marker,
     apply_tier2_library_assets_to_marker, build_fast_img_output_import_candidates,
-    delete_verified_modern_lossy_static_sources,
+    delete_verified_modern_lossy_static_sources_recorded,
     import_media_outputs_with_checkpointed_library_verifier,
     prune_empty_source_dirs_for_tier2_assets, reverify_media_outputs_in_library,
-    safe_delete_jpeg_source, safe_delete_matching_xmp_sidecar,
+    safe_delete_jpeg_source_recorded, safe_delete_matching_xmp_sidecar_recorded,
     verify_final_avif_delivery_integrity, verify_final_jxl_delivery_integrity,
 };
+#[cfg(test)]
+use foundation::fast_img::{safe_delete_jpeg_source, safe_delete_matching_xmp_sidecar};
 use foundation::image::format_detect::FormatKind;
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
@@ -661,6 +663,15 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    cli.policy
+        .validate_avif_settings_scope(match &cli.command {
+            Commands::Config { .. } => true,
+            Commands::FastImg { strategy, .. } => strategy == "avif",
+            _ => false,
+        })?;
+    if let Commands::FastImg { strategy, .. } = &cli.command {
+        cli.policy.validate_fast_strategy(strategy)?;
+    }
     cli.policy.validate_size_tolerance_scope(matches!(
         cli.command,
         Commands::Run { .. } | Commands::Config { .. }
@@ -2083,6 +2094,39 @@ mod conversion_result_adapter_tests {
         assert_eq!(std::fs::read(&input)?, payload);
         Ok(())
     }
+
+    #[test]
+    fn default_image_conversion_keeps_disguised_source_name() -> anyhow::Result<()> {
+        let _env_lock = super::FAST_IMG_TEST_ENV_LOCK
+            .lock()
+            .expect("shared CLI test environment lock");
+        let temporary = tempfile::tempdir()?;
+        let input = temporary.path().join("actual-png.jpg");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([18, 52, 86]))
+            .save_with_format(&input, image::ImageFormat::Png)?;
+        let original = std::fs::read(&input)?;
+        let config = AutoConvertConfig {
+            output_dir: None,
+            base_dir: None,
+            flags: ConfigFlags::FORCE,
+            size_tolerance_bytes: foundation::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            child_threads: 1,
+            cache: None,
+            tool_preflight: Arc::default(),
+            error_mode: foundation::BatchErrorMode::FailFast,
+        };
+        let outcome = super::auto_convert_single_file(&input, &config)?;
+        assert!(!outcome.skipped && !outcome.ignored, "{}", outcome.message);
+        assert_eq!(std::fs::read(&input)?, original);
+        assert!(!input.with_extension("png").exists());
+        assert_eq!(
+            foundation::image::format_detect::detect_true_format(std::path::Path::new(
+                &outcome.output_path
+            ))?,
+            foundation::image::format_detect::FormatKind::Jxl
+        );
+        Ok(())
+    }
 }
 
 fn auto_convert_single_file(
@@ -2149,14 +2193,8 @@ fn auto_convert_single_file(
         .map_err(anyhow::Error::msg)
         .context("IMG conversion tools unavailable")?;
 
-    // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
-    // When an output directory is configured the source tree must remain immutable:
-    // use the readonly variant that logs mismatches without renaming source files.
-    let fixed_input = if config.output_dir.is_some() {
-        foundation::check_extension_mismatch_readonly(input)?
-    } else {
-        foundation::fix_extension_if_mismatch(input)?
-    };
+    // Content detection must not rename a source before its conversion is verified.
+    let fixed_input = foundation::check_extension_mismatch_readonly(input)?;
     let input = fixed_input.as_path();
 
     let label = foundation::media_conversion_gate::path_file_name_for_log(input);
@@ -2409,7 +2447,7 @@ fn dispatch_static_conversion(
         _ => {
             if config.verbose() {
                 log_detail!(&format!(
-                    " {} Lossy→JXL (Near-Lossless): {}",
+                    " {} Lossy→JXL (configured quality target): {}",
                     match format.to_uppercase().as_str() {
                         "PNG" => "Quantized PNG",
                         "GIF" => "Static GIF",
@@ -2436,6 +2474,7 @@ struct ImageBatchCounters {
     ignored: AtomicUsize,
     processed: AtomicUsize,
     converted_bytes: std::sync::Mutex<foundation::report::ConvertedByteTotals>,
+    cleanup_completed_sources: std::sync::Mutex<Vec<PathBuf>>,
 }
 
 struct ImageBatchWorker<'a> {
@@ -2538,6 +2577,13 @@ impl ImageBatchWorker<'_> {
             auto_convert_single_file(path, &live_config)
         }) {
             Ok(result) => {
+                if !result.ignored && !result.skipped {
+                    foundation::media_conversion_gate::mutex_guard_or_recover(
+                        "img_batch_cleanup_completed_sources",
+                        self.counters.cleanup_completed_sources.lock(),
+                    )
+                    .push(path.to_path_buf());
+                }
                 if result.ignored {
                     self.counters.ignored.fetch_add(1, Ordering::Relaxed);
                 } else if result.skipped {
@@ -2702,12 +2748,33 @@ fn process_image_batch(
     });
 }
 
+fn source_cleanup_candidates(
+    sources: impl Iterator<Item = PathBuf>,
+) -> std::collections::BTreeSet<PathBuf> {
+    sources.collect()
+}
+
+fn restore_source_directory_cleanup(
+    snapshot: foundation::metadata::SourceDirectoryCleanupSnapshot,
+    known_removed_files: &[PathBuf],
+) -> anyhow::Result<()> {
+    if !snapshot.restore_after_cleanup(known_removed_files)? {
+        tracing::warn!(
+            target: "ghost_mode",
+            "source directory changes were not limited to known cleanup; observed timestamps retained"
+        );
+    }
+    Ok(())
+}
+
 struct ImageBatchFinalization<'a> {
     input_root: &'a Path,
     source_dirs: &'a [PathBuf],
     config: &'a AutoConvertConfig,
     recursive: bool,
     saved_dir_timestamps: Option<&'a foundation::metadata::DirectoryTimestampsMap>,
+    source_cleanup_snapshot: foundation::metadata::SourceDirectoryCleanupSnapshot,
+    source_cleanup_candidates: std::collections::BTreeSet<PathBuf>,
     checkpoint: Option<foundation::checkpoint::Manager>,
     counters: &'a ImageBatchCounters,
     pause_controller: &'a PauseController,
@@ -2812,25 +2879,17 @@ impl ImageBatchFinalization<'_> {
             }
         }
 
-        if let Some(saved) = self.saved_dir_timestamps {
-            if !result.paused
-                && self.abort_reason.is_none()
-                && let Some(output_dir) = self.config.output_dir.as_ref()
-                && let Some(base_dir) = self.config.base_dir.as_ref()
-                && let Err(e) =
-                    foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
-            {
-                post_run_errors.push(format!(
-                    "Failed to apply saved directory timestamps to {}: {e}",
-                    output_dir.display()
-                ));
-            }
-            if let Err(e) = foundation::restore_directory_timestamps(saved) {
-                post_run_errors.push(format!(
-                    "Failed to restore source directory timestamps after batch run: {e}"
-                ));
-            }
-            log_detail!(foundation::infra::static_logs::messages::DIR_TIMESTAMPS_RESTORED);
+        if let Some(saved) = self.saved_dir_timestamps
+            && !result.paused
+            && self.abort_reason.is_none()
+            && let Some(output_dir) = self.config.output_dir.as_ref()
+            && let Some(base_dir) = self.config.base_dir.as_ref()
+            && let Err(e) = foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
+        {
+            post_run_errors.push(format!(
+                "Failed to apply saved directory timestamps to {}: {e}",
+                output_dir.display()
+            ));
         }
 
         foundation::infra::static_logs::log_batch_complete_audit(
@@ -2887,6 +2946,26 @@ impl ImageBatchFinalization<'_> {
             post_run_errors.push(format!(
                 "Failed to prune empty source directories under {}: {error}",
                 self.input_root.display()
+            ));
+        }
+
+        let completed_sources = foundation::media_conversion_gate::mutex_guard_or_recover(
+            "img_batch_cleanup_completed_sources",
+            self.counters.cleanup_completed_sources.lock(),
+        );
+        // Successful delete-original finalization requires a successful source unlink;
+        // optional sidecar absence is not a deletion receipt.
+        let known_removals = completed_sources
+            .iter()
+            .filter(|source| self.source_cleanup_candidates.contains(*source))
+            .cloned()
+            .collect::<Vec<_>>();
+        drop(completed_sources);
+        if let Err(error) =
+            restore_source_directory_cleanup(self.source_cleanup_snapshot, &known_removals)
+        {
+            post_run_errors.push(format!(
+                "Failed to preserve source directory timestamps: {error}"
             ));
         }
 
@@ -2979,6 +3058,22 @@ fn auto_convert_directory(
         .iter()
         .map(|file| file.path().to_path_buf())
         .collect::<Vec<_>>();
+    let source_cleanup_candidates = if config.delete_original() || config.in_place() {
+        source_cleanup_candidates(files.iter().cloned())
+    } else {
+        std::collections::BTreeSet::new()
+    };
+    let cleanup_candidates: Vec<PathBuf> = if source_cleanup_candidates.is_empty() {
+        files
+            .iter()
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect()
+    } else {
+        source_cleanup_candidates.iter().cloned().collect()
+    };
+    let source_cleanup_snapshot =
+        foundation::metadata::SourceDirectoryCleanupSnapshot::capture(input, &cleanup_candidates)
+            .context("snapshot source directory cleanup boundary")?;
 
     tracing::info!(
         target: "static_log",
@@ -3158,6 +3253,8 @@ fn auto_convert_directory(
         config,
         recursive,
         saved_dir_timestamps: saved_dir_timestamps.as_ref(),
+        source_cleanup_snapshot,
+        source_cleanup_candidates,
         checkpoint,
         counters: &counters,
         pause_controller: &pause_controller,
@@ -3426,8 +3523,14 @@ fn scan_fast_img_sources(
             planned_encode_count,
             src_dir.display()
         );
+        let quality = if foundation::jxl_effort_policy::quality_search_enabled(true) {
+            "search q=100..0 (saved fixed Q is inactive)".to_owned()
+        } else {
+            format!("fixed q={} (no quality search)", avif_meme_fixed_quality())
+        };
         println!(
-            "[MEME    ] AVIF quality search: q=100..0; use pure-media budget with smallest verified pure-media fallback"
+            "[MEME    ] AVIF {quality}; final speed={}; verified pure-media size policy remains required",
+            avif_meme_speed_domain().value()
         );
     } else {
         println!(
@@ -3636,14 +3739,11 @@ fn fast_img_confirm_resume_if_needed(
     }
 
     if fast_img_requires_resume_decision(marker, shortest_path) {
-        let prompt = format!(
-            "[STATE   ] Found a saved fast-img task at stage {}. Its source path, relative paths, and recorded BLAKE3 identities match. Reconcile durable state and resume it? [y/N] ",
-            marker.stage.as_str()
+        println!(
+            "[RESUME  ] source identities match saved task at {}; reconciling verified progress in {}",
+            marker.stage.as_str(),
+            marker.working_copy.display()
         );
-        fast_img_require_interactive_confirmation(
-            &prompt,
-            "MFB_RESUME_DECISION_REQUIRED: saved task was not resumed; no state was changed. Rerun with --retry to resume or --no-resume to start an isolated new task",
-        )?;
         *retry_requested = true;
     } else if fast_img_completed_marker_has_new_tier2_work(marker, modern_lossy_candidate_count) {
         fast_img_require_interactive_confirmation(
@@ -3660,6 +3760,7 @@ fn fast_img_try_finish_tier2_delivery(
     context: &FastImgMarkerContext<'_>,
     dry_run: DryRunFlag,
     retry_requested: bool,
+    removed_files: &mut Vec<PathBuf>,
 ) -> anyhow::Result<bool> {
     let tier2_pending = (existing_marker
         .as_ref()
@@ -3700,6 +3801,7 @@ fn fast_img_try_finish_tier2_delivery(
         context.src_dir,
         context.modern_lossy_candidates,
         context.remove_selected_root,
+        removed_files,
     )?;
     println!(
         "[TIER 2  ] verified Photos delivery complete; source deleted={deleted} already_absent={already_deleted} empty_dirs_pruned={pruned}"
@@ -3857,27 +3959,22 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )
     })?;
     let working_copy =
-        fast_img_resolve_requested_working_copy(&src_dir, output_dir, dry_run, fresh)?;
+        fast_img_resolve_requested_working_copy(&src_dir, output_dir, dry_run, fresh, strategy)?;
     let working_copy_existed = working_copy.exists();
     let _working_copy_lock = if dry_run.0 {
         None
     } else {
-        std::fs::create_dir_all(&working_copy).with_context(|| {
-            format!(
-                "fast-img could not create output directory before locking {}",
-                working_copy.display()
-            )
-        })?;
         Some(
-            foundation::acquire_dir_lock(&working_copy).with_context(|| {
-                format!(
-                    "fast-img could not acquire exclusive output lock for {}",
-                    working_copy.display()
-                )
-            })?,
+            foundation::process_lock::acquire_output_dir_lock(&working_copy).with_context(
+                || {
+                    format!(
+                        "lock prospective fast-img output {}",
+                        working_copy.display()
+                    )
+                },
+            )?,
         )
     };
-
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
     let FastImgSourceInventory {
         source_files: source_jpegs,
@@ -3897,6 +3994,30 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         remove_selected_root,
         strategy,
     };
+    let source_cleanup_candidates = if dry_run.0 {
+        std::collections::BTreeSet::new()
+    } else {
+        source_cleanup_candidates(
+            source_jpegs.iter().cloned().chain(
+                modern_lossy_candidates
+                    .iter()
+                    .map(|candidate| candidate.path.clone()),
+            ),
+        )
+    };
+    let source_cleanup_snapshot = if dry_run.0 {
+        None
+    } else {
+        let candidates = source_cleanup_candidates
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        Some(
+            foundation::metadata::SourceDirectoryCleanupSnapshot::capture(&src_dir, &candidates)
+                .context("snapshot fast-img source directory cleanup boundary")?,
+        )
+    };
+    let mut removed_source_files = Vec::new();
     let execution = (|| -> anyhow::Result<()> {
         fast_img_reconcile_saved_marker(
             &mut existing_marker,
@@ -3917,6 +4038,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             &marker_context,
             dry_run,
             retry_requested,
+            &mut removed_source_files,
         )? {
             return Ok(());
         }
@@ -4000,6 +4122,19 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 );
             }
             return Ok(());
+        }
+
+        std::fs::create_dir_all(&working_copy).with_context(|| {
+            format!(
+                "create reconciled fast-img output {}",
+                working_copy.display()
+            )
+        })?;
+        if fresh.0 {
+            println!(
+                "[STATE   ] explicit fresh task uses isolated output {}; previous checkpoints and outputs are preserved",
+                working_copy.display()
+            );
         }
 
         let reuse_marker_import_proof = existing_marker
@@ -4119,7 +4254,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 })?;
             }
 
-            foundation::restore_delivery_directory_metadata(
+            foundation::metadata::apply_delivery_directory_metadata(
                 &saved_dir_timestamps,
                 &src_dir,
                 &working_copy,
@@ -4148,6 +4283,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 modern_lossy_candidates: &modern_lossy_candidates,
                 remove_selected_root: RemoveSelectedRootFlag(remove_selected_root),
                 strategy,
+                removed_files: &mut removed_source_files,
             })?;
 
             Ok(())
@@ -4155,6 +4291,18 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         existing_marker = Some(marker);
         execution
     })();
+    let execution = match source_cleanup_snapshot
+        .map(|snapshot| restore_source_directory_cleanup(snapshot, &removed_source_files))
+        .transpose()
+    {
+        Ok(_) => execution,
+        Err(error) => match execution {
+            Ok(()) => Err(error.context("preserve fast-img source directory timestamps")),
+            Err(execution_error) => Err(execution_error.context(format!(
+                "source directory timestamp preservation also failed: {error:#}"
+            ))),
+        },
+    };
     if dry_run.0 {
         return execution;
     }
@@ -4539,6 +4687,7 @@ fn fast_img_effective_encode_parallelism(
 }
 
 /// Quality exploration result for AVIF Meme Mode.
+#[derive(Debug)]
 enum AvifQualityExploreResult {
     /// Highest verified candidate within the source's pure-media budget.
     Found {
@@ -4831,13 +4980,21 @@ fn avif_quality_probe_error_is_source_invariant(message: &str) -> bool {
                 || message.contains("Unsupported file format")))
 }
 
+#[cfg(test)]
 const AVIF_MEME_SPEED: u8 =
     foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH.value();
 
 /// Keep every AVIF quality probe in one comparable speed domain.
 #[must_use]
-const fn avif_meme_speed_domain() -> foundation::exploration_policy::AvifSpeedDomain {
-    foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH
+fn avif_meme_speed_domain() -> foundation::exploration_policy::AvifSpeedDomain {
+    foundation::infra::runtime_config::active().map_or(
+        foundation::exploration_policy::AvifSpeedDomain::MEME_QUALITY_SEARCH,
+        |config| foundation::exploration_policy::AvifSpeedDomain::new(config.img.avif_speed),
+    )
+}
+
+fn avif_meme_fixed_quality() -> u8 {
+    foundation::infra::runtime_config::active().map_or(100, |config| config.img.avif_quality)
 }
 pub(crate) use foundation::infra::constants::AVIF_MEME_MIN_QUALITY;
 
@@ -5023,7 +5180,7 @@ fn probe_single_avif_quality(
 }
 
 /// Find a bounded quality anchor. The locator candidate is always discarded;
-/// only its coordinate is reused, and the final speed=0 domain must probe it
+/// only its coordinate is reused, and the selected final speed domain must probe it
 /// again before it can become delivery evidence.
 fn locate_avif_meme_quality(
     source: &Path,
@@ -5076,6 +5233,7 @@ fn explore_avif_meme_quality(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> AvifQualityExploreResult {
     const COARSE_STEP: u8 = 10;
+    let search_enabled = foundation::jxl_effort_policy::quality_search_enabled(true);
     let source_pure_media_size = match source_pure_media_size(source, format) {
         Ok(size) => size,
         Err(error) => {
@@ -5088,7 +5246,11 @@ fn explore_avif_meme_quality(
     };
 
     let mut evidence = AvifMemeQualityEvidence::default();
-    let mut coarse_quality = 100_u8;
+    let mut coarse_quality = if search_enabled {
+        100
+    } else {
+        avif_meme_fixed_quality()
+    };
     let mut locator_attempted = false;
     let mut locator_needed = false;
     let mut locator_quality = None;
@@ -5108,17 +5270,24 @@ fn explore_avif_meme_quality(
         ) {
             AvifMemeProbeOutcome::Fits(candidate) => {
                 evidence.record_fit(&candidate);
-                if candidate.quality == 100 {
+                if !search_enabled || candidate.quality == 100 {
                     return AvifQualityExploreResult::Found {
                         domain: avif_meme_speed_domain().encoder_domain(),
-                        outcome:
-                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized,
+                        outcome: if search_enabled {
+                            foundation::exploration_policy::ExplorationOutcome::ExploredOptimized
+                        } else {
+                            foundation::exploration_policy::ExplorationOutcome::Adopted
+                        },
                         quality: candidate.quality,
                         temp_path: candidate.temp_path,
                         output_size: candidate.output_size,
                         pure_media_size: candidate.pure_media_size,
                         content_blake3: candidate.content_blake3,
-                        selection: "highest_verified_fitting",
+                        selection: if search_enabled {
+                            "highest_verified_fitting"
+                        } else {
+                            "fixed_verified_quality"
+                        },
                     };
                 }
                 current_passed_candidate = Some(candidate);
@@ -5146,7 +5315,7 @@ fn explore_avif_meme_quality(
             }
         }
 
-        if coarse_quality == AVIF_MEME_MIN_QUALITY {
+        if !search_enabled || coarse_quality == AVIF_MEME_MIN_QUALITY {
             break;
         }
         if coarse_quality == 100 && locator_needed && !locator_attempted {
@@ -5233,7 +5402,15 @@ fn explore_avif_meme_quality(
 
     AvifQualityExploreResult::SourceUnavailable {
         reason: format!(
-            "no AVIF candidate passed the Meme Mode quality gate at q=100..={AVIF_MEME_MIN_QUALITY}{}",
+            "no AVIF candidate passed the Meme Mode quality gate at q={}{}",
+            if search_enabled {
+                format!("100..={AVIF_MEME_MIN_QUALITY}")
+            } else {
+                format!(
+                    "{} (fixed; no other qualities attempted)",
+                    avif_meme_fixed_quality()
+                )
+            },
             last_probe_error
                 .as_deref()
                 .map_or_else(String::new, |reason| format!(
@@ -5259,11 +5436,12 @@ fn try_fast_img_lossless_avif(
     metadata_retry: &mut img::lossless_converter::AvifencMetadataRetryState,
 ) -> anyhow::Result<Option<foundation::TaskResult>> {
     let source_pure_media_size = source_pure_media_size(source, source_format)?;
+    let speed = avif_meme_speed_domain().value();
     let probe =
         img::lossless_converter::convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
             source,
             encoder_input,
-            AVIF_MEME_SPEED,
+            speed,
             metadata_retry,
             options,
         );
@@ -5300,7 +5478,7 @@ fn try_fast_img_lossless_avif(
         active_policy,
     ) {
         foundation::log_detail!(&format!(
-            "Meme Mode true-lossless AVIF is outside the active size policy: complete_file={complete_file_size}B pure_media={candidate_pure_media_size}B source_pure_media={source_pure_media_size}B; continuing with q-boundary exploration"
+            "Meme Mode true-lossless AVIF is outside the active size policy: complete_file={complete_file_size}B pure_media={candidate_pure_media_size}B source_pure_media={source_pure_media_size}B; continuing with the configured quality mode"
         ));
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "fast_img_lossless_probe_oversize_cleanup",
@@ -5318,7 +5496,7 @@ fn try_fast_img_lossless_avif(
         foundation::exploration_policy::ExplorationOutcome::LosslessTranscoded,
     );
     foundation::log_detail!(&format!(
-        "Meme Mode accepted true-lossless AVIF at speed={AVIF_MEME_SPEED}: pure_media={candidate_pure_media_size}B < source={source_pure_media_size}B"
+        "Meme Mode accepted true-lossless AVIF at speed={speed}: pure_media={candidate_pure_media_size}B < source={source_pure_media_size}B"
     ));
     Ok(Some(result))
 }
@@ -5486,7 +5664,7 @@ fn fast_img_run_encode_job_inner(
                     }
                     AvifQualityExploreResult::SourceUnavailable { reason } => {
                         anyhow::bail!(
-                            "AVIF source preflight could not produce a verifiable target output for {}: {reason}",
+                            "AVIF encoding/verification could not produce an eligible target output for {}; source retained: {reason}",
                             job.source.display()
                         );
                     }
@@ -6164,6 +6342,7 @@ fn fast_img_delete_verified_source_jpegs(
     marker: &WorkingCopyMarker,
     src_dir: &Path,
     strategy: &str,
+    removed_files: &mut Vec<PathBuf>,
 ) -> anyhow::Result<(usize, usize)> {
     fast_img_preflight_verified_source_deletion(marker, src_dir)?;
     let mut candidates = Vec::new();
@@ -6264,7 +6443,7 @@ fn fast_img_delete_verified_source_jpegs(
     let mut already_deleted = 0usize;
     for candidate in candidates {
         if !candidate.source.exists() {
-            safe_delete_matching_xmp_sidecar(&candidate.source, &candidate.output).map_err(
+            safe_delete_matching_xmp_sidecar_recorded(&candidate.source, &candidate.output, removed_files).map_err(
                 |err| {
                     anyhow::anyhow!(
                         "fast-img failed to delete matching XMP sidecar for already-absent source JPEG {} using output {}: {err}",
@@ -6282,14 +6461,19 @@ fn fast_img_delete_verified_source_jpegs(
         }
     }
     for candidate in verified {
-        safe_delete_jpeg_source(&candidate.source, &candidate.output, &candidate.integrity)
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "fast-img failed to delete verified source JPEG {} using output {}: {err}",
-                    candidate.source.display(),
-                    candidate.output.display()
-                )
-            })?;
+        safe_delete_jpeg_source_recorded(
+            &candidate.source,
+            &candidate.output,
+            &candidate.integrity,
+            removed_files,
+        )
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "fast-img failed to delete verified source JPEG {} using output {}: {err}",
+                candidate.source.display(),
+                candidate.output.display()
+            )
+        })?;
         deleted += 1;
     }
     Ok((deleted, already_deleted))
@@ -6611,6 +6795,7 @@ fn fast_img_recover_non_directory_working_copy(
 fn fast_img_resolve_working_copy_for_run(
     src_dir: &Path,
     dry_run: DryRunFlag,
+    strategy: &str,
 ) -> anyhow::Result<PathBuf> {
     let preferred_working_copy = working_copy_dir(src_dir);
     match std::fs::symlink_metadata(&preferred_working_copy) {
@@ -6632,7 +6817,7 @@ fn fast_img_resolve_working_copy_for_run(
         }
     }
 
-    let working_copy = resolve_working_copy_dir(src_dir);
+    let working_copy = resolve_working_copy_dir(src_dir, strategy)?;
     fast_img_recover_non_directory_working_copy(&working_copy, dry_run)?;
     Ok(working_copy)
 }
@@ -6642,13 +6827,14 @@ fn fast_img_resolve_requested_working_copy(
     requested: Option<&Path>,
     dry_run: DryRunFlag,
     fresh: FreshFlag,
+    strategy: &str,
 ) -> anyhow::Result<PathBuf> {
     let live = if fresh.0 {
         foundation::pipeline::verification::resolve_fresh_working_copy_dir(src_dir)
     } else if requested.is_some() {
-        foundation::pipeline::verification::resolve_working_copy_dir(src_dir)
+        foundation::pipeline::verification::resolve_working_copy_dir(src_dir, strategy)?
     } else {
-        return fast_img_resolve_working_copy_for_run(src_dir, dry_run);
+        return fast_img_resolve_working_copy_for_run(src_dir, dry_run, strategy);
     };
     if let Some(requested) = requested
         && requested != live
@@ -9815,6 +10001,7 @@ fn fast_img_deliver_modern_lossy_static_tier(
     src_dir: &Path,
     candidates: &[ModernLossyStaticCandidate],
     remove_selected_root: bool,
+    removed_files: &mut Vec<PathBuf>,
 ) -> anyhow::Result<(usize, usize, usize)> {
     if candidates.is_empty() && !marker.tier2_in_progress {
         return Ok((0, 0, 0));
@@ -9852,10 +10039,12 @@ fn fast_img_deliver_modern_lossy_static_tier(
         import_error_count: 0,
         photos_library_path: marker.photos_library_path.clone(),
     };
-    let (deleted, already_deleted) =
-        delete_verified_modern_lossy_static_sources(src_dir, &complete_library_handle).map_err(
-            |err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"),
-        )?;
+    let (deleted, already_deleted) = delete_verified_modern_lossy_static_sources_recorded(
+        src_dir,
+        &complete_library_handle,
+        removed_files,
+    )
+    .map_err(|err| anyhow::anyhow!("fast-img modern lossy source delete gate failed: {err}"))?;
     let pruned = prune_empty_source_dirs_for_tier2_assets(
         src_dir,
         &complete_library_handle.imported_assets,
@@ -9893,13 +10082,19 @@ fn fast_img_finalize_sources(
     modern_lossy_candidates: &[ModernLossyStaticCandidate],
     remove_selected_root: bool,
     strategy: &str,
+    removed_files: &mut Vec<PathBuf>,
 ) -> anyhow::Result<((usize, usize, usize), (usize, usize, usize))> {
+    let removed_files = std::cell::RefCell::new(removed_files);
     fast_img_result::finalize_sources(
         marker,
         !modern_lossy_candidates.is_empty(),
         |marker| {
-            let (deleted, absent) =
-                fast_img_delete_verified_source_jpegs(marker, src_dir, strategy)?;
+            let (deleted, absent) = fast_img_delete_verified_source_jpegs(
+                marker,
+                src_dir,
+                strategy,
+                &mut removed_files.borrow_mut(),
+            )?;
             let pruned = fast_img_prune_empty_source_dirs(marker, src_dir, remove_selected_root)?;
             Ok((deleted, absent, pruned))
         },
@@ -9909,6 +10104,7 @@ fn fast_img_finalize_sources(
                 src_dir,
                 modern_lossy_candidates,
                 remove_selected_root,
+                &mut removed_files.borrow_mut(),
             )
         },
     )
@@ -9928,6 +10124,7 @@ struct FastImgDeliveryContext<'a> {
     modern_lossy_candidates: &'a [ModernLossyStaticCandidate],
     remove_selected_root: RemoveSelectedRootFlag,
     strategy: &'a str,
+    removed_files: &'a mut Vec<PathBuf>,
 }
 
 fn fast_img_run_verification_and_delivery_pipeline(
@@ -9948,6 +10145,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         modern_lossy_candidates,
         remove_selected_root,
         strategy,
+        removed_files,
     } = context;
     let mode_name = if strategy == "avif" {
         "AVIF-only (Meme Mode)"
@@ -10028,7 +10226,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             )?;
         }
         fast_img_strip_non_target_files(working_copy, strategy)?;
-        foundation::restore_delivery_directory_metadata(
+        foundation::metadata::apply_delivery_directory_metadata(
             saved_dir_timestamps,
             src_dir,
             working_copy,
@@ -10049,6 +10247,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
             modern_lossy_candidates,
             remove_selected_root.0,
             strategy,
+            removed_files,
         )?;
         println!(
             "[DELIVER ] Gate 1 passed; {mode_name} output at {}; source {source_type} deleted={} already_absent={} modern_lossy_deleted={} modern_lossy_already_absent={} empty_dirs_pruned={}",
@@ -10180,14 +10379,18 @@ fn fast_img_run_verification_and_delivery_pipeline(
 
     foundation::batch_control::checkpoint()?;
     fast_img_strip_non_target_files(working_copy, strategy)?;
-    foundation::restore_delivery_directory_metadata(saved_dir_timestamps, src_dir, working_copy)
-        .with_context(|| {
-            format!(
-                "restore fast-img directory metadata {} -> {} after shortest-path cleanup",
-                src_dir.display(),
-                working_copy.display()
-            )
-        })?;
+    foundation::metadata::apply_delivery_directory_metadata(
+        saved_dir_timestamps,
+        src_dir,
+        working_copy,
+    )
+    .with_context(|| {
+        format!(
+            "restore fast-img directory metadata {} -> {} after shortest-path cleanup",
+            src_dir.display(),
+            working_copy.display()
+        )
+    })?;
     let (
         (source_deleted, source_already_deleted, source_dirs_pruned),
         (tier2_deleted, tier2_already_deleted, tier2_dirs_pruned),
@@ -10197,6 +10400,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         modern_lossy_candidates,
         remove_selected_root.0,
         strategy,
+        removed_files,
     )?;
     tracing::info!(
         target: "fast_img",
@@ -11457,7 +11661,7 @@ mod fast_img_hardening_tests {
         write_jpeg(&src, b"restored original")?;
         let src_root = src_root_raw.canonicalize()?;
         let src = src_root.join("a.jpg");
-        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root);
+        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root, "jxl")?;
         std::fs::create_dir_all(&wc)?;
         let out = wc.join("a.JXL");
         std::fs::write(&out, b"old jxl output")?;
@@ -11705,7 +11909,7 @@ mod fast_img_hardening_tests {
         write_jpeg(&stale_src, b"old completed source")?;
         let src_root = src_root_raw.canonicalize()?;
         let stale_src = src_root.join("old.jpg");
-        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root);
+        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root, "jxl")?;
         std::fs::create_dir_all(&wc)?;
         let out = wc.join("old.JXL");
         std::fs::write(&out, b"old jxl output")?;
@@ -12184,7 +12388,7 @@ mod fast_img_hardening_tests {
         write_jpeg(&stale_src, b"old completed source")?;
         let src_root = src_root_raw.canonicalize()?;
         let stale_src = src_root.join("old.jpg");
-        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root);
+        let wc = foundation::pipeline::verification::resolve_working_copy_dir(&src_root, "jxl")?;
         std::fs::create_dir_all(&wc)?;
         let out = wc.join("old.JXL");
         std::fs::write(&out, b"old jxl output")?;
@@ -12265,7 +12469,8 @@ mod fast_img_hardening_tests {
         let working_copy = foundation::pipeline::verification::working_copy_dir(&source_dir);
         std::fs::write(&working_copy, b"interrupted output placeholder")?;
 
-        let resolved = fast_img_resolve_working_copy_for_run(&source_dir, DryRunFlag(false))?;
+        let resolved =
+            fast_img_resolve_working_copy_for_run(&source_dir, DryRunFlag(false), "jxl")?;
 
         assert_eq!(resolved, working_copy);
         assert!(std::fs::symlink_metadata(&working_copy).is_err());
@@ -12296,6 +12501,7 @@ mod fast_img_hardening_tests {
                 Some(&live),
                 DryRunFlag(false),
                 FreshFlag(false),
+                "jxl",
             )?,
             live
         );
@@ -12305,6 +12511,7 @@ mod fast_img_hardening_tests {
             Some(&stale),
             DryRunFlag(false),
             FreshFlag(false),
+            "jxl",
         )
         .unwrap_err();
         assert!(error.to_string().contains("requested="));
@@ -12976,12 +13183,22 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn unfinished_fast_img_marker_requires_explicit_resume_decision() {
+    fn unfinished_fast_img_marker_is_detected_and_resumes_after_reconciliation() {
         let mut marker = WorkingCopyMarker::new(PathBuf::from("src"), PathBuf::from("wc"), 1);
         assert!(fast_img_requires_resume_decision(
             &marker,
             ShortestPathFlag(false)
         ));
+        let mut retry = false;
+        super::fast_img_confirm_resume_if_needed(
+            Some(&marker),
+            0,
+            DryRunFlag(false),
+            ShortestPathFlag(false),
+            &mut retry,
+        )
+        .unwrap();
+        assert!(retry);
         marker.stage = FastImgStageName::CleanupComplete;
         assert!(!fast_img_requires_resume_decision(
             &marker,
@@ -13512,6 +13729,7 @@ mod fast_img_hardening_tests {
                 &context,
                 super::DryRunFlag(false),
                 true,
+                &mut Vec::new(),
             )?,
             "pending original delivery must not bypass failed primary retries"
         );
@@ -14313,6 +14531,107 @@ mod fast_img_hardening_tests {
         );
         assert_eq!(super::AVIF_MEME_MIN_QUALITY, 0);
         assert!(img::lossless_converter::AVIF_QUALITY_BINARY_PROBE_BUDGET >= 7);
+    }
+
+    #[test]
+    fn fast_avif_numeric_settings_reach_verified_local_candidates() -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_TEST_FAST_AVIF_SETTINGS_CHILD";
+        let case = match std::env::var(CHILD) {
+            Ok(case) => case,
+            Err(std::env::VarError::NotPresent) => {
+                for case in ["fixed_minimum", "fixed_manual", "fixed_highest", "adaptive"] {
+                    let output = std::process::Command::new(std::env::current_exe()?)
+                        .args([
+                            "--exact",
+                            "fast_img_hardening_tests::fast_avif_numeric_settings_reach_verified_local_candidates",
+                            "--nocapture",
+                        ])
+                        .env(CHILD, case)
+                        .output()?;
+                    anyhow::ensure!(
+                        output.status.success()
+                            && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                        "{case} failed: {}\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let (manual_quality, speed, search, expected_quality) = match case.as_str() {
+            "fixed_minimum" => (10, 10, foundation::runtime_config::QualitySearch::Fixed, 10),
+            "fixed_manual" => (80, 8, foundation::runtime_config::QualitySearch::Fixed, 80),
+            "fixed_highest" => (
+                100,
+                0,
+                foundation::runtime_config::QualitySearch::Fixed,
+                100,
+            ),
+            "adaptive" => (
+                10,
+                8,
+                foundation::runtime_config::QualitySearch::Adaptive,
+                100,
+            ),
+            _ => anyhow::bail!("unknown isolated AVIF test case"),
+        };
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let mut config = foundation::runtime_config::RuntimeConfig::default();
+        config.img.avif_quality = manual_quality;
+        config.img.avif_speed = speed;
+        config.img.quality_search = search;
+        foundation::runtime_config::install(config)?;
+        foundation::tools::require(&["avifenc", "avifdec"]).map_err(anyhow::Error::msg)?;
+        let source = root.path().join("source.jpg");
+        image::ImageEncoder::write_image(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(
+                std::fs::File::create(&source)?,
+                100,
+            ),
+            image::RgbImage::new(128, 128).as_raw(),
+            128,
+            128,
+            image::ExtendedColorType::Rgb8,
+        )?;
+        let original = std::fs::read(&source)?;
+        let options = foundation::ConvertOptions {
+            output_dir: Some(root.path().join("output")),
+            flags: foundation::ConvertFlags::FORCE | foundation::ConvertFlags::AVIF_PROGRESSIVE,
+            ..Default::default()
+        };
+        let mut retry = img::lossless_converter::AvifencMetadataRetryState::strip_all();
+        let result = super::explore_avif_meme_quality(
+            &source,
+            FormatKind::Jpeg,
+            &source,
+            &options,
+            &mut retry,
+        );
+        let super::AvifQualityExploreResult::Found {
+            quality,
+            domain,
+            temp_path,
+            content_blake3,
+            ..
+        } = result
+        else {
+            anyhow::bail!("{case} did not produce a verified fitting AVIF: {result:?}");
+        };
+        assert_eq!(quality, expected_quality);
+        assert_eq!(
+            domain,
+            foundation::exploration_policy::EncoderDomain::avif(speed)
+        );
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&temp_path)?,
+            content_blake3
+        );
+        assert_eq!(std::fs::read(&source)?, original, "source bytes changed");
+        std::fs::remove_file(temp_path)?;
+        Ok(())
     }
 
     #[test]

@@ -26,6 +26,7 @@ mod macos;
 #[cfg(target_os = "macos")]
 mod network;
 mod output_audit;
+mod source_cleanup;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -34,6 +35,7 @@ pub use delivery_policy::{
     preserve_filesystem_for_delivery, preserve_for_delivery,
 };
 pub use exif::preserve_internal;
+pub use source_cleanup::SourceDirectoryCleanupSnapshot;
 pub(crate) fn verify_output_embedded_metadata_with_explicit_xmp(
     src: &Path,
     xmp: &Path,
@@ -2829,10 +2831,25 @@ pub fn restore_delivery_directory_metadata<S>(
 where
     S: std::hash::BuildHasher,
 {
-    preserve_directory(src_dir, dst_dir)?;
-    apply_saved_timestamps_to_dst(saved, src_dir, dst_dir)?;
+    apply_delivery_directory_metadata(saved, src_dir, dst_dir)?;
     restore_directory_timestamps(saved)?;
     Ok(())
+}
+
+/// Mirror delivery directory metadata without writing back to the source tree.
+///
+/// # Errors
+/// Returns an error if destination metadata synchronization fails.
+pub fn apply_delivery_directory_metadata<S>(
+    saved: &std::collections::HashMap<PathBuf, (filetime::FileTime, filetime::FileTime), S>,
+    src_dir: &Path,
+    dst_dir: &Path,
+) -> io::Result<()>
+where
+    S: std::hash::BuildHasher,
+{
+    preserve_directory(src_dir, dst_dir)?;
+    apply_saved_timestamps_to_dst(saved, src_dir, dst_dir)
 }
 
 fn collect_dir_timestamps<S>(

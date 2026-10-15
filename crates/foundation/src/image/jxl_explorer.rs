@@ -1268,12 +1268,14 @@ impl JxlScreeningSession {
 ///
 /// # Errors
 /// Returns `Err` if the `try_candidate` closure fails for any tested distance.
+/// `initial_measurement` binds its actual distance (D0 or the exploration floor)
+/// to its pure payload size; a D0 measurement never stands in for a floor probe.
 // Rationale: This function handles complex, sequential initialization or
 // business logic where further fragmentation would hinder readability and
 // maintainability.
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
-    initial_size: u64,
+    initial_measurement: (f32, u64),
     size_policy: crate::exploration_policy::SizePolicy,
     mut try_candidate: F,
 ) -> Result<Option<JxlScreeningResult>, String>
@@ -1284,9 +1286,30 @@ where
         return Ok(None);
     }
 
-    let initial_distance = clamp_explore_distance(JXL_EXPLORE_FLOOR);
+    let (measured_distance, measured_size) = initial_measurement;
+    if measured_distance != 0.0 && measured_distance != JXL_EXPLORE_FLOOR {
+        return Err(
+            "JXL screening requires a measured D0 or exploration-floor baseline".to_string(),
+        );
+    }
+    if measured_distance == 0.0 && size_policy.fits(measured_size, input_size) {
+        return Ok(None);
+    }
+    let initial_size = if measured_distance == 0.0 {
+        try_candidate(JXL_EXPLORE_FLOOR)?
+    } else {
+        measured_size
+    };
+    let initial_distance = JXL_EXPLORE_FLOOR;
     let mut session =
         JxlScreeningSession::new(input_size, size_policy, initial_distance, initial_size);
+    if measured_distance == 0.0 {
+        session.iterations += 1;
+        session.log.push(format!(
+            "Measured d=0 baseline: {measured_size}B; measured floor d={} separately: {initial_size}B",
+            format_distance_for_log(initial_distance)
+        ));
+    }
 
     // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size),
     // stop exploring. Quality is already safe and beneficial, so further
@@ -1522,7 +1545,7 @@ mod tests {
     fn test_screening_keeps_best_ladder_candidate() {
         let result = screen_jxl_candidates(
             100,
-            120,
+            (JXL_EXPLORE_FLOOR, 120),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 if distance
@@ -1570,7 +1593,7 @@ mod tests {
         // With binary search, Phase 2 is skipped (no d_under). Result should be None.
         let result = screen_jxl_candidates(
             100,
-            140,
+            (JXL_EXPLORE_FLOOR, 140),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |_distance| Ok(130),
         )
@@ -1586,7 +1609,7 @@ mod tests {
     fn test_screening_promotes_adjacent_and_boundary_candidates() {
         let result = screen_jxl_candidates(
             100,
-            104,
+            (JXL_EXPLORE_FLOOR, 104),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 let size = if distance <= 0.002 {
@@ -1624,7 +1647,7 @@ mod tests {
         // Phase 2 binary search should find a qualifying candidate below source.
         let result = screen_jxl_candidates(
             100,
-            150,
+            (JXL_EXPLORE_FLOOR, 150),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 let size = if distance <= 0.1 {
@@ -1658,7 +1681,7 @@ mod tests {
         let mut calls = 0_i32;
         let result = screen_jxl_candidates(
             100,
-            90,
+            (JXL_EXPLORE_FLOOR, 90),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |_distance| {
                 calls += 1_i32;
@@ -1676,12 +1699,56 @@ mod tests {
     }
 
     #[test]
+    fn screening_measures_floor_instead_of_relabeling_d0() {
+        for (policy, d0_size, floor_size) in [
+            (
+                crate::exploration_policy::SizePolicy::StrictlySmaller,
+                120,
+                99,
+            ),
+            (
+                crate::exploration_policy::SizePolicy::AllowGrowth { max_extra_bytes: 5 },
+                106,
+                105,
+            ),
+        ] {
+            let mut probes = Vec::new();
+            let result = screen_jxl_candidates(100, (0.0, d0_size), policy, |distance| {
+                probes.push(distance);
+                Ok(floor_size)
+            })
+            .expect("floor screening")
+            .expect("the measured floor fits");
+            assert_eq!(probes, vec![JXL_EXPLORE_FLOOR]);
+            assert_eq!(result.best_distance, JXL_EXPLORE_FLOOR);
+            assert_eq!(result.best_output_size, floor_size);
+            assert_eq!(result.iterations, 2);
+            assert_eq!(result.screened_candidates[0].output_size, floor_size);
+            assert!(
+                result
+                    .log
+                    .iter()
+                    .any(|line| line.contains("Measured d=0 baseline"))
+            );
+        }
+
+        let result = screen_jxl_candidates(
+            100,
+            (0.0, 99),
+            crate::exploration_policy::SizePolicy::StrictlySmaller,
+            |_| panic!("a fitting D0 must not start lossy exploration"),
+        )
+        .expect("fitting D0");
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_screening_never_retests_the_floor_distance() {
         let mut probed = Vec::new();
 
         let _result = screen_jxl_candidates(
             100,
-            130,
+            (JXL_EXPLORE_FLOOR, 130),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 probed.push(distance);
@@ -1799,7 +1866,7 @@ mod tests {
         let mut probed = Vec::new();
         let result = screen_jxl_candidates(
             1000,
-            1190,
+            (JXL_EXPLORE_FLOOR, 1190),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 probed.push(distance);
@@ -1824,7 +1891,7 @@ mod tests {
         // Binary search should narrow the bracket and converge well below budget.
         let result = screen_jxl_candidates(
             1000,
-            1200,
+            (JXL_EXPLORE_FLOOR, 1200),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 let size = if distance <= 0.005 {
@@ -1864,7 +1931,7 @@ mod tests {
         // Binary search should converge without exhausting the 50-iteration budget.
         let result = screen_jxl_candidates(
             1000,
-            1192,
+            (JXL_EXPLORE_FLOOR, 1192),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 let size = crate::numeric_cast::f64_to_u64_sat(
@@ -1899,7 +1966,7 @@ mod tests {
         // Expected result is None, not a fallback to d=0.001.
         let result = screen_jxl_candidates(
             100,
-            200,
+            (JXL_EXPLORE_FLOOR, 200),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |_distance| Ok(150),
         )
@@ -1917,7 +1984,7 @@ mod tests {
         // Binary search should converge best_distance to <= 0.04 + precision.
         let result = screen_jxl_candidates(
             1000,
-            1300,
+            (JXL_EXPLORE_FLOOR, 1300),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |distance| {
                 if distance <= 0.04 {
@@ -1944,7 +2011,7 @@ mod tests {
     fn screen_jxl_candidates_zero_input_is_fail_closed() {
         let result = screen_jxl_candidates(
             0,
-            100,
+            (JXL_EXPLORE_FLOOR, 100),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |_| Ok(50),
         )
@@ -1967,8 +2034,11 @@ mod tolerance_tests {
             max_extra_bytes: 512 * 1024,
         };
 
-        let result =
-            screen_jxl_candidates(source_pure, source_pure + 700 * 1024, policy, |distance| {
+        let result = screen_jxl_candidates(
+            source_pure,
+            (JXL_EXPLORE_FLOOR, source_pure + 700 * 1024),
+            policy,
+            |distance| {
                 if distance <= 0.001 {
                     Ok(source_pure + 700 * 1024)
                 } else if distance <= 0.05 {
@@ -1978,9 +2048,10 @@ mod tolerance_tests {
                 } else {
                     Ok(source_pure - 100 * 1024)
                 }
-            })
-            .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
-            .unwrap_or_else(|| panic!("screening result should exist"));
+            },
+        )
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Highest quality fitting candidate starts at d0.05.
         // It should converge to d <= 0.05 + precision

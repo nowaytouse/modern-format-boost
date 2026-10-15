@@ -239,6 +239,34 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<DirLock> {
     // 1. Get absolute, canonical path to ensure unique hashing
     let abs_path = fs::canonicalize(dir_path)
         .with_context(|| format!("Failed to canonicalize path: {}", dir_path.display()))?;
+    acquire_canonical_dir_lock(abs_path)
+}
+
+/// Lock an adjacent output before creating it, using the same identity as an existing directory.
+pub fn acquire_output_dir_lock(dir_path: &Path) -> Result<DirLock> {
+    let absolute = match fs::symlink_metadata(dir_path) {
+        Ok(metadata) if metadata.file_type().is_dir() => dir_path.canonicalize()?,
+        Ok(_) => {
+            return Err(anyhow!(
+                "Output lock target is not a real directory: {}",
+                dir_path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = dir_path
+                .parent()
+                .context("Output lock target has no parent")?;
+            let name = dir_path
+                .file_name()
+                .context("Output lock target has no file name")?;
+            parent.canonicalize()?.join(name)
+        }
+        Err(error) => return Err(error).context("Inspect prospective output lock target"),
+    };
+    acquire_canonical_dir_lock(absolute)
+}
+
+fn acquire_canonical_dir_lock(abs_path: PathBuf) -> Result<DirLock> {
     let path_str = abs_path.to_string_lossy();
 
     // 2. Generate a unique hash for this path using blake3
@@ -465,6 +493,33 @@ mod tests {
 
         unsafe {
             std::env::remove_var("MFB_HOME_ROOT");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn output_lock_precedes_creation_and_keeps_existing_directory_identity() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let old = std::env::var_os("MFB_HOME_ROOT");
+        unsafe {
+            std::env::set_var("MFB_HOME_ROOT", temp.path().join("state"));
+        }
+        let output = temp.path().join("output");
+        let lock = acquire_output_dir_lock(&output).unwrap();
+        assert!(!output.exists());
+        fs::create_dir(&output).unwrap();
+        assert!(acquire_dir_lock(&output).is_err());
+        drop(lock);
+        assert!(acquire_dir_lock(&output).is_ok());
+        unsafe {
+            if let Some(old) = old {
+                std::env::set_var("MFB_HOME_ROOT", old);
+            } else {
+                std::env::remove_var("MFB_HOME_ROOT");
+            }
         }
     }
 }

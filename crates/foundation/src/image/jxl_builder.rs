@@ -147,13 +147,15 @@ impl ToolBuilder for CjxlBuilder {
         if let Some(e) = self.effort {
             let lossless_encode_e11 =
                 self.lossless_jpeg && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
-            let expert_e11 =
-                self.allow_expert_options && e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT;
+            let expert_e11 = e == constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT
+                && (self.allow_expert_options
+                    || crate::runtime_config::active()
+                        .is_some_and(|config| config.img.jxl_effort == Some(e)));
             debug_assert!(
-                constants::is_supported_jxl_effort_with_expert(e, self.allow_expert_options)
-                    || lossless_encode_e11,
-                "unsupported cjxl effort {e}; runtime policy permits e7/e8/e10, plus e11 \
-                 for JPEG lossless encode or explicit expert options; e9 is disabled"
+                constants::is_supported_jxl_effort_with_expert(e, expert_e11)
+                    || (self.lossless_jpeg && (1..=11).contains(&e)),
+                "unsupported cjxl effort {e}; pixel policy permits e1 through e10 or explicit \
+                 expert e11; reversible JPEG permits e1 through e11"
             );
             if lossless_encode_e11 || expert_e11 {
                 cmd.arg(constants::JXL_ARG_ALLOW_EXPERT_OPTIONS);
@@ -301,24 +303,29 @@ mod tests {
     }
 
     #[test]
-    fn cjxl_builder_allows_e11_for_lossless_jpeg_encode_without_expert_options() {
-        let mut builder = CjxlBuilder::new();
-        builder
-            .input(Path::new("in.jpg"))
-            .output(Path::new("out.jxl"))
-            .lossless_jpeg(true)
-            .effort(constants::JXL_EXPERIMENTAL_LOSSLESS_EFFORT);
-
-        let cmd = builder.build();
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-
-        assert!(args.contains(&"-e".to_string()));
-        assert!(args.contains(&"11".to_string()));
-        assert!(args.contains(&"--allow_expert_options".to_string()));
-        assert!(args.contains(&"--lossless_jpeg=1".to_string()));
+    fn cjxl_builder_allows_full_reversible_jpeg_effort_range_without_expert_options() {
+        for effort in 1..=11 {
+            let mut builder = CjxlBuilder::new();
+            builder
+                .input(Path::new("in.jpg"))
+                .output(Path::new("out.jxl"))
+                .lossless_jpeg(true)
+                .effort(effort);
+            let cmd = builder.build();
+            let args: Vec<_> = cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair == ["-e", &effort.to_string()])
+            );
+            assert_eq!(
+                args.contains(&"--allow_expert_options".to_string()),
+                effort == 11
+            );
+            assert!(args.contains(&"--lossless_jpeg=1".to_string()));
+        }
     }
 
     #[test]

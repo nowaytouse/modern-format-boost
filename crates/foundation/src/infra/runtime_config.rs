@@ -141,8 +141,74 @@ pub struct ImgPolicy {
     pub allow_size_tolerance: bool,
     /// Standard IMG only: inclusive pure-media byte allowance; metadata is excluded.
     pub size_tolerance_bytes: u64,
+    /// Fixed AVIF quality used by Fast IMG AVIF; progressive AVIF requires at least Q10.
+    pub avif_quality: u8,
+    /// Final AVIF encoder speed used by Fast IMG AVIF delivery.
+    pub avif_speed: u8,
     pub jpeg_effort: u8,
+    /// Override distance only where the private media policy permits lossy encoding.
+    pub jxl_distance: Option<f32>,
+    /// None retains the normal/ultimate or PNG effort selected by the media policy.
+    pub jxl_effort: Option<u8>,
+    /// Compare verified encodes at fixed quality before distance exploration.
+    pub jxl_effort_search: EffortSearch,
+    pub jpeg_effort_search: EffortSearch,
+    pub quality_search: QualitySearch,
     pub fallback_policy: FallbackPolicy,
+}
+
+/// Parse a final direct pixel JXL effort.
+///
+/// # Errors
+/// Rejects values outside the encoder range (1 through 11).
+pub fn parse_direct_jxl_effort(value: &str) -> std::result::Result<u8, String> {
+    let effort = value.parse::<u8>().map_err(|error| error.to_string())?;
+    if (1..=11).contains(&effort) {
+        Ok(effort)
+    } else {
+        Err("direct JXL effort must be 1..11".into())
+    }
+}
+
+/// Parse a finite JXL distance within the encoder range.
+///
+/// # Errors
+/// Rejects non-finite values and distances outside 0 through 25.
+pub fn parse_jxl_distance(value: &str) -> std::result::Result<f32, String> {
+    let distance = value.parse::<f32>().map_err(|error| error.to_string())?;
+    if distance.is_finite() && (0.0..=25.0).contains(&distance) {
+        Ok(distance)
+    } else {
+        Err("JXL distance must be finite and within 0..25".into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffortSearch {
+    #[default]
+    Fixed,
+    Adaptive,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum QualitySearch {
+    #[default]
+    ModeDefault,
+    Fixed,
+    Adaptive,
+}
+
+impl QualitySearch {
+    #[must_use]
+    pub const fn enabled(self, default: bool) -> bool {
+        match self {
+            Self::ModeDefault => default,
+            Self::Fixed => false,
+            Self::Adaptive => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
@@ -178,7 +244,14 @@ impl Default for ImgPolicy {
             quality_heuristic: false,
             allow_size_tolerance: false,
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
+            avif_quality: 100,
+            avif_speed: 0,
             jpeg_effort: 11,
+            jxl_distance: None,
+            jxl_effort: None,
+            jxl_effort_search: EffortSearch::Fixed,
+            jpeg_effort_search: EffortSearch::Fixed,
+            quality_search: QualitySearch::ModeDefault,
             fallback_policy: FallbackPolicy::Strict,
         }
     }
@@ -380,6 +453,23 @@ impl RuntimeConfig {
             (1..=11).contains(&self.img.jpeg_effort),
             "img.jpeg_effort must be 1..11"
         );
+        ensure!(
+            self.img
+                .jxl_effort
+                .is_none_or(|effort| (1..=11).contains(&effort)),
+            "img.jxl_effort must be 1..11 when specified"
+        );
+        ensure!(
+            self.img
+                .jxl_distance
+                .is_none_or(|distance| distance.is_finite() && (0.0..=25.0).contains(&distance)),
+            "img.jxl_distance must be finite and within 0..25 when specified"
+        );
+        ensure!(
+            (10..=100).contains(&self.img.avif_quality),
+            "img.avif_quality must be 10..100 because progressive AVIF requires Q10 or higher"
+        );
+        ensure!(self.img.avif_speed <= 10, "img.avif_speed must be 0..10");
         ensure!(
             (1..=1000).contains(&self.photos.native_batch_size),
             "photos.native_batch_size must be 1..1000"
@@ -796,6 +886,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_jxl_effort_is_bounded_and_independent_from_jpeg() -> Result<()> {
+        let mut config = RuntimeConfig::default();
+        assert_eq!(config.img.jxl_effort, None);
+        assert_eq!(config.img.jxl_distance, None);
+        assert_eq!(config.img.jxl_effort_search, EffortSearch::Fixed);
+        assert_eq!(config.img.jpeg_effort_search, EffortSearch::Fixed);
+        assert_eq!(
+            serde_json::to_value(&config)?["img"]["jxl_effort"],
+            Value::Null
+        );
+        for effort in 1..=11 {
+            config.img.jxl_effort = Some(effort);
+            config.validate()?;
+            assert_eq!(parse_direct_jxl_effort(&effort.to_string()), Ok(effort));
+            assert_eq!(config.img.jpeg_effort, 11);
+        }
+        for effort in [0, 12, u8::MAX] {
+            config.img.jxl_effort = Some(effort);
+            assert!(config.validate().is_err());
+            assert!(parse_direct_jxl_effort(&effort.to_string()).is_err());
+        }
+        let mut value = serde_json::to_value(RuntimeConfig::default())?;
+        let mut sources = BTreeMap::new();
+        let mut source_chain = BTreeMap::new();
+        let temp = tempfile::tempdir()?;
+        let saved = temp.path().join("direct.json");
+        std::fs::write(
+            &saved,
+            br#"{"config_version":1,"img":{"jxl_effort":8,"jpeg_effort":9}}"#,
+        )?;
+        apply_file(&mut value, &saved, &mut sources, &mut source_chain)?;
+        assert_eq!(value["img"]["jxl_effort"], 8);
+        std::fs::write(&saved, br#"{"config_version":1,"img":{"jxl_effort":null}}"#)?;
+        apply_file(&mut value, &saved, &mut sources, &mut source_chain)?;
+        assert_eq!(value["img"]["jxl_effort"], Value::Null);
+        assert_eq!(value["img"]["jpeg_effort"], 9);
+        Ok(())
+    }
+
+    #[test]
+    fn jxl_distance_rejects_non_finite_and_out_of_range_values() -> Result<()> {
+        let mut config = RuntimeConfig::default();
+        for distance in [0.0, 0.001, 0.4, 25.0] {
+            config.img.jxl_distance = Some(distance);
+            config.validate()?;
+            assert_eq!(parse_jxl_distance(&distance.to_string()), Ok(distance));
+        }
+        for distance in [-0.1, 25.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            config.img.jxl_distance = Some(distance);
+            assert!(config.validate().is_err());
+            assert!(parse_jxl_distance(&distance.to_string()).is_err());
+        }
+        config.img.jxl_distance = Some(0.4);
+        config.img.quality_search = QualitySearch::Adaptive;
+        config.validate()?;
+        config.img.quality_search = QualitySearch::Fixed;
+        config.validate()?;
+        config.img.jxl_distance = None;
+        config.validate()?;
+        let restored: RuntimeConfig =
+            serde_json::from_value(json!({"img":{"jpeg_effort_search":"adaptive"}}))?;
+        assert_eq!(restored.img.jpeg_effort_search, EffortSearch::Adaptive);
+        Ok(())
+    }
+
+    #[test]
     fn tool_overrides_preserve_inheritance_exact_paths_and_cli_sources() -> Result<()> {
         let mut loaded = LoadedConfig {
             config: RuntimeConfig::default(),
@@ -921,6 +1077,42 @@ mod tests {
             old_config.img.size_tolerance_bytes,
             crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fast_img_avif_quality_and_speed_validate_encoder_bounds() -> Result<()> {
+        let defaults = RuntimeConfig::default();
+        assert_eq!(defaults.img.avif_quality, 100);
+        assert_eq!(defaults.img.avif_speed, 0);
+        defaults.validate()?;
+        let empty_config: RuntimeConfig = serde_json::from_value(json!({}))?;
+        assert_eq!(empty_config.img.avif_quality, 100);
+        assert_eq!(empty_config.img.avif_speed, 0);
+
+        for (quality, speed) in [(10, 0), (100, 10)] {
+            let config: RuntimeConfig = serde_json::from_value(json!({
+                "img": {"avif_quality": quality, "avif_speed": speed}
+            }))?;
+            config.validate()?;
+            assert_eq!(config.img.avif_quality, quality);
+            assert_eq!(config.img.avif_speed, speed);
+        }
+
+        for (field, value) in [
+            ("avif_quality", 0),
+            ("avif_quality", 9),
+            ("avif_quality", 101),
+            ("avif_speed", 11),
+        ] {
+            let config: RuntimeConfig = serde_json::from_value(json!({
+                "img": {field: value}
+            }))?;
+            assert!(
+                config.validate().is_err(),
+                "{field}={value} must be rejected"
+            );
+        }
         Ok(())
     }
 

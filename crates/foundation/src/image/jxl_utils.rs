@@ -962,7 +962,12 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         icc_policy,
         flags,
     } = request;
-    debug_assert!(crate::constants::is_supported_jxl_effort(effort));
+    debug_assert!(crate::constants::is_supported_jxl_effort_with_expert(
+        effort,
+        flags.contains(crate::ConvertFlags::ALLOW_EXPERT_OPTIONS)
+            || crate::runtime_config::active()
+                .is_some_and(|config| config.img.jxl_effort == Some(11)),
+    ));
 
     let mut magick_builder = crate::image_builders::MagickBuilder::new();
     magick_builder
@@ -1022,6 +1027,7 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
         .distance(distance)
         .effort(effort)
         .threads(max_threads)
+        .allow_expert_options(flags.contains(crate::ConvertFlags::ALLOW_EXPERT_OPTIONS))
         .apple_compat(flags.contains(crate::ConvertFlags::APPLE_COMPAT))
         .fixed_features(flags.contains(crate::ConvertFlags::JXL_FIXED_FEATURES));
 
@@ -1240,7 +1246,12 @@ pub fn try_imagemagick_fallback_with_effort(
     max_threads: usize,
     flags: crate::ConvertFlags,
 ) -> std::result::Result<(), std::io::Error> {
-    debug_assert!(crate::constants::is_supported_jxl_effort(effort));
+    debug_assert!(crate::constants::is_supported_jxl_effort_with_expert(
+        effort,
+        flags.contains(crate::ConvertFlags::ALLOW_EXPERT_OPTIONS)
+            || crate::runtime_config::active()
+                .is_some_and(|config| config.img.jxl_effort == Some(11)),
+    ));
     let base_request = ImagemagickCjxlPipelineRequest {
         input,
         output,

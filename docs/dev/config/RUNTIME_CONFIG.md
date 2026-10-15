@@ -39,6 +39,11 @@ img config init ./preferences.json
 img --config /path/to/preferences.json config show --effective
 img run /path/to/images --allow-database --quality-heuristic
 img fast-img /path/to/images --jpeg-effort 11 --fallback-policy strict
+img run /path/to/images --jxl-effort 8
+img run /path/to/images --jxl-effort-search adaptive --jxl-effort 8 --quality-search fixed
+img fast-img /path/to/images --jpeg-effort-search adaptive --jpeg-effort 11
+img fast-img /path/to/images --strategy avif --quality-search fixed --avif-quality 80 --avif-speed 6
+img --avif-quality 10 --avif-speed 0 config show --effective
 img fast-img /path/to/images --fallback-policy same-semantics --tool-policy single
 img fast-img /path/to/images --shortest-path --photos-backend native \
   --photos-import-root Archive --photos-album-name Family \
@@ -77,6 +82,67 @@ cancelling discards them and Apply validates through the worker before persisten
 No override means inheritance, not a saved copy of a discovered or inherited value.
 No raw JSON editor or configuration-file rewrite is involved.
 
+Image settings adjust the current private policy, not a second processing policy.
+The algorithm reference and route-specific limits are recorded in
+[IMG Private Policy](IMG_PRIVATE_POLICY.md).
+
+- **D: pixel distance.** `img.jxl_distance` is nullable: omission or `null` keeps
+  the existing source/mode decision. An explicit value must be finite in 0..25.
+  It can adjust an eligible legacy-lossy pixel encode, not relax a protected
+  source's fidelity contract. PNG and confirmed-lossless input keep D0; JPEG
+  uses reversible reconstruction. Existing modern-lossy/container retention
+  remains in force. These are private policy decisions, not broken-media errors.
+- **E: encoder effort.** `img.jxl_effort` is nullable: Normal uses E7,
+  Ultimate/archive E10, and PNG E10 unless explicitly overridden. JPEG uses its
+  independent `img.jpeg_effort`, default E11. Explicit supported efforts do not
+  change D, media routing, metadata policy or verification.
+- **D exploration.** `quality_search=mode-default` retains the existing
+  Ultimate/explore/non-archive trigger. `fixed` disables D search; `adaptive`
+  requests it only where source and size admission permit. D0 is the baseline;
+  ladder screening, finalist verification and refinement use the same selected
+  E. The algorithm prefers the lowest fitting D, not the smallest file at any D.
+  Explicit `adaptive` leaves a saved manual D inactive without overwriting it.
+  `mode-default` retains the manual D where the historical route does not explore.
+- **E exploration.** `jxl_effort_search=fixed` is the default. Opt-in `adaptive`
+  compares verified pure-media payloads at one quality within the bounded E
+  candidate range. Equal payloads prefer lower E. This is not low-E assistance
+  for high-E D search and is not a speed guarantee. With both searches enabled,
+  E is selected first, then D is explored in that single E domain.
+
+Fast JXL has JPEG E and optional verified JPEG E comparison, not pixel D controls.
+Each JPEG candidate must reconstruct the source bytes exactly. Existing
+same-semantics compatibility retries remain governed by `fallback_policy`.
+Fast AVIF keeps its own Q search and locator/final Speed domains; JXL D/E does
+not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
+
+- **Fast AVIF fixed Q.** `img.avif_quality` accepts integers 10..100 (default 100).
+  The existing progressive-output policy requires Q at least 10; the encoder's
+  general non-progressive 0..100 range is not this route's supported range.
+  It is active only when `img.quality_search=fixed`; the selected Q is probed once
+  in the final speed domain, not silently lowered on failure or oversize. With
+  `mode-default` or `adaptive`, the stored Q is inactive and the existing bounded
+  search starts at Q100. A true-lossless candidate may still be accepted first
+  for a confirmed-lossless source; existing AVIF retains its no-reencode route.
+- **Fast AVIF final Speed.** `img.avif_speed` accepts integers 0..10 (default 0,
+  slowest; 10 is fastest). It applies to true-lossless probes, final-domain Q
+  probes and refinement. The existing fast locator remains Speed6; its temporary
+  candidate is discarded and its coordinate must be re-probed at the selected
+  final Speed. This is a speed selection, not Speed exploration or a JXL E value.
+  No runtime or compression benefit is guaranteed by changing it.
+
+`--avif-quality` and `--avif-speed` are valid for `img fast-img --strategy avif`
+and `img config` inspection, not ordinary IMG, Fast JXL or unrelated commands.
+The launcher uses `--img-avif-quality` and `--img-avif-speed` in Fast AVIF mode.
+Explicit Speed0 survives all boundaries. Q100 is the encoder's highest quality
+setting, not a guarantee of RGB mathematical losslessness for arbitrary inputs.
+All existing health, pixel, payload-size, metadata and delivery checks remain
+mandatory; a fixed Q request can fail them and must preserve the source.
+
+CLI flags and GUI preferences enter the same typed resolver. Existing
+`--explore`, `--match-quality`, `--ultimate` and `--archive` interfaces are not
+retired by this work. Explicit typed search preferences control their own
+algorithm; they do not remove source admission, size or delivery checks.
+
 ### Native GUI Overrides
 
 The gear button shows the current image workflow, a standard Video tab,
@@ -85,6 +151,26 @@ independent JPEG transcoding effort (1 through 11), fallback,
 quality heuristic and database overrides. Standard IMG preferences are never
 copied into Fast IMG on read; each workflow uses its own saved overrides and the
 backend's effective configuration. Existing independent preferences stay intact.
+Fast AVIF adds **Manual quality** with a Q10..100 input and a Speed0..10 popup.
+Automatic or inherited AVIF-rule selection disables the Q input without deleting
+its saved value. Selecting manual quality reactivates it. Reset removes only the
+GUI overrides; effective source loading and validation still use the same worker
+resolver as execution. These controls are absent from standard IMG and Fast JXL.
+The ordinary Image tab keeps D and E values separate from their independent
+exploration checkboxes. E-only remains available without D exploration; D-only
+does not silently search E. Inactive fixed-D drafts remain saved, while D search
+uses the policy's D0 baseline. Fast JXL shows JPEG E, not pixel D; Fast AVIF shows
+its separate quality selection. Each workflow retains independent preferences.
+The ordinary labels use quality (D), compression level (E) and lossless JPEG
+transcoding rather than algorithm names. When E comparison is enabled, the
+numeric control is labelled "Compare up to level (E)" instead of implying a final
+effort. Turning it off restores the fixed-level label without changing the
+saved value or worker arguments. Unspecified D/E display "Follow archive rules"
+only after configuration is known; a failed lookup remains unknown.
+The D checkbox distinguishes the inherited conditional policy from an explicit
+automatic choice, and accessible labels follow the same visible state.
+An unchanged inherited control does not save an override;
+explicit selection retains one, and reset removes it without changing JSON.
 Search locates the original setting by localized label, section or choice. In
 Developer mode, runtime keys and flags are searchable too. Results include only
 the current workflow's applicable controls; selecting a Photos advanced parameter
@@ -92,9 +178,11 @@ reveals it without changing its value. Search and navigation preserve the draft.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and per-file failure
-policies and image tool selection appear only in Developer mode, enabled in About.
+policies appear only in Developer mode, enabled in About. Image tool selection
+is an ordinary Image/Fast IMG processing preference.
 Video exposes HEVC/AV1 in Settings, plus an independent developer configuration
-file, file-error mode and long-video fusion quality checks. The latter is typed
+file and file-error mode. Long-video fusion quality checks are an ordinary Video
+preference. The latter is typed
 `vid.force_ms_ssim_long`, default `false`; direct standard VID uses
 `--force-ms-ssim-long[=true|false]`, and the launcher uses
 `--vid-force-ms-ssim-long[=true|false]`. Omission inherits the file setting, explicit
@@ -125,7 +213,8 @@ show an unknown inherited value, never a fabricated continue policy. When standa
 IMG and VID inherit different performance modes, the mixed workflow offers
 "Use each pipeline's configuration" rather than fabricating one shared mode;
 only an explicit shared selection overrides both. Developer
-tooltips include configuration keys and sources. Numeric fields use steppers;
+tooltips include configuration keys and sources. Efforts use numeric menus;
+other numeric fields use steppers;
 quality inference/database use Enabled/Disabled menus and Photos booleans use
 ordinary two-state checkboxes. Apply
 validates the relevant standard/Fast IMG and VID profiles, including adaptive
@@ -139,7 +228,8 @@ remains owned by the shared Rust model. Tool executable paths remain available t
 direct `img --tool` overrides.
 
 The launcher accepts `--img-config`, `--img-fallback-policy`,
-`--img-jpeg-effort`, `--img-quality-heuristic=true|false`,
+`--img-jpeg-effort`, `--img-jpeg-effort-search`, `--img-jxl-effort`, `--img-jxl-distance`,
+`--img-jxl-effort-search`, `--img-quality-search`, `--img-quality-heuristic=true|false`,
 `--img-allow-database=true|false`, `--img-tool-policy`, `--img-error-mode`, `--vid-config`, `--vid-codec`, and
 `--vid-error-mode`, plus `--vid-force-ms-ssim-long=true|false`. Error modes are `log-and-continue` and `fail-fast`; overrides
 are forwarded as typed worker `--error-mode` flags, including PTY launches, without
@@ -205,7 +295,12 @@ chosen after runtime fallback are not yet part of this record.
 | `execution.error_mode` | `log-and-continue` | Standard IMG/VID recoverable file-failure policy. `fail-fast` stops on the first recoverable failure; fatal errors always stop and intentional skips remain skips. `--error-mode` overrides files. Does not change Fast IMG/Fast GIF encoding loops. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
-| `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11. Pixel encoding retains its normal/ultimate mode policy. |
+| `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11; independent of direct pixel encoding. |
+| `img.jxl_distance` | `null` | Optional finite 0..25 pixel-distance override for policy-eligible sources; null retains the existing source/mode decision. Does not permit lossy archival of protected input. |
+| `img.jxl_effort` | `null` | Optional pixel E override; null keeps Normal E7, Ultimate/archive E10 or PNG E10. Fixed encoding uses the value; opt-in E comparison can select a different verified candidate in its bounded range. |
+| `img.jxl_effort_search` | `fixed` | Optional verified E payload comparison at fixed quality, independent of D search. No cross-E auxiliary D screening. |
+| `img.jpeg_effort_search` | `fixed` | Optional reversible JPEG E comparison; every candidate needs exact reconstruction proof. |
+| `img.quality_search` | `mode-default` | Existing standard mode trigger or separate Fast AVIF Q search; fixed disables parameter search, adaptive remains subject to source/size admission. Not source-quality inference. |
 | `img.fallback_policy` | `strict` | `strict`: one requested JPEG encode attempt. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
 | `tools.policy` | `fallback` | `single` forbids alternate image encoding/recovery tools. `fallback` permits them only where the fallback policy allows recovery. Metadata and verification tools remain required. |

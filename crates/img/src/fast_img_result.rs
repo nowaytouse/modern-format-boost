@@ -4,6 +4,7 @@
     reason = "CLI result types remain internal; public visibility conflicts with unreachable_pub"
 )]
 use foundation::ModernLossyStaticCandidate;
+use foundation::common_utils::calculate_blake3_hash;
 use foundation::pipeline::verification::{
     FastImgStageName, WorkingCopyMarker, gate1_complete_or_later, gate3_complete_or_later,
     write_marker_atomic,
@@ -35,7 +36,7 @@ impl std::fmt::Display for FileFailures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "fast-img {} recorded {} failed source(s); failed sources retained",
+            "fast-img {} recorded {} failed source(s); see the result report for source retention",
             if self.originals != 0 {
                 "original-media delivery"
             } else {
@@ -58,6 +59,9 @@ struct Report {
     encoded: usize,
     photos_verified: usize,
     source_retained: Option<usize>,
+    failed_sources_retained: Option<usize>,
+    failed_sources_verified: Option<usize>,
+    failed_source_verification_error: Option<String>,
     retention_unknown_reason: Option<String>,
     primary_cleanup_complete: bool,
     finalization_error: Option<String>,
@@ -141,13 +145,25 @@ impl Report {
             .chain(marker.skipped_sources.keys().map(String::as_str))
             .chain(tier2)
             .collect::<BTreeSet<_>>();
-        let retention = sources.iter().try_fold(0usize, |count, rel| {
-            marker
-                .src_dir
-                .join(rel)
-                .try_exists()
-                .map(|exists| count + usize::from(exists))
-        });
+        let retention = sources
+            .iter()
+            .try_fold((0usize, 0usize), |(count, failures), rel| {
+                marker.src_dir.join(rel).try_exists().map(|exists| {
+                    (
+                        count + usize::from(exists),
+                        failures + usize::from(exists && marker.failed_sources.contains_key(*rel)),
+                    )
+                })
+            });
+        let failed_sources_retained = match &retention {
+            Ok((_, count))
+                if probe_failures == 0
+                    && recorded_failures.is_none_or(|failures| failures.originals == 0) =>
+            {
+                Some(*count)
+            }
+            _ => None,
+        };
         let (source_retained, retention_unknown_reason) = match retention {
             Err(error) => (
                 None,
@@ -157,7 +173,41 @@ impl Report {
                 None,
                 Some("source inventory has unclassified or unaccounted entries".into()),
             ),
+            Ok((count, _)) => (Some(count), None),
+        };
+        let failed_verification = (|| -> anyhow::Result<usize> {
+            anyhow::ensure!(
+                probe_failures == 0
+                    && recorded_failures.is_none_or(|failures| failures.originals == 0),
+                "failed sources are not all bound to recorded source hashes"
+            );
+            for (rel, entry) in &marker.failed_sources {
+                let mut path = marker.src_dir.clone();
+                let root = std::fs::symlink_metadata(&path)?;
+                anyhow::ensure!(root.is_dir(), "failed source root is not a real directory");
+                for component in std::path::Path::new(rel).components() {
+                    path.push(component);
+                    let metadata = std::fs::symlink_metadata(&path)?;
+                    anyhow::ensure!(
+                        !metadata.file_type().is_symlink(),
+                        "failed source path contains a symlink: {rel}"
+                    );
+                }
+                anyhow::ensure!(
+                    std::fs::symlink_metadata(&path)?.is_file(),
+                    "failed source is not a regular file: {rel}"
+                );
+                anyhow::ensure!(
+                    calculate_blake3_hash(&path)? == entry.src,
+                    "failed source no longer matches its recorded content hash: {rel}"
+                );
+            }
+            Ok(marker.failed_sources.len())
+        })();
+        let (failed_sources_verified, failed_source_verification_error) = match failed_verification
+        {
             Ok(count) => (Some(count), None),
+            Err(error) => (None, Some(format!("{error:#}"))),
         };
         Ok(Self {
             schema_version: 1,
@@ -169,10 +219,30 @@ impl Report {
             encoded: marker.blake3_log.len(),
             photos_verified,
             source_retained,
+            failed_sources_retained,
+            failed_sources_verified,
+            failed_source_verification_error,
             retention_unknown_reason,
             primary_cleanup_complete: marker.stage == FastImgStageName::CleanupComplete,
             finalization_error: None,
         })
+    }
+
+    fn record_execution(&mut self, execution: &anyhow::Result<()>, photos: bool) {
+        self.finalization_error = execution.as_ref().err().and_then(|error| {
+            let isolated_file_failures =
+                error
+                    .downcast_ref::<FileFailures>()
+                    .is_some_and(|failures| {
+                        error.chain().count() == 1
+                            && failures.total == self.failed
+                            && self.unprocessed == 0
+                            && self.primary_cleanup_complete
+                            && self.failed_sources_verified == Some(self.failed)
+                            && (!photos || self.photos_verified == self.succeeded)
+                    });
+            (!isolated_file_failures).then(|| format!("{error:#}"))
+        });
     }
 }
 
@@ -195,7 +265,7 @@ pub(super) fn finish(
                 Err(execution) => error.context(format!("execution also failed: {execution:#}")),
             },
         )?;
-    report.finalization_error = execution.as_ref().err().map(|error| format!("{error:#}"));
+    report.record_execution(&execution, photos);
     report.ignored = ignored;
     println!("MFB_FAST_IMG_RESULT={}", serde_json::to_string(&report)?);
     println!(
@@ -237,6 +307,7 @@ pub(super) fn finalize_sources<T, U>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use foundation::pipeline::verification::{Blake3Entry, SkippedSourceEntry};
 
     fn partial_marker(root: &std::path::Path, successes: usize) -> WorkingCopyMarker {
@@ -296,6 +367,186 @@ mod tests {
             assert!(!infrastructure.is::<FileFailures>());
             assert!(infrastructure.to_string().contains("backend unavailable"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_source_retention_is_not_inferred_from_retained_successes() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 1);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::fs::write(marker.src_dir.join("0.jpg"), b"successful source")?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, Some(1));
+        assert_eq!(report.failed_sources_retained, Some(0));
+
+        std::fs::write(marker.src_dir.join("invalid.jpg"), b"failed source")?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, Some(2));
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed, 1);
+        assert_eq!(serde_json::to_value(&report)?["failed_sources_retained"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_source_verification_requires_the_recorded_regular_file() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 1);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        let source = marker.src_dir.join("invalid.jpg");
+        std::fs::write(&source, b"original failed source")?;
+        marker
+            .failed_sources
+            .get_mut("invalid.jpg")
+            .context("failed source")?
+            .src = calculate_blake3_hash(&source)?;
+        let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_verified, Some(1));
+        assert_eq!(report.failed_source_verification_error, None);
+        assert_eq!(serde_json::to_value(&report)?["failed_sources_verified"], 1);
+
+        std::fs::write(&source, b"changed failed source")?;
+        let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed_sources_verified, None);
+        assert!(report.failed_source_verification_error.is_some());
+
+        std::fs::remove_file(&source)?;
+        std::fs::create_dir(&source)?;
+        let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed_sources_verified, None);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_source_verification_rejects_symlinks_even_when_content_matches() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        let original = root.path().join("original.jpg");
+        std::fs::write(&original, b"original failed source")?;
+        marker
+            .failed_sources
+            .get_mut("invalid.jpg")
+            .context("failed source")?
+            .src = calculate_blake3_hash(&original)?;
+        std::os::unix::fs::symlink(&original, marker.src_dir.join("invalid.jpg"))?;
+        let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_retained, Some(1));
+        assert_eq!(report.failed_sources_verified, None);
+
+        std::fs::remove_file(marker.src_dir.join("invalid.jpg"))?;
+        let entry = marker
+            .failed_sources
+            .remove("invalid.jpg")
+            .context("failed source")?;
+        marker
+            .failed_sources
+            .insert("linked/original.jpg".into(), entry);
+        std::os::unix::fs::symlink(root.path(), marker.src_dir.join("linked"))?;
+        let report = Report::from_marker(&marker, false, &[], 0, None)?;
+        assert_eq!(report.failed_sources_verified, None);
+        Ok(())
+    }
+
+    #[test]
+    fn only_verified_completed_file_failures_are_not_finalization_errors() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 1);
+        marker.stage = FastImgStageName::CleanupComplete;
+        std::fs::create_dir_all(&marker.src_dir)?;
+        let source = marker.src_dir.join("invalid.jpg");
+        std::fs::write(&source, b"original failed source")?;
+        marker
+            .failed_sources
+            .get_mut("invalid.jpg")
+            .context("failed source")?
+            .src = calculate_blake3_hash(&source)?;
+        let mut report = Report::from_marker(&marker, false, &[], 0, None)?;
+        let failure = Err(FileFailures::primary(1).into());
+        report.record_execution(&failure, false);
+        assert_eq!(report.finalization_error, None);
+        assert!(
+            finish(&marker, false, &[], 0, 0, failure)
+                .err()
+                .context("file failure exit")?
+                .is::<FileFailures>()
+        );
+
+        report.record_execution(&Err(anyhow::anyhow!("backend unavailable")), false);
+        assert!(
+            report
+                .finalization_error
+                .as_deref()
+                .is_some_and(|error| error.contains("backend unavailable"))
+        );
+        report.record_execution(&Err(FileFailures::primary(2).into()), false);
+        assert!(report.finalization_error.is_some());
+        report.record_execution(
+            &Err(anyhow::Error::new(FileFailures::primary(1)).context("final marker write failed")),
+            false,
+        );
+        assert!(report.finalization_error.is_some());
+        report.record_execution(&Err(FileFailures::primary(1).into()), true);
+        assert!(report.finalization_error.is_some());
+        report.unprocessed = 1;
+        report.record_execution(&Err(FileFailures::primary(1).into()), false);
+        assert!(report.finalization_error.is_some());
+        report.unprocessed = 0;
+        report.failed_sources_verified = None;
+        report.record_execution(&Err(FileFailures::primary(1).into()), false);
+        assert!(report.finalization_error.is_some());
+        report.failed_sources_verified = Some(1);
+        report.primary_cleanup_complete = false;
+        report.record_execution(&Err(FileFailures::primary(1).into()), false);
+        assert!(report.finalization_error.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn unbound_failures_have_no_failed_source_retention_proof() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::fs::write(marker.src_dir.join("invalid.jpg"), b"failed source")?;
+        let probe_failure = Report::from_marker(&marker, true, &[], 1, None)?;
+        assert_eq!(probe_failure.failed, 2);
+        assert_eq!(probe_failure.failed_sources_retained, None);
+        assert_eq!(probe_failure.failed_sources_verified, None);
+        let originals = [ModernLossyStaticCandidate {
+            path: marker.src_dir.join("original.jxl"),
+            rel_path: "original.jxl".into(),
+            format: foundation::image::format_detect::FormatKind::Jxl,
+            blake3: "original-hash".into(),
+        }];
+        let original_failure = Report::from_marker(
+            &marker,
+            true,
+            &originals,
+            0,
+            Some(&FileFailures::originals(1)),
+        )?;
+        assert_eq!(original_failure.failed, 2);
+        assert_eq!(original_failure.failed_sources_retained, None);
+        assert_eq!(original_failure.failed_sources_verified, None);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_source_inspection_error_is_unknown_not_missing_or_retained() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = partial_marker(root.path(), 0);
+        std::fs::create_dir_all(&marker.src_dir)?;
+        std::os::unix::fs::symlink("invalid.jpg", marker.src_dir.join("invalid.jpg"))?;
+        let report = Report::from_marker(&marker, true, &[], 0, None)?;
+        assert_eq!(report.source_retained, None);
+        assert_eq!(report.failed_sources_retained, None);
+        assert!(report.retention_unknown_reason.is_some());
         Ok(())
     }
 

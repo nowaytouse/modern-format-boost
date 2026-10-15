@@ -547,8 +547,17 @@ pub fn safe_delete_jpeg_source(
     output: &Path,
     integrity: &IntegrityResult,
 ) -> Result<()> {
+    safe_delete_jpeg_source_recorded(source, output, integrity, &mut Vec::new())
+}
+
+/// Verify and remove a source, recording only successful unlink operations.
+pub fn safe_delete_jpeg_source_recorded(
+    source: &Path,
+    output: &Path,
+    integrity: &IntegrityResult,
+    removed_files: &mut Vec<PathBuf>,
+) -> Result<()> {
     use crate::common_utils::calculate_blake3_hash;
-    use crate::io_utils::safe_remove_file;
 
     // @ANCHOR:delete-gate — delete iff integrity_passed && output_size>0 &&
     // blake3_logged; atomic Gate 1: §Integrity must have passed (caller
@@ -669,15 +678,21 @@ pub fn safe_delete_jpeg_source(
         "delete-gate PASS: removing source JPEG"
     );
 
-    safe_remove_file(source).map_err(|e| {
+    std::fs::remove_file(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "delete failed for {} (output preserved at {}): {e}",
             source.display(),
             output.display()
         ))
     })?;
+    removed_files.push(source.to_path_buf());
 
-    delete_matching_xmp_sidecar_path(source, output, matching_xmp_sidecar.as_deref())?;
+    delete_matching_xmp_sidecar_path(
+        source,
+        output,
+        matching_xmp_sidecar.as_deref(),
+        removed_files,
+    )?;
 
     Ok(())
 }
@@ -688,8 +703,22 @@ pub fn safe_delete_jpeg_source(
 /// # Errors
 /// Returns an error if a matching sidecar exists but cannot be removed.
 pub fn safe_delete_matching_xmp_sidecar(source: &Path, output: &Path) -> Result<bool> {
+    safe_delete_matching_xmp_sidecar_recorded(source, output, &mut Vec::new())
+}
+
+/// Remove a verified sidecar and retain the exact successful unlink receipt.
+pub fn safe_delete_matching_xmp_sidecar_recorded(
+    source: &Path,
+    output: &Path,
+    removed_files: &mut Vec<PathBuf>,
+) -> Result<bool> {
     let matching_xmp_sidecar = xmp_sidecar_for_verified_output_cleanup(source, output)?;
-    delete_matching_xmp_sidecar_path(source, output, matching_xmp_sidecar.as_deref())
+    delete_matching_xmp_sidecar_path(
+        source,
+        output,
+        matching_xmp_sidecar.as_deref(),
+        removed_files,
+    )
 }
 
 fn xmp_sidecar_for_verified_output_cleanup(
@@ -712,9 +741,8 @@ fn delete_matching_xmp_sidecar_path(
     source: &Path,
     output: &Path,
     matching_xmp_sidecar: Option<&Path>,
+    removed_files: &mut Vec<PathBuf>,
 ) -> Result<bool> {
-    use crate::io_utils::safe_remove_file;
-
     let Some(xmp_sidecar) = matching_xmp_sidecar else {
         return Ok(false);
     };
@@ -738,7 +766,7 @@ fn delete_matching_xmp_sidecar_path(
         xmp_sidecar = %xmp_sidecar.display(),
         "delete-gate PASS: removing source XMP after verified delivery"
     );
-    safe_remove_file(xmp_sidecar).map_err(|err| {
+    std::fs::remove_file(xmp_sidecar).map_err(|err| {
         ImgQualityError::AnalysisError(format!(
             "delete-gate sidecar FAIL: failed to delete matching XMP sidecar {} for {} (output \
              preserved at {}): {err}",
@@ -747,6 +775,7 @@ fn delete_matching_xmp_sidecar_path(
             output.display()
         ))
     })?;
+    removed_files.push(xmp_sidecar.to_path_buf());
     Ok(true)
 }
 
@@ -801,8 +830,19 @@ fn safe_delete_modern_lossy_static_source_after_reverify(
     source: &Path,
     import_proof: &crate::pipeline::verification::LibraryAssetRecord,
 ) -> Result<()> {
+    safe_delete_modern_lossy_static_source_after_reverify_recorded(
+        source,
+        import_proof,
+        &mut Vec::new(),
+    )
+}
+
+fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
+    source: &Path,
+    import_proof: &crate::pipeline::verification::LibraryAssetRecord,
+    removed_files: &mut Vec<PathBuf>,
+) -> Result<()> {
     use crate::common_utils::calculate_blake3_hash;
-    use crate::io_utils::safe_remove_file;
 
     let claimed_blake3 = import_proof.blake3.as_str();
     let photos_uuid = import_proof
@@ -906,13 +946,19 @@ fn safe_delete_modern_lossy_static_source_after_reverify(
         "delete-gate PASS: removing tier-2 lossy modern static source"
     );
 
-    safe_remove_file(source).map_err(|e| {
+    std::fs::remove_file(source).map_err(|e| {
         ImgQualityError::AnalysisError(format!(
             "delete failed for tier-2 source {} (Photos custody preserved): {e}",
             source.display()
         ))
     })?;
-    delete_matching_xmp_sidecar_path(source, source, matching_xmp_sidecar.as_deref())?;
+    removed_files.push(source.to_path_buf());
+    delete_matching_xmp_sidecar_path(
+        source,
+        source,
+        matching_xmp_sidecar.as_deref(),
+        removed_files,
+    )?;
     Ok(())
 }
 
@@ -1098,6 +1144,15 @@ pub fn delete_verified_modern_lossy_static_sources(
     src_dir: &Path,
     library_handle: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<(usize, usize)> {
+    delete_verified_modern_lossy_static_sources_recorded(src_dir, library_handle, &mut Vec::new())
+}
+
+/// Batch source cleanup with receipts that remain available after a later failure.
+pub fn delete_verified_modern_lossy_static_sources_recorded(
+    src_dir: &Path,
+    library_handle: &crate::pipeline::verification::LibraryHandle,
+    removed_files: &mut Vec<PathBuf>,
+) -> Result<(usize, usize)> {
     if library_handle.imported_assets.is_empty() {
         return Ok((0, 0));
     }
@@ -1114,13 +1169,14 @@ pub fn delete_verified_modern_lossy_static_sources(
                 asset.xmp_sidecar_blake3.as_deref(),
                 true,
             )? {
-                crate::io_utils::safe_remove_file(&sidecar).map_err(|error| {
+                std::fs::remove_file(&sidecar).map_err(|error| {
                     ImgQualityError::AnalysisError(format!(
                         "tier-2 delete failed to remove proven XMP sidecar {} for already-absent source {}: {error}",
                         sidecar.display(),
                         source.display()
                     ))
                 })?;
+                removed_files.push(sidecar);
             }
             already_deleted += 1;
             tracing::info!(
@@ -1130,7 +1186,12 @@ pub fn delete_verified_modern_lossy_static_sources(
             );
             continue;
         }
-        safe_delete_modern_lossy_static_source_after_reverify(&source, asset).map_err(|err| {
+        safe_delete_modern_lossy_static_source_after_reverify_recorded(
+            &source,
+            asset,
+            removed_files,
+        )
+        .map_err(|err| {
             ImgQualityError::AnalysisError(format!(
                 "tier-2 delete failed for verified source {}: {err}",
                 source.display()
@@ -9758,8 +9819,15 @@ mod tests {
             source_hash,
             output_hash,
         };
-        safe_delete_jpeg_source(&src_path, out.path(), &integrity).unwrap();
+        let mut removed = Vec::new();
+        safe_delete_jpeg_source_recorded(&src_path, out.path(), &integrity, &mut removed).unwrap();
         assert!(!src_path.exists());
+        assert_eq!(removed, vec![src_path.clone()]);
+        assert!(
+            safe_delete_jpeg_source_recorded(&src_path, out.path(), &integrity, &mut removed)
+                .is_err()
+        );
+        assert_eq!(removed, vec![src_path]);
     }
 
     #[test]

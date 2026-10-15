@@ -113,6 +113,12 @@ impl AvifSpeedDomain {
     /// Slow final domain used for materialized delivery candidates.
     pub const MEME_QUALITY_SEARCH: Self = Self(0);
 
+    /// Name a speed domain; callers validate the speed against encoder capabilities.
+    #[must_use]
+    pub const fn new(speed: u8) -> Self {
+        Self(speed)
+    }
+
     #[must_use]
     pub const fn value(self) -> u8 {
         self.0

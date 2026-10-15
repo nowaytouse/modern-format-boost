@@ -275,10 +275,11 @@ impl GpuProbeEnvironment {
         let configured_tool = crate::runtime_config::active()
             .and_then(|config| config.tools.paths.get(crate::constants::TOOL_FFMPEG))
             .cloned();
-        let priority_path = match configured_tool
-            .clone()
-            .or_else(|| std::env::var_os("MFB_TOOL_FFMPEG").map(std::path::PathBuf::from))
-        {
+        let priority_path = match configured_tool.as_ref() {
+            Some(path) => Some(path.clone()),
+            None => std::env::var_os("MFB_TOOL_FFMPEG").map(std::path::PathBuf::from),
+        };
+        let priority_path = match priority_path {
             Some(path) => Some(path),
             None => match which::which(crate::constants::TOOL_FFMPEG) {
                 Ok(path) => Some(path),
@@ -296,8 +297,9 @@ impl GpuProbeEnvironment {
             None => None,
         };
         Ok(Self {
-            working_directory: std::env::current_dir()
-                .map_err(|error| format!("GPU probe working directory unavailable: {error}"))?,
+            working_directory: crate::media_conversion_gate::delivery_cwd_or_err(
+                "GPU probe working directory",
+            )?,
             configured_tool,
             priority_tool,
             variables: [
@@ -4805,6 +4807,15 @@ mod tests {
             fresh_positive.refresh_reason(&changed, false).unwrap(),
             Some("environment_changed")
         );
+        let mut changed = environment.clone();
+        changed.working_directory = changed
+            .working_directory
+            .join("different-working-directory");
+        assert_eq!(
+            fresh_positive.refresh_reason(&changed, false).unwrap(),
+            Some("environment_changed"),
+            "working directory changes must invalidate the observed probe context"
+        );
         std::fs::write(tool.path(), b"changed executable").expect("replace fixture contents");
         assert_eq!(
             fresh_positive.refresh_reason(&environment, false).unwrap(),
@@ -4850,9 +4861,23 @@ mod tests {
             assert_eq!(count(), 3, "driver environment must invalidate the probe");
             assert!(GpuAccel::detect().enabled);
             assert_eq!(count(), 3);
+            let cwd = std::env::var_os("MFB_GPU_CWD_CHILD_FIXTURE").expect("owned child cwd");
+            std::fs::remove_dir(&cwd).expect("remove isolated child working directory");
+            let error = std::env::current_dir().expect_err("deleted cwd must be unavailable");
+            let state = GpuAccel::cached_state(false, false);
+            assert!(!state.accel.enabled);
+            assert!(state.context.is_none());
+            assert!(state.diagnostics.iter().any(|message| {
+                message.contains("GPU probe working directory: current_dir unavailable")
+                    && message.contains(&error.to_string())
+            }));
+            assert!(crate::media_conversion_gate::delivery_cwd_or_audit("unit_test").is_none());
+            assert_eq!(count(), 3, "invalid cwd must not start a new GPU probe");
             return;
         }
         let root = tempfile::tempdir().expect("owned GPU cache test root");
+        let working_directory = root.path().join("cwd");
+        std::fs::create_dir(&working_directory).expect("owned child working directory");
         let tool = root.path().join("ffmpeg");
         let counter = root.path().join("encoder-list-count");
         std::fs::write(&counter, b"").expect("create counter");
@@ -4862,9 +4887,11 @@ mod tests {
         let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args(["--exact", "videopipe::gpu_accel::tests::gpu_capability_cache_tracks_tool_replacement_without_reprobing_hits", "--nocapture"])
             .env(CHILD, &counter)
+            .env("MFB_GPU_CWD_CHILD_FIXTURE", &working_directory)
             .env("MFB_TOOL_FFMPEG", &tool)
             .env("MFB_HOME_ROOT", root.path().join("home"))
             .env("MFB_LOG_DIR", root.path().join("logs"))
+            .current_dir(&working_directory)
             .output()
             .expect("run isolated GPU cache fixture");
         assert!(
