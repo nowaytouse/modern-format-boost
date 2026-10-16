@@ -2700,12 +2700,21 @@ pub fn convert_jpeg_to_jxl(
     // Report a failed task through the shared policy without invoking an encoder
     // or manufacturing a successful skip for an incomplete source.
     if !is_jpeg_complete(&input_bytes) {
-        return Ok(handle_irreversible_jpeg_encode_failure(
+        let missing_eoi = !input_bytes.windows(2).any(|marker| marker == b"\xFF\xD9");
+        let mut result = handle_irreversible_jpeg_encode_failure(
             input,
             input_size,
             options,
-            "Incomplete JPEG container: encoding was not started because the end-of-image marker is missing",
-        ));
+            if missing_eoi {
+                "Incomplete JPEG container: encoding was not started because the end-of-image marker is missing"
+            } else {
+                "Incomplete JPEG container: encoding was not started because the required image structure could not be confirmed"
+            },
+        );
+        if missing_eoi {
+            result.skip_reason = Some("jpeg_missing_eoi".to_owned());
+        }
+        return Ok(result);
     }
 
     if foundation::image_jpeg_analysis::is_ultra_hdr_jpeg(&input_bytes) {
@@ -7010,16 +7019,26 @@ mod tests {
         assert!(!result.skipped);
         assert_eq!(result.outcome(), foundation::conversion::Outcome::Failed);
         assert!(input.exists(), "failed conversion must retain its source");
-        assert_eq!(
-            result.skip_reason.as_deref(),
-            Some(JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON)
-        );
+        assert_eq!(result.skip_reason.as_deref(), Some("jpeg_missing_eoi"));
         assert!(
             !result.message.contains("JPEG is truncated or missing EOI"),
             "raw EOI probe failure must not be the user-facing batch result: {}",
             result.message
         );
         assert!(result.message.contains("encoding was not started"));
+        assert_eq!(fs::read(&input).unwrap(), [0xFF, 0xD8, 0xFF, 0xE0]);
+        assert!(result.output_path.is_none());
+        fs::write(&input, [0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xD9]).unwrap();
+        let other = convert_jpeg_to_jxl(&input, &options, None).unwrap();
+        assert_eq!(
+            other.skip_reason.as_deref(),
+            Some(JPEG_LOSSLESS_TRANSCODE_UNAVAILABLE_SKIP_REASON)
+        );
+        assert!(!other.message.contains("end-of-image marker is missing"));
+        assert_eq!(
+            fs::read(&input).unwrap(),
+            [0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xD9]
+        );
     }
 
     #[test]

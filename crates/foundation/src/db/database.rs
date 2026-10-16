@@ -1676,6 +1676,19 @@ fn log_loop_lookup_branch(branch: LoopIntentLookupBranch) {
     );
 }
 
+macro_rules! clone_rational {
+    ($value:expr) => {{
+        #[cfg(feature = "high-precision")]
+        {
+            $value.clone()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            $value
+        }
+    }};
+}
+
 // Rationale: This function handles complex, sequential initialization or
 // business logic where further fragmentation would hinder readability and
 // maintainability.
@@ -2007,9 +2020,9 @@ fn lookup_similar_samples_inner(
             loop_durations.push(*d);
         }
 
-        weighted_keep += prob * final_weight.clone();
-        total_weight += final_weight.clone();
-        weight_squares_sum += final_weight.clone() * final_weight;
+        weighted_keep += prob * clone_rational!(final_weight);
+        total_weight += clone_rational!(final_weight);
+        weight_squares_sum += clone_rational!(final_weight) * final_weight;
         distances.push(*distance);
     }
 
@@ -2036,7 +2049,7 @@ fn lookup_similar_samples_inner(
         ));
     };
     let divisor = if total_weight > min_weight {
-        total_weight.clone()
+        clone_rational!(total_weight)
     } else {
         min_weight
     };

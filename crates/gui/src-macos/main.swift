@@ -6908,7 +6908,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             if line.hasPrefix(HistoryFileFailure.prefix) {
                 do {
                     if let failure = try HistoryFileFailure.decode(line) {
-                        visibleLine = "[FAIL] \(failure.source_path): \(failure.message)"
+                        let reason = hasSeriousProcessingDiagnostic(failure.message) ? failure.message : failure.userReason
+                        visibleLine = "[FAIL] \(failure.source_path): \(reason)"
                         if developerMode { displayLines.append(line) }
                     }
                 } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
@@ -7898,6 +7899,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard latestDiagnostics.warning == "[WARN] " + localized("history.batch_issues.invalid"),
               latestDiagnostics.failure == visibleFailure else {
             throw HostError(message: "Malformed file failure marker hid the previous actionable error")
+        }
+        clearBatchLog()
+        let incompleteJpeg = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/incomplete.jpg",
+            absolute_path: "/synthetic/incomplete.jpg", message: "synthetic original diagnostic", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", reason_code: "jpeg_missing_eoi")
+        let incompleteMarker = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(incompleteJpeg), as: UTF8.self)
+        appendLog(incompleteMarker)
+        guard latestDiagnostics.failure == "[FAIL] /synthetic/incomplete.jpg: " + localized("history.file_failure.reason.jpeg_missing_eoi"),
+              incompleteJpeg.message == "synthetic original diagnostic", !batchResults.hasFailure else {
+            throw HostError(message: "A verified reason code lost its localized explanation, original diagnostic or count boundary")
         }
     }
 

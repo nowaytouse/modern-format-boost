@@ -48,6 +48,30 @@ struct HistoryFileFailure: Codable, Hashable {
     let invocation_id: String
     let reason_code: String?
 
+    var userReason: String {
+        switch reason_code {
+        case "jpeg_lossless_encode_unavailable": localized("history.file_failure.reason.jpeg_lossless_encode_unavailable")
+        case "jpeg_missing_eoi": localized("history.file_failure.reason.jpeg_missing_eoi")
+        default: message + (reason_code.map { " [\($0)]" } ?? "")
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.schema_version == rhs.schema_version && lhs.pipeline == rhs.pipeline
+            && lhs.run_id == rhs.run_id && lhs.invocation_id == rhs.invocation_id
+            && lhs.reason_code == rhs.reason_code
+            && lhs.source_path.utf8.elementsEqual(rhs.source_path.utf8)
+            && lhs.absolute_path.map { Data($0.utf8) } == rhs.absolute_path.map { Data($0.utf8) }
+            && lhs.message.utf8.elementsEqual(rhs.message.utf8)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(schema_version); hasher.combine(pipeline)
+        hasher.combine(run_id); hasher.combine(invocation_id); hasher.combine(reason_code)
+        hasher.combine(Data(source_path.utf8)); hasher.combine(absolute_path.map { Data($0.utf8) })
+        hasher.combine(Data(message.utf8))
+    }
+
     static let prefix = "MFB_FILE_FAILURE="
 
     static func decode(_ line: String) throws -> Self? {
@@ -1861,13 +1885,58 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let failedContent = NSStackView()
     private var failedCopyButton = NSButton()
     private var failedRevealButton = NSButton()
+    private var failedDetailsButton = NSButton()
     private var failedPaths: [String] = []
+    private struct FailureSourceKey: Hashable {
+        let runID: String
+        let invocationID: String
+        let pipeline: String
+        let sourcePath: String
+        let absolutePath: String?
+
+        init(_ failure: HistoryFileFailure) {
+            runID = failure.run_id
+            invocationID = failure.invocation_id
+            pipeline = failure.pipeline
+            sourcePath = failure.source_path
+            absolutePath = failure.absolute_path
+        }
+
+        var ordering: [String] { [sourcePath, absolutePath ?? "", runID, invocationID, pipeline] }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.runID == rhs.runID && lhs.invocationID == rhs.invocationID && lhs.pipeline == rhs.pipeline
+                && lhs.sourcePath.utf8.elementsEqual(rhs.sourcePath.utf8)
+                && lhs.absolutePath.map { Data($0.utf8) } == rhs.absolutePath.map { Data($0.utf8) }
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(runID); hasher.combine(invocationID); hasher.combine(pipeline)
+            hasher.combine(Data(sourcePath.utf8)); hasher.combine(absolutePath.map { Data($0.utf8) })
+        }
+    }
+    private struct FailureObservation {
+        let failure: HistoryFileFailure
+        let repetitions: Int
+    }
     private struct FailureDisplayRow {
         let path: String
         let absolutePath: String?
         let reason: String
+        let source: FailureSourceKey?
+        let observations: [FailureObservation]
+
+        var searchable: String {
+            ([path, absolutePath ?? "", reason] + observations.flatMap { observation in
+                let failure = observation.failure
+                return [failure.run_id, failure.invocation_id, failure.pipeline, failure.source_path,
+                        failure.absolute_path ?? "", failure.message, failure.reason_code ?? "", failure.userReason]
+            }).joined(separator: "\n")
+        }
     }
     private var failureDisplayRows: [FailureDisplayRow] = []
+    private var failureDetailAlert: NSAlert?
+    private var failureDetailGeneration = UUID()
     private var detailScroll = NSScrollView()
     private var outputNavigation = NSStackView()
     private var olderButton = NSButton()
@@ -2113,6 +2182,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func configureFailedFiles() {
         failedTable.delegate = self
         failedTable.dataSource = self
+        failedTable.target = self
+        failedTable.doubleAction = #selector(openFailureDetails)
         failedTable.rowHeight = HistoryLayout.rowHeight
         failedTable.usesAlternatingRowBackgroundColors = true
         failedTable.style = .inset
@@ -2136,7 +2207,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedSearch.setContentHuggingPriority(.defaultLow, for: .horizontal)
         failedCopyButton = iconButton("doc.on.doc", key: "history.failed_files.copy", action: #selector(copyFailedPath))
         failedRevealButton = iconButton("folder", key: "history.failed_files.reveal", action: #selector(revealFailedPath))
-        let toolbar = NSStackView(views: [failedSearch, failedCopyButton, failedRevealButton])
+        failedDetailsButton = iconButton("info.circle", key: "history.file_failure.detail", action: #selector(openFailureDetails))
+        let toolbar = NSStackView(views: [failedSearch, failedDetailsButton, failedCopyButton, failedRevealButton])
         toolbar.spacing = 4
         failedStatus.font = HistoryLayout.smallFont
         failedStatus.textColor = .secondaryLabelColor
@@ -2187,6 +2259,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
                               (exportButton, "history.export.title"),
+                               (failedDetailsButton, "history.file_failure.detail"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
@@ -2546,6 +2619,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedTable.isEnabled = failuresVisible
         failedCopyButton.isEnabled = failuresVisible && selectedFailedPath != nil
         failedRevealButton.isEnabled = failuresVisible && selectedFailedURL != nil
+        failedDetailsButton.isEnabled = failuresVisible && failureDisplayRows.indices.contains(failedTable.selectedRow)
+            && !failureDisplayRows[failedTable.selectedRow].observations.isEmpty
         logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single || pair, forSegment: 2)
@@ -2559,6 +2634,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func windowWillClose(_ notification: Notification) {
+        clearFailureDetails()
         cancelIssueScan()
         exportGeneration = UUID()
         if exportBusy { finishExport(localized("history.export.cancelled")) }
@@ -2632,6 +2708,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func resetOutput() {
+        clearFailureDetails()
         cancelIssueScan()
         batchIssueResult = nil
         comparisonIssues = nil
@@ -2643,6 +2720,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func detailModeChanged() {
+        clearFailureDetails()
         if selectedEntries.count == 2 {
             if detailMode.selectedSegment == 2 {
                 if let issues = comparisonIssues { displayFailureComparison(issues) }
@@ -2707,23 +2785,34 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func filterFailedFiles() {
+        clearFailureDetails()
         let paths = selected?.summary?.failed_files ?? []
         let query = failedSearch.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        var observations = Set<HistoryFileFailure>()
-        var recordedPaths = Set<String>()
-        var candidates: [FailureDisplayRow] = []
-        for observation in batchIssueResult?.fileFailures ?? [] where observations.insert(observation).inserted {
-            recordedPaths.insert(observation.source_path)
-            candidates.append(FailureDisplayRow(path: observation.source_path, absolutePath: observation.absolute_path,
-                reason: observation.message + (observation.reason_code.map { " [\($0)]" } ?? "")))
+        let grouped = Dictionary(grouping: batchIssueResult?.fileFailures ?? [], by: FailureSourceKey.init)
+        let sourceRows = grouped.map { key, failures -> FailureDisplayRow in
+            var repetitions: [HistoryFileFailure: Int] = [:]
+            for failure in failures { repetitions[failure, default: 0] += 1 }
+            let observations = repetitions.map { FailureObservation(failure: $0.key, repetitions: $0.value) }
+                .sorted { ($0.failure.message, $0.failure.reason_code ?? "") < ($1.failure.message, $1.failure.reason_code ?? "") }
+            let reason = observations.count == 1 ? observations[0].failure.userReason
+                : localized("history.file_failure.reason.multiple", observations.count)
+            return FailureDisplayRow(path: key.sourcePath, absolutePath: key.absolutePath,
+                                     reason: reason, source: key, observations: observations)
+        }.sorted { $0.source!.ordering.lexicographicallyPrecedes($1.source!.ordering) }
+        let recordedPaths = Set(sourceRows.map { Data($0.path.utf8) })
+        var seenPaths = Set<Data>()
+        let missingRows = paths.filter {
+            let bytes = Data($0.utf8)
+            return !recordedPaths.contains(bytes) && seenPaths.insert(bytes).inserted
+        }.map {
+            FailureDisplayRow(path: $0, absolutePath: nil, reason: localized("history.file_failure.not_recorded"),
+                              source: nil, observations: [])
         }
-        candidates += paths.filter { !recordedPaths.contains($0) }.map {
-            FailureDisplayRow(path: $0, absolutePath: nil, reason: localized("history.file_failure.not_recorded"))
-        }
+        let candidates = sourceRows + missingRows
         var matches = 0
         var bytes = 0
         failureDisplayRows = []
-        for row in candidates where query.isEmpty || row.path.localizedCaseInsensitiveContains(query) || row.reason.localizedCaseInsensitiveContains(query) {
+        for row in candidates where query.isEmpty || row.searchable.localizedCaseInsensitiveContains(query) {
             matches += 1
             let length = row.path.utf8.count + row.reason.utf8.count + (row.absolutePath?.utf8.count ?? 0)
             if failureDisplayRows.count < HistoryStore.maximumOutputLines, length <= HistoryStore.maximumOutputBytes - bytes {
@@ -2737,8 +2826,86 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedStatus.stringValue = (candidates.isEmpty ? localized("history.failed_files.empty")
             : localized("history.failed_files.range", failedPaths.count, matches, candidates.count))
             + "\n" + (batchIssueResult == nil ? localized("history.failed_files.note")
-                : localized("history.file_failure.records", batchIssueResult!.fileFailures.count) + "\n" + localized("history.file_failure.note"))
+                : localized("history.file_failure.source_observations", sourceRows.count, batchIssueResult!.fileFailures.count)
+                    + "\n" + localized("history.file_failure.note"))
         updateActions()
+    }
+
+    private func clearFailureDetails() {
+        failureDetailGeneration = UUID()
+        if let alert = failureDetailAlert, let window, window.attachedSheet === alert.window {
+            window.endSheet(alert.window)
+        }
+        failureDetailAlert = nil
+    }
+
+    private func failureDetailText(for row: FailureDisplayRow) throws -> String {
+        guard let source = row.source, !row.observations.isEmpty else {
+            throw HostError(message: localized("history.file_failure.not_recorded"))
+        }
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var lines = [localized("history.detail.run_id") + ": " + source.runID,
+                     localized("history.detail.invocation_id") + ": " + source.invocationID,
+                     localized("history.media.\(source.pipeline)") + ": " + source.pipeline,
+                     localized("history.failed_files.path") + ": " + source.sourcePath,
+                     localized("history.file_failure.detail.absolute_path") + ": " + (source.absolutePath ?? localized("result.unknown")),
+                     localized("history.file_failure.detail.note"), ""]
+        for observation in row.observations {
+            let json = try jsonEncoder.encode(observation.failure)
+            lines += [observation.failure.userReason, observation.failure.message,
+                      localized("history.file_failure.detail.observations", observation.repetitions),
+                      localized("history.file_failure.detail.json"), String(decoding: json, as: UTF8.self), ""]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @objc private func openFailureDetails() {
+        guard detailMode.selectedSegment == 2, refreshButton.isEnabled,
+              failureDisplayRows.indices.contains(failedTable.selectedRow),
+              let window else { return }
+        let row = failureDisplayRows[failedTable.selectedRow]
+        do {
+            let text = try failureDetailText(for: row)
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = localized("history.file_failure.detail.title")
+            alert.informativeText = localized("history.file_failure.detail.observations",
+                row.observations.reduce(0) { $0 + $1.repetitions })
+            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
+            textView.string = text
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isHorizontallyResizable = false
+            textView.isVerticallyResizable = true
+            textView.minSize = .zero
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.autoresizingMask = [.width]
+            textView.textContainer?.widthTracksTextView = true
+            textView.setAccessibilityLabel(localized("history.file_failure.detail.title"))
+            textView.font = HistoryLayout.detailFont
+            textView.textContainerInset = NSSize(width: HistoryLayout.spacing, height: HistoryLayout.spacing)
+            let scroll = NSScrollView(frame: textView.frame)
+            scroll.hasVerticalScroller = true
+            scroll.documentView = textView
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("history.file_failure.detail.copy"))
+            alert.addButton(withTitle: localized("history.file_failure.detail.close"))
+            let token = UUID()
+            failureDetailGeneration = token
+            failureDetailAlert = alert
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, self.failureDetailGeneration == token else { return }
+                self.failureDetailAlert = nil
+                if response == .alertFirstButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    self.status.stringValue = localized("history.file_failure.detail.copied")
+                }
+            }
+        } catch {
+            status.stringValue = error.localizedDescription
+        }
     }
 
     @objc private func copyFailedPath() {
@@ -3003,25 +3170,55 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         batchIssueResult = issues
         detailMode.selectedSegment = 2
         detailModeChanged()
-        guard failedTable.numberOfRows == 3, entry.summary?.img.failed == 1,
-              failureDisplayRows[0].reason.contains("synthetic decoder failed"),
-              failureDisplayRows[1].reason == "synthetic metadata failure",
-              failureDisplayRows[2].reason == localized("history.file_failure.not_recorded"),
-              failedStatus.stringValue.contains(localized("history.file_failure.records", 3)) else {
-            throw HostError(message: "File-linked reasons merged distinct observations or invented failed-file counts")
+        guard failedTable.numberOfRows == 2, entry.summary?.img.failed == 1,
+              failureDisplayRows[0].reason == localized("history.file_failure.reason.multiple", 2),
+              failureDisplayRows[0].observations.map(\.repetitions).sorted() == [1, 2],
+              failureDisplayRows[1].reason == localized("history.file_failure.not_recorded"),
+              failedStatus.stringValue.contains(localized("history.file_failure.source_observations", 1, 3)) else {
+            throw HostError(message: "File-linked grouping lost distinct observations or changed final failed-file counts")
+        }
+        let fullDetails = try failureDetailText(for: failureDisplayRows[0])
+        guard fullDetails.contains("synthetic decoder failed\nno guessed root cause"),
+              fullDetails.contains("synthetic metadata failure"), fullDetails.contains("decoder_failed"),
+              fullDetails.contains(issues.fileFailures[0].source_path),
+              fullDetails.contains(issues.fileFailures[0].invocation_id) else {
+            throw HostError(message: "Grouped failure details lost original diagnostics, Unicode paths or invocation identity")
         }
         failedTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         updateActions()
         guard selectedFailedPath == issues.fileFailures[0].source_path,
-              selectedFailedURL == nil, failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
+              selectedFailedURL == nil, failedCopyButton.isEnabled, !failedRevealButton.isEnabled, failedDetailsButton.isEnabled,
               (tableView(failedTable, viewFor: failedTable.tableColumns[1], row: 0) as? NSTableCellView)?.textField?.toolTip == failureDisplayRows[0].reason else {
             throw HostError(message: "Recorded reasons lost exact paths/tooltips or enabled unavailable Finder navigation")
         }
         failedSearch.stringValue = "METADATA"
         filterFailedFiles()
-        guard failedPaths == [issues.fileFailures[0].source_path], failureDisplayRows[0].reason == "synthetic metadata failure",
-              !failedCopyButton.isEnabled else { throw HostError(message: "Failure-reason search retained stale actions") }
+        guard failedPaths == [issues.fileFailures[0].source_path], failureDisplayRows[0].observations.count == 2,
+              !failedCopyButton.isEnabled, !failedDetailsButton.isEnabled else {
+            throw HostError(message: "Failure-reason search lost a grouped cause or retained stale actions")
+        }
         failedSearch.stringValue = ""
+        let original = issues.fileFailures[0]
+        let anotherCall = HistoryFileFailure(schema_version: original.schema_version, pipeline: original.pipeline,
+            source_path: original.source_path, absolute_path: original.absolute_path, message: original.message,
+            run_id: original.run_id, invocation_id: "another-call", reason_code: original.reason_code)
+        batchIssueResult = HistoryStore.BatchIssues(groups: [], occurrences: 0,
+            fileFailures: [original, original, original, anotherCall], scannedRows: 4, start: 0, upper: 4, endSource: "snapshot_only")
+        filterFailedFiles()
+        guard failureDisplayRows.filter({ $0.source != nil }).count == 2,
+              failedStatus.stringValue.contains(localized("history.file_failure.source_observations", 2, 4)),
+              failureDisplayRows.flatMap(\.observations).map(\.repetitions).sorted() == [1, 3] else {
+            throw HostError(message: "Source grouping merged different invocations or confused observations with files")
+        }
+        let composed = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/\u{e9}.jpg",
+            absolute_path: nil, message: "unknown original", run_id: "r", invocation_id: "i", reason_code: "unrecognized")
+        let decomposed = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/e\u{301}.jpg",
+            absolute_path: nil, message: "unknown original", run_id: "r", invocation_id: "i", reason_code: "unrecognized")
+        guard Set([composed, decomposed]).count == 2, Set([FailureSourceKey(composed), FailureSourceKey(decomposed)]).count == 2,
+              composed.userReason == "unknown original [unrecognized]" else {
+            throw HostError(message: "Source grouping normalized recorded paths or invented an unknown reason")
+        }
+        batchIssueResult = issues
         detailMode.selectedSegment = 0
         detailModeChanged()
         guard detail.string.contains(entry.context!.run_id!) else { throw HostError(message: "History overview lost run identity") }

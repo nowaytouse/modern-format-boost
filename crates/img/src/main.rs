@@ -637,7 +637,18 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         let result = foundation::progress_mode::with_deferred_skip_reporting(|| {
             auto_convert_single_file(&input, &config)
         })
-        .inspect_err(foundation::report::print_recoverable_single_file_error)?;
+        .inspect_err(|error| {
+            if let Some(failure) = error.downcast_ref::<ImageTaskFailure>() {
+                foundation::infra::static_logs::log_file_outcome_audit_with_class(
+                    "img",
+                    "failed",
+                    &input,
+                    &failure.message,
+                    failure.reason_code.as_deref(),
+                );
+            }
+            foundation::report::print_recoverable_single_file_error(error);
+        })?;
         let outcome = if result.ignored {
             foundation::conversion::Outcome::Ignored
         } else if result.skipped {
@@ -1531,9 +1542,37 @@ fn conversion_output_ignored(input: &Path, reason: String, original_size: u64) -
     }
 }
 
+#[derive(Debug)]
+struct ImageTaskFailure {
+    message: String,
+    reason_code: Option<String>,
+}
+
+impl std::fmt::Display for ImageTaskFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+fn image_task_failure(result: &foundation::TaskResult) -> anyhow::Error {
+    anyhow::Error::new(foundation::UnifiedError::conversion_error(
+        result.message.clone(),
+    ))
+    .context(ImageTaskFailure {
+        message: result.message.clone(),
+        reason_code: result.skip_reason.clone(),
+    })
+}
+
+fn image_failure_reason_code(error: &anyhow::Error) -> Option<&str> {
+    error
+        .downcast_ref::<ImageTaskFailure>()
+        .and_then(|failure| failure.reason_code.as_deref())
+}
+
 fn convert_result_to_output(result: foundation::TaskResult) -> anyhow::Result<ConversionOutput> {
     if !result.success && !result.ignored {
-        return Err(foundation::UnifiedError::conversion_error(result.message).into());
+        return Err(image_task_failure(&result));
     }
     let input_path = result.input_path.clone();
     let output_path = if let Some(v) = result.output_path.clone() {
@@ -1661,6 +1700,21 @@ mod conversion_result_adapter_tests {
 
         let error = convert_result_to_output(result).expect_err("failed task must remain failed");
         assert!(error.to_string().contains("decode failed"));
+        assert!(
+            error.downcast_ref::<foundation::UnifiedError>().is_some(),
+            "single-file recoverable reporting must retain its typed error"
+        );
+        assert_eq!(
+            super::image_failure_reason_code(&error),
+            Some("decode_failed")
+        );
+        let fast_result =
+            foundation::TaskResult::failed(&input, 7, "incomplete source", "jpeg_missing_eoi");
+        let fast_error = super::fast_img_encoded_output(&fast_result).unwrap_err();
+        assert_eq!(
+            super::image_failure_reason_code(&fast_error),
+            Some("jpeg_missing_eoi")
+        );
         assert!(!image_batch_should_abort(
             foundation::BatchErrorMode::LogAndContinue,
             &error
@@ -2691,11 +2745,12 @@ impl ImageBatchWorker<'_> {
                             error
                         );
                     }
-                    foundation::infra::static_logs::log_file_outcome_audit(
+                    foundation::infra::static_logs::log_file_outcome_audit_with_class(
                         "img",
                         "failed",
                         path,
                         &error_text,
+                        image_failure_reason_code(&error),
                     );
                     let request_abort = image_batch_should_abort(self.config.error_mode, &error);
                     self.record_failure(path, &error_text, request_abort);
@@ -4669,6 +4724,7 @@ struct FastImgTranscodeError {
     out_rel_key: String,
     src_hash: String,
     reason: String,
+    reason_code: Option<String>,
 }
 
 type FastImgJobResult = std::result::Result<FastImgTranscodeOutcome, FastImgTranscodeError>;
@@ -5526,13 +5582,11 @@ fn fast_img_prepare_existing_avif(
 }
 
 fn fast_img_encoded_output(result: &foundation::TaskResult) -> anyhow::Result<&Path> {
-    anyhow::ensure!(
-        result.success,
-        "encode failed for {}: {} [{}]",
-        result.input_path,
-        result.message,
-        result.skip_reason.as_deref().unwrap_or("unspecified")
-    );
+    if !result.success {
+        return Err(
+            image_task_failure(result).context(format!("encode failed for {}", result.input_path))
+        );
+    }
     result.output_path.as_deref().map(Path::new).ok_or_else(|| {
         anyhow::anyhow!(
             "encoder reported success without an output path for {}: {}",
@@ -5812,7 +5866,8 @@ fn fast_img_run_encode_job(
         rel_key: job.rel_key.clone(),
         out_rel_key: job.out_rel_key.clone(),
         src_hash: job.src_hash.clone(),
-        reason: err.to_string(),
+        reason: format!("{err:#}"),
+        reason_code: image_failure_reason_code(&err).map(str::to_owned),
     })
 }
 
@@ -9699,6 +9754,13 @@ fn fast_img_apply_encode_results(
             Ok(outcome) => outcome,
             Err(err) => {
                 println!("[FAIL    ] {} {}", err.rel_key, err.reason);
+                foundation::infra::static_logs::log_file_outcome_audit_with_class(
+                    "img",
+                    "failed",
+                    &src_dir.join(fast_img_checked_rel_path(&err.rel_key)?),
+                    &err.reason,
+                    err.reason_code.as_deref(),
+                );
                 fast_img_remove_failed_encode_output(working_copy, &err)?;
                 marker.blake3_log.remove(&err.rel_key);
                 marker.skipped_sources.remove(&err.rel_key);
@@ -9865,6 +9927,7 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                                 out_rel_key: job.out_rel_key.clone(),
                                 src_hash: job.src_hash.clone(),
                                 reason: "encode admission unexpectedly cancelled".to_owned(),
+                                reason_code: None,
                             })?;
                         let result = fast_img_run_encode_job(
                             job,
@@ -11789,14 +11852,28 @@ mod fast_img_hardening_tests {
         let root = TempDir::new()?;
         let src_root = root.path().join("Photos");
         let src = src_root.join("bad.jpg");
-        write_jpeg(&src, b"bad")?;
+        std::fs::create_dir_all(&src_root)?;
+        std::fs::write(&src, [0xFF, 0xD8, 0xFF, 0xDA, 0, 2])?;
         let src_hash = foundation::common_utils::calculate_blake3_hash(&src)?;
-        let err = FastImgTranscodeError {
+        let job = super::FastImgTranscodeJob {
+            source: src.clone(),
             rel_key: "bad.jpg".to_string(),
             out_rel_key: "bad.JXL".to_string(),
             src_hash: src_hash.clone(),
-            reason: "pixel-diff: djxl exited non-zero decoding output.JXL".to_string(),
         };
+        let output = root.path().join("Photos_optimized");
+        let err = super::fast_img_run_encode_job(&job, &src_root, &output, 1, false, false, "jxl")
+            .err()
+            .context("incomplete JPEG must remain a failed task")?;
+        assert_eq!(err.reason_code.as_deref(), Some("jpeg_missing_eoi"));
+        assert!(
+            !output.exists(),
+            "incomplete source must not start output encoding"
+        );
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&src)?,
+            src_hash
+        );
         let mut marker = WorkingCopyMarker::new(src_root, root.path().join("Photos_optimized"), 1);
 
         marker.blake3_log.remove(&err.rel_key);
@@ -11813,7 +11890,7 @@ mod fast_img_hardening_tests {
             .get("bad.jpg")
             .context("failed source was not recorded")?;
         assert_eq!(skipped.src, src_hash);
-        assert!(skipped.reason.contains("djxl exited non-zero"));
+        assert!(skipped.reason.contains("encoding was not started"));
         assert!(marker.blake3_log.is_empty());
         Ok(())
     }
@@ -11830,6 +11907,7 @@ mod fast_img_hardening_tests {
             out_rel_key: "bad.JXL".to_string(),
             src_hash: "source-hash".to_string(),
             reason: "pixel-diff: djxl exited non-zero decoding bad.JXL".to_string(),
+            reason_code: None,
         };
 
         fast_img_remove_failed_encode_output(&wc, &err)?;
@@ -11849,6 +11927,7 @@ mod fast_img_hardening_tests {
             out_rel_key: "bad.JXL".to_string(),
             src_hash: "source-hash".to_string(),
             reason: "pixel-diff: djxl exited non-zero decoding bad.JXL".to_string(),
+            reason_code: None,
         };
 
         let cleanup_error = fast_img_remove_failed_encode_output(&wc, &err)
@@ -15266,6 +15345,7 @@ mod fast_img_hardening_tests {
             out_rel_key: out_avif,
             src_hash: "hash".to_string(),
             reason: "malformed gif".to_string(),
+            reason_code: None,
         };
 
         super::fast_img_remove_failed_encode_output(&wc, &err)?;
@@ -15591,6 +15671,7 @@ mod fast_img_hardening_tests {
             out_rel_key: "target/image.avif".to_string(),
             src_hash: "hash".to_string(),
             reason: "encode failed".to_string(),
+            reason_code: None,
         };
 
         super::fast_img_remove_failed_encode_output(&wc, &err)?;

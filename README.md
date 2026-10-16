@@ -312,9 +312,17 @@ without opening logs. Versioned `MFB_FILE_FAILURE` observations bind the exact
 reported path, optional absolute path, reason and optional explicit code to the
 run and worker invocation. It reads the selected SQLite snapshot under the same
 bounded whole-batch scan; malformed, oversized or unbound evidence is unavailable,
-not zero. Equal observations share a display row; different reasons stay separate.
-Observation counts are log records, never authoritative failed-file counts or root
-causes. Earlier path-only records say no file-linked reason was recorded.
+not zero. Exact run, invocation, pipeline and recorded source paths form one table
+row. Different reasons remain distinct inside that row's full details; repeated
+observations retain their occurrence counts. Different invocations are not merged.
+Source-group and observation counts are not final failed-file counts, content
+deduplication or proof of a shared root cause. Earlier path-only records say no
+file-linked reason was recorded. Use the information button or double-click a row
+to read/copy complete recorded diagnostics and fields, without opening a log folder.
+Only explicit known reason codes receive translated explanations; unknown codes
+retain the original message. A missing JPEG end marker has its own code, distinct
+from other failures to confirm reversible reconstruction. Stage and current source
+safety are not inferred from a diagnostic record.
 The table is bounded to 1,000 rows and 2 MiB of retained text, with shown/matched
 and recorded-row totals. Copy preserves the reported path; Finder uses an explicit
 absolute observation when available, otherwise an absolute reported path. Missing

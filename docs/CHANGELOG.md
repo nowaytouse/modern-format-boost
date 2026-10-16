@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### File Failure Details And Traceable Reasons (2026-10-16)
+
+- Group History failure observations by exact run/invocation/pipeline/source paths,
+  preserving distinct messages and occurrence counts inside a selectable detail
+  sheet. Add direct full-detail copying, source-group versus observation counts,
+  and search across recorded fields without changing final media counters or raw logs.
+- Translate known failure codes in the live and History views while preserving
+  unknown messages and original diagnostics. Propagate typed image task failure
+  reasons through normal and Fast IMG, and retain existing reason IDs in shared
+  task-failure audit markers. JPEGs missing EOI have a specific code; other
+  incomplete structures are not mislabeled as missing that marker.
+- Keep failure, skip, source retention and delivery evidence separate. A detail
+  group does not establish file-content identity, a verified stage or current
+  source safety. Changing selection or closing details invalidates stale actions.
+- Fix Rational value reuse for both high-precision and Copy fallback builds without
+  changing weight calculations or suppressing feature-specific Clippy diagnostics.
+
 ### Worker-Backed Tool Inspection (2026-10-16)
 
 - Add a read-only **Inspect Processing Tools** window to ordinary image, Fast IMG
