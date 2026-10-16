@@ -8,9 +8,9 @@ use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
 use dev::app::worker::{CollectedChildError, LaunchCommand, WorkerSession};
 use dev::infra::drag_drop::{
-    ContentScan, FastImgAction, ProcessingFilter, ScanRoute, acquire_global_lock,
-    adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
-    count_fast_img_jxl_outputs, create_directory_structure,
+    ContentScan, FastImgAction, OutputCleanupOutcome, OutputCleanupReceipt, ProcessingFilter,
+    ScanRoute, acquire_global_lock, adjacent_output_for_target, build_size_comparison_summary,
+    confirm_in_place, count_fast_img_jxl_outputs, create_directory_structure,
     delete_fast_img_shortest_path_output_dir, fast_img_partial_cleanup_verified,
     fast_img_retained_file_names, fast_img_session_size_metrics,
     prune_completed_fast_img_empty_outputs, run_unified_verification, safety_check, scan_content,
@@ -358,6 +358,19 @@ impl DragDropSession {
         }
         let event = format!("{name}={payload}");
         dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
+    }
+
+    fn record_output_cleanup(&self, mut receipt: OutputCleanupReceipt) -> Result<()> {
+        receipt.run_id.clone_from(&self.run_id);
+        let payload = serde_json::to_value(receipt).context("serialize output cleanup receipt")?;
+        let marker = serde_json::to_string(&payload).context("encode output cleanup marker")?;
+        anyhow::ensure!(
+            marker.len() < 64 * 1024 - "MFB_HISTORY_OUTPUT_CLEANUP=".len(),
+            "output cleanup marker exceeds 64 KiB"
+        );
+        self.append_history_event("MFB_HISTORY_OUTPUT_CLEANUP", payload)?;
+        writeln!(io::stdout().lock(), "MFB_OUTPUT_CLEANUP={marker}")
+            .context("write output cleanup marker to stdout")
     }
 
     fn record_history_verification(
@@ -1746,7 +1759,24 @@ fn run_fast_img_post_success(
     failed_sources_verified: Option<usize>,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
-    let (_, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
+    let cleanup_output_path =
+        std::path::absolute(output_dir).context("resolve output cleanup receipt path")?;
+    let delivered_size = match count_fast_img_jxl_outputs(output_dir) {
+        Ok((_, size)) => size,
+        Err(error) => {
+            let receipt = if args.shortest_path {
+                OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+            } else {
+                OutputCleanupReceipt::not_requested(&cleanup_output_path)
+            };
+            if let Err(receipt_error) = session.record_output_cleanup(receipt) {
+                return Err(error.context(format!(
+                    "also failed to persist output cleanup receipt: {receipt_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     summary.fast_img_size_after_override = summary
         .fast_img_session_output_bytes
         .or(Some(delivered_size));
@@ -1757,7 +1787,7 @@ fn run_fast_img_post_success(
         pick_symbol("🔍", "[CHECK]")
     );
     let target = args.inputs.first().context("input required")?;
-    let mut verify = run_unified_verification(
+    let verification = run_unified_verification(
         &verify_bin,
         target,
         Some(output_dir),
@@ -1771,7 +1801,23 @@ fn run_fast_img_post_success(
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::Delivery,
             strategy: args.strategy.clone(),
         },
-    )?;
+    );
+    let mut verify = match verification {
+        Ok(verify) => verify,
+        Err(error) => {
+            let receipt = if args.shortest_path {
+                OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+            } else {
+                OutputCleanupReceipt::not_requested(&cleanup_output_path)
+            };
+            if let Err(receipt_error) = session.record_output_cleanup(receipt) {
+                return Err(error.context(format!(
+                    "also failed to persist output cleanup receipt: {receipt_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     summary.integrity_state = verify
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
@@ -1784,40 +1830,51 @@ fn run_fast_img_post_success(
         "[VERIFY] inventory: {} optimized, {} skipped, {} failed; processing counters unchanged",
         counts.optimized_count, counts.skipped_count, counts.failed_count
     );
-    if args.shortest_path && verify.warnings == Some(false) {
-        match delete_fast_img_shortest_path_output_dir(output_dir) {
-            Ok(true) => {
+    let receipt = if !args.shortest_path {
+        OutputCleanupReceipt::not_requested(&cleanup_output_path)
+    } else if verify.warnings != Some(false) {
+        OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+    } else {
+        let mut receipt = delete_fast_img_shortest_path_output_dir(output_dir);
+        receipt.output_path = cleanup_output_path;
+        match receipt.outcome {
+            OutputCleanupOutcome::Removed | OutputCleanupOutcome::AlreadyAbsent => {
                 summary.fast_img_size_after_override = summary
                     .fast_img_session_output_bytes
                     .or(Some(delivered_size));
             }
-            Ok(false) => {
-                summary.integrity_state = Some("WARNINGS");
-                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+            OutputCleanupOutcome::Residual => {
                 eprintln!(
                     "   {} Shortest Path cleanup left residual files in {}",
                     pick_symbol("⚠️", "[WARN]"),
                     output_dir.display()
                 );
             }
-            Err(err) => {
-                summary.integrity_state = Some("WARNINGS");
-                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+            OutputCleanupOutcome::Failed => {
                 eprintln!(
-                    "   {} Shortest Path cleanup failed for {}: {err:#}",
+                    "   {} Shortest Path cleanup failed for {}: {}",
                     pick_symbol("❌", "[ERROR]"),
-                    output_dir.display()
+                    output_dir.display(),
+                    receipt.error.as_deref().unwrap_or("unknown cleanup error")
                 );
             }
+            OutputCleanupOutcome::NotRequested | OutputCleanupOutcome::VerificationBlocked => {
+                bail!("output cleanup returned an unattempted outcome after execution");
+            }
         }
-        if let Err(error) = prune_completed_fast_img_empty_outputs(
+        receipt
+    };
+    session.record_output_cleanup(receipt)?;
+    if args.shortest_path
+        && verify.warnings == Some(false)
+        && let Err(error) = prune_completed_fast_img_empty_outputs(
             &fast_img_source_root_for_run(target)?,
             args.strategy.as_deref().unwrap_or("jxl"),
-        ) {
-            summary.integrity_state = Some("WARNINGS");
-            summary.integrity_issue_count = summary.integrity_issue_count.max(1);
-            eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
-        }
+        )
+    {
+        summary.integrity_state = Some("WARNINGS");
+        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+        eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
     }
     if summary.integrity_state == Some("WARNINGS") {
         verify.warnings = Some(true);
@@ -3995,6 +4052,50 @@ mod tests {
         );
         let unchanged = history_payloads(&session, "MFB_HISTORY_FINISHED");
         assert_eq!(unchanged.len(), 2);
+    }
+
+    #[test]
+    fn output_cleanup_receipt_is_persisted_with_the_active_run_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let run = session.for_run().unwrap();
+        let output_path = temp.path().join("output");
+
+        run.record_output_cleanup(OutputCleanupReceipt::verification_blocked(&output_path))
+            .unwrap();
+
+        let events = history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["schema_version"], 1);
+        assert_eq!(events[0]["run_id"], run.run_id.as_deref().unwrap());
+        assert_eq!(
+            events[0]["output_path"],
+            output_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(events[0]["outcome"], "verification_blocked");
+        assert!(events[0]["removed_files"].is_null());
+        assert!(events[0]["already_absent_files"].is_null());
+        assert!(events[0]["pruned_directories"].is_null());
+        assert!(events[0]["error"].is_null());
+
+        let mut boundary = OutputCleanupReceipt::not_requested(Path::new("/"));
+        boundary.run_id.clone_from(&run.run_id);
+        let base_bytes = serde_json::to_string(&boundary).unwrap().len();
+        let stdout_payload_budget = 64 * 1024 - "MFB_OUTPUT_CLEANUP=".len() - 1;
+        boundary.output_path = PathBuf::from(format!(
+            "/{}",
+            "x".repeat(stdout_payload_budget - base_bytes)
+        ));
+        assert_eq!(
+            serde_json::to_string(&boundary).unwrap().len(),
+            stdout_payload_budget
+        );
+        let error = run.record_output_cleanup(boundary).unwrap_err();
+        assert!(format!("{error:#}").contains("exceeds 64 KiB"));
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP").len(),
+            events.len()
+        );
     }
 
     #[test]

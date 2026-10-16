@@ -4606,9 +4606,34 @@ private struct BatchResults {
     private(set) var invalid = false
     private(set) var fastDeliveries: [FastDelivery] = []
     private(set) var fastDeliveryInvalid = false
+    private(set) var outputCleanups: [OutputCleanupReceipt] = []
+    private(set) var outputCleanupInvalid = false
     private var workerExitCodes: [Int] = []
     private(set) var mandatoryEvidenceConflict = false
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    mutating func ingestOutputCleanup(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(OutputCleanupReceipt.prefix) else { return false }
+        do {
+            guard let receipt = try OutputCleanupReceipt.decode(raw), receipt.run_id != nil,
+                  !outputCleanupInvalid, outputCleanups.count < 64,
+                  outputCleanups.allSatisfy({ $0.run_id == receipt.run_id }) else {
+                outputCleanupInvalid = true
+                return true
+            }
+            if let previous = outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
+                if previous != receipt { outputCleanupInvalid = true }
+            } else { outputCleanups.append(receipt) }
+        } catch { outputCleanupInvalid = true }
+        return true
+    }
+
+    func outputCleanupText(detailed: Bool) -> String {
+        if outputCleanupInvalid { return localized("cleanup.invalid") }
+        if outputCleanups.isEmpty { return localized("cleanup.not_recorded") }
+        return outputCleanups.map { detailed ? $0.detailText : $0.statusText }.joined(separator: "\n")
+    }
 
     func fastDeliveryCount(_ key: KeyPath<FastDelivery, Int>) -> Int? {
         processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
@@ -4912,6 +4937,12 @@ enum LogTone: Equatable {
 
     static func classify(_ line: String) -> Self {
         let line = message(line)
+        if line.hasPrefix(OutputCleanupReceipt.prefix) {
+            do {
+                guard let receipt = try OutputCleanupReceipt.decode(line) else { return .warning }
+                return receipt.needsAttention ? .warning : .muted
+            } catch { return .warning }
+        }
         if line.hasPrefix(HistoryIgnoredSource.prefix) {
             do { return try HistoryIgnoredSource.decode(line) == nil ? .warning : .muted }
             catch { return .warning }
@@ -6908,6 +6939,10 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if developerMode { displayLines.append(line) }
                 continue
             }
+            if batchResults.ingestOutputCleanup(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
             if line.hasPrefix(HistoryIgnoredSource.prefix) {
                 do {
                     if let ignored = try HistoryIgnoredSource.decode(line) {
@@ -7246,7 +7281,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             : batchResults.compactSummary
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
         batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
-        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || !logDetailsExpanded
+        let cleanupNeedsAttention = batchResults.outputCleanupInvalid
+            || batchResults.outputCleanups.contains(where: \.needsAttention)
+            || (photos && batchResults.outputCleanups.isEmpty)
+        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || (!logDetailsExpanded && !cleanupNeedsAttention)
         if batchResults.hasFastDelivery {
             let usable = !batchResults.fastDeliveryInvalid
             batchOverviewDelivery.stringValue = localized("result.delivery_facts",
@@ -7268,7 +7306,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             let cleanup = usable && !batchResults.fastDeliveries.isEmpty
                 && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
-            batchOverviewCleanup.stringValue = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
+            let primary = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
+            batchOverviewCleanup.stringValue = (logDetailsExpanded ? primary + "\n" : "")
+                + batchResults.outputCleanupText(detailed: logDetailsExpanded)
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .secondaryLabelColor
         }
         for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
             label.toolTip = label.stringValue
@@ -7720,6 +7761,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         logDetailsExpanded = false
         clearBatchLog()
+        let cleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-cleanup-run", "output_path": "/synthetic/results_optimized",
+            "outcome": "removed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": 1, "error": NSNull()]
+        func cleanupLine(_ fields: [String: Any]) throws -> String {
+            OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        }
+        appendLog(try cleanupLine(cleanup))
         appendLog(try line(receipt))
         appendLog(batch)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
@@ -7728,7 +7775,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard !batchOverview.isHidden,
               batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
               batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
-              batchOverviewCleanup.stringValue == localized("result.cleanup_primary"),
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.removed"),
               batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
               !logView.string.contains("MFB_FAST_IMG_RESULT="),
               window.contentView!.bounds.height < mainWindowContentSize.height,
@@ -7758,6 +7805,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         logDetailsExpanded = false
         refreshBatchOverview(processExit: 1, exitedNormally: true)
+        var remaining = cleanup
+        remaining["outcome"] = "residual"
+        clearBatchLog()
+        appendLog(try line(receipt))
+        appendLog(batch)
+        appendLog(try cleanupLine(remaining))
+        appendLog(try cleanupLine(remaining))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard !batchOverviewCleanup.isHidden, batchOverviewCleanup.textColor == .systemOrange,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.residual"),
+              batchResults.outputCleanups.count == 1, batchResults.fastDeliveryCount(\.succeeded) == 1829,
+              batchOverviewTitle.stringValue == localized("result.attention_count", "1") else {
+            throw HostError(message: "Output cleanup hid leftovers, inflated counts or erased independently confirmed delivery")
+        }
+        appendLog(try cleanupLine(cleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchResults.outputCleanupInvalid, batchOverviewCleanup.stringValue == localized("cleanup.invalid"),
+              batchResults.fastDeliveryCount(\.succeeded) == 1829 else {
+            throw HostError(message: "Conflicting cleanup receipts were accepted or changed media counts")
+        }
         appendLog("MFB_FAST_IMG_RESULT={}")
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
         refreshBatchOverview(processExit: 1, exitedNormally: true)

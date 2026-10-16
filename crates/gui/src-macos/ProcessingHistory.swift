@@ -221,6 +221,69 @@ private struct HistoryFinished: Decodable, Equatable {
     let output_sequence: Int64?
 }
 
+struct OutputCleanupReceipt: Decodable, Equatable {
+    static let prefix = "MFB_OUTPUT_CLEANUP="
+    static let historyPrefix = "MFB_HISTORY_OUTPUT_CLEANUP="
+    let schema_version: Int
+    let run_id: String?
+    let output_path: String
+    let outcome: String
+    let removed_files: Int?
+    let already_absent_files: Int?
+    let pruned_directories: Int?
+    let error: String?
+
+    static func decode(_ line: String, prefix: String = OutputCleanupReceipt.prefix) throws -> Self? {
+        guard line.hasPrefix(prefix) else { return nil }
+        let data = Data(line.dropFirst(prefix.count).utf8)
+        let fields: Set<String> = ["schema_version", "run_id", "output_path", "outcome",
+            "removed_files", "already_absent_files", "pruned_directories", "error"]
+        guard line.utf8.count < 64 * 1_024,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys).isSubset(of: fields),
+              ["schema_version", "output_path", "outcome", "error"].allSatisfy({ object[$0] != nil })
+        else { throw HostError(message: localized("cleanup.invalid")) }
+        let receipt = try JSONDecoder().decode(Self.self, from: data)
+        guard receipt.valid else { throw HostError(message: localized("cleanup.invalid")) }
+        return receipt
+    }
+
+    var valid: Bool {
+        guard schema_version == 1, output_path.hasPrefix("/"), !output_path.utf8.contains(0),
+              run_id.map(validHistoryIdentity) ?? true else { return false }
+        let counts = [removed_files, already_absent_files, pruned_directories]
+        let measured = counts.compactMap { $0 }
+        guard measured.allSatisfy({ $0 >= 0 }),
+              measured.isEmpty || processingCountTotal(measured.map(Optional.some)) != nil else { return false }
+        switch outcome {
+        case "removed", "residual": return counts.allSatisfy({ $0 != nil }) && error == nil
+        case "already_absent", "not_requested", "verification_blocked":
+            return counts.allSatisfy({ $0 == nil }) && error == nil
+        case "failed": return error?.isEmpty == false
+        default: return false
+        }
+    }
+
+    var needsAttention: Bool { ["residual", "failed", "verification_blocked"].contains(outcome) }
+    var statusText: String { localized("cleanup.outcome.\(outcome)") }
+    var detailText: String {
+        let unknown = localized("cleanup.not_measured")
+        var lines = [statusText, output_path,
+            localized("cleanup.counts", removed_files.map(String.init) ?? unknown,
+                already_absent_files.map(String.init) ?? unknown, pruned_directories.map(String.init) ?? unknown)]
+        if let error { lines.append(error) }
+        lines.append(localized("cleanup.scope"))
+        return lines.joined(separator: "\n")
+    }
+
+    var recordedObject: [String: Any] {
+        ["schema_version": schema_version, "run_id": run_id as Any? ?? NSNull(),
+         "output_path": output_path, "outcome": outcome, "removed_files": removed_files as Any? ?? NSNull(),
+         "already_absent_files": already_absent_files as Any? ?? NSNull(),
+         "pruned_directories": pruned_directories as Any? ?? NSNull(), "error": error as Any? ?? NSNull()]
+    }
+}
+
 private struct HistoryVerification: Decodable, Equatable {
     let schema_version: Int
     let has_warnings: Bool
@@ -386,6 +449,8 @@ private struct HistoryEntry {
     var context: HistoryContext?
     var summary: HistorySummary?
     var verification: HistoryVerification?
+    var outputCleanups: [OutputCleanupReceipt] = []
+    var outputCleanupInvalid = false
     var inputPlan: HistoryInputPlan?
     var inputVerifications: [String: HistoryVerification] = [:]
     var configSnapshots: [HistoryConfigSnapshot] = []
@@ -902,6 +967,14 @@ private enum HistoryStore {
                         else { throw HistoryParseError.invalid }
                         current.verification = verification
                     }
+                } else if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
+                    guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
+                          let context = current.context, context.mode == "fast-img", !context.dry_run,
+                          let runID = context.run_id, receipt.run_id == runID,
+                          !current.outputCleanupInvalid, current.outputCleanups.count < 64 else { throw HistoryParseError.invalid }
+                    if let previous = current.outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
+                        guard previous == receipt else { throw HistoryParseError.invalid }
+                    } else { current.outputCleanups.append(receipt) }
                 } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
                     current.configMarkerSeen = true
                     let snapshot = try decodeConfig(event)
@@ -971,6 +1044,10 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
+                    current.outputCleanups.removeAll()
+                    current.outputCleanupInvalid = true
+                }
                 if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
                 if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
                     current.invocations.removeAll()
@@ -1002,7 +1079,24 @@ private enum HistoryStore {
         }
         if !sawRecord { current.issues.append(localized("history.issue.empty")) }
         entries.append(current)
-        for index in entries.indices { entries[index].aggregateInputVerification() }
+        for index in entries.indices {
+            entries[index].aggregateInputVerification()
+            let planOutputs = entries[index].inputPlan?.inputs.compactMap(\.output)
+            let contextOutput = entries[index].context?.output
+            let verifiedOutput = entries[index].verification?.output_path
+            let outputs = planOutputs ?? [verifiedOutput ?? contextOutput].compactMap { $0 }
+            let conflictingOutputs: Bool
+            if planOutputs == nil, let contextOutput, let verifiedOutput {
+                conflictingOutputs = Data(contextOutput.utf8) != Data(verifiedOutput.utf8)
+            } else { conflictingOutputs = false }
+            if entries[index].outputCleanups.contains(where: { receipt in
+                conflictingOutputs || !outputs.contains(where: { Data($0.utf8) == Data(receipt.output_path.utf8) })
+            }) {
+                entries[index].outputCleanups.removeAll()
+                entries[index].outputCleanupInvalid = true
+                entries[index].issues.append(localized("cleanup.invalid"))
+            }
+        }
         let hasEnd = entries.allSatisfy {
             $0.issues.isEmpty && ($0.context != nil && $0.finished != nil || $0.legacy && $0.legacyEnded)
         }
@@ -1506,7 +1600,9 @@ private enum HistoryStore {
             "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
             "worker_launches": launches.isEmpty ? NSNull() : launches,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
-            "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory, "records": retained]
+            "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory,
+            "output_cleanup": ["state": entry.outputCleanups.isEmpty ? "unavailable" : "recorded",
+                "receipts": entry.outputCleanups.map(\.recordedObject)], "records": retained]
         let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
         guard data.count <= maximumScanBytes else { throw HostError(message: localized("history.export.limit")) }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
@@ -2642,6 +2738,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     lines += [row("verified_source", input.source), row("count_status", unknown)]
                 }
             }
+        }
+        if entry.context?.mode == "fast-img" {
+            lines += ["", localized("cleanup.history_title")]
+            if entry.outputCleanupInvalid { lines.append(localized("cleanup.invalid")) }
+            else if entry.outputCleanups.isEmpty { lines.append(localized("cleanup.not_recorded")) }
+            else { lines += entry.outputCleanups.map(\.detailText) }
         }
         if let error = entry.finished?.error { lines += ["", row("error", error)] }
         if !entry.issues.isEmpty { lines += ["", localized("history.read_issues")] + entry.issues }
@@ -4055,6 +4157,66 @@ func runProcessingHistorySelfTests() throws {
         "source_path": "/synthetic/input", "output_path": "/synthetic/output",
         "failed_sources_verified": 1, "primary_cleanup_complete": true]
     let preservedEvent = try payload("MFB_HISTORY_VERIFICATION", preservedReceipt)
+    do {
+        func bound(_ name: String, _ fields: [String: Any]) throws -> String {
+            var fields = fields
+            fields["run_id"] = "synthetic-cleanup-run"
+            return try payload(name, fields)
+        }
+        let cleanupContext = try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+            "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": true])
+        let cleanup: [String: Any] = ["schema_version": 1, "output_path": "/synthetic/output", "outcome": "residual",
+            "removed_files": 2, "already_absent_files": 1, "pruned_directories": 0, "error": NSNull()]
+        let event = try bound("MFB_HISTORY_OUTPUT_CLEANUP", cleanup)
+        let end = try bound("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "completed", "error": NSNull()])
+        let events = [cleanupContext, event, event, try bound("MFB_HISTORY_VERIFICATION", preservedReceipt),
+            try bound("MFB_HISTORY_SUMMARY", mixedSummary), end]
+        let entry = try parsed(events).entries[0]
+        try require(entry.outputCleanups.count == 1 && !entry.outputCleanupInvalid && entry.summary?.img.succeeded == 2
+                    && entry.outputCleanups[0].removed_files == 2
+                    && ProcessingHistoryPanel.render(entry).contains(localized("cleanup.outcome.residual")),
+                    "Output cleanup observations inflated counts or lost their separate historical status")
+        let old = try parsed([fastContext, mixedEvent, preservedEvent, fileFailureFinish]).entries[0]
+        try require(ProcessingHistoryPanel.render(old).contains(localized("cleanup.not_recorded")),
+                    "Primary source cleanup was used to infer output folder removal")
+        var wrongOutput = preservedReceipt
+        wrongOutput["output_path"] = "/synthetic/other"
+        var wrongCleanup = cleanup
+        wrongCleanup["output_path"] = "/synthetic/other"
+        let inconsistentPaths = try parsed([cleanupContext, try bound("MFB_HISTORY_VERIFICATION", wrongOutput),
+            try bound("MFB_HISTORY_OUTPUT_CLEANUP", wrongCleanup), end]).entries[0]
+        try require(inconsistentPaths.outputCleanupInvalid && inconsistentPaths.outputCleanups.isEmpty,
+                    "Verification and cleanup paths overrode a conflicting recorded output target")
+        for (key, value) in [("schema_version", 2 as Any), ("outcome", "guessed"), ("removed_files", -1),
+                              ("removed_files", true), ("output_path", "/synthetic/other"), ("run_id", "different-run")] {
+            var changed = cleanup
+            changed["run_id"] = "synthetic-cleanup-run"
+            changed[key] = value
+            let bad = try payload("MFB_HISTORY_OUTPUT_CLEANUP", changed)
+            let invalid = try parsed([cleanupContext, event, bad, event, end]).entries[0]
+            try require(invalid.outputCleanupInvalid && invalid.outputCleanups.isEmpty,
+                        "Invalid, conflicting or unbound output cleanup evidence was accepted: \(key)")
+        }
+        for outcome in ["not_requested", "verification_blocked", "already_absent"] {
+            var unmeasured = cleanup
+            unmeasured["outcome"] = outcome
+            for key in ["removed_files", "already_absent_files", "pruned_directories"] { unmeasured[key] = NSNull() }
+            let noAttempt = try bound("MFB_HISTORY_OUTPUT_CLEANUP", unmeasured)
+            let recorded = try parsed([cleanupContext, noAttempt, end]).entries[0]
+            try require(recorded.outputCleanups.first?.removed_files == nil
+                        && recorded.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == true,
+                        "An unmeasured cleanup invented zero counts")
+        }
+        var failedCleanup = cleanup
+        failedCleanup["outcome"] = "failed"
+        failedCleanup["pruned_directories"] = NSNull()
+        failedCleanup["error"] = "synthetic permission denied after two removals"
+        let partial = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", failedCleanup), end]).entries[0]
+        try require(partial.outputCleanups.first?.removed_files == 2
+                    && partial.outputCleanups.first?.pruned_directories == nil
+                    && partial.outputCleanups.first?.error == failedCleanup["error"] as? String,
+                    "Partial cleanup erased completed work or invented an unmeasured directory count")
+    }
     for finish in [completed, failed] {
         let mixed = try parsed([context, mixedEvent, finish]).entries[0]
         try require(!mixed.hasPartialSuccess && mixed.needsAttention
@@ -5256,6 +5418,37 @@ func runProcessingHistorySelfTests() throws {
     }
     try refuseExport({ _ = try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true) }, "Malformed ignored record became a complete list")
     sqlite3_close(ignoredDB)
+    do {
+        var cleanupContext = identityContext
+        cleanupContext["mode"] = "fast-img"
+        cleanupContext["output"] = "/synthetic/output"
+        cleanupContext["shortest_path"] = true
+        var finish = ignoredFinished
+        finish["output_sequence"] = 0
+        let receipt: [String: Any] = ["schema_version": 1, "run_id": "run-synthetic-1", "output_path": "/synthetic/output",
+            "outcome": "failed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": NSNull(),
+            "error": "synthetic directory permission denied"]
+        let context = try payload("MFB_HISTORY_CONTEXT", cleanupContext)
+        let end = try payload("MFB_HISTORY_FINISHED", finish)
+        let cleanup = try payload("MFB_HISTORY_OUTPUT_CLEANUP", receipt)
+        try writeDatabase([("cleanup", [context, identitySummaryLine, cleanup, end])], schema: 2)
+        let entry = try HistoryStore.load(directory: directory).entries.first(where: { $0.stamp == "cleanup" })!
+        let before = try Data(contentsOf: databaseURL)
+        let document = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: entry)) as? [String: Any]
+        let exported = document?["output_cleanup"] as? [String: Any]
+        let rows = exported?["receipts"] as? [[String: Any]]
+        try require(exported?["state"] as? String == "recorded" && rows?.count == 1
+                    && rows?.first?["removed_files"] as? Int == 2 && rows?.first?["pruned_directories"] is NSNull
+                    && rows?.first?["error"] as? String == receipt["error"] as? String
+                    && Data(contentsOf: databaseURL) == before,
+                    "Read-only diagnostic export lost partial cleanup evidence or changed its database")
+        var conflicting = receipt
+        conflicting["removed_files"] = 3
+        try writeDatabase([("cleanup", [context, identitySummaryLine, cleanup,
+            try payload("MFB_HISTORY_OUTPUT_CLEANUP", conflicting), end])], schema: 2)
+        try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: entry) },
+                         "Conflicting output cleanup evidence exported a successful diagnostic")
+    }
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

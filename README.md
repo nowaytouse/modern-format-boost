@@ -349,6 +349,19 @@ their inventory matches the recorded total; it is not a new media-verification p
 Direct CLI runs without run/invocation identity print one `[IGNORED]` line per item;
 GUI runs capture one structured observation instead of duplicate plain/JSON lines.
 
+Fast IMG records **output folder cleanup separately from primary source cleanup**.
+The completion overview keeps leftovers and blocked cleanup visible, while History
+shows the recorded path, exact error and measured counts for removed files,
+already-absent marker targets and removed empty directories. A folder already absent
+before cleanup is not counted as removed by this operation; work not attempted or
+not measured stays unknown rather than zero. Run-bound `MFB_HISTORY_OUTPUT_CLEANUP`
+events and `MFB_OUTPUT_CLEANUP` live observations distinguish removed, already absent,
+residual, failed, not requested and verification blocked. History rejects conflicting
+records or output identities, and diagnostic exports retain accepted receipts. Missing
+older evidence remains explicitly unavailable. These observations describe only that
+operation on that output folder, not current filesystem state, all temporary folders,
+recovery ownership, safe deletion candidates or new Photos delivery proof.
+
 History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
 read-only system SQLite can open cold WAL histories without initializing them
 writable. Full synchronous writes and checkpoints remain enabled; the reader

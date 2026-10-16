@@ -529,6 +529,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_WORKER_EXECUTION"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
+                | "MFB_HISTORY_OUTPUT_CLEANUP"
                 | "MFB_HISTORY_FINISHED"
         ),
         "unsupported history event: {name}"

@@ -424,6 +424,18 @@
 "result.delivery_facts" = "エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
 "result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";
+"cleanup.history_title" = "出力フォルダの整理（実行時の記録）";
+"cleanup.not_recorded" = "出力フォルダの整理記録がないため、残存内容は不明です。";
+"cleanup.invalid" = "出力フォルダの整理記録が不完全、または矛盾しています。元の診断を確認してください。";
+"cleanup.not_measured" = "未計測";
+"cleanup.counts" = "削除したファイル %@ · 元から存在しない項目 %@ · 削除した空フォルダ %@";
+"cleanup.scope" = "この出力フォルダの今回の整理のみ。他のフォルダ、復旧データ、現在の状態の証明ではありません。";
+"cleanup.outcome.removed" = "今回の整理後、出力フォルダは存在しません。";
+"cleanup.outcome.already_absent" = "出力フォルダは整理前から存在せず、今回削除したものではありません。";
+"cleanup.outcome.residual" = "出力フォルダに内容が残っているため保持しました。処理履歴でパスを確認できます。";
+"cleanup.outcome.failed" = "出力フォルダの整理を完了できません。完了した受け渡しは取り消されません。";
+"cleanup.outcome.not_requested" = "今回は出力フォルダの削除を要求していません。";
+"cleanup.outcome.verification_blocked" = "受け渡しの検証が整理条件を満たさないため、出力フォルダの削除は試みていません。";
 "settings.unavailable" = "この操作に対応するメディアのエンコード設定はありません。";
 
 "history.title" = "処理履歴";

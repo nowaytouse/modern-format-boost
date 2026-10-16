@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Independent Fast IMG Output Cleanup Receipts (2026-10-16)
+
+- Record output-folder cleanup independently of primary source cleanup, with the
+  run identity, observed target, six explicit outcomes and nullable operation counts.
+  Preserve completed file removals and the original error after partial failure;
+  do not invent zero counts for unattempted or unmeasured work.
+- Persist the bounded History event before emitting its live observation. Keep
+  verification and persistence errors explicit, without masking the original
+  failure or changing media counters and deletion eligibility.
+- Show leftover, blocked and unknown output cleanup in the compact completion
+  overview; expose exact paths, counts and diagnostics in expanded details and
+  History. Reject conflicting identities and records, and retain valid receipts
+  in diagnostic exports without a database schema change.
+- Keep current output-folder cleanup failures separate from verifier/Gate warnings
+  and failed-source preservation proofs. Preserve actual verifier warnings, severe
+  diagnostics and the existing warnings for other checkpoint-owned folders.
+- Distinguish a folder absent before cleanup from one absent afterwards. Treat
+  metadata I/O errors and replaced non-directory targets as failures, not absence.
+  Missing older receipts do not prove cleanup; these observations do not inventory
+  all scratch folders, authorize user-triggered deletion or prove current state.
+
 ### Explainable Fast IMG Ignored Inventory (2026-10-16)
 
 - Preserve exact scan exclusions with explicit policy reason codes and source paths,

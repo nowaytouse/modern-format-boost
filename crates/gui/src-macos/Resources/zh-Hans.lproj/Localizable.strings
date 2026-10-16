@@ -424,6 +424,18 @@
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
 "result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
+"cleanup.history_title" = "输出目录清理（当时记录）";
+"cleanup.not_recorded" = "输出目录清理情况未记录，不能确认是否仍有残留。";
+"cleanup.invalid" = "输出目录清理记录不完整或相互矛盾，请查看原始诊断。";
+"cleanup.not_measured" = "未测量";
+"cleanup.counts" = "本次已删除文件 %@ · 原已不存在 %@ · 已移除空目录 %@";
+"cleanup.scope" = "仅说明此输出目录的本次清理，不代表其他目录、恢复数据或当前文件状态。";
+"cleanup.outcome.removed" = "本次清理后，输出目录已不存在。";
+"cleanup.outcome.already_absent" = "开始清理时，输出目录已不存在；本次未删除该目录。";
+"cleanup.outcome.residual" = "输出目录仍有内容，已保留；请在处理记录中查看路径。";
+"cleanup.outcome.failed" = "输出目录清理遇阻；已完成的交付不因此撤销。";
+"cleanup.outcome.not_requested" = "本次未要求删除输出目录。";
+"cleanup.outcome.verification_blocked" = "交付核验未满足清理条件，未尝试删除输出目录。";
 "settings.unavailable" = "当前操作没有可配置的媒体编码选项。";
 
 "history.title" = "处理记录";
