@@ -1817,11 +1817,29 @@ pub fn commit_reconstructible_jxl_to_output_with_metadata(
     commit_temp_to_output_with_metadata_inner(temp, output, force, original, true, true)
 }
 
-fn prepare_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
+/// Apply the delivery metadata policy before comparing JPEG-reconstructible candidates.
+///
+/// This enriches a staging file; it does not replace reconstruction or delivery verification.
+///
+/// # Errors
+/// Returns an error if gain-map or filesystem/XMP metadata enrichment fails.
+pub fn enrich_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
+    if !fs::symlink_metadata(output)?.file_type().is_file()
+        || crate::checkpoint::files_alias_same_inode(source, output)?
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "JPEG metadata candidate must be a regular file distinct from its source",
+        ));
+    }
     crate::image::gain_map::attach_jpeg_gain_map(source, output).map_err(|error| {
         std::io::Error::other(format!("Native gain-map preservation failed: {error:#}"))
     })?;
-    prepare_output_metadata(output, Some(source), true, true)?;
+    prepare_output_metadata(output, Some(source), true, true)
+}
+
+fn prepare_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
+    enrich_reconstructible_jxl_candidate(source, output)?;
     if let Err(error) = crate::image::gain_map::verify_jpeg_gain_map(source, output) {
         crate::media_conversion_gate::delivery_remove_file_or_audit(
             "native gain-map proof failed after metadata commit",
@@ -2127,7 +2145,7 @@ fn prepare_output_metadata(
                 target: "orientation_pixel_diff",
                 source = %src.display(),
                 output = %output.display(),
-                "delivery orientation pixel audit skipped (pixel equivalence already verified by caller)"
+                "delivery orientation pixel audit not repeated here; caller-side pixel or mandatory JPEG reconstruction proof is required"
             );
         } else if src_exists {
             audit_orientation_pixel_verification_for_delivery(src, output)?;
@@ -3688,6 +3706,24 @@ mod tests {
     use proptest::test_runner::FileFailurePersistence;
     use std::process::Command;
     use tempfile::{NamedTempFile, tempdir_in};
+
+    #[test]
+    fn jpeg_metadata_enrichment_rejects_source_aliases_before_writing() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source.jpg");
+        let candidate = root.path().join("candidate.jxl");
+        fs::write(&source, b"synthetic source bytes")?;
+        fs::hard_link(&source, &candidate)?;
+        assert!(enrich_reconstructible_jxl_candidate(&source, &candidate).is_err());
+        fs::remove_file(&candidate)?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&source, &candidate)?;
+            assert!(enrich_reconstructible_jxl_candidate(&source, &candidate).is_err());
+        }
+        assert_eq!(fs::read(source)?, b"synthetic source bytes");
+        Ok(())
+    }
 
     /// Store proptest regressions under `tests/proptest-regressions/` (external to
     /// `src/`, gitignored) instead of `src/proptest-regressions/`.

@@ -249,7 +249,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.13.2"
-source = "git+https://github.com/bitflags/bitflags#8df4d4ebb26fc35d49515972ede9dc77e5b43599"
+source = "git+https://github.com/bitflags/bitflags#74c6fd129967093b048bf71bf3ffbdadfbc76225"
 dependencies = [
  "serde_core",
 ]
@@ -873,7 +873,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#423355533c4460bed7bbbb104d0938b73ea89b99"
+source = "git+https://github.com/rust-lang/flate2-rs#6860418f169627798aee13e7403e2daca4a9cd43"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -2812,7 +2812,7 @@ dependencies = [
 [[package]]
 name = "thiserror"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#e7e9f4acbd12d8ee697f2cd60df8413f8563e617"
+source = "git+https://github.com/dtolnay/thiserror#3b29f0107e7900860c7a061c069958569eb458e7"
 dependencies = [
  "thiserror-impl",
 ]
@@ -2820,7 +2820,7 @@ dependencies = [
 [[package]]
 name = "thiserror-impl"
 version = "2.0.21"
-source = "git+https://github.com/dtolnay/thiserror#e7e9f4acbd12d8ee697f2cd60df8413f8563e617"
+source = "git+https://github.com/dtolnay/thiserror#3b29f0107e7900860c7a061c069958569eb458e7"
 dependencies = [
  "proc-macro2",
  "quote",

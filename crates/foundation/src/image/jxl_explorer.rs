@@ -1,4 +1,4 @@
-//! JXL Distance Explorer for Ultimate Mode
+//! JXL Distance Explorer for policy-eligible still images.
 //!
 //! Two-phase screening algorithm to identify JXL distance candidates for
 //! same-effort verification:
@@ -144,7 +144,6 @@ pub struct JxlScreeningResult {
     pub iterations: u32,
     pub screened_candidates: Vec<JxlScreenedCandidate>,
     pub finalists: Vec<JxlScreenedCandidate>,
-    pub log: Vec<String>,
     /// Telemetry: ratio of initial JXL output to input (≥1.0 when oversize).
     pub initial_ratio: f64,
     /// Telemetry: `log2(initial_ratio)` — oversize severity in doublings.
@@ -153,6 +152,111 @@ pub struct JxlScreeningResult {
     pub profile_label: &'static str,
     /// Telemetry: target distance the adaptive plan aimed for.
     pub target_distance: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JxlScreeningStop {
+    BaselineFits,
+    FloorFits,
+    PrecisionReached,
+    BudgetExhausted,
+    DistanceLimit,
+    NoNewCoordinate,
+}
+
+impl JxlScreeningStop {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::BaselineFits => "baseline-fits",
+            Self::FloorFits => "floor-fits",
+            Self::PrecisionReached => "local-bracket-precision",
+            Self::BudgetExhausted => "measurement-budget-exhausted",
+            Self::DistanceLimit => "distance-limit",
+            Self::NoNewCoordinate => "no-new-coordinate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JxlScreeningDiagnostics {
+    /// One measurement is supplied by the caller, not encoded by this search.
+    pub supplied_measurements: u32,
+    pub floor_probes: u32,
+    pub ladder_probes: u32,
+    pub discovery_probes: u32,
+    pub binary_probes: u32,
+}
+
+impl JxlScreeningDiagnostics {
+    #[must_use]
+    pub const fn probe_calls(&self) -> u32 {
+        self.floor_probes + self.ladder_probes + self.discovery_probes + self.binary_probes
+    }
+
+    #[must_use]
+    pub const fn measurements(&self) -> u32 {
+        self.supplied_measurements + self.probe_calls()
+    }
+}
+
+/// A bounded search can finish without a winner; its evidence must remain visible.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JxlScreeningReport {
+    pub screening: Option<JxlScreeningResult>,
+    pub diagnostics: JxlScreeningDiagnostics,
+    pub stop: JxlScreeningStop,
+    pub log: Vec<String>,
+}
+
+impl JxlScreeningReport {
+    fn new(
+        screening: Option<JxlScreeningResult>,
+        diagnostics: JxlScreeningDiagnostics,
+        stop: JxlScreeningStop,
+        mut log: Vec<String>,
+    ) -> Self {
+        let summary = format!(
+            "JXL screening summary: outcome={} stop={} supplied_measurements={} probe_calls={} \
+             floor={} ladder={} discovery={} binary={} measurements={}/{}; best tested candidate \
+             only, not a global optimum",
+            if screening.is_some() {
+                "shortlist"
+            } else {
+                "no-shortlist"
+            },
+            stop.label(),
+            diagnostics.supplied_measurements,
+            diagnostics.probe_calls(),
+            diagnostics.floor_probes,
+            diagnostics.ladder_probes,
+            diagnostics.discovery_probes,
+            diagnostics.binary_probes,
+            diagnostics.measurements(),
+            JXL_EXPLORE_MAX_ITERATIONS,
+        );
+        tracing::info!(
+            target: "mfb.algorithm",
+            pipeline = "jxl_screening",
+            stop = stop.label(),
+            shortlisted = screening.is_some(),
+            supplied_measurements = diagnostics.supplied_measurements,
+            probe_calls = diagnostics.probe_calls(),
+            floor_probes = diagnostics.floor_probes,
+            ladder_probes = diagnostics.ladder_probes,
+            discovery_probes = diagnostics.discovery_probes,
+            binary_probes = diagnostics.binary_probes,
+            measurement_budget = JXL_EXPLORE_MAX_ITERATIONS,
+            "{summary}"
+        );
+        log.push(summary);
+        Self {
+            screening,
+            diagnostics,
+            stop,
+            log,
+        }
+    }
 }
 
 impl JxlScreeningResult {
@@ -217,38 +321,30 @@ impl JxlExploreResult {
     #[must_use]
     pub fn sealed(mut self) -> Self {
         self.seal_algorithm_outputs();
-        self.enforce_delivery_gates();
         self
-    }
-
-    fn enforce_delivery_gates(&mut self) {
-        if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled() {
-            return;
-        }
-        if self.output_size == 0 {
-            tracing::warn!(
-                target: "mfb.algorithm",
-                pipeline = "jxl_exploration",
-                branch = "jxl_explore_zero_output",
-                "JXL explore result has zero output_size under strict delivery"
-            );
-        }
-        if !self.accepted_distance.is_finite() {
-            tracing::warn!(
-                target: "mfb.algorithm",
-                pipeline = "jxl_exploration",
-                branch = "jxl_explore_non_finite_distance",
-                distance = self.accepted_distance,
-                "JXL explore result has non-finite accepted_distance under strict delivery"
-            );
-            self.accepted_distance = crate::constants::JXL_MIN_DISTANCE;
-        }
     }
 
     /// Strict delivery: non-zero output, finite sealed distance, at least one
     /// screening iteration.
     #[must_use]
     pub fn delivery_acceptable(&self) -> bool {
+        let valid_distance =
+            |distance| (JXL_EXPLORE_FLOOR..=JXL_EXPLORE_CEILING).contains(&distance);
+        if !valid_distance(self.accepted_distance)
+            || !valid_distance(self.screened_best_distance)
+            || !valid_distance(self.target_distance)
+            || self
+                .promoted_distances
+                .iter()
+                .any(|distance| !valid_distance(*distance))
+            || self.output_size == 0
+            || self.screened_best_size == 0
+            || !self.initial_ratio.is_finite()
+            || self.initial_ratio <= 0.0
+            || !self.pressure_stops.is_finite()
+        {
+            return false;
+        }
         if !crate::algorithm_runtime::strict_media_conversion_delivery_enabled() {
             return true;
         }
@@ -261,36 +357,20 @@ impl JxlExploreResult {
             && self.iterations > 0
     }
 
-    /// Sanitize finalized JXL exploration outputs.
+    /// Audit invalid evidence without relabeling it as a valid measured coordinate.
     pub fn seal_algorithm_outputs(&mut self) {
-        if let Some(d) = crate::algorithm_seal::seal_jxl_distance(self.accepted_distance) {
-            self.accepted_distance = d;
-        } else if !self.accepted_distance.is_finite() {
-            tracing::warn!(
-                target: "mfb.algorithm",
-                pipeline = "jxl_exploration",
-                branch = "jxl_accepted_distance_non_finite",
-                "non-finite accepted_distance; clamping to JXL floor"
-            );
-            self.accepted_distance = crate::constants::JXL_MIN_DISTANCE;
+        for distance in [
+            self.accepted_distance,
+            self.screened_best_distance,
+            self.target_distance,
+        ]
+        .iter()
+        .chain(&self.promoted_distances)
+        {
+            let _ = crate::algorithm_seal::seal_jxl_distance(*distance);
         }
-        if let Some(d) = crate::algorithm_seal::seal_jxl_distance(self.screened_best_distance) {
-            self.screened_best_distance = d;
-        }
-        if let Some(d) = crate::algorithm_seal::seal_jxl_distance(self.target_distance) {
-            self.target_distance = d;
-        }
-        if let Some(r) = crate::algorithm_seal::seal_non_negative_ratio(self.initial_ratio) {
-            self.initial_ratio = r;
-        }
-        if let Some(p) = crate::algorithm_seal::seal_finite_scalar(self.pressure_stops) {
-            self.pressure_stops = p;
-        }
-        for distance in &mut self.promoted_distances {
-            if let Some(d) = crate::algorithm_seal::seal_jxl_distance(*distance) {
-                *distance = d;
-            }
-        }
+        let _ = crate::algorithm_seal::seal_non_negative_ratio(self.initial_ratio);
+        let _ = crate::algorithm_seal::seal_finite_scalar(self.pressure_stops);
     }
 }
 
@@ -410,7 +490,10 @@ fn format_scalar_for_log(value: f64) -> String {
 
 #[must_use]
 pub fn format_distance_for_log(distance: f32) -> String {
-    format_scalar_for_log(f64::from(clamp_explore_distance(distance)))
+    if !(0.0..=crate::constants::JXL_MAX_DISTANCE).contains(&distance) {
+        return format!("invalid({distance})");
+    }
+    format_scalar_for_log(f64::from(distance))
 }
 
 fn size_ratio(size: u64, input_size: u64) -> f64 {
@@ -954,12 +1037,12 @@ fn finalize_screening_result(
     candidates: Vec<JxlScreenedCandidate>,
     best_idx: usize,
     iterations: u32,
-    mut log: Vec<String>,
+    log: &mut Vec<String>,
     initial_ratio: f64,
     pressure_stops: f64,
     profile_label: &'static str,
     target_distance: f32,
-) -> JxlScreeningResult {
+) -> Result<JxlScreeningResult, String> {
     let finalists = shortlist_finalists(&candidates, best_idx, input_size, size_policy);
     let finalist_summary = finalists
         .iter()
@@ -974,58 +1057,28 @@ fn finalize_screening_result(
     // Structured telemetry for data-driven calibration.
     // Collect these lines to fit band boundaries statistically rather than
     // manually.
-    let Some(best) = candidates.get(best_idx) else {
-        let _ = crate::media_conversion_gate::jxl_best_telemetry_optional(
-            None,
-            None,
-            "jxl_explorer screening telemetry: missing best_idx",
-        );
-        log.push(format!(
-            "ERROR: best_idx {best_idx} out of range ({} candidates); refusing fabricated \
-             screening winner",
+    let best = candidates.get(best_idx).ok_or_else(|| {
+        format!(
+            "JXL screening winner index {best_idx} is outside {} candidates",
             candidates.len()
-        ));
-        // Route through the same seal as the normal path so the NaN/u64::MAX sentinels
-        // get the standard seal-time audit instead of leaving unsealed.
-        return JxlScreeningResult {
-            best_distance: f32::NAN,
-            best_output_size: u64::MAX,
-            iterations,
-            screened_candidates: candidates,
-            finalists,
-            log,
-            initial_ratio,
-            pressure_stops,
-            profile_label,
-            target_distance,
-        }
-        .sealed();
-    };
+        )
+    })?;
     let best_dist = best.distance;
     let best_size = best.output_size;
-    if !best_dist.is_finite() {
-        let _ = crate::media_conversion_gate::jxl_best_telemetry_optional(
-            Some(best.distance),
-            Some(best.output_size),
-            "jxl_explorer screening telemetry: non-finite best distance",
-        );
+    if !(JXL_EXPLORE_FLOOR..=JXL_EXPLORE_CEILING).contains(&best_dist)
+        || best_size == 0
+        || !size_policy.fits(best_size, input_size)
+    {
+        return Err("JXL screening winner lacks a valid distance/size measurement".to_string());
     }
 
     log.push(format!(
         "TELEMETRY: initial_ratio={initial_ratio:.6} pressure_stops={pressure_stops:.4} \
-         profile={profile_label} target_distance={} best_distance={} best_pct={} \
+         profile={profile_label} target_distance={} best_distance={} best_pct={:.1} \
          iterations={iterations} finalists={}",
         format_distance_for_log(target_distance),
-        if best_dist.is_finite() {
-            format_distance_for_log(best_dist)
-        } else {
-            "N/A".to_string()
-        },
-        if best_dist.is_finite() && best_size > 0 {
-            format!("{:.1}", size_ratio_pct(best_size, input_size))
-        } else {
-            "N/A".to_string()
-        },
+        format_distance_for_log(best_dist),
+        size_ratio_pct(best_size, input_size),
         finalists.len()
     ));
 
@@ -1035,13 +1088,12 @@ fn finalize_screening_result(
         iterations,
         screened_candidates: candidates,
         finalists,
-        log,
         initial_ratio,
         pressure_stops,
         profile_label,
         target_distance,
     };
-    result.sealed()
+    Ok(result.sealed())
 }
 
 struct JxlScreeningSession {
@@ -1057,11 +1109,47 @@ struct JxlScreeningSession {
     d_over: Option<f32>,
     d_under: Option<f32>,
     best_below_idx: Option<usize>,
+    diagnostics: JxlScreeningDiagnostics,
+}
+
+#[derive(Clone, Copy)]
+enum ScreeningStage {
+    Ladder,
+    Discovery,
+    Binary,
 }
 
 impl JxlScreeningSession {
     const fn fits(&self, size: u64) -> bool {
         self.size_policy.fits(size, self.input_size)
+    }
+
+    fn probe<F>(
+        &mut self,
+        stage: ScreeningStage,
+        distance: f32,
+        try_candidate: &mut F,
+    ) -> Result<u64, String>
+    where
+        F: FnMut(f32) -> Result<u64, String>,
+    {
+        let (counter, label) = match stage {
+            ScreeningStage::Ladder => (&mut self.diagnostics.ladder_probes, "ladder"),
+            ScreeningStage::Discovery => (&mut self.diagnostics.discovery_probes, "discovery"),
+            ScreeningStage::Binary => (&mut self.diagnostics.binary_probes, "binary"),
+        };
+        *counter += 1;
+        self.iterations += 1;
+        let size = try_candidate(distance).map_err(|error| format!(
+            "JXL screening {label} probe failed at d={distance}, measurement {}/{} ({} probe calls): {error}",
+            self.iterations, JXL_EXPLORE_MAX_ITERATIONS, self.diagnostics.probe_calls()
+        ))?;
+        if size == 0 {
+            return Err(format!(
+                "JXL screening {label} probe at d={distance} returned zero payload bytes"
+            ));
+        }
+        Ok(size)
     }
 
     fn new(
@@ -1098,6 +1186,10 @@ impl JxlScreeningSession {
             d_over: Some(initial_distance),
             d_under: None,
             best_below_idx: None,
+            diagnostics: JxlScreeningDiagnostics {
+                supplied_measurements: 1,
+                ..JxlScreeningDiagnostics::default()
+            },
         }
     }
 
@@ -1267,7 +1359,9 @@ impl JxlScreeningSession {
 /// philosophy.
 ///
 /// # Errors
-/// Returns `Err` if the `try_candidate` closure fails for any tested distance.
+/// Returns a report even when no candidate fits. Any failed/empty probe is an error,
+/// never evidence that a distance is oversized. Probe counts exclude supplied measurements.
+///
 /// `initial_measurement` binds its actual distance (D0 or the exploration floor)
 /// to its pure payload size; a D0 measurement never stands in for a floor probe.
 // Rationale: This function handles complex, sequential initialization or
@@ -1278,25 +1372,44 @@ pub fn screen_jxl_candidates<F>(
     initial_measurement: (f32, u64),
     size_policy: crate::exploration_policy::SizePolicy,
     mut try_candidate: F,
-) -> Result<Option<JxlScreeningResult>, String>
+) -> Result<JxlScreeningReport, String>
 where
     F: FnMut(f32) -> Result<u64, String>,
 {
     if input_size == 0 {
-        return Ok(None);
+        return Err("JXL screening requires a nonzero source payload size".to_string());
     }
 
     let (measured_distance, measured_size) = initial_measurement;
+    if measured_size == 0 {
+        return Err("JXL screening requires a nonzero measured baseline payload size".to_string());
+    }
     if measured_distance != 0.0 && measured_distance != JXL_EXPLORE_FLOOR {
         return Err(
             "JXL screening requires a measured D0 or exploration-floor baseline".to_string(),
         );
     }
     if measured_distance == 0.0 && size_policy.fits(measured_size, input_size) {
-        return Ok(None);
+        return Ok(JxlScreeningReport::new(
+            None,
+            JxlScreeningDiagnostics {
+                supplied_measurements: 1,
+                ..JxlScreeningDiagnostics::default()
+            },
+            JxlScreeningStop::BaselineFits,
+            vec![
+                "Measured D0 already fits the size policy; no lossy screening is required"
+                    .to_string(),
+            ],
+        ));
     }
     let initial_size = if measured_distance == 0.0 {
-        try_candidate(JXL_EXPLORE_FLOOR)?
+        let size = try_candidate(JXL_EXPLORE_FLOOR)
+            .map_err(|error| format!("JXL screening floor probe failed at d={JXL_EXPLORE_FLOOR}, measurement 2/{JXL_EXPLORE_MAX_ITERATIONS} (1 probe call): {error}"))?;
+        if size == 0 {
+            return Err("JXL screening floor probe returned zero payload bytes".to_string());
+        }
+        size
     } else {
         measured_size
     };
@@ -1305,6 +1418,7 @@ where
         JxlScreeningSession::new(input_size, size_policy, initial_distance, initial_size);
     if measured_distance == 0.0 {
         session.iterations += 1;
+        session.diagnostics.floor_probes = 1;
         session.log.push(format!(
             "Measured d=0 baseline: {measured_size}B; measured floor d={} separately: {initial_size}B",
             format_distance_for_log(initial_distance)
@@ -1321,18 +1435,24 @@ where
             format_distance_for_log(initial_distance),
             ratio * 100.0_f64
         ));
-        return Ok(Some(finalize_screening_result(
+        let screening = finalize_screening_result(
             input_size,
             size_policy,
             session.candidates,
             0,
             session.iterations,
-            session.log,
+            &mut session.log,
             ratio,
             0.0,
             "early-exit",
             JXL_EXPLORE_FLOOR,
-        )));
+        )?;
+        return Ok(JxlScreeningReport::new(
+            Some(screening),
+            session.diagnostics,
+            JxlScreeningStop::FloorFits,
+            session.log,
+        ));
     }
 
     let plan = build_exploration_plan(input_size, initial_size)?;
@@ -1382,8 +1502,11 @@ where
         }
 
         let previous_size = session.previous_size(initial_size);
-        let size = try_candidate(candidate_distance)?;
-        session.iterations += 1;
+        let size = session.probe(
+            ScreeningStage::Ladder,
+            candidate_distance,
+            &mut try_candidate,
+        )?;
         let delta_pct = improvement_ratio(previous_size, size, input_size) * 100.0_f64;
         let trend = if size < previous_size { "↓" } else { "→" };
         let status = if near_boundary(size, input_size) {
@@ -1419,6 +1542,7 @@ where
     //
     // If no d_under is ever found, return None (skip JXL — nothing compresses below
     // source).
+    let mut termination = JxlScreeningStop::DistanceLimit;
     if session.d_under.is_none()
         && let Some(start) = session.d_over
     {
@@ -1444,8 +1568,7 @@ where
             }
             session.tested.insert(distance_key(next));
 
-            let size = try_candidate(next)?;
-            session.iterations += 1;
+            let size = session.probe(ScreeningStage::Discovery, next, &mut try_candidate)?;
 
             let status = if near_boundary(size, input_size) {
                 "near break-even"
@@ -1485,12 +1608,12 @@ where
                 || mid <= lo + f32::EPSILON
                 || mid >= hi - f32::EPSILON
             {
+                termination = JxlScreeningStop::NoNewCoordinate;
                 break;
             }
             session.tested.insert(distance_key(mid));
 
-            let size = try_candidate(mid)?;
-            session.iterations += 1;
+            let size = session.probe(ScreeningStage::Binary, mid, &mut try_candidate)?;
 
             let status = if near_boundary(size, input_size) {
                 "NEAR BREAK-EVEN"
@@ -1511,6 +1634,15 @@ where
             let probe_idx = session.push_candidate(mid, size, false);
             session.note_refinement_outcome(probe_idx, mid, size, &mut lo, &mut hi);
         }
+        if hi - lo < precision {
+            termination = JxlScreeningStop::PrecisionReached;
+        }
+    }
+    if session.iterations >= JXL_EXPLORE_MAX_ITERATIONS
+        && termination != JxlScreeningStop::PrecisionReached
+        && termination != JxlScreeningStop::NoNewCoordinate
+    {
+        termination = JxlScreeningStop::BudgetExhausted;
     }
 
     // Determine the best candidate index.
@@ -1518,28 +1650,184 @@ where
     // If nothing ever beat the source, skip JXL entirely.
     let Some(final_best_idx) = session.best_below_idx else {
         session.log.push(format!(
-            "No candidate beat source size ({input_size}B); skipping JXL"
+            "No tested candidate fits the size policy for {input_size}B; no JXL shortlist"
         ));
-        return Ok(None);
+        return Ok(JxlScreeningReport::new(
+            None,
+            session.diagnostics,
+            termination,
+            session.log,
+        ));
     };
 
-    Ok(Some(finalize_screening_result(
+    let screening = finalize_screening_result(
         input_size,
         size_policy,
         session.candidates,
         final_best_idx,
         session.iterations,
-        session.log,
+        &mut session.log,
         ratio,
         pressure_stops,
         plan.profile.label(),
         plan.target_distance,
-    )))
+    )?;
+    Ok(JxlScreeningReport::new(
+        Some(screening),
+        session.diagnostics,
+        termination,
+        session.log,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screening_reports_all_attempts_and_best_tested_candidate_without_claiming_global_optimality()
+    {
+        let policy = crate::exploration_policy::SizePolicy::StrictlySmaller;
+        for nonmonotonic in [false, true] {
+            let mut measured = vec![(JXL_EXPLORE_FLOOR, 150)];
+            let report = screen_jxl_candidates(100, (JXL_EXPLORE_FLOOR, 150), policy, |distance| {
+                let size = if nonmonotonic && (0.01..0.1).contains(&distance) {
+                    90
+                } else {
+                    120
+                };
+                measured.push((distance, size));
+                Ok(size)
+            })
+            .expect("bounded screening");
+            assert_eq!(report.diagnostics.supplied_measurements, 1);
+            assert_eq!(
+                report.diagnostics.probe_calls() as usize,
+                measured.len() - 1
+            );
+            assert_eq!(report.diagnostics.measurements() as usize, measured.len());
+            assert!(report.diagnostics.measurements() <= JXL_EXPLORE_MAX_ITERATIONS);
+            assert!(
+                report
+                    .log
+                    .last()
+                    .expect("summary")
+                    .contains("not a global optimum")
+            );
+            if let Some(screening) = report.screening {
+                let best = measured
+                    .iter()
+                    .filter(|(_, size)| policy.fits(*size, 100))
+                    .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+                    .expect("measured fitting candidate");
+                assert_eq!(screening.best_distance, best.0);
+                assert_eq!(screening.best_output_size, best.1);
+                assert_eq!(screening.iterations, report.diagnostics.measurements());
+            } else {
+                assert!(!nonmonotonic);
+                assert!(
+                    report
+                        .log
+                        .iter()
+                        .any(|line| line.contains("No tested candidate"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn screening_rejects_invalid_baselines_empty_payloads_and_failed_probes() {
+        let policy = crate::exploration_policy::SizePolicy::StrictlySmaller;
+        for baseline in [
+            (f32::NAN, 120),
+            (f32::INFINITY, 120),
+            (-1.0, 120),
+            (0.1, 120),
+            (0.0, 0),
+        ] {
+            assert!(
+                screen_jxl_candidates(100, baseline, policy, |_| panic!(
+                    "invalid baseline must not probe"
+                ))
+                .is_err()
+            );
+        }
+        for baseline in [(0.0, 120), (JXL_EXPLORE_FLOOR, 120)] {
+            let mut calls = 0;
+            let error = screen_jxl_candidates(100, baseline, policy, |_| {
+                calls += 1;
+                Ok(0)
+            })
+            .expect_err("empty payload is not a fitting candidate");
+            assert_eq!(calls, 1);
+            assert!(error.contains("zero payload"));
+        }
+        for (stage, label) in [
+            (ScreeningStage::Ladder, "ladder"),
+            (ScreeningStage::Discovery, "discovery"),
+            (ScreeningStage::Binary, "binary"),
+        ] {
+            let mut session = JxlScreeningSession::new(100, policy, JXL_EXPLORE_FLOOR, 120);
+            let error = session
+                .probe(stage, 0.1, &mut |_| Err("encoder diagnostic".to_string()))
+                .expect_err("failed probe cannot update a size boundary");
+            assert!(
+                error.contains(label)
+                    && error.contains("d=0.1")
+                    && error.contains("encoder diagnostic")
+            );
+            assert_eq!(session.diagnostics.probe_calls(), 1);
+            assert_eq!(session.iterations, 2);
+            assert_eq!(session.candidates.len(), 1);
+        }
+    }
+
+    #[test]
+    fn sealing_cannot_turn_invalid_exploration_evidence_into_delivery() {
+        let valid = JxlExploreResult {
+            encoder_domain: crate::exploration_policy::EncoderDomain::jxl(10),
+            outcome: crate::exploration_policy::ExplorationOutcome::ExploredOptimized,
+            accepted_distance: 0.01,
+            output_size: 90,
+            iterations: 3,
+            ladder_phase: true,
+            screened_best_distance: 0.01,
+            screened_best_size: 90,
+            promoted_distances: vec![0.01],
+            log: Vec::new(),
+            initial_ratio: 1.2,
+            pressure_stops: 0.2,
+            profile_label: "test",
+            target_distance: 0.1,
+        };
+        assert!(valid.clone().sealed().delivery_acceptable());
+        for distance in [f32::NAN, f32::INFINITY, -0.1, JXL_EXPLORE_CEILING + 1.0] {
+            let mut result = valid.clone();
+            result.accepted_distance = distance;
+            let sealed = result.sealed();
+            assert_eq!(sealed.accepted_distance.to_bits(), distance.to_bits());
+            assert!(!sealed.delivery_acceptable());
+        }
+        let mut invalid = valid.clone();
+        invalid.promoted_distances.push(f32::NAN);
+        assert!(!invalid.sealed().delivery_acceptable());
+        let mut invalid = valid.clone();
+        invalid.initial_ratio = f64::INFINITY;
+        assert!(!invalid.sealed().delivery_acceptable());
+        let mut invalid = valid;
+        invalid.output_size = 0;
+        assert!(!invalid.sealed().delivery_acceptable());
+    }
+
+    #[test]
+    fn distance_logs_preserve_real_zero_precision_and_invalid_coordinates() {
+        assert_eq!(format_distance_for_log(0.0), "0");
+        assert_eq!(format_distance_for_log(0.0001), "0.0001");
+        assert_eq!(format_distance_for_log(JXL_EXPLORE_FLOOR), "0.001");
+        for distance in [f32::NAN, f32::INFINITY, -0.1] {
+            assert!(format_distance_for_log(distance).starts_with("invalid("));
+        }
+    }
 
     #[test]
     fn test_screening_keeps_best_ladder_candidate() {
@@ -1558,6 +1846,7 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert_eq!(result.best_output_size, 90);
@@ -1600,7 +1889,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
-            result.is_none(),
+            result.screening.is_none(),
             "expected None when all candidates are oversize, but got Some"
         );
     }
@@ -1627,6 +1916,7 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert!(result.finalists.iter().any(|candidate| {
@@ -1645,7 +1935,7 @@ mod tests {
     fn test_screening_logs_deceleration_near_break_even() {
         // File at 1.5x oversize; break-even occurs at d > 0.1.
         // Phase 2 binary search should find a qualifying candidate below source.
-        let result = screen_jxl_candidates(
+        let report = screen_jxl_candidates(
             100,
             (JXL_EXPLORE_FLOOR, 150),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
@@ -1658,20 +1948,20 @@ mod tests {
                 Ok(size)
             },
         )
-        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
-        .unwrap_or_else(|| panic!("screening result should exist"));
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
+        let result = report.screening.expect("screening result should exist");
 
         // best_distance must be a below-source d
         assert!(result.best_output_size < 100);
         assert!(result.best_distance < 1.0);
         // Phase 2 binary search log should appear
         assert!(
-            result
+            report
                 .log
                 .iter()
                 .any(|line| line.contains("JXL Phase 2 Refinement")),
             "expected JXL Phase 2 Refinement log, got {:?}",
-            result.log
+            report.log
         );
     }
 
@@ -1679,7 +1969,7 @@ mod tests {
     fn test_screening_early_exit_on_safe_initial_result() {
         // Condition A: d=0.001 is safe (90 <= 100), should exit immediately
         let mut calls = 0_i32;
-        let result = screen_jxl_candidates(
+        let report = screen_jxl_candidates(
             100,
             (JXL_EXPLORE_FLOOR, 90),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
@@ -1688,14 +1978,14 @@ mod tests {
                 Ok(50) // Should never be called
             },
         )
-        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
-        .unwrap_or_else(|| panic!("screening result should exist"));
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
+        let result = report.screening.expect("screening result should exist");
 
         assert!((result.best_distance - JXL_EXPLORE_FLOOR).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
         assert_eq!(result.iterations, 1);
         assert_eq!(calls, 0_i32); // No further probes
-        assert!(result.log.iter().any(|line| line.contains("Early exit")));
+        assert!(report.log.iter().any(|line| line.contains("Early exit")));
     }
 
     #[test]
@@ -1713,19 +2003,19 @@ mod tests {
             ),
         ] {
             let mut probes = Vec::new();
-            let result = screen_jxl_candidates(100, (0.0, d0_size), policy, |distance| {
+            let report = screen_jxl_candidates(100, (0.0, d0_size), policy, |distance| {
                 probes.push(distance);
                 Ok(floor_size)
             })
-            .expect("floor screening")
-            .expect("the measured floor fits");
+            .expect("floor screening");
+            let result = report.screening.expect("the measured floor fits");
             assert_eq!(probes, vec![JXL_EXPLORE_FLOOR]);
             assert_eq!(result.best_distance, JXL_EXPLORE_FLOOR);
             assert_eq!(result.best_output_size, floor_size);
             assert_eq!(result.iterations, 2);
             assert_eq!(result.screened_candidates[0].output_size, floor_size);
             assert!(
-                result
+                report
                     .log
                     .iter()
                     .any(|line| line.contains("Measured d=0 baseline"))
@@ -1739,7 +2029,9 @@ mod tests {
             |_| panic!("a fitting D0 must not start lossy exploration"),
         )
         .expect("fitting D0");
-        assert!(result.is_none());
+        assert!(result.screening.is_none());
+        assert_eq!(result.stop, JxlScreeningStop::BaselineFits);
+        assert_eq!(result.diagnostics.probe_calls(), 0);
     }
 
     #[test]
@@ -1756,6 +2048,7 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert_ne!(probed.len(), 0);
@@ -1876,7 +2169,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
 
         assert!(
-            result.is_none(),
+            result.screening.is_none(),
             "expected None when no candidate beats source, but got Some"
         );
         // All probed distances must be < 1.0 (never reaches the hard ceiling)
@@ -1889,7 +2182,7 @@ mod tests {
     fn test_phase_two_converges_early_on_break_even() {
         // Scenario: file starts oversize, break-even occurs around d=0.005.
         // Binary search should narrow the bracket and converge well below budget.
-        let result = screen_jxl_candidates(
+        let report = screen_jxl_candidates(
             1000,
             (JXL_EXPLORE_FLOOR, 1200),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
@@ -1902,8 +2195,8 @@ mod tests {
                 Ok(size)
             },
         )
-        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
-        .unwrap_or_else(|| panic!("screening result should exist"));
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
+        let result = report.screening.expect("screening result should exist");
 
         // Should NOT exhaust the full 50-iteration budget
         assert!(
@@ -1914,12 +2207,12 @@ mod tests {
         );
         // Binary search log should be present
         assert!(
-            result
+            report
                 .log
                 .iter()
                 .any(|line| line.contains("JXL Phase 2 Refinement")),
             "expected JXL Phase 2 Refinement log, got {:?}",
-            result.log
+            report.log
         );
         // Result must be below source
         assert!(result.best_output_size < 1000);
@@ -1941,6 +2234,7 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Must NOT exhaust the full budget
@@ -1973,7 +2267,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
-            result.is_none(),
+            result.screening.is_none(),
             "expected None when all probes are oversize, got Some"
         );
     }
@@ -1995,6 +2289,7 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0_f64;
@@ -2014,11 +2309,11 @@ mod tests {
             (JXL_EXPLORE_FLOOR, 100),
             crate::exploration_policy::SizePolicy::StrictlySmaller,
             |_| Ok(50),
-        )
-        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
+        );
         assert!(
-            result.is_none(),
-            "zero input_size must not run screening with fabricated ratio defaults"
+            result
+                .expect_err("invalid source size")
+                .contains("nonzero source")
         );
     }
 }
@@ -2051,6 +2346,7 @@ mod tolerance_tests {
             },
         )
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .screening
         .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Highest quality fitting candidate starts at d0.05.

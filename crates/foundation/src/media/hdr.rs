@@ -534,6 +534,13 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     ultimate: bool,
     archive: bool,
 ) -> Result<()> {
+    // This migration rewrites metadata after selection and emits a separate gain-map sidecar.
+    anyhow::ensure!(
+        !crate::runtime_config::active().is_some_and(|config| {
+            config.img.jpeg_effort_search == crate::runtime_config::JpegEffortSearch::Full
+        }),
+        "Full JPEG effort search requires the current IMG JPEG archive path; legacy UltraHDR migration is unsupported"
+    );
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
     // JPEG bitstream migration retains its mode policy, not the pixel-encoding override.
     let actual_effort = crate::constants::jxl_effort_for_mode(
@@ -554,7 +561,8 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
 
     let selected = match crate::runtime_config::active() {
         Some(config)
-            if config.img.jpeg_effort_search == crate::runtime_config::EffortSearch::Adaptive =>
+            if config.img.jpeg_effort_search
+                == crate::runtime_config::JpegEffortSearch::Adaptive =>
         {
             config.img.jpeg_effort
         }
@@ -1790,6 +1798,56 @@ pub fn is_hdr10plus_tool_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ultrahdr_migration_rejects_full_search_before_accessing_files() -> Result<()> {
+        const CHILD: &str = "MFB_TEST_ULTRAHDR_MIGRATION_FULL_SEARCH";
+        if std::env::var_os(CHILD).is_some() {
+            let mut config = crate::runtime_config::RuntimeConfig::default();
+            config.img.jpeg_effort_search = crate::runtime_config::JpegEffortSearch::Full;
+            crate::runtime_config::install(config)?;
+            let root = tempfile::tempdir()?;
+            let output = root.path().join("untouched.jxl");
+            std::fs::write(&output, b"existing output must remain unchanged")?;
+            let error = convert_ultrahdr_jpeg_to_jxl_migration(
+                &root.path().join("missing-input.jpg"),
+                &output,
+                0.0,
+                11,
+                false,
+                false,
+                false,
+            )
+            .expect_err("legacy migration must not claim a full JPEG search");
+            assert!(
+                error
+                    .to_string()
+                    .contains("legacy UltraHDR migration is unsupported")
+            );
+            assert_eq!(
+                std::fs::read(output)?,
+                b"existing output must remain unchanged"
+            );
+            return Ok(());
+        }
+        let name = format!(
+            "{}::ultrahdr_migration_rejects_full_search_before_accessing_files",
+            module_path!()
+        );
+        let (_, name) = name.split_once("::").context("test module path")?;
+        let root = tempfile::tempdir()?;
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", name])
+            .env(CHILD, "1")
+            .env("MFB_HOME_ROOT", root.path())
+            .env("MFB_LOG_DIR", root.path().join("logs"))
+            .status()?;
+        anyhow::ensure!(
+            status.success(),
+            "isolated UltraHDR migration guard test failed"
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_cicp_hdr10() {

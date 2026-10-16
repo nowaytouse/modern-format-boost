@@ -64,6 +64,129 @@ fn version_probe_arg(name: &str) -> &'static str {
     }
 }
 
+/// A fresh version-command observation, not codec capability or media proof.
+#[derive(Debug, serde::Serialize)]
+pub struct ToolInspection {
+    pub schema_version: u8,
+    pub name: String,
+    pub path: Option<std::path::PathBuf>,
+    pub status: &'static str,
+    pub version: Option<String>,
+    pub diagnostic: Option<String>,
+    pub configuration_source: Option<String>,
+    pub configured_path: Option<std::path::PathBuf>,
+}
+
+fn inspect_version_at(
+    path: &std::path::Path,
+    argument: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<crate::process_runner::ProcessOutput> {
+    let mut command = Command::new(path);
+    command.arg(argument);
+    crate::process_runner::ManagedProcess::spawn_captured_isolated(&mut command)?
+        .wait_timeout(timeout, "tool inspection version command")
+}
+
+fn inspected_version(output: &crate::process_runner::ProcessOutput) -> Option<String> {
+    if !output.status.success() {
+        return None;
+    }
+    output
+        .stdout
+        .lines()
+        .chain(output.stderr.lines())
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().chars().take(512).collect())
+}
+
+/// Inspect the same selection order as processing, without processing media.
+///
+/// # Errors
+/// Rejects invalid tool names. Each version command has a hard deadline.
+pub fn inspect_tool(name: &str) -> anyhow::Result<ToolInspection> {
+    anyhow::ensure!(
+        name.as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_'),
+        "invalid tool name"
+    );
+    let configured_path = crate::runtime_config::active()
+        .and_then(|config| config.tools.paths.get(name))
+        .cloned();
+    let mut last_probe = None;
+    let path = crate::common_utils::resolve_tool_path_with_health(name, |path| {
+        let probe = inspect_version_at(path, "-version", std::time::Duration::from_secs(3));
+        let healthy = probe.as_ref().is_ok_and(|output| {
+            !output.stdout.contains("Library not loaded")
+                && !output.stdout.contains("dyld:")
+                && !output.stderr.contains("Library not loaded")
+                && !output.stderr.contains("dyld:")
+        });
+        last_probe = Some(probe);
+        healthy
+    });
+    let probe = path.as_deref().map(|path| {
+        if let Some(probe) = last_probe
+            .take()
+            .filter(|_| version_probe_arg(name) == "-version")
+        {
+            probe
+        } else {
+            inspect_version_at(
+                path,
+                version_probe_arg(name),
+                std::time::Duration::from_secs(3),
+            )
+        }
+    });
+    let (status, version, diagnostic) = match probe {
+        Some(Ok(output)) => match inspected_version(&output) {
+            Some(version) => ("version_reported", Some(version), None),
+            None => (
+                "version_unconfirmed",
+                None,
+                Some(format!(
+                    "Version command did not return a successful nonempty version line ({}): {}",
+                    output.status,
+                    crate::logging::combined_tool_output(&output.stdout, &output.stderr)
+                        .chars()
+                        .take(2048)
+                        .collect::<String>()
+                )),
+            ),
+        },
+        Some(Err(error)) => ("version_unconfirmed", None, Some(format!("{error:#}"))),
+        None => (
+            "unresolved",
+            None,
+            Some(last_probe.map_or_else(
+                || "No usable tool path was resolved".to_owned(),
+                |probe| match probe {
+                    Err(error) => format!("No usable tool path was resolved: {error:#}"),
+                    Ok(output) => format!(
+                        "Tool candidate failed the runtime loader check: {}",
+                        crate::logging::combined_tool_output(&output.stdout, &output.stderr)
+                    ),
+                },
+            )),
+        ),
+    };
+    Ok(ToolInspection {
+        schema_version: 1,
+        name: name.to_owned(),
+        path,
+        status,
+        version,
+        diagnostic: diagnostic.map(|value| value.chars().take(4096).collect()),
+        configuration_source: None,
+        configured_path,
+    })
+}
+
 fn get_tool_version_output(name: &str) -> Option<Output> {
     let path = crate::common_utils::resolve_tool_path_or_audit(name);
     let probe_arg = version_probe_arg(name);
@@ -442,6 +565,55 @@ pub fn is_available(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspection_rejects_names_that_could_be_paths_or_options() {
+        for name in ["", "../cjxl", "--version", "CJXL", "cjxl --help"] {
+            assert!(inspect_tool(name).is_err(), "accepted {name:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspection_observes_stderr_empty_and_failed_versions_without_inventing_success()
+    -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir()?;
+        let tool = directory.path().join("version-tool");
+        for (script, expected) in [
+            (
+                "#!/bin/sh\nprintf 'test version 1\\n' >&2\n",
+                Some("test version 1"),
+            ),
+            (
+                "#!/bin/sh\nprintf 'not a successful version\\n'\nexit 1\n",
+                None,
+            ),
+            ("#!/bin/sh\nexit 0\n", None),
+            ("#!/bin/sh\nprintf '版本 2\\n'\n", Some("版本 2")),
+        ] {
+            std::fs::write(&tool, script)?;
+            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700))?;
+            let output = inspect_version_at(&tool, "--version", std::time::Duration::from_secs(1))?;
+            assert_eq!(inspected_version(&output).as_deref(), expected);
+        }
+        std::fs::write(&tool, "#!/bin/sh\nsleep 5 &\nprintf 'test version 3\\n'\n")?;
+        let start = std::time::Instant::now();
+        let output = inspect_version_at(&tool, "--version", std::time::Duration::from_millis(100))?;
+        assert_eq!(
+            inspected_version(&output).as_deref(),
+            Some("test version 3")
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+
+        std::fs::write(&tool, "#!/bin/sh\nexec sleep 5\n")?;
+        let start = std::time::Instant::now();
+        assert!(
+            inspect_version_at(&tool, "--version", std::time::Duration::from_millis(30)).is_err()
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        Ok(())
+    }
 
     #[test]
     fn test_is_version_at_least_basic() {

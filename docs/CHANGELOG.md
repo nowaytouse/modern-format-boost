@@ -4,6 +4,189 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Inspectable History Cleanup Details (2026-10-16)
+
+- Add a dedicated Fast IMG History action for a selectable, read-only cleanup
+  detail sheet and full receipt copying, including explicit clipboard failure.
+- Locate only recorded directories that pass current non-link directory checks;
+  recheck immediately before Finder navigation. Missing or conflicting evidence
+  never creates a guessed path or deletion action.
+- Include cleanup attention in filtering, search and a wrapping result label,
+  without changing media counters or the underlying processing outcome.
+- Reject cleanup outcomes inconsistent with the batch's folder-removal request.
+  Cover missing/conflicting receipts, replaced links/files and sheet lifecycle
+  in native self-tests. This is not a complete residual inventory or safe-delete UI.
+
+### Independent Fast IMG Output Cleanup Receipts (2026-10-16)
+
+- Record output-folder cleanup independently of primary source cleanup, with the
+  run identity, observed target, six explicit outcomes and nullable operation counts.
+  Preserve completed file removals and the original error after partial failure;
+  do not invent zero counts for unattempted or unmeasured work.
+- Persist the bounded History event before emitting its live observation. Keep
+  verification and persistence errors explicit, without masking the original
+  failure or changing media counters and deletion eligibility.
+- Show leftover, blocked and unknown output cleanup in the compact completion
+  overview; expose exact paths, counts and diagnostics in expanded details and
+  History. Reject conflicting identities and records, and retain valid receipts
+  in diagnostic exports without a database schema change.
+- Keep current output-folder cleanup failures separate from verifier/Gate warnings
+  and failed-source preservation proofs. Preserve actual verifier warnings, severe
+  diagnostics and the existing warnings for other checkpoint-owned folders.
+- Distinguish a folder absent before cleanup from one absent afterwards. Treat
+  metadata I/O errors and replaced non-directory targets as failures, not absence.
+  Missing older receipts do not prove cleanup; these observations do not inventory
+  all scratch folders, authorize user-triggered deletion or prove current state.
+
+### Explainable Fast IMG Ignored Inventory (2026-10-16)
+
+- Preserve exact scan exclusions with explicit policy reason codes and source paths,
+  then reconcile the inventory against the existing ignored-count partition. Keep
+  probe failures out of ignored records and preserve processing/deletion policy.
+- Add run/invocation-bound, ordered `MFB_FAST_IMG_IGNORED` observations with bounded
+  transport and explicit identity, serialization and output errors. Direct CLI
+  output uses one ignored line per item; captured GUI output avoids duplicate lines
+  and no longer presents animation exclusions as successful skips.
+- Add a separate History ignored-items view with category totals, localized reason
+  and path search, bounded rows, exact-record copying and guarded Finder navigation.
+  Validate complete ordinals, conflicting duplicates, recorded-path uniqueness and
+  the reported batch total; absent or inconsistent evidence stays unavailable.
+- Query only the ignored-observation stream when browsing this inventory. Retain
+  original observations and a separate inventory reconciliation status in diagnostic
+  exports without changing History database schema, media counters or delivery proof.
+- Escape control characters in direct CLI path labels while retaining exact paths
+  in structured records. Do not classify a literal warning/error tag in an ignored
+  filename as a diagnostic. The ignored table uses vertical scrolling only to avoid
+  horizontal/vertical scroller retiling when the History window is reopened.
+- Retain the workspace's bitflags Git refresh from `8df4d4eb` to `74c6fd12` at
+  version 2.13.2; the upstream diff changes only a compile-fail diagnostic fixture.
+
+### File Failure Details And Traceable Reasons (2026-10-16)
+
+- Group History failure observations by exact run/invocation/pipeline/source paths,
+  preserving distinct messages and occurrence counts inside a selectable detail
+  sheet. Add direct full-detail copying, source-group versus observation counts,
+  and search across recorded fields without changing final media counters or raw logs.
+- Translate known failure codes in the live and History views while preserving
+  unknown messages and original diagnostics. Propagate typed image task failure
+  reasons through normal and Fast IMG, and retain existing reason IDs in shared
+  task-failure audit markers. JPEGs missing EOI have a specific code; other
+  incomplete structures are not mislabeled as missing that marker.
+- Keep failure, skip, source retention and delivery evidence separate. A detail
+  group does not establish file-content identity, a verified stage or current
+  source safety. Changing selection or closing details invalidates stale actions.
+- Fix Rational value reuse for both high-precision and Copy fallback builds without
+  changing weight calculations or suppressing feature-specific Clippy diagnostics.
+
+### Worker-Backed Tool Inspection (2026-10-16)
+
+- Add a read-only **Inspect Processing Tools** window to ordinary image, Fast IMG
+  and video Settings. Show common tool roles, resolved paths, versions,
+  configuration sources/overrides and explicit unresolved/unconfirmed diagnostics
+  from the selected pipeline's current draft. Do not save settings or process media.
+- Share the worker's selection order with `img config tool NAME` and
+  `vid config tool NAME`. Version commands use bounded capture and per-probe
+  deadlines and opt-in Unix process-group cleanup, including background pipe
+  holders after the version-command parent exits. Stderr versions, empty output,
+  nonzero exits and timeouts remain distinct from success. Normal processing's
+  resolver behavior is retained; unsupported isolated inspection is explicit.
+- Validate versioned reports and stale-response boundaries in the native UI;
+  permission, path discovery, a successful version command, codec capability,
+  actual invocation and delivery proof remain separate facts.
+- Preserve the existing source updates for flate2 and the matched thiserror macro
+  pair, and pinned Rust toolchain action refresh. Fast IMG emits its final batch
+  count after post-processing rather than an early duplicate nonzero result;
+  confirmed partial Photos outcomes retain their explicit failure counts with a
+  restrained heading, while unconfirmed evidence remains visibly separate.
+
+### Clear Recovery And Tool Permissions (2026-10-16)
+
+- Replace ambiguous encoding-fallback/alternative-tool labels with **Encoding
+  retries and repair** and **Permitted encoding tools** in English, Simplified
+  Chinese and Japanese. Visible scope notes distinguish permitted operations,
+  tool switching and batch failure handling without relying on hover text.
+- Link image Settings directly to a native guide topic explaining conditional
+  JPEG compatibility retries, same-encoder ICC repair, alternate D-search probes
+  and the stricter full-JPEG-search boundary. Permission is not evidence of actual
+  execution, availability or archival success.
+- Align worker/launcher CLI help and configuration documentation without changing
+  flag names, saved values, search defaults, recovery permissions or safety Gates.
+
+### Bounded distance-search evidence (2026-10-16)
+
+- Retain the JXL screening report when no shortlist exists or D0 already fits,
+  instead of losing its log through an empty optional result. Record floor,
+  ladder, discovery and binary requests separately from the supplied baseline;
+  include the measurement budget and actual stop condition.
+- Reject empty baseline/probe payloads and invalid baseline coordinates. Remove
+  the invalid-winner NaN/MAX sentinel path; invalid final distance or telemetry
+  cannot become eligible for delivery merely by sealing/clamping it.
+- Preserve actual D0 and sub-floor precision values in diagnostic text; invalid
+  values are marked invalid, not printed as D0.001. Record finalist failures and
+  refinement termination separately, retaining a verified candidate after a
+  failed refinement without claiming a continuous/global optimum. Probe requests
+  are explicitly not presented as encoder subprocess counts. Final search logs
+  compare pure payload with pure payload and report the container bytes separately.
+- Keep the existing candidate order, same-effort domains, quality-first ranking,
+  size policy and final delivery verification. Cross-stage artifact reuse,
+  representative throughput and complete per-file persistent manifests remain
+  separate work.
+- Validation: 23 Foundation distance-search regressions, seven IMG probe/ranking
+  checks and two existing delivery contracts pass, including the shared probe's
+  legal D2.5 pre-AVIF handoff, empty/failed probes, non-monotonic test curves and
+  invalid evidence sealing. These are focused deterministic checks, not a
+  representative encoder benchmark or real-media/Photos acceptance.
+
+### Algorithm-first settings and the in-app processing guide (2026-10-16)
+
+- Replace the question-mark URL shortcut with a native, searchable processing
+  guide: private archive policy, media routing, distinct D/E/Q searches, mandatory
+  delivery verification, Photos custody and partial-result/recovery semantics.
+  The guide stays in the app and shows the selected workflow as context. Use an
+  inline native Find bar with live matches; retain the standard window close
+  action and add the missing Command-W menu shortcut.
+- Default to JPEG `full`, pixel Effort `adaptive` and guarded quality `adaptive`.
+  Fixed levels remain manual opt-outs; explicitly saved choices are preserved.
+  Normal E7 can still have only one permitted pixel effort. Source policy, PNG D0,
+  archive restrictions, modern-format retention and all delivery Gates remain.
+- Move the existing pure AVIF quality-boundary search and six regression tests
+  into Foundation without changing its search order or callback contracts.
+  Keep JPEG complete-file selection separate from pixel payload/D selection.
+  Discard larger/superseded pixel-E temporary files immediately, retaining only
+  the current winner and challenger, as the JPEG full search already does.
+- Add `jpeg_effort_search=full` to ordinary IMG and Fast JXL. Independently
+  encode E1..E11 without assuming monotonic sizes or unproven equivalent Efforts.
+  Compare complete JXL bytes after identical delivery metadata enrichment; ties
+  retain lower E. Manual E11 and existing bounded comparison remain available.
+- Reconstruct the first candidate and every smaller contender, skip redundant
+  selection decodes for larger/tied candidates, retain only best/challenger and
+  publish the existing winner without re-encoding. Final delivery Gates remain
+  mandatory, and final metadata must not change the selected file's bytes.
+- Bind candidate selection to source, XMP and cjxl executable content. Incomplete,
+  unsupported, cancelled or failed searches retain the source and cannot claim a
+  full-domain minimum. Full mode does not silently switch Effort or repair input.
+  Preserve complete backend error chains, including the original encoder stderr.
+- Replace the native JPEG search checkbox with fixed / selected levels / all 11
+  choices. Hide the inactive numeric E in full mode while retaining its saved
+  value, distinguish JPEG reconstruction from other-image D/E, and keep normal
+  IMG and Fast JXL profiles independent. CLI, launch and effective-config inputs
+  share the dedicated typed JPEG mode; pixel Effort does not accept `full`.
+- Reject source-alias metadata candidates before writing. The unused legacy
+  UltraHDR migration interface explicitly rejects full search; current ordinary
+  IMG/Fast JXL JPEG archival does not use that old representation.
+- Keep pause acknowledgment at the owning file transaction boundary; check
+  cancellation between candidates and before publication without retaining a
+  transaction while waiting for its own pause acknowledgment.
+- Validation: 33 focused Foundation regressions, 16 IMG CLI configuration tests,
+  two IMG conversion/label checks and launcher normal/Fast forwarding pass.
+  An independent all-eleven reference selected E9 at 678 complete bytes;
+  both normal/Fast conversion option sets delivered byte-identical winners and
+  passed final delivery proof. Changed post-selection metadata preserves the old
+  output. The native warnings-as-errors build, settings/guide self-test and
+  language-resource validation pass. Chinese dark and English light guide windows,
+  topic switching, actual Find matches and window closing were inspected. These
+  are targeted checks, not representative throughput or Photos acceptance.
+
 ### Conservative partial results and checkpoint-first recovery (2026-10-15)
 
 - Default the native window to a compact result overview with expandable original

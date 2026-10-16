@@ -675,11 +675,12 @@ where
                             }
                             return;
                         }
-                        crate::infra::static_logs::log_file_outcome_audit(
+                        crate::infra::static_logs::log_file_outcome_audit_with_class(
                             audit_pipeline,
                             "failed",
                             &fixed,
                             result.message(),
+                            result.skip_reason(),
                         );
                         crate::log_info!(
                             crate::infra::static_logs::messages::LABEL_BATCH,
@@ -1157,6 +1158,13 @@ where
     );
 
     if !result.is_success() && !result.is_skipped() && !result.is_ignored() {
+        crate::infra::static_logs::log_file_outcome_audit_with_class(
+            crate::infra::static_logs::audit_pipeline_from_label(&config.label),
+            "failed",
+            input,
+            result.message(),
+            result.skip_reason(),
+        );
         crate::report::print_single_file_outcome(crate::conversion::Outcome::Failed);
         anyhow::bail!(result.message().to_string());
     }
@@ -1240,6 +1248,56 @@ mod tests {
     use super::*;
 
     const MINIMAL_MP4: &[u8] = b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2";
+
+    #[test]
+    fn failed_task_reason_survives_single_file_marker() -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_REASON_MARKER_TEST_INPUT";
+        if let Some(input) = std::env::var_os(CHILD) {
+            let mut config = test_config(PathBuf::from(input));
+            config.label = "Video".to_owned();
+            let error = process_single_file(&config, |path| {
+                Ok(crate::conversion::TaskResult::failed(
+                    path,
+                    24,
+                    "synthetic failure",
+                    "synthetic_reason",
+                ))
+            })
+            .unwrap_err();
+            assert_eq!(error.to_string(), "synthetic failure");
+            return Ok(());
+        }
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("failure.mp4");
+        std::fs::write(&input, MINIMAL_MP4)?;
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "convert::cli_runner::tests::failed_task_reason_survives_single_file_marker",
+                "--nocapture",
+            ])
+            .env(CHILD, &input)
+            .env("MFB_RUN_ID", "synthetic-run")
+            .env("MFB_INVOCATION_ID", "synthetic-call")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        let markers = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("MFB_FILE_FAILURE="))
+            .collect::<Vec<_>>();
+        assert_eq!(markers.len(), 1, "{stdout}");
+        let marker: crate::infra::static_logs::FileFailureMarker =
+            serde_json::from_str(markers[0])?;
+        assert_eq!(marker.reason_code.as_deref(), Some("synthetic_reason"));
+        assert_eq!(marker.pipeline, "vid");
+        assert_eq!(std::fs::read(input)?, MINIMAL_MP4);
+        Ok(())
+    }
 
     fn test_config(input: PathBuf) -> Config {
         Config {

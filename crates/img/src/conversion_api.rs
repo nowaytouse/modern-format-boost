@@ -667,7 +667,7 @@ fn convert_to_jxl(
             &jpeg_lossless_options(config),
             max_threads,
         )
-        .map_err(|error| ImgQualityError::ConversionError(error.to_string()))?;
+        .map_err(|error| ImgQualityError::ConversionError(format!("{error:#}")))?;
         if !output.status.success() {
             return Err(ImgQualityError::ConversionError(format!(
                 "cjxl JPEG lossless transcode failed: {}",

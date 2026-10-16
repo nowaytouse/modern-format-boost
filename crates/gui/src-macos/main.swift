@@ -289,10 +289,11 @@ private enum MediaSetting: String, CaseIterable {
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
     var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
     var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
+    var isJpegSearch: Bool { self == .imgJpegSearch || self == .fastJpegSearch }
     var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
     var isDistance: Bool { self == .imgJxlDistance }
     var isSearch: Bool { [.imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch, .fastQualitySearch].contains(self) }
-    var isSearchToggle: Bool { [.imgJxlSearch, .imgJpegSearch, .fastJpegSearch, .imgQualitySearch].contains(self) }
+    var isSearchToggle: Bool { [.imgJxlSearch, .imgQualitySearch].contains(self) }
     func searchEnabled(_ value: String) -> Bool? {
         if value == "adaptive" { return true }
         if value == "fixed" { return false }
@@ -302,7 +303,8 @@ private enum MediaSetting: String, CaseIterable {
     func choiceTitle(_ value: String) -> String {
         if isEffort || isDistance { return value }
         if self == .fastAvifSpeed { return value }
-        if self == .imgJxlSearch || self == .fastJxlSearch || self == .imgJpegSearch || self == .fastJpegSearch { return localized("settings.effort.\(value)") }
+        if isJpegSearch { return localized("settings.jpeg_search.\(value)") }
+        if self == .imgJxlSearch || self == .fastJxlSearch { return localized("settings.effort.\(value)") }
         if self == .imgQualitySearch { return localized("settings.distance.\(value)") }
         if self == .fastQualitySearch { return localized("settings.avif.\(value)") }
         return localized(isSearch && value == "adaptive" ? "settings.search.adaptive" : "settings.value.\(value)")
@@ -369,8 +371,9 @@ private enum MediaSetting: String, CaseIterable {
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
         case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
         case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
-        case .imgJxlSearch, .fastJxlSearch, .imgJpegSearch, .fastJpegSearch: ["fixed", "adaptive"]
-        case .imgQualitySearch, .fastQualitySearch: ["mode-default", "fixed", "adaptive"]
+        case .imgJxlSearch, .fastJxlSearch: ["fixed", "adaptive"]
+        case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive", "fixed"]
+        case .imgQualitySearch, .fastQualitySearch: ["adaptive", "mode-default", "fixed"]
         case .fastAvifSpeed: (0...10).map(String.init)
         case .vidCodec: ["hevc", "av1"]
         case .imgToolPolicy, .fastToolPolicy: ["fallback", "single"]
@@ -456,6 +459,7 @@ private enum VideoCodec: String { case hevc, av1 }
 private enum ToolSelectionPolicy: String { case fallback, single }
 private enum PhotosImportBackend: String { case auto, native, applescript }
 private enum EffortSearchMode: String { case fixed, adaptive }
+private enum JpegEffortSearchMode: String { case fixed, adaptive, full }
 private enum QualitySearchMode: String { case modeDefault = "mode-default", fixed, adaptive }
 
 private enum ToolPipeline: String, CaseIterable {
@@ -468,7 +472,7 @@ private struct ImageSettings {
     var configurationFile: String?
     var fallback: ImageFallback?
     var jpegEffort: Int?
-    var jpegEffortSearch: EffortSearchMode?
+    var jpegEffortSearch: JpegEffortSearchMode?
     var jxlDistance: Float?
     var jxlEffort: Int?
     var jxlEffortSearch: EffortSearchMode?
@@ -576,7 +580,7 @@ private struct MediaSettings {
                 case .imgJxlDistance: image.jxlDistance = Float(value)
                 case .imgJxlEffort: image.jxlEffort = Int(value)
                 case .imgJxlSearch: image.jxlEffortSearch = EffortSearchMode(rawValue: value)
-                case .imgJpegSearch: image.jpegEffortSearch = EffortSearchMode(rawValue: value)
+                case .imgJpegSearch: image.jpegEffortSearch = JpegEffortSearchMode(rawValue: value)
                 case .imgQualitySearch: image.qualitySearch = QualitySearchMode(rawValue: value)
                 case .imgHeuristic: image.qualityHeuristic = Bool(value)
                 case .imgDatabase: image.allowDatabase = Bool(value)
@@ -587,7 +591,7 @@ private struct MediaSettings {
                 case .fastConfig: fastImage.configurationFile = value
                 case .fastFallback: fastImage.fallback = ImageFallback(rawValue: value)
                 case .fastJpegEffort: fastImage.jpegEffort = Int(value)
-                case .fastJpegSearch: fastImage.jpegEffortSearch = EffortSearchMode(rawValue: value)
+                case .fastJpegSearch: fastImage.jpegEffortSearch = JpegEffortSearchMode(rawValue: value)
                 case .fastJxlEffort: fastImage.jxlEffort = Int(value)
                 case .fastJxlSearch: fastImage.jxlEffortSearch = EffortSearchMode(rawValue: value)
                 case .fastQualitySearch: fastImage.qualitySearch = QualitySearchMode(rawValue: value)
@@ -699,6 +703,8 @@ private struct MediaSettings {
     }
 
     private func argumentValue(for field: MediaSetting) -> String? {
+        if field == .imgJpegEffort && image.jpegEffortSearch == .full { return nil }
+        if field == .fastJpegEffort && fastImage.jpegEffortSearch == .full { return nil }
         if field == .imgJxlDistance && image.qualitySearch == .adaptive { return nil }
         if field == .fastAvifQuality,
            fastImage.qualitySearch == .adaptive || fastImage.qualitySearch == .modeDefault { return nil }
@@ -1317,6 +1323,189 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
 }
 
 @MainActor
+private final class ToolInspectionPanel: NSObject, NSWindowDelegate {
+    private struct Observation: Decodable {
+        let schemaVersion: Int
+        let name: String
+        let path: String?
+        let status: String
+        let version: String?
+        let diagnostic: String?
+        let configurationSource: String?
+        let configuredPath: String?
+
+        static func decode(_ data: Data, name: String) throws -> Self {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let value = try decoder.decode(Self.self, from: data)
+            guard value.schemaVersion == 1, value.name == name,
+                  ["version_reported", "version_unconfirmed", "unresolved"].contains(value.status),
+                  value.path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? (value.status == "unresolved"),
+                  value.configuredPath.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+                  (value.status == "version_reported") == !(value.version ?? "").isEmpty,
+                  value.status != "unresolved" || value.path == nil,
+                  value.status == "version_reported" || !(value.diagnostic ?? "").isEmpty else {
+                throw HostError(message: localized("settings.tools.inspect_invalid"))
+            }
+            return value
+        }
+    }
+
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let tools = NSPopUpButton()
+    private let details = NSTextView()
+    private let refresh = NSButton()
+    private let pipeline: ToolPipeline
+    private let avif: Bool
+    private let settings: MediaSettings
+    private let completed: () -> Void
+    private var generation = UUID()
+
+    init(settings: MediaSettings, pipeline: ToolPipeline, avif: Bool, completed: @escaping () -> Void) {
+        self.settings = settings
+        self.pipeline = pipeline
+        self.avif = avif
+        self.completed = completed
+        super.init()
+        panel.title = localized("settings.tools.inspect") + " · " + pipeline.title
+        panel.delegate = self
+        tools.addItems(withTitles: pipeline == .video ? ["ffmpeg", "ffprobe", "exiftool"]
+            : (avif ? ["avifenc", "avifdec", "exiftool", "ffprobe", "ffmpeg", "magick"]
+                : ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick"]))
+        tools.target = self
+        tools.action = #selector(inspect)
+        tools.setAccessibilityLabel(localized("settings.tools.tool"))
+        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        refresh.isBordered = false
+        refresh.target = self
+        refresh.action = #selector(inspect)
+        refresh.toolTip = localized("settings.tools.inspect_refresh")
+        refresh.setAccessibilityLabel(refresh.toolTip)
+        refresh.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        refresh.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        let selector = NSStackView(views: [NSTextField(labelWithString: localized("settings.tools.tool")), tools, refresh])
+        selector.spacing = 12
+        let note = NSTextField(wrappingLabelWithString: localized("settings.tools.inspect_note"))
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        details.isEditable = false
+        details.isSelectable = true
+        details.drawsBackground = false
+        details.font = .systemFont(ofSize: 12)
+        details.textColor = .labelColor
+        details.isHorizontallyResizable = false
+        details.isVerticallyResizable = true
+        details.minSize = .zero
+        details.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(localized("settings.tools.inspect"))
+        let scroll = NSScrollView()
+        scroll.documentView = details
+        scroll.hasVerticalScroller = true
+        let done = NSButton(title: localized("settings.tools.inspect_done"), target: self, action: #selector(close))
+        done.bezelStyle = .rounded
+        done.keyEquivalent = "\u{1b}"
+        let root = NSStackView(views: [selector, note, scroll, done])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+        root.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView?.addSubview(root)
+        if let content = panel.contentView {
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+                note.widthAnchor.constraint(equalTo: root.widthAnchor),
+                scroll.widthAnchor.constraint(equalTo: root.widthAnchor),
+            ])
+        }
+    }
+
+    func show(for parent: NSWindow) { parent.beginSheet(panel); inspect() }
+
+    @objc private func inspect() {
+        generation = UUID()
+        let token = generation
+        let name = tools.titleOfSelectedItem ?? ""
+        let worker = pipeline == .video ? "vid" : "img"
+        let arguments = pipeline == .video ? settings.videoRuntimeArguments(inheritedOnly: false)
+            : settings.runtimeArguments(fast: pipeline == .fastImage, inheritedOnly: false, avif: avif)
+        tools.isEnabled = false
+        refresh.isEnabled = false
+        details.string = localized("settings.tools.inspect_loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                guard let binary = ProcessorLocator.resolveTool(named: worker) else {
+                    throw HostError(message: localized(worker == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
+                }
+                return try Observation.decode(settingsToolOutput(binary, arguments: ["config", "tool", name] + arguments, timeout: 40), name: name)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.tools.isEnabled = true
+                self.refresh.isEnabled = true
+                switch result {
+                case let .success(value):
+                    self.details.string = [
+                        localized("settings.tools.inspect_status", localized("settings.tools.inspect_\(value.status)")),
+                        localized("settings.tools.inspect_role", localized("settings.tools.role.\(name)")),
+                        localized("settings.tools.inspect_path", value.path ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_version", value.version ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_source", value.configurationSource ?? localized("settings.tools.inspect_discovery")),
+                        value.configuredPath.map { localized("settings.tools.inspect_override", $0) } ?? "",
+                        value.diagnostic.map { localized("settings.tools.inspect_diagnostic", $0) } ?? "",
+                    ].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                case let .failure(error): self.details.string = error.localizedDescription
+                }
+                self.details.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            }
+        }
+    }
+
+    @objc private func close() { generation = UUID(); panel.sheetParent?.endSheet(panel); completed() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { close(); return false }
+
+    static func selfTest() throws {
+        let keys = ["inspect", "inspect_refresh", "inspect_done", "inspect_note", "inspect_loading", "inspect_invalid",
+            "inspect_status", "inspect_version_reported", "inspect_version_unconfirmed", "inspect_unresolved",
+            "inspect_role", "inspect_path", "inspect_version", "inspect_source", "inspect_discovery", "inspect_diagnostic", "inspect_override"]
+            + ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick", "avifenc", "avifdec"].map { "role.\($0)" }
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing tool inspection language bundle")
+            }
+            for suffix in keys {
+                let key = "settings.tools.\(suffix)"
+                guard bundle.localizedString(forKey: key, value: key, table: nil) != key else {
+                    throw HostError(message: "Missing tool inspection translation: \(language)/\(key)")
+                }
+            }
+        }
+        let valid: [String: Any] = ["schema_version": 1, "name": "cjxl", "path": "/synthetic/cjxl",
+            "status": "version_reported", "version": "cjxl 1"]
+        _ = try Observation.decode(JSONSerialization.data(withJSONObject: valid), name: "cjxl")
+        for patch: [String: Any] in [["schema_version": 2], ["name": "ffmpeg"],
+            ["path": "relative/cjxl"], ["status": "ready"], ["version": ""], ["path": NSNull()]] {
+            let invalid = valid.merging(patch) { _, value in value }
+            do {
+                _ = try Observation.decode(JSONSerialization.data(withJSONObject: invalid), name: "cjxl")
+            } catch { continue }
+            throw HostError(message: "Invalid tool inspection was accepted")
+        }
+        for status in ["unresolved", "version_unconfirmed"] {
+            var observation: [String: Any] = ["schema_version": 1, "name": "cjxl", "status": status,
+                "diagnostic": "synthetic probe failure"]
+            if status != "unresolved" { observation["path"] = "/synthetic/cjxl" }
+            _ = try Observation.decode(JSONSerialization.data(withJSONObject: observation), name: "cjxl")
+        }
+    }
+}
+
+@MainActor
 private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 240),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -1575,6 +1764,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var cacheLoaded = false
     private var cacheBusy = false
     private var toolEditor: ToolPathsPanel?
+    private var toolInspector: ToolInspectionPanel?
+    private var processingGuide: ProcessingGuideController?
     private var validatingLayout = false
 
     init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
@@ -1677,8 +1868,20 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.setAccessibilityLabel(field.title)
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                let fieldView: NSView
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy].contains(field) {
+                    let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
+                    note.font = .systemFont(ofSize: 11)
+                    note.textColor = .secondaryLabelColor
+                    let stack = NSStackView(views: [control, note])
+                    stack.orientation = .vertical
+                    stack.alignment = .leading
+                    stack.spacing = 3
+                    note.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                    fieldView = stack
+                } else { fieldView = control }
                 var cells: [NSView] = toggles[field] == nil
-                    ? [NSTextField(labelWithString: field.title), control] : [control, NSView()]
+                    ? [NSTextField(labelWithString: field.title), fieldView] : [control, NSView()]
                 if developer && field.runtimeKey != nil {
                     let source = NSButton()
                     source.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
@@ -1697,6 +1900,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 rows[field] = row
                 fieldSections[field] = section
                 row.yPlacement = .center
+            }
+            if section == "img" {
+                let guide = NSButton(title: localized("settings.recovery.guide"), target: self, action: #selector(showRecoveryGuide))
+                guide.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: nil)
+                guide.imagePosition = .imageLeading
+                guide.isBordered = false
+                guide.alignment = .left
+                guide.contentTintColor = .linkColor
+                guide.setAccessibilityLabel(guide.title)
+                grid.addRow(with: developer ? [NSView(), guide, NSView()] : [NSView(), guide]).yPlacement = .center
+            }
+            if section == "img" || section == "vid" {
+                let inspect = NSButton(title: localized("settings.tools.inspect"), target: self, action: #selector(inspectTools(_:)))
+                inspect.tag = section == "vid" ? 1 : 0
+                inspect.image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: nil)
+                inspect.imagePosition = .imageLeading
+                inspect.isBordered = false
+                inspect.alignment = .left
+                inspect.contentTintColor = .linkColor
+                grid.addRow(with: developer ? [NSView(), inspect, NSView()] : [NSView(), inspect]).yPlacement = .center
             }
             if section == "cache" { addCacheRows(to: grid) }
             if section == "developer" {
@@ -2359,6 +2582,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         if tabViewItem?.identifier as? String == "cache", !cacheLoaded && !validatingLayout { refreshCache() }
     }
 
+    @objc private func showRecoveryGuide() {
+        if processingGuide == nil { processingGuide = ProcessingGuideController() }
+        processingGuide?.show(relativeTo: panel, topic: "tools")
+    }
+
     private func updatePanelSize() {
         guard let section = tabs.selectedTabViewItem?.identifier as? String,
               let grid = grids[section], let tabHeight else { return }
@@ -2538,6 +2766,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     private func isApplicable(_ field: MediaSetting) -> Bool {
         if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
+        if field == .imgJpegEffort || field == .fastJpegEffort {
+            let searchField: MediaSetting = field == .imgJpegEffort ? .imgJpegSearch : .fastJpegSearch
+            let mode = popups[searchField]?.selectedItem?.representedObject as? String ?? displayed[searchField]
+            if mode == "full" { return false }
+        }
         let backend = (popups[.photosBackend]?.selectedItem?.representedObject as? String) ?? displayed[.photosBackend]
         let adaptive = toggles[.photosAdaptive]?.state == .on
         if field == .photosAppleScriptBatch && backend == "native" { return false }
@@ -2572,7 +2805,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         for (field, searchField) in [(MediaSetting.imgJxlEffort, MediaSetting.imgJxlSearch),
                                      (.imgJpegEffort, .imgJpegSearch), (.fastJpegEffort, .fastJpegSearch)] {
             guard let popup = popups[field], let label = rows[field]?.cell(at: 0).contentView as? NSTextField else { continue }
-            let title = toggles[searchField]?.state == .on
+            let comparing = field.isPixelEffort ? toggles[searchField]?.state == .on
+                : (popups[searchField]?.selectedItem?.representedObject as? String ?? displayed[searchField]) == "adaptive"
+            let title = comparing
                 ? localized(field.isPixelEffort ? "settings.effort.comparison" : "settings.jpeg_effort.comparison") : field.title
             label.stringValue = title
             popup.setAccessibilityLabel(title)
@@ -2701,6 +2936,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     private var toolPipelines: [ToolPipeline] { fast ? [.fastImage] : (videos ? [.video] : [.image, .video]) }
 
+    @objc private func inspectTools(_ sender: NSButton) {
+        guard !applying, !cacheBusy, toolInspector == nil else { return }
+        let pipeline: ToolPipeline = sender.tag == 1 ? .video : (fast ? .fastImage : .image)
+        toolInspector = ToolInspectionPanel(settings: draft(), pipeline: pipeline, avif: avif) { [weak self] in
+            self?.toolInspector = nil
+        }
+        toolInspector?.show(for: panel)
+    }
+
     @objc private func editToolPaths() {
         guard !applying, !cacheBusy, toolEditor == nil else { return }
         sourceGeneration = UUID()
@@ -2818,6 +3062,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         validatingLayout = true
         defer { validatingLayout = false }
         try validateEncodingScopesForSelfTest()
+        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy] {
+            guard let row = rows[field] else { continue }
+            guard let stack = row.cell(at: 1).contentView as? NSStackView,
+                  let note = stack.arrangedSubviews.last as? NSTextField,
+                  note.stringValue == localized("settings.\(field.labelKey).note"),
+                  popups[field]?.accessibilityLabel() == field.title else {
+                throw HostError(message: "Encoding recovery and tool permissions lost their visible explanation")
+            }
+        }
         var pixelEffort = MediaSettings()
         pixelEffort.values = [.imgJxlEffort: "8", .fastJxlEffort: "10", .imgJpegEffort: "11"]
         try pixelEffort.validate()
@@ -3069,10 +3322,45 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     func validateEncodingScopesForSelfTest() throws {
+        if !videos && (!fast || !avif) {
+            let searchField: MediaSetting = fast ? .fastJpegSearch : .imgJpegSearch
+            let effortField: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort
+            let otherSearch: MediaSetting = fast ? .imgJpegSearch : .fastJpegSearch
+            guard fieldSections[searchField] == "img", toggles[searchField] == nil,
+                  popups[searchField]?.itemArray.compactMap({ $0.representedObject as? String }) == ["full", "adaptive", "fixed"],
+                  !MediaSetting.imgJxlSearch.choices.contains("full"), !MediaSetting.fastJxlSearch.choices.contains("full") else {
+                throw HostError(message: "JPEG effort comparison is not a complete image settings choice")
+            }
+            var settings = MediaSettings()
+            settings.values = [searchField: "full", effortField: "7", otherSearch: "fixed"]
+            restore(settings)
+            let operation: OperationMode = fast ? .fastImgJxl : .adjacent
+            let arguments = try draft().arguments(operation: operation, processing: .imagesOnly)
+            guard rows[effortField]?.isHidden == true, draft().values[effortField] == "7",
+                  draft().values[searchField] == "full", draft().values[otherSearch] == "fixed",
+                  arguments == ["--img-jpeg-effort-search", "full"],
+                  draft().runtimeArguments(fast: fast, inheritedOnly: false) == ["--jpeg-effort-search", "full"] else {
+                throw HostError(message: "Full JPEG comparison retained a false limit or mixed image profiles")
+            }
+            popups[searchField]?.select(popups[searchField]?.itemArray.first(where: { $0.representedObject as? String == "fixed" }))
+            updateVisibility()
+            guard rows[effortField]?.isHidden == false, draft().values[effortField] == "7",
+                  draft().values[searchField] == "fixed" else {
+                throw HostError(message: "Returning from full JPEG comparison lost the fixed effort")
+            }
+            let suite = "MFBGuiJpegSearchSelfTest.\(UUID().uuidString)"
+            let storage = UserDefaults(suiteName: suite)!
+            defer { storage.removePersistentDomain(forName: suite) }
+            try settings.save(to: storage)
+            guard MediaSettings(preferences: storage).values == settings.values else {
+                throw HostError(message: "Full JPEG comparison did not survive independent profile persistence")
+            }
+            restore(MediaSettings())
+        }
         if !videos && !fast {
-            guard [.imgJxlEffort, .imgJpegEffort, .imgToolPolicy]
+            guard [.imgJxlEffort, .imgJpegEffort, .imgJpegSearch, .imgToolPolicy]
                 .allSatisfy({ fieldSections[$0] == "img" && popups[$0] != nil }),
-                  [.imgJxlSearch, .imgJpegSearch, .imgQualitySearch]
+                  [.imgJxlSearch, .imgQualitySearch]
                     .allSatisfy({ fieldSections[$0] == "img" && toggles[$0] != nil }),
                   let distance = textFields[.imgJxlDistance] as? NSComboBox,
                   distance.isEditable, distance.numberOfItems == 6,
@@ -3170,7 +3458,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         if fast {
             guard popups[.fastJxlEffort] == nil, popups[.fastJxlSearch] == nil,
-                  (popups[.fastJpegEffort] != nil) == !avif, (toggles[.fastJpegSearch] != nil) == !avif,
+                  (popups[.fastJpegEffort] != nil) == !avif, (popups[.fastJpegSearch] != nil) == !avif,
                   (popups[.fastQualitySearch] != nil) == avif,
                   (textFields[.fastAvifQuality] != nil) == avif,
                   (popups[.fastAvifSpeed] != nil) == avif,
@@ -4318,9 +4606,34 @@ private struct BatchResults {
     private(set) var invalid = false
     private(set) var fastDeliveries: [FastDelivery] = []
     private(set) var fastDeliveryInvalid = false
+    private(set) var outputCleanups: [OutputCleanupReceipt] = []
+    private(set) var outputCleanupInvalid = false
     private var workerExitCodes: [Int] = []
     private(set) var mandatoryEvidenceConflict = false
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    mutating func ingestOutputCleanup(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(OutputCleanupReceipt.prefix) else { return false }
+        do {
+            guard let receipt = try OutputCleanupReceipt.decode(raw), receipt.run_id != nil,
+                  !outputCleanupInvalid, outputCleanups.count < 64,
+                  outputCleanups.allSatisfy({ $0.run_id == receipt.run_id }) else {
+                outputCleanupInvalid = true
+                return true
+            }
+            if let previous = outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
+                if previous != receipt { outputCleanupInvalid = true }
+            } else { outputCleanups.append(receipt) }
+        } catch { outputCleanupInvalid = true }
+        return true
+    }
+
+    func outputCleanupText(detailed: Bool) -> String {
+        if outputCleanupInvalid { return localized("cleanup.invalid") }
+        if outputCleanups.isEmpty { return localized("cleanup.not_recorded") }
+        return outputCleanups.map { detailed ? $0.detailText : $0.statusText }.joined(separator: "\n")
+    }
 
     func fastDeliveryCount(_ key: KeyPath<FastDelivery, Int>) -> Int? {
         processingCountTotal(fastDeliveries.map { $0[keyPath: key] })
@@ -4624,6 +4937,17 @@ enum LogTone: Equatable {
 
     static func classify(_ line: String) -> Self {
         let line = message(line)
+        if line.hasPrefix(OutputCleanupReceipt.prefix) {
+            do {
+                guard let receipt = try OutputCleanupReceipt.decode(line) else { return .warning }
+                return receipt.needsAttention ? .warning : .muted
+            } catch { return .warning }
+        }
+        if line.hasPrefix(HistoryIgnoredSource.prefix) {
+            do { return try HistoryIgnoredSource.decode(line) == nil ? .warning : .muted }
+            catch { return .warning }
+        }
+        if ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: line.hasPrefix) { return .normal }
         if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
         if line == "WARNING: Always keep a backup of your original media before optimization." { return .muted }
         if line.range(of: #"(?i)^Error: fast-img exited with (?:code|status) \d+$"#, options: .regularExpression) != nil {
@@ -5604,6 +5928,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let pauseButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
     private var aboutWindow: NSWindow?
+    private var processingGuide: ProcessingGuideController?
     private var closeWhenFinished = false
     private var lastRequest: ProcessorRequest?
     private var sawResumeDecision = false
@@ -6614,12 +6939,32 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if developerMode { displayLines.append(line) }
                 continue
             }
+            if batchResults.ingestOutputCleanup(line) {
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if line.hasPrefix(HistoryIgnoredSource.prefix) {
+                do {
+                    if let ignored = try HistoryIgnoredSource.decode(line) {
+                        displayLines.append(localized("history.ignored.live", ignored.source_path, ignored.userReason))
+                        if developerMode { displayLines.append(line) }
+                    }
+                } catch {
+                    let warning = "[WARN] " + localized("history.ignored.invalid")
+                    displayLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                }
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
             batchResults.observeMandatoryEvidence(line)
             var visibleLine = line
             if line.hasPrefix(HistoryFileFailure.prefix) {
                 do {
                     if let failure = try HistoryFileFailure.decode(line) {
-                        visibleLine = "[FAIL] \(failure.source_path): \(failure.message)"
+                        let reason = hasSeriousProcessingDiagnostic(failure.message) ? failure.message : failure.userReason
+                        visibleLine = "[FAIL] \(failure.source_path): \(reason)"
                         if developerMode { displayLines.append(line) }
                     }
                 } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
@@ -6908,6 +7253,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let photos = lastRequest?.shortestPath ?? false
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: processExit ?? host.lastExitStatus,
             exitedNormally: exitedNormally ?? host.lastExitWasNormal)
+        let verifiedPartialFailure = confirmed && photos && countStatus?.uppercased() == "MATCH"
+            && batchResults.hasPartialSuccess
         let previousConfirmation = hasConfirmedFileFailures
         hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
         if previousConfirmation != hasConfirmedFileFailures, let storage = logView.textStorage {
@@ -6928,12 +7275,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
-            : uncertain ? .systemRed : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+            : uncertain ? .systemRed : verifiedPartialFailure ? .secondaryLabelColor
+            : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
             : batchResults.compactSummary
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
         batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
-        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || !logDetailsExpanded
+        let cleanupNeedsAttention = batchResults.outputCleanupInvalid
+            || batchResults.outputCleanups.contains(where: \.needsAttention)
+            || (photos && batchResults.outputCleanups.isEmpty)
+        batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || (!logDetailsExpanded && !cleanupNeedsAttention)
         if batchResults.hasFastDelivery {
             let usable = !batchResults.fastDeliveryInvalid
             batchOverviewDelivery.stringValue = localized("result.delivery_facts",
@@ -6955,7 +7306,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             let cleanup = usable && !batchResults.fastDeliveries.isEmpty
                 && batchResults.fastDeliveries.allSatisfy { $0.primaryCleanupComplete && $0.finalizationError == nil }
-            batchOverviewCleanup.stringValue = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
+            let primary = localized(cleanup ? "result.cleanup_primary" : "result.cleanup_unknown")
+            batchOverviewCleanup.stringValue = (logDetailsExpanded ? primary + "\n" : "")
+                + batchResults.outputCleanupText(detailed: logDetailsExpanded)
+            batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .secondaryLabelColor
         }
         for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
             label.toolTip = label.stringValue
@@ -6981,7 +7335,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openHelp() {
-        if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost#readme") { NSWorkspace.shared.open(url) }
+        if processingGuide == nil { processingGuide = ProcessingGuideController() }
+        processingGuide?.show(relativeTo: window, context: operationPopup.titleOfSelectedItem ?? "")
     }
 
     @objc private func repairCore() {
@@ -7406,6 +7761,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         logDetailsExpanded = false
         clearBatchLog()
+        let cleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-cleanup-run", "output_path": "/synthetic/results_optimized",
+            "outcome": "removed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": 1, "error": NSNull()]
+        func cleanupLine(_ fields: [String: Any]) throws -> String {
+            OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        }
+        appendLog(try cleanupLine(cleanup))
         appendLog(try line(receipt))
         appendLog(batch)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
@@ -7414,7 +7775,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard !batchOverview.isHidden,
               batchOverviewTitle.stringValue == localized("result.attention_count", "1"),
               batchOverviewDelivery.stringValue.contains("1829"), !batchOverviewDelivery.stringValue.contains("1163"),
-              batchOverviewCleanup.stringValue == localized("result.cleanup_primary"),
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.removed"),
               batchOverviewCleanup.isHidden, logScroll.isHidden, latestDiagnosticsRow.isHidden,
               !logView.string.contains("MFB_FAST_IMG_RESULT="),
               window.contentView!.bounds.height < mainWindowContentSize.height,
@@ -7444,6 +7805,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         logDetailsExpanded = false
         refreshBatchOverview(processExit: 1, exitedNormally: true)
+        var remaining = cleanup
+        remaining["outcome"] = "residual"
+        clearBatchLog()
+        appendLog(try line(receipt))
+        appendLog(batch)
+        appendLog(try cleanupLine(remaining))
+        appendLog(try cleanupLine(remaining))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard !batchOverviewCleanup.isHidden, batchOverviewCleanup.textColor == .systemOrange,
+              batchOverviewCleanup.stringValue == localized("cleanup.outcome.residual"),
+              batchResults.outputCleanups.count == 1, batchResults.fastDeliveryCount(\.succeeded) == 1829,
+              batchOverviewTitle.stringValue == localized("result.attention_count", "1") else {
+            throw HostError(message: "Output cleanup hid leftovers, inflated counts or erased independently confirmed delivery")
+        }
+        appendLog(try cleanupLine(cleanup))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchResults.outputCleanupInvalid, batchOverviewCleanup.stringValue == localized("cleanup.invalid"),
+              batchResults.fastDeliveryCount(\.succeeded) == 1829 else {
+            throw HostError(message: "Conflicting cleanup receipts were accepted or changed media counts")
+        }
         appendLog("MFB_FAST_IMG_RESULT={}")
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
         refreshBatchOverview(processExit: 1, exitedNormally: true)
@@ -7605,6 +7986,28 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard latestDiagnostics.warning == "[WARN] " + localized("history.batch_issues.invalid"),
               latestDiagnostics.failure == visibleFailure else {
             throw HostError(message: "Malformed file failure marker hid the previous actionable error")
+        }
+        clearBatchLog()
+        let incompleteJpeg = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/incomplete.jpg",
+            absolute_path: "/synthetic/incomplete.jpg", message: "synthetic original diagnostic", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", reason_code: "jpeg_missing_eoi")
+        let incompleteMarker = HistoryFileFailure.prefix + String(decoding: try JSONEncoder().encode(incompleteJpeg), as: UTF8.self)
+        appendLog(incompleteMarker)
+        guard latestDiagnostics.failure == "[FAIL] /synthetic/incomplete.jpg: " + localized("history.file_failure.reason.jpeg_missing_eoi"),
+              incompleteJpeg.message == "synthetic original diagnostic", !batchResults.hasFailure else {
+            throw HostError(message: "A verified reason code lost its localized explanation, original diagnostic or count boundary")
+        }
+        clearBatchLog()
+        let ignored = HistoryIgnoredSource(schema_version: 1, pipeline: "img", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", source_path: "[FAIL] invariant failed\nname.png",
+            absolute_path: "/synthetic/absent/name.png", reason_code: "outside_current_policy_scope",
+            message: "Synthetic scope observation", ordinal: 1, total: 1)
+        appendLog(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self))
+        guard latestDiagnostics.failure == nil, latestDiagnostics.warning == nil,
+              !batchResults.hasFailure, batchResults.totals.isEmpty,
+              LogTone.classify(localized("history.ignored.live", ignored.source_path, ignored.userReason)) == .normal,
+              LogTone.classify(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self)) == .muted else {
+            throw HostError(message: "An ignored record's literal path became a failure or changed media counts")
         }
     }
 
@@ -8081,6 +8484,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: localized("menu.window"))
+        windowMenu.addItem(withTitle: localized("menu.close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: localized("menu.minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: localized("menu.front"), action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
@@ -8091,8 +8495,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
 private func runSelfTest() -> Int32 {
     do {
+        try ProcessingGuideController.selfTest()
+        try ToolInspectionPanel.selfTest()
+        let menuDelegate = AppDelegate()
+        menuDelegate.configureMenus()
+        guard NSApp.windowsMenu?.items.contains(where: {
+            $0.action == #selector(NSWindow.performClose(_:)) && $0.keyEquivalent == "w"
+        }) == true else { throw HostError(message: "Window Close shortcut is unavailable") }
         guard MediaSetting.fastQualitySearch.choices.allSatisfy({
             MediaSetting.fastQualitySearch.choiceTitle($0) != localized("settings.value.\($0)")
         }) else { throw HostError(message: "AVIF choices lost codec-specific quality meaning") }
@@ -8785,7 +9197,9 @@ private func runSelfTest() -> Int32 {
     }
 }
 
-if CommandLine.arguments.contains("--self-test") { exit(runSelfTest()) }
+if CommandLine.arguments.contains("--self-test") {
+    exit(MainActor.assumeIsolated { runSelfTest() })
+}
 
 if CommandLine.arguments.contains("--preflight-ui-fixture") {
     MainActor.assumeIsolated {

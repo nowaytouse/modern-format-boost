@@ -227,6 +227,8 @@ pub struct ManagedProcess {
     stderr_thread: Option<JoinHandle<Result<String>>>,
     command_line: String,
     audit_nonzero_exit: bool,
+    isolated: bool,
+    isolated_group: Option<u32>,
 }
 
 impl ManagedProcess {
@@ -235,7 +237,7 @@ impl ManagedProcess {
     /// # Errors
     /// Returns error if spawning fails.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, true, true, MANAGED_PROCESS_CAPTURE_MAX_BYTES)
+        Self::spawn_with_policy(cmd, true, true, MANAGED_PROCESS_CAPTURE_MAX_BYTES, false)
     }
 
     /// Spawn a command whose non-zero exit is an expected, caller-inspected
@@ -245,7 +247,26 @@ impl ManagedProcess {
     /// # Errors
     /// Returns an error if spawning fails.
     pub fn spawn_captured(cmd: &mut Command) -> Result<Self> {
-        Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES)
+        Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES, false)
+    }
+
+    /// Capture a diagnostic command in a group whose descendants are stopped before draining.
+    ///
+    /// # Errors
+    /// Returns an error if spawning fails or isolated cleanup is unsupported.
+    pub fn spawn_captured_isolated(cmd: &mut Command) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // shortcut: descendants must retain this group; add deadline-aware pipe draining if daemonizing tools need support.
+            cmd.process_group(0);
+            Self::spawn_with_policy(cmd, false, false, MANAGED_PROCESS_CAPTURE_MAX_BYTES, true)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = cmd;
+            anyhow::bail!("Isolated diagnostic process cleanup is unsupported on this platform")
+        }
     }
 
     fn spawn_with_policy(
@@ -253,6 +274,7 @@ impl ManagedProcess {
         stream_verbose_stderr: bool,
         audit_nonzero_exit: bool,
         capture_max_bytes: usize,
+        isolated: bool,
     ) -> Result<Self> {
         let command_line = crate::common_utils::format_command_for_audit(cmd);
         crate::log_debug!(
@@ -261,20 +283,33 @@ impl ManagedProcess {
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child = cmd
+        let child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn command: {command_line}"))?;
 
-        let stdout = child
+        let isolated_group = isolated.then(|| child.id());
+        let mut process = Self {
+            child,
+            stdout_thread: None,
+            stderr_thread: None,
+            command_line,
+            audit_nonzero_exit,
+            isolated,
+            isolated_group,
+        };
+
+        let stdout = process
+            .child
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
-        let stderr = child
+        let stderr = process
+            .child
             .stderr
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
 
-        let stdout_command_line = command_line.clone();
+        let stdout_command_line = process.command_line.clone();
         let stdout_thread = thread::spawn(move || {
             capture_text_stream_bounded(
                 stdout,
@@ -285,7 +320,7 @@ impl ManagedProcess {
             )
         });
 
-        let stderr_command_line = command_line.clone();
+        let stderr_command_line = process.command_line.clone();
         let stderr_thread = thread::spawn(move || {
             capture_text_stream_bounded(
                 stderr,
@@ -296,13 +331,34 @@ impl ManagedProcess {
             )
         });
 
-        Ok(Self {
-            child,
-            stdout_thread: Some(stdout_thread),
-            stderr_thread: Some(stderr_thread),
-            command_line,
-            audit_nonzero_exit,
-        })
+        process.stdout_thread = Some(stdout_thread);
+        process.stderr_thread = Some(stderr_thread);
+        Ok(process)
+    }
+
+    fn stop_isolated_group(&mut self) -> Result<()> {
+        let Some(group) = self.isolated_group else {
+            return Ok(());
+        };
+        #[cfg(unix)]
+        {
+            let group = libc::pid_t::try_from(group).context("Invalid isolated process group")?;
+            // A background descendant can retain capture pipes after the leader exits.
+            let result = unsafe { libc::kill(-group, libc::SIGKILL) };
+            if result != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error).context("Failed to stop isolated diagnostic process group");
+                }
+            }
+            self.isolated_group = None;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = group;
+            anyhow::bail!("Isolated diagnostic process cleanup is unsupported on this platform")
+        }
     }
 
     /// Get the process ID (PID) of the managed process.
@@ -346,6 +402,7 @@ impl ManagedProcess {
     }
 
     fn finalize(mut self, status: ExitStatus) -> Result<ProcessOutput> {
+        self.stop_isolated_group()?;
         let stdout_thread = self
             .stdout_thread
             .take()
@@ -380,7 +437,7 @@ impl ManagedProcess {
             status,
             stdout,
             stderr,
-            command_line: self.command_line,
+            command_line: std::mem::take(&mut self.command_line),
         })
     }
 
@@ -446,6 +503,7 @@ impl ManagedProcess {
             if elapsed >= hard_timeout {
                 let child_id = this.child.id();
                 let command_line = this.command_line.clone();
+                this.stop_isolated_group()?;
                 kill_child_after_timeout(&mut this.child, &command_line)?;
                 let status = this
                     .child
@@ -494,6 +552,28 @@ impl ManagedProcess {
                 );
             }
             thread::sleep(Duration::from_millis(35));
+        }
+    }
+}
+
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        if !self.isolated {
+            return;
+        }
+        let cleanup = (|| -> Result<()> {
+            self.stop_isolated_group()?;
+            if self.child.try_wait()?.is_none() {
+                kill_child_after_timeout(&mut self.child, "isolated diagnostic cleanup")?;
+                self.child.wait()?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = cleanup {
+            crate::media_conversion_gate::delivery_runtime_batch_audit(
+                "isolated_diagnostic_cleanup",
+                format!("Failed to clean up isolated diagnostic process: {error:#}"),
+            );
         }
     }
 }
@@ -702,13 +782,79 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn isolated_capture_stops_pipe_holding_descendants_after_leader_exit() -> Result<()> {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 5 & printf version; printf detail >&2");
+        let start = Instant::now();
+        let output = ManagedProcess::spawn_captured_isolated(&mut command)?
+            .wait_timeout(Duration::from_millis(200), "isolated background fixture")?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, "version\n");
+        assert_eq!(output.stderr, "detail\n");
+        assert!(start.elapsed() < Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn isolated_capture_kills_sleeping_leader_and_descendants_at_deadline() -> Result<()> {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 5 & wait");
+        let start = Instant::now();
+        let result = ManagedProcess::spawn_captured_isolated(&mut command)?
+            .wait_timeout(Duration::from_millis(30), "isolated deadline fixture");
+        let error = result
+            .err()
+            .context("isolated process unexpectedly succeeded")?;
+        assert!(error.to_string().contains("hard timeout"));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn abandoned_isolated_capture_stops_children_and_releases_readers() -> Result<()> {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 5 & wait");
+        let mut process = ManagedProcess::spawn_captured_isolated(&mut command)?;
+        let stdout = process
+            .stdout_thread
+            .take()
+            .context("missing stdout reader")?;
+        let stderr = process
+            .stderr_thread
+            .take()
+            .context("missing stderr reader")?;
+        let start = Instant::now();
+        drop(process);
+        stdout
+            .join()
+            .map_err(|_| anyhow::anyhow!("stdout reader panicked"))??;
+        stderr
+            .join()
+            .map_err(|_| anyhow::anyhow!("stderr reader panicked"))??;
+        assert!(start.elapsed() < Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn isolated_capture_rejects_unsupported_cleanup_before_spawning() {
+        let result = ManagedProcess::spawn_captured_isolated(&mut Command::new("unused-tool"));
+        assert!(result.is_err_and(|error| error.to_string().contains("unsupported")));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn captured_output_limit_drains_noisy_process_before_failing() {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
             "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i+1)); done; printf done >&2",
         );
-        let result =
-            ManagedProcess::spawn_with_policy(&mut command, false, false, 64).and_then(|process| {
+        let result = ManagedProcess::spawn_with_policy(&mut command, false, false, 64, false)
+            .and_then(|process| {
                 process.wait_timeout(Duration::from_secs(2), "bounded output fixture")
             });
         let error = match result {

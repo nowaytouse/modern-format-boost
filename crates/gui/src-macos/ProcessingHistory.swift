@@ -5,7 +5,7 @@ import Darwin
 import CoreFoundation
 import UniformTypeIdentifiers
 
-private enum HistoryLayout {
+enum HistoryLayout {
     static let margin: CGFloat = 16
     static let spacing: CGFloat = 10
     static let rowHeight: CGFloat = 28
@@ -32,7 +32,7 @@ private struct HistoryContext: Decodable, Equatable {
     let run_id: String?
 }
 
-private func validHistoryIdentity(_ value: String) -> Bool {
+func validHistoryIdentity(_ value: String) -> Bool {
     !value.isEmpty && value.utf8.count <= 256 && value.utf8.allSatisfy { (33...126).contains($0) }
 }
 
@@ -47,6 +47,30 @@ struct HistoryFileFailure: Codable, Hashable {
     let run_id: String
     let invocation_id: String
     let reason_code: String?
+
+    var userReason: String {
+        switch reason_code {
+        case "jpeg_lossless_encode_unavailable": localized("history.file_failure.reason.jpeg_lossless_encode_unavailable")
+        case "jpeg_missing_eoi": localized("history.file_failure.reason.jpeg_missing_eoi")
+        default: message + (reason_code.map { " [\($0)]" } ?? "")
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.schema_version == rhs.schema_version && lhs.pipeline == rhs.pipeline
+            && lhs.run_id == rhs.run_id && lhs.invocation_id == rhs.invocation_id
+            && lhs.reason_code == rhs.reason_code
+            && lhs.source_path.utf8.elementsEqual(rhs.source_path.utf8)
+            && lhs.absolute_path.map { Data($0.utf8) } == rhs.absolute_path.map { Data($0.utf8) }
+            && lhs.message.utf8.elementsEqual(rhs.message.utf8)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(schema_version); hasher.combine(pipeline)
+        hasher.combine(run_id); hasher.combine(invocation_id); hasher.combine(reason_code)
+        hasher.combine(Data(source_path.utf8)); hasher.combine(absolute_path.map { Data($0.utf8) })
+        hasher.combine(Data(message.utf8))
+    }
 
     static let prefix = "MFB_FILE_FAILURE="
 
@@ -195,6 +219,69 @@ private struct HistoryFinished: Decodable, Equatable {
     let outcome: String
     let error: String?
     let output_sequence: Int64?
+}
+
+struct OutputCleanupReceipt: Decodable, Equatable {
+    static let prefix = "MFB_OUTPUT_CLEANUP="
+    static let historyPrefix = "MFB_HISTORY_OUTPUT_CLEANUP="
+    let schema_version: Int
+    let run_id: String?
+    let output_path: String
+    let outcome: String
+    let removed_files: Int?
+    let already_absent_files: Int?
+    let pruned_directories: Int?
+    let error: String?
+
+    static func decode(_ line: String, prefix: String = OutputCleanupReceipt.prefix) throws -> Self? {
+        guard line.hasPrefix(prefix) else { return nil }
+        let data = Data(line.dropFirst(prefix.count).utf8)
+        let fields: Set<String> = ["schema_version", "run_id", "output_path", "outcome",
+            "removed_files", "already_absent_files", "pruned_directories", "error"]
+        guard line.utf8.count < 64 * 1_024,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys).isSubset(of: fields),
+              ["schema_version", "output_path", "outcome", "error"].allSatisfy({ object[$0] != nil })
+        else { throw HostError(message: localized("cleanup.invalid")) }
+        let receipt = try JSONDecoder().decode(Self.self, from: data)
+        guard receipt.valid else { throw HostError(message: localized("cleanup.invalid")) }
+        return receipt
+    }
+
+    var valid: Bool {
+        guard schema_version == 1, output_path.hasPrefix("/"), !output_path.utf8.contains(0),
+              run_id.map(validHistoryIdentity) ?? true else { return false }
+        let counts = [removed_files, already_absent_files, pruned_directories]
+        let measured = counts.compactMap { $0 }
+        guard measured.allSatisfy({ $0 >= 0 }),
+              measured.isEmpty || processingCountTotal(measured.map(Optional.some)) != nil else { return false }
+        switch outcome {
+        case "removed", "residual": return counts.allSatisfy({ $0 != nil }) && error == nil
+        case "already_absent", "not_requested", "verification_blocked":
+            return counts.allSatisfy({ $0 == nil }) && error == nil
+        case "failed": return error?.isEmpty == false
+        default: return false
+        }
+    }
+
+    var needsAttention: Bool { ["residual", "failed", "verification_blocked"].contains(outcome) }
+    var statusText: String { localized("cleanup.outcome.\(outcome)") }
+    var detailText: String {
+        let unknown = localized("cleanup.not_measured")
+        var lines = [statusText, output_path,
+            localized("cleanup.counts", removed_files.map(String.init) ?? unknown,
+                already_absent_files.map(String.init) ?? unknown, pruned_directories.map(String.init) ?? unknown)]
+        if let error { lines.append(error) }
+        lines.append(localized("cleanup.scope"))
+        return lines.joined(separator: "\n")
+    }
+
+    var recordedObject: [String: Any] {
+        ["schema_version": schema_version, "run_id": run_id as Any? ?? NSNull(),
+         "output_path": output_path, "outcome": outcome, "removed_files": removed_files as Any? ?? NSNull(),
+         "already_absent_files": already_absent_files as Any? ?? NSNull(),
+         "pruned_directories": pruned_directories as Any? ?? NSNull(), "error": error as Any? ?? NSNull()]
+    }
 }
 
 private struct HistoryVerification: Decodable, Equatable {
@@ -362,6 +449,8 @@ private struct HistoryEntry {
     var context: HistoryContext?
     var summary: HistorySummary?
     var verification: HistoryVerification?
+    var outputCleanups: [OutputCleanupReceipt] = []
+    var outputCleanupInvalid = false
     var inputPlan: HistoryInputPlan?
     var inputVerifications: [String: HistoryVerification] = [:]
     var configSnapshots: [HistoryConfigSnapshot] = []
@@ -506,8 +595,12 @@ private struct HistoryEntry {
         if hasVerificationWarnings { return "history.status.verification_warnings" }
         return "history.status.completed"
     }
+    var hasCleanupAttention: Bool { outputCleanupInvalid || outputCleanups.contains(where: \.needsAttention) }
+    var statusLabel: String {
+        localized(statusKey) + (hasCleanupAttention ? " · " + localized("cleanup.attention.short") : "")
+    }
     var needsAttention: Bool {
-        !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings
+        !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings || hasCleanupAttention
     }
     var statusColor: NSColor {
         if hasVerificationFailure { return .systemRed }
@@ -516,8 +609,9 @@ private struct HistoryEntry {
         return needsAttention ? .systemOrange : .labelColor
     }
     var searchable: String {
-        ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", localized(statusKey)] + (context?.inputs ?? [])
-            + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""])
+        ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", statusLabel] + (context?.inputs ?? [])
+            + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""]
+            + outputCleanups.flatMap { [$0.output_path, $0.outcome, $0.statusText, $0.error ?? ""] })
             .joined(separator: " ")
     }
     var succeededLabel: String {
@@ -686,6 +780,7 @@ private enum HistoryStore {
         let start: Int64
         let upper: Int64
         let endSource: String
+        var ignoredSources: [HistoryIgnoredSource] = []
     }
 
     final class IssueScanControl {
@@ -877,6 +972,15 @@ private enum HistoryStore {
                         else { throw HistoryParseError.invalid }
                         current.verification = verification
                     }
+                } else if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
+                    guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
+                          let context = current.context, context.mode == "fast-img", !context.dry_run,
+                          let runID = context.run_id, receipt.run_id == runID,
+                          context.shortest_path == (receipt.outcome != "not_requested"),
+                          !current.outputCleanupInvalid, current.outputCleanups.count < 64 else { throw HistoryParseError.invalid }
+                    if let previous = current.outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
+                        guard previous == receipt else { throw HistoryParseError.invalid }
+                    } else { current.outputCleanups.append(receipt) }
                 } else if event.hasPrefix("MFB_HISTORY_CONFIG=") {
                     current.configMarkerSeen = true
                     let snapshot = try decodeConfig(event)
@@ -946,6 +1050,10 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
+                    current.outputCleanups.removeAll()
+                    current.outputCleanupInvalid = true
+                }
                 if event.hasPrefix("MFB_HISTORY_CONFIG=") { current.configEvidenceInvalid = true }
                 if event.hasPrefix("MFB_HISTORY_INVOCATION=") {
                     current.invocations.removeAll()
@@ -977,7 +1085,24 @@ private enum HistoryStore {
         }
         if !sawRecord { current.issues.append(localized("history.issue.empty")) }
         entries.append(current)
-        for index in entries.indices { entries[index].aggregateInputVerification() }
+        for index in entries.indices {
+            entries[index].aggregateInputVerification()
+            let planOutputs = entries[index].inputPlan?.inputs.compactMap(\.output)
+            let contextOutput = entries[index].context?.output
+            let verifiedOutput = entries[index].verification?.output_path
+            let outputs = planOutputs ?? [verifiedOutput ?? contextOutput].compactMap { $0 }
+            let conflictingOutputs: Bool
+            if planOutputs == nil, let contextOutput, let verifiedOutput {
+                conflictingOutputs = Data(contextOutput.utf8) != Data(verifiedOutput.utf8)
+            } else { conflictingOutputs = false }
+            if entries[index].outputCleanups.contains(where: { receipt in
+                conflictingOutputs || !outputs.contains(where: { Data($0.utf8) == Data(receipt.output_path.utf8) })
+            }) {
+                entries[index].outputCleanups.removeAll()
+                entries[index].outputCleanupInvalid = true
+                entries[index].issues.append(localized("cleanup.invalid"))
+            }
+        }
         let hasEnd = entries.allSatisfy {
             $0.issues.isEmpty && ($0.context != nil && $0.finished != nil || $0.legacy && $0.legacyEnded)
         }
@@ -1138,7 +1263,7 @@ private enum HistoryStore {
         return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
     }
 
-    static func batchIssues(for selected: HistoryEntry, control: IssueScanControl = IssueScanControl()) throws -> BatchIssues {
+    static func batchIssues(for selected: HistoryEntry, control: IssueScanControl = IssueScanControl(), ignoredOnly: Bool = false) throws -> BatchIssues {
         try control.check()
         guard selected.hasStoredOutput, let selectedContext = selected.context,
               let start = selectedContext.output_sequence, start >= 0, regularFile(selected.audit) else {
@@ -1198,8 +1323,14 @@ private enum HistoryStore {
                   sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
                 throw databaseError(database)
             }
+            if ignoredOnly {
+                guard HistoryIgnoredSource.prefix.withCString({ sqlite3_bind_text(query, 4, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK else {
+                    throw databaseError(database)
+                }
+            }
         }
-        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+        let markerFilter = ignoredOnly ? " AND substr(CAST(line AS BLOB),1,\(HistoryIgnoredSource.prefix.utf8.count))=CAST(?4 AS BLOB)" : ""
+        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?" + markerFilter)
         defer { sqlite3_finalize(count) }
         try bind(count)
         guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER else {
@@ -1211,11 +1342,12 @@ private enum HistoryStore {
         let columns = ["ts", "pipeline", "line"].map {
             "CASE WHEN typeof(\($0))='text' AND length(CAST(\($0) AS BLOB))<=\(maximumOutputBytes) THEN \($0) ELSE NULL END"
         }.joined(separator: ", ")
-        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence")
+        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?" + markerFilter + " ORDER BY sequence")
         defer { sqlite3_finalize(query) }
         try bind(query)
         var accumulator = Output.DiagnosticAccumulator()
         var fileFailures: [HistoryFileFailure] = []
+        var ignoredSources: [HistoryIgnoredSource] = []
         var failureBytes = 0
         var scanned: Int64 = 0
         var previous = start
@@ -1237,7 +1369,19 @@ private enum HistoryStore {
             let line = try databaseText(query, 3, database: database)
             guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.batch_issues.invalid")) }
             do {
-                if let failure = try HistoryFileFailure.parse(line, context: selectedContext, invocations: entry.invocations, pipeline: pipeline) {
+                if let ignored = try HistoryIgnoredSource.decode(line) {
+                    guard ignored.run_id == selectedContext.run_id, ignored.pipeline == pipeline.lowercased(),
+                          entry.invocations.contains(where: { $0.invocation_id == ignored.invocation_id && $0.run_id == ignored.run_id && $0.pipeline == ignored.pipeline }) else {
+                        throw HistoryIgnoredSource.invalid()
+                    }
+                    if ignoredOnly {
+                        guard ignoredSources.count < 4_096, length <= maximumOutputBytes - failureBytes else {
+                            throw HostError(message: localized("history.batch_issues.limit"))
+                        }
+                        ignoredSources.append(ignored)
+                        failureBytes += length
+                    }
+                } else if !ignoredOnly, let failure = try HistoryFileFailure.parse(line, context: selectedContext, invocations: entry.invocations, pipeline: pipeline) {
                     guard fileFailures.count < 4_096, length <= maximumOutputBytes - failureBytes else {
                         throw HostError(message: localized("history.batch_issues.limit"))
                     }
@@ -1246,9 +1390,11 @@ private enum HistoryStore {
                 }
             } catch let error as HostError { throw error }
             catch { throw HostError(message: localized("history.batch_issues.invalid")) }
-            let tone = LogTone.classify(line)
-            accumulator.ingest(Output.Row(sequence: sequence, text: "[\(timestamp)] \(pipeline): \(line)",
-                diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line))
+            if !ignoredOnly && !line.hasPrefix(HistoryIgnoredSource.prefix) {
+                let tone = LogTone.classify(line)
+                accumulator.ingest(Output.Row(sequence: sequence, text: "[\(timestamp)] \(pipeline): \(line)",
+                    diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line))
+            }
             guard !accumulator.invalidPhaseSeen else { throw HostError(message: localized("history.batch_issues.invalid")) }
             guard accumulator.groups.count <= 4_096, accumulator.retainedBytes <= maximumOutputBytes - failureBytes else {
                 throw HostError(message: localized("history.batch_issues.limit"))
@@ -1259,12 +1405,14 @@ private enum HistoryStore {
         }
         try control.check()
         guard scanned == total else { throw HostError(message: localized("history.batch_issues.invalid")) }
+        if ignoredOnly { ignoredSources = try HistoryIgnoredSource.reconcile(ignoredSources, expected: entry.summary?.img.ignored) }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
             try control.check()
             throw databaseError(database)
         }
         return BatchIssues(groups: accumulator.groups, occurrences: accumulator.occurrences,
-            fileFailures: fileFailures, scannedRows: scanned, start: start, upper: end, endSource: entry.outputEndSource)
+            fileFailures: fileFailures, scannedRows: scanned, start: start, upper: end, endSource: entry.outputEndSource,
+            ignoredSources: ignoredSources)
     }
 
     static func diagnosticArtifact(for selected: HistoryEntry) throws -> Data {
@@ -1315,6 +1463,7 @@ private enum HistoryStore {
         var phaseCount = 0
         var activityCount = 0
         var fileFailureCount = 0
+        var ignoredObservations: [HistoryIgnoredSource] = []
         var phases: [String: PhaseLogPresentation] = [:]
         var activities: [String: GateCheckActivity] = [:]
         while true {
@@ -1333,6 +1482,15 @@ private enum HistoryStore {
             let line = try databaseText(query, 3, database: database)
             guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.export.invalid")) }
             do {
+                if let ignored = try HistoryIgnoredSource.decode(line) {
+                    guard ignored.run_id == context.run_id, ignored.pipeline == pipeline.lowercased(),
+                          entry.invocations.contains(where: { $0.invocation_id == ignored.invocation_id && $0.run_id == ignored.run_id && $0.pipeline == ignored.pipeline }),
+                          ignoredObservations.count < 4_096 else { throw HistoryIgnoredSource.invalid() }
+                    ignoredObservations.append(ignored)
+                    retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                        "kind": "ignored_source_observation", "observation": try JSONSerialization.jsonObject(with: ignored.recordedJSON())])
+                    continue
+                }
                 if let failure = try HistoryFileFailure.parse(line, context: context, invocations: entry.invocations, pipeline: pipeline) {
                     fileFailureCount += 1
                     retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
@@ -1424,6 +1582,15 @@ private enum HistoryStore {
                 ["source": $0.source, "output": nullable($0.output), "in_place": $0.in_place, "requires_verification": $0.requires_verification]
             }]
         }
+        let ignoredInventory: [String: Any]
+        do {
+            let rows = try HistoryIgnoredSource.reconcile(ignoredObservations, expected: entry.summary?.img.ignored)
+            ignoredInventory = ["state": "matches_reported_total", "listed_items": rows.count,
+                "reported_ignored": nullable(entry.summary?.img.ignored), "diagnostic": NSNull()]
+        } catch {
+            ignoredInventory = ["state": ignoredObservations.isEmpty ? "unavailable" : "inconsistent",
+                "listed_items": NSNull(), "reported_ignored": nullable(entry.summary?.img.ignored), "diagnostic": error.localizedDescription]
+        }
         let artifact: [String: Any] = ["schema_version": 2, "artifact_kind": "mfb_selected_run_diagnostic",
             "authoritative_state": false, "full_run_manifest": false,
             "exported_at": ISO8601DateFormatter().string(from: Date()), "session_id": entry.stamp,
@@ -1432,13 +1599,16 @@ private enum HistoryStore {
                 "end_source": entry.outputEndSource,
                 "total_output_rows": total, "retained_output_rows": retained.count, "diagnostic_log_rows": diagnosticCount,
                 "phase_control_rows": phaseCount, "verification_activity_rows": activityCount, "file_failure_observation_rows": fileFailureCount,
+                "ignored_source_observation_rows": ignoredObservations.count,
                 "omitted_non_diagnostic_output_rows": total - retained.count,
                 "scan_complete": true, "count_scope": "log_records_not_files", "contains_local_paths_and_diagnostics": true],
             "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
             "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
             "worker_launches": launches.isEmpty ? NSNull() : launches,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
-            "input_verifications": entry.inputVerifications.mapValues(verification), "records": retained]
+            "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory,
+            "output_cleanup": ["state": entry.outputCleanups.isEmpty ? "unavailable" : "recorded",
+                "receipts": entry.outputCleanups.map(\.recordedObject)], "records": retained]
         let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
         guard data.count <= maximumScanBytes else { throw HostError(message: localized("history.export.limit")) }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
@@ -1853,7 +2023,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
-    private let detailMode = NSSegmentedControl(labels: ["", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let detailMode = NSSegmentedControl(labels: ["", "", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let ignoredView = HistoryIgnoredView()
+    private var ignoredSources: [HistoryIgnoredSource]?
     private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let failedTable = NSTableView()
     private let failedSearch = NSSearchField()
@@ -1861,13 +2033,60 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let failedContent = NSStackView()
     private var failedCopyButton = NSButton()
     private var failedRevealButton = NSButton()
+    private var failedDetailsButton = NSButton()
     private var failedPaths: [String] = []
+    private struct FailureSourceKey: Hashable {
+        let runID: String
+        let invocationID: String
+        let pipeline: String
+        let sourcePath: String
+        let absolutePath: String?
+
+        init(_ failure: HistoryFileFailure) {
+            runID = failure.run_id
+            invocationID = failure.invocation_id
+            pipeline = failure.pipeline
+            sourcePath = failure.source_path
+            absolutePath = failure.absolute_path
+        }
+
+        var ordering: [String] { [sourcePath, absolutePath ?? "", runID, invocationID, pipeline] }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.runID == rhs.runID && lhs.invocationID == rhs.invocationID && lhs.pipeline == rhs.pipeline
+                && lhs.sourcePath.utf8.elementsEqual(rhs.sourcePath.utf8)
+                && lhs.absolutePath.map { Data($0.utf8) } == rhs.absolutePath.map { Data($0.utf8) }
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(runID); hasher.combine(invocationID); hasher.combine(pipeline)
+            hasher.combine(Data(sourcePath.utf8)); hasher.combine(absolutePath.map { Data($0.utf8) })
+        }
+    }
+    private struct FailureObservation {
+        let failure: HistoryFileFailure
+        let repetitions: Int
+    }
     private struct FailureDisplayRow {
         let path: String
         let absolutePath: String?
         let reason: String
+        let source: FailureSourceKey?
+        let observations: [FailureObservation]
+
+        var searchable: String {
+            ([path, absolutePath ?? "", reason] + observations.flatMap { observation in
+                let failure = observation.failure
+                return [failure.run_id, failure.invocation_id, failure.pipeline, failure.source_path,
+                        failure.absolute_path ?? "", failure.message, failure.reason_code ?? "", failure.userReason]
+            }).joined(separator: "\n")
+        }
     }
     private var failureDisplayRows: [FailureDisplayRow] = []
+    private var failureDetailAlert: NSAlert?
+    private var failureDetailGeneration = UUID()
+    private var cleanupDetailAlert: NSAlert?
+    private var cleanupDetailGeneration = UUID()
     private var detailScroll = NSScrollView()
     private var outputNavigation = NSStackView()
     private var olderButton = NSButton()
@@ -1877,6 +2096,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var batchIssueResult: HistoryStore.BatchIssues?
     private var comparisonIssues: [HistoryStore.BatchIssues]?
     private var issueScanControl: HistoryStore.IssueScanControl?
+    private var issueScanIsIgnored = false
     private var issueGeneration = UUID()
     private let status = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
@@ -1887,6 +2107,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var revealButton = NSButton()
     private var copyButton = NSButton()
     private var exportButton = NSButton()
+    private var cleanupButton = NSButton()
     private var entries: [HistoryEntry] = []
     private var displayed: [HistoryEntry] = []
     private var directory: URL
@@ -2061,7 +2282,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         outputNavigation = NSStackView(views: [outputFilter, olderButton, newerButton])
         outputNavigation.spacing = 4
         configureFailedFiles()
-        let detailRoot = NSStackView(views: [detailMode, outputNavigation, detailScroll, failedContent])
+        let detailRoot = NSStackView(views: [detailMode, outputNavigation, detailScroll, failedContent, ignoredView])
         detailRoot.orientation = .vertical
         detailRoot.alignment = .leading
         detailRoot.spacing = 6
@@ -2069,6 +2290,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         detailScroll.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
         failedContent.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
+        ignoredView.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
         // Keep toolbar intrinsic widths out of the split item's sizing negotiation.
         let detailContainer = NSView(frame: NSRect(x: 0, y: 0, width: 433, height: 540))
         detailContainer.addSubview(detailRoot)
@@ -2093,6 +2315,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit))
         copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
         exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
+        cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails))
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -2100,7 +2323,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, progress, status])
+        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, cleanupButton, progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -2113,6 +2336,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func configureFailedFiles() {
         failedTable.delegate = self
         failedTable.dataSource = self
+        failedTable.target = self
+        failedTable.doubleAction = #selector(openFailureDetails)
         failedTable.rowHeight = HistoryLayout.rowHeight
         failedTable.usesAlternatingRowBackgroundColors = true
         failedTable.style = .inset
@@ -2136,7 +2361,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedSearch.setContentHuggingPriority(.defaultLow, for: .horizontal)
         failedCopyButton = iconButton("doc.on.doc", key: "history.failed_files.copy", action: #selector(copyFailedPath))
         failedRevealButton = iconButton("folder", key: "history.failed_files.reveal", action: #selector(revealFailedPath))
-        let toolbar = NSStackView(views: [failedSearch, failedCopyButton, failedRevealButton])
+        failedDetailsButton = iconButton("info.circle", key: "history.file_failure.detail", action: #selector(openFailureDetails))
+        let toolbar = NSStackView(views: [failedSearch, failedDetailsButton, failedCopyButton, failedRevealButton])
         toolbar.spacing = 4
         failedStatus.font = HistoryLayout.smallFont
         failedStatus.textColor = .secondaryLabelColor
@@ -2174,6 +2400,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setLabel(localized("history.output.title"), forSegment: 1)
         detailMode.setLabel(localized("history.failed_files"), forSegment: 2)
         detailMode.setLabel(localized("history.batch_issues.tab"), forSegment: 3)
+        detailMode.setLabel(localized("history.ignored.tab"), forSegment: 4)
+        ignoredView.updateLocalization()
         detailMode.setAccessibilityLabel(localized("history.details"))
         failedSearch.placeholderString = localized("history.failed_files.search")
         failedSearch.setAccessibilityLabel(localized("history.failed_files.search"))
@@ -2187,6 +2415,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
                               (exportButton, "history.export.title"),
+                               (cleanupButton, "cleanup.inspect"),
+                               (failedDetailsButton, "history.file_failure.detail"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
             button.toolTip = localized(key)
@@ -2276,7 +2506,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 label.stringValue = paths.count == 1 ? first : localized("history.source_multiple", first, paths.count)
                 label.toolTip = paths.joined(separator: "\n")
             } else { label.stringValue = localized("result.unknown") }
-        case "status": label.stringValue = localized(entry.statusKey); resultColor = entry.statusColor
+        case "status":
+            label.stringValue = localized(entry.statusKey)
+                + (entry.hasCleanupAttention ? "\n" + localized("cleanup.attention.short") : "")
+            label.toolTip = entry.statusLabel
+            label.setAccessibilityLabel(entry.statusLabel)
+            label.maximumNumberOfLines = 2
+            label.lineBreakMode = .byWordWrapping
+            resultColor = entry.statusColor
         case "verification":
             label.stringValue = entry.verification?.count_status ?? localized("result.unknown")
             resultColor = entry.hasVerificationFailure ? .systemRed : .secondaryLabelColor
@@ -2426,7 +2663,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
              row("remaining_inventory", String(verification.source_remaining_count)),
              row("deleted_inventory", String(verification.verified_deleted_count))]
         }
-        var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), ""]
+        var lines = [entry.statusLabel, Self.timestampLabel(entry.timestamp), ""]
         if entry.isRestoreJpeg {
             lines.append(entry.sizeOutcome)
             if entry.summary?.sizeInvalid == true { lines.append(localized("history.space.invalid")) }
@@ -2520,6 +2757,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 }
             }
         }
+        if entry.context?.mode == "fast-img" {
+            lines += ["", localized("cleanup.history_title")]
+            if entry.outputCleanupInvalid { lines.append(localized("cleanup.invalid")) }
+            else if entry.outputCleanups.isEmpty { lines.append(localized("cleanup.not_recorded")) }
+            else { lines += entry.outputCleanups.map(\.detailText) }
+        }
         if let error = entry.finished?.error { lines += ["", row("error", error)] }
         if !entry.issues.isEmpty { lines += ["", localized("history.read_issues")] + entry.issues }
         if entry.legacy { lines += ["", localized("history.legacy_note")] }
@@ -2539,26 +2782,35 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         search.isEnabled = ready
         filter.isEnabled = ready
         let failuresVisible = single && detailMode.selectedSegment == 2
+        let ignoredVisible = single && detailMode.selectedSegment == 4
         failedContent.isHidden = !failuresVisible
-        detailScroll.isHidden = failuresVisible
+        ignoredView.isHidden = !ignoredVisible
+        ignoredView.setEnabled(ignoredVisible)
+        detailScroll.isHidden = failuresVisible || ignoredVisible
         outputNavigation.isHidden = detailMode.selectedSegment != 1
         failedSearch.isEnabled = failuresVisible
         failedTable.isEnabled = failuresVisible
         failedCopyButton.isEnabled = failuresVisible && selectedFailedPath != nil
         failedRevealButton.isEnabled = failuresVisible && selectedFailedURL != nil
+        failedDetailsButton.isEnabled = failuresVisible && failureDisplayRows.indices.contains(failedTable.selectedRow)
+            && !failureDisplayRows[failedTable.selectedRow].observations.isEmpty
         logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single || pair, forSegment: 2)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
+        detailMode.setEnabled(single && selected?.hasStoredOutput == true && selected?.context?.mode == "fast-img", forSegment: 4)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
         revealButton.isEnabled = single
         copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
         exportButton.isEnabled = single && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
+        cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img"
     }
 
     func windowWillClose(_ notification: Notification) {
+        clearCleanupDetails()
+        clearFailureDetails()
         cancelIssueScan()
         exportGeneration = UUID()
         if exportBusy { finishExport(localized("history.export.cancelled")) }
@@ -2632,8 +2884,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func resetOutput() {
+        clearCleanupDetails()
+        clearFailureDetails()
         cancelIssueScan()
         batchIssueResult = nil
+        ignoredSources = nil
+        ignoredView.reset(localized("history.ignored.loading"))
         comparisonIssues = nil
         outputGeneration = UUID()
         outputLoading = false
@@ -2643,6 +2899,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func detailModeChanged() {
+        clearCleanupDetails()
+        clearFailureDetails()
         if selectedEntries.count == 2 {
             if detailMode.selectedSegment == 2 {
                 if let issues = comparisonIssues { displayFailureComparison(issues) }
@@ -2658,7 +2916,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard selected != nil else { showSelected(); return }
         outputGeneration = UUID()
         outputLoading = false
-        if ![2, 3].contains(detailMode.selectedSegment) { cancelIssueScan() }
+        if ![2, 3, 4].contains(detailMode.selectedSegment)
+            || (issueScanControl != nil && issueScanIsIgnored != (detailMode.selectedSegment == 4)) { cancelIssueScan() }
         if detailMode.selectedSegment == 0 {
             detail.string = selected.map { Self.render($0) } ?? localized("history.select")
             updateHistoryStatus()
@@ -2670,6 +2929,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
         else if detailMode.selectedSegment == 3 {
             if batchIssueResult != nil { renderBatchIssues() }
+            else if issueScanControl == nil, let entry = selected { loadBatchIssues(entry: entry) }
+        }
+        else if detailMode.selectedSegment == 4 {
+            if let ignoredSources { ignoredView.show(ignoredSources) }
             else if issueScanControl == nil, let entry = selected { loadBatchIssues(entry: entry) }
         }
         else if outputPage != nil { renderOutput() }
@@ -2707,23 +2970,34 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func filterFailedFiles() {
+        clearFailureDetails()
         let paths = selected?.summary?.failed_files ?? []
         let query = failedSearch.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        var observations = Set<HistoryFileFailure>()
-        var recordedPaths = Set<String>()
-        var candidates: [FailureDisplayRow] = []
-        for observation in batchIssueResult?.fileFailures ?? [] where observations.insert(observation).inserted {
-            recordedPaths.insert(observation.source_path)
-            candidates.append(FailureDisplayRow(path: observation.source_path, absolutePath: observation.absolute_path,
-                reason: observation.message + (observation.reason_code.map { " [\($0)]" } ?? "")))
+        let grouped = Dictionary(grouping: batchIssueResult?.fileFailures ?? [], by: FailureSourceKey.init)
+        let sourceRows = grouped.map { key, failures -> FailureDisplayRow in
+            var repetitions: [HistoryFileFailure: Int] = [:]
+            for failure in failures { repetitions[failure, default: 0] += 1 }
+            let observations = repetitions.map { FailureObservation(failure: $0.key, repetitions: $0.value) }
+                .sorted { ($0.failure.message, $0.failure.reason_code ?? "") < ($1.failure.message, $1.failure.reason_code ?? "") }
+            let reason = observations.count == 1 ? observations[0].failure.userReason
+                : localized("history.file_failure.reason.multiple", observations.count)
+            return FailureDisplayRow(path: key.sourcePath, absolutePath: key.absolutePath,
+                                     reason: reason, source: key, observations: observations)
+        }.sorted { $0.source!.ordering.lexicographicallyPrecedes($1.source!.ordering) }
+        let recordedPaths = Set(sourceRows.map { Data($0.path.utf8) })
+        var seenPaths = Set<Data>()
+        let missingRows = paths.filter {
+            let bytes = Data($0.utf8)
+            return !recordedPaths.contains(bytes) && seenPaths.insert(bytes).inserted
+        }.map {
+            FailureDisplayRow(path: $0, absolutePath: nil, reason: localized("history.file_failure.not_recorded"),
+                              source: nil, observations: [])
         }
-        candidates += paths.filter { !recordedPaths.contains($0) }.map {
-            FailureDisplayRow(path: $0, absolutePath: nil, reason: localized("history.file_failure.not_recorded"))
-        }
+        let candidates = sourceRows + missingRows
         var matches = 0
         var bytes = 0
         failureDisplayRows = []
-        for row in candidates where query.isEmpty || row.path.localizedCaseInsensitiveContains(query) || row.reason.localizedCaseInsensitiveContains(query) {
+        for row in candidates where query.isEmpty || row.searchable.localizedCaseInsensitiveContains(query) {
             matches += 1
             let length = row.path.utf8.count + row.reason.utf8.count + (row.absolutePath?.utf8.count ?? 0)
             if failureDisplayRows.count < HistoryStore.maximumOutputLines, length <= HistoryStore.maximumOutputBytes - bytes {
@@ -2737,8 +3011,166 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedStatus.stringValue = (candidates.isEmpty ? localized("history.failed_files.empty")
             : localized("history.failed_files.range", failedPaths.count, matches, candidates.count))
             + "\n" + (batchIssueResult == nil ? localized("history.failed_files.note")
-                : localized("history.file_failure.records", batchIssueResult!.fileFailures.count) + "\n" + localized("history.file_failure.note"))
+                : localized("history.file_failure.source_observations", sourceRows.count, batchIssueResult!.fileFailures.count)
+                    + "\n" + localized("history.file_failure.note"))
         updateActions()
+    }
+
+    private func clearCleanupDetails() {
+        cleanupDetailGeneration = UUID()
+        if let alert = cleanupDetailAlert, let window, window.attachedSheet === alert.window {
+            window.endSheet(alert.window)
+        }
+        cleanupDetailAlert = nil
+    }
+
+    private static func cleanupDirectories(for entry: HistoryEntry) -> [URL] {
+        guard !entry.outputCleanupInvalid else { return [] }
+        return entry.outputCleanups.compactMap { receipt in
+            let url = URL(fileURLWithPath: receipt.output_path)
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+                  values.isDirectory == true, values.isSymbolicLink != true else { return nil }
+            return url
+        }
+    }
+
+    private static func cleanupDetailText(for entry: HistoryEntry) throws -> String {
+        let state = entry.outputCleanupInvalid ? "inconsistent" : entry.outputCleanups.isEmpty ? "unavailable" : "recorded"
+        let object: [String: Any] = ["run_id": entry.context?.run_id as Any? ?? NSNull(),
+            "state": state, "receipts": entry.outputCleanupInvalid ? [] : entry.outputCleanups.map(\.recordedObject)]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        let details = entry.outputCleanupInvalid ? localized("cleanup.invalid") : entry.outputCleanups.isEmpty
+            ? localized("cleanup.not_recorded") : entry.outputCleanups.map(\.detailText).joined(separator: "\n\n")
+        return [localized("cleanup.history_title"), localized("cleanup.inspect.note"), details,
+            localized("history.file_failure.detail.json"), String(decoding: data, as: UTF8.self)].joined(separator: "\n\n")
+    }
+
+    @objc private func openCleanupDetails() {
+        guard cleanupButton.isEnabled, let entry = selected, let window, window.attachedSheet == nil else { return }
+        do {
+            let text = try Self.cleanupDetailText(for: entry)
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = localized("cleanup.inspect")
+            alert.informativeText = localized("cleanup.inspect.note")
+            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 320))
+            textView.string = text
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isHorizontallyResizable = false
+            textView.isVerticallyResizable = true
+            textView.minSize = .zero
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.autoresizingMask = [.width]
+            textView.textContainer?.widthTracksTextView = true
+            textView.font = HistoryLayout.detailFont
+            textView.textContainerInset = NSSize(width: HistoryLayout.spacing, height: HistoryLayout.spacing)
+            textView.setAccessibilityLabel(localized("cleanup.history_title"))
+            let scroll = NSScrollView(frame: textView.frame)
+            scroll.hasVerticalScroller = true
+            scroll.documentView = textView
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("history.file_failure.detail.close"))
+            alert.addButton(withTitle: localized("cleanup.inspect.copy"))
+            let reveal = alert.addButton(withTitle: localized("cleanup.inspect.reveal"))
+            reveal.isEnabled = !Self.cleanupDirectories(for: entry).isEmpty
+            if !reveal.isEnabled { reveal.toolTip = localized("cleanup.inspect.unavailable") }
+            let token = UUID()
+            cleanupDetailGeneration = token
+            cleanupDetailAlert = alert
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, self.cleanupDetailGeneration == token else { return }
+                self.cleanupDetailAlert = nil
+                if response == .alertSecondButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    self.status.stringValue = localized(NSPasteboard.general.setString(text, forType: .string)
+                        ? "cleanup.inspect.copied" : "cleanup.inspect.copy_failed")
+                } else if response == .alertThirdButtonReturn {
+                    let urls = Self.cleanupDirectories(for: entry)
+                    guard !urls.isEmpty else {
+                        self.status.stringValue = localized("cleanup.inspect.unavailable"); return
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting(urls)
+                }
+            }
+        } catch { status.stringValue = error.localizedDescription }
+    }
+
+    private func clearFailureDetails() {
+        failureDetailGeneration = UUID()
+        if let alert = failureDetailAlert, let window, window.attachedSheet === alert.window {
+            window.endSheet(alert.window)
+        }
+        failureDetailAlert = nil
+    }
+
+    private func failureDetailText(for row: FailureDisplayRow) throws -> String {
+        guard let source = row.source, !row.observations.isEmpty else {
+            throw HostError(message: localized("history.file_failure.not_recorded"))
+        }
+        let jsonEncoder = JSONEncoder()
+        jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var lines = [localized("history.detail.run_id") + ": " + source.runID,
+                     localized("history.detail.invocation_id") + ": " + source.invocationID,
+                     localized("history.media.\(source.pipeline)") + ": " + source.pipeline,
+                     localized("history.failed_files.path") + ": " + source.sourcePath,
+                     localized("history.file_failure.detail.absolute_path") + ": " + (source.absolutePath ?? localized("result.unknown")),
+                     localized("history.file_failure.detail.note"), ""]
+        for observation in row.observations {
+            let json = try jsonEncoder.encode(observation.failure)
+            lines += [observation.failure.userReason, observation.failure.message,
+                      localized("history.file_failure.detail.observations", observation.repetitions),
+                      localized("history.file_failure.detail.json"), String(decoding: json, as: UTF8.self), ""]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @objc private func openFailureDetails() {
+        guard detailMode.selectedSegment == 2, refreshButton.isEnabled,
+              failureDisplayRows.indices.contains(failedTable.selectedRow),
+              let window else { return }
+        let row = failureDisplayRows[failedTable.selectedRow]
+        do {
+            let text = try failureDetailText(for: row)
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = localized("history.file_failure.detail.title")
+            alert.informativeText = localized("history.file_failure.detail.observations",
+                row.observations.reduce(0) { $0 + $1.repetitions })
+            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
+            textView.string = text
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isHorizontallyResizable = false
+            textView.isVerticallyResizable = true
+            textView.minSize = .zero
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.autoresizingMask = [.width]
+            textView.textContainer?.widthTracksTextView = true
+            textView.setAccessibilityLabel(localized("history.file_failure.detail.title"))
+            textView.font = HistoryLayout.detailFont
+            textView.textContainerInset = NSSize(width: HistoryLayout.spacing, height: HistoryLayout.spacing)
+            let scroll = NSScrollView(frame: textView.frame)
+            scroll.hasVerticalScroller = true
+            scroll.documentView = textView
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("history.file_failure.detail.copy"))
+            alert.addButton(withTitle: localized("history.file_failure.detail.close"))
+            let token = UUID()
+            failureDetailGeneration = token
+            failureDetailAlert = alert
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, self.failureDetailGeneration == token else { return }
+                self.failureDetailAlert = nil
+                if response == .alertFirstButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    self.status.stringValue = localized("history.file_failure.detail.copied")
+                }
+            }
+        } catch {
+            status.stringValue = error.localizedDescription
+        }
     }
 
     @objc private func copyFailedPath() {
@@ -2948,31 +3380,47 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         issueGeneration = token
         let control = HistoryStore.IssueScanControl()
         issueScanControl = control
-        batchIssueResult = nil
+        let ignoredOnly = detailMode.selectedSegment == 4
+        issueScanIsIgnored = ignoredOnly
+        if ignoredOnly {
+            ignoredSources = nil
+            ignoredView.reset(localized("history.ignored.loading"))
+        } else { batchIssueResult = nil }
         detail.string = localized("history.batch_issues.loading")
         if detailMode.selectedSegment == 2 { failedStatus.stringValue = localized("history.file_failure.loading") }
         status.stringValue = detail.string
         updateActions()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Swift.Result { try HistoryStore.batchIssues(for: entry, control: control) }
+            let result = Swift.Result { try HistoryStore.batchIssues(for: entry, control: control, ignoredOnly: ignoredOnly) }
             DispatchQueue.main.async {
                 guard let self, self.issueGeneration == token, self.selected?.id == entry.id,
-                      [2, 3].contains(self.detailMode.selectedSegment), !control.isCancelled else { return }
+                      (ignoredOnly ? self.detailMode.selectedSegment == 4 : [2, 3].contains(self.detailMode.selectedSegment)), !control.isCancelled else { return }
                 self.issueScanControl = nil
                 switch result {
                 case let .success(issues):
-                    self.batchIssueResult = issues
-                    if self.detailMode.selectedSegment == 2 {
-                        self.filterFailedFiles()
+                    if ignoredOnly {
+                        self.ignoredSources = issues.ignoredSources
+                        self.ignoredView.show(issues.ignoredSources)
                         self.updateHistoryStatus()
+                    } else {
+                        self.batchIssueResult = issues
+                        if self.detailMode.selectedSegment == 2 {
+                            self.filterFailedFiles()
+                            self.updateHistoryStatus()
+                        }
+                        else { self.renderBatchIssues() }
                     }
-                    else { self.renderBatchIssues() }
                 case let .failure(error):
-                    self.batchIssueResult = nil
-                    self.detail.string = error.localizedDescription
-                    if self.detailMode.selectedSegment == 2 {
-                        self.filterFailedFiles()
-                        self.failedStatus.stringValue = error.localizedDescription + "\n" + localized("history.file_failure.not_recorded")
+                    if ignoredOnly {
+                        self.ignoredSources = nil
+                        self.ignoredView.reset(error.localizedDescription)
+                    } else {
+                        self.batchIssueResult = nil
+                        self.detail.string = error.localizedDescription
+                        if self.detailMode.selectedSegment == 2 {
+                            self.filterFailedFiles()
+                            self.failedStatus.stringValue = error.localizedDescription + "\n" + localized("history.file_failure.not_recorded")
+                        }
                     }
                     self.status.stringValue = error.localizedDescription
                 }
@@ -2995,6 +3443,103 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.stringValue = localized("history.copied")
     }
 
+    fileprivate func validateCleanupForSelfTest(_ entry: HistoryEntry) throws {
+        entries = [entry]
+        filter.selectedSegment = 0
+        search.stringValue = ""
+        applyFilter()
+        show()
+        guard cleanupButton.isEnabled else { throw HostError(message: "Cleanup inspection is missing for a recorded Fast IMG batch") }
+        let text = try Self.cleanupDetailText(for: entry)
+        guard text.contains(entry.context!.run_id!), text.contains("\"removed_files\""),
+              text.contains("\"outcome\""), text.contains("\"residual\"") else {
+            throw HostError(message: "Cleanup inspection lost the original run-bound receipt")
+        }
+        openCleanupDetails()
+        guard let alert = cleanupDetailAlert, window?.attachedSheet === alert.window,
+              alert.buttons.count == 3, alert.buttons[1].title == localized("cleanup.inspect.copy"),
+              alert.buttons[2].isEnabled == false,
+              let scroll = alert.accessoryView as? NSScrollView, let view = scroll.documentView as? NSTextView,
+              !view.isEditable, view.isSelectable, !scroll.hasHorizontalScroller,
+              view.string == text else { throw HostError(message: "Cleanup inspector is not read-only or enables an unavailable folder") }
+        resetOutput()
+        guard cleanupDetailAlert == nil, window?.attachedSheet == nil else {
+            throw HostError(message: "A stale cleanup inspector remained after selection reset")
+        }
+        var old = entry
+        old.outputCleanups = []
+        guard try Self.cleanupDetailText(for: old).contains(localized("cleanup.not_recorded")),
+              Self.cleanupDirectories(for: old).isEmpty else {
+            throw HostError(message: "Missing cleanup evidence invented actionable folders")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { fputs("MFB: cleanup inspector fixture removal failed: \(error.localizedDescription)\n", stderr) }
+        }
+        let folder = root.appendingPathComponent("output\n映像", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let recorded = entry.outputCleanups[0]
+        var current = entry
+        current.outputCleanups = [OutputCleanupReceipt(schema_version: 1, run_id: recorded.run_id, output_path: folder.path,
+            outcome: recorded.outcome, removed_files: recorded.removed_files, already_absent_files: recorded.already_absent_files,
+            pruned_directories: recorded.pruned_directories, error: recorded.error)]
+        guard Self.cleanupDirectories(for: current).map(\.path) == [folder.path] else {
+            throw HostError(message: "An accessible recorded directory cannot be located")
+        }
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: root)
+        guard Self.cleanupDirectories(for: current).isEmpty else {
+            throw HostError(message: "A replaced directory symlink became a cleanup action")
+        }
+        try FileManager.default.removeItem(at: folder)
+        try Data("synthetic non-directory".utf8).write(to: folder)
+        guard Self.cleanupDirectories(for: current).isEmpty else {
+            throw HostError(message: "A regular file became an output folder action")
+        }
+        current.outputCleanupInvalid = true
+        guard Self.cleanupDirectories(for: current).isEmpty,
+              try Self.cleanupDetailText(for: current).contains(localized("cleanup.invalid")) else {
+            throw HostError(message: "Conflicting cleanup records became actionable")
+        }
+        window?.close()
+    }
+
+    fileprivate func validateIgnoredForSelfTest(_ entry: HistoryEntry, records: [HistoryIgnoredSource]) throws {
+        entries = [entry]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        ignoredSources = records
+        detailMode.selectedSegment = 4
+        detailModeChanged()
+        guard !ignoredView.isHidden, failedContent.isHidden, detailScroll.isHidden,
+              entry.summary?.img.ignored == records.count, detailMode.isEnabled(forSegment: 4) else {
+            throw HostError(message: "Ignored history tab mixed failures, changed counts or lost supported controls")
+        }
+        try ignoredView.validateForSelfTest(records)
+        defer { window?.orderOut(nil) }
+        for width in [1_040.0, 780.0, 1_040.0] {
+            window?.setContentSize(NSSize(width: width, height: 620))
+            ignoredSources = records
+            detailMode.selectedSegment = 4
+            detailModeChanged()
+            showWindow(nil)
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            close()
+            show()
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            guard window?.isVisible == true else { throw HostError(message: "Ignored history failed to reopen") }
+        }
+        resetOutput()
+        updateActions()
+        guard ignoredSources == nil, ignoredView.isHidden else {
+            throw HostError(message: "History reset retained another batch's ignored inventory")
+        }
+    }
+
     fileprivate func validateFileReasonsForSelfTest(_ entry: HistoryEntry, issues: HistoryStore.BatchIssues) throws {
         entries = [entry]
         filter.selectedSegment = 0
@@ -3003,25 +3548,55 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         batchIssueResult = issues
         detailMode.selectedSegment = 2
         detailModeChanged()
-        guard failedTable.numberOfRows == 3, entry.summary?.img.failed == 1,
-              failureDisplayRows[0].reason.contains("synthetic decoder failed"),
-              failureDisplayRows[1].reason == "synthetic metadata failure",
-              failureDisplayRows[2].reason == localized("history.file_failure.not_recorded"),
-              failedStatus.stringValue.contains(localized("history.file_failure.records", 3)) else {
-            throw HostError(message: "File-linked reasons merged distinct observations or invented failed-file counts")
+        guard failedTable.numberOfRows == 2, entry.summary?.img.failed == 1,
+              failureDisplayRows[0].reason == localized("history.file_failure.reason.multiple", 2),
+              failureDisplayRows[0].observations.map(\.repetitions).sorted() == [1, 2],
+              failureDisplayRows[1].reason == localized("history.file_failure.not_recorded"),
+              failedStatus.stringValue.contains(localized("history.file_failure.source_observations", 1, 3)) else {
+            throw HostError(message: "File-linked grouping lost distinct observations or changed final failed-file counts")
+        }
+        let fullDetails = try failureDetailText(for: failureDisplayRows[0])
+        guard fullDetails.contains("synthetic decoder failed\nno guessed root cause"),
+              fullDetails.contains("synthetic metadata failure"), fullDetails.contains("decoder_failed"),
+              fullDetails.contains(issues.fileFailures[0].source_path),
+              fullDetails.contains(issues.fileFailures[0].invocation_id) else {
+            throw HostError(message: "Grouped failure details lost original diagnostics, Unicode paths or invocation identity")
         }
         failedTable.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         updateActions()
         guard selectedFailedPath == issues.fileFailures[0].source_path,
-              selectedFailedURL == nil, failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
+              selectedFailedURL == nil, failedCopyButton.isEnabled, !failedRevealButton.isEnabled, failedDetailsButton.isEnabled,
               (tableView(failedTable, viewFor: failedTable.tableColumns[1], row: 0) as? NSTableCellView)?.textField?.toolTip == failureDisplayRows[0].reason else {
             throw HostError(message: "Recorded reasons lost exact paths/tooltips or enabled unavailable Finder navigation")
         }
         failedSearch.stringValue = "METADATA"
         filterFailedFiles()
-        guard failedPaths == [issues.fileFailures[0].source_path], failureDisplayRows[0].reason == "synthetic metadata failure",
-              !failedCopyButton.isEnabled else { throw HostError(message: "Failure-reason search retained stale actions") }
+        guard failedPaths == [issues.fileFailures[0].source_path], failureDisplayRows[0].observations.count == 2,
+              !failedCopyButton.isEnabled, !failedDetailsButton.isEnabled else {
+            throw HostError(message: "Failure-reason search lost a grouped cause or retained stale actions")
+        }
         failedSearch.stringValue = ""
+        let original = issues.fileFailures[0]
+        let anotherCall = HistoryFileFailure(schema_version: original.schema_version, pipeline: original.pipeline,
+            source_path: original.source_path, absolute_path: original.absolute_path, message: original.message,
+            run_id: original.run_id, invocation_id: "another-call", reason_code: original.reason_code)
+        batchIssueResult = HistoryStore.BatchIssues(groups: [], occurrences: 0,
+            fileFailures: [original, original, original, anotherCall], scannedRows: 4, start: 0, upper: 4, endSource: "snapshot_only")
+        filterFailedFiles()
+        guard failureDisplayRows.filter({ $0.source != nil }).count == 2,
+              failedStatus.stringValue.contains(localized("history.file_failure.source_observations", 2, 4)),
+              failureDisplayRows.flatMap(\.observations).map(\.repetitions).sorted() == [1, 3] else {
+            throw HostError(message: "Source grouping merged different invocations or confused observations with files")
+        }
+        let composed = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/\u{e9}.jpg",
+            absolute_path: nil, message: "unknown original", run_id: "r", invocation_id: "i", reason_code: "unrecognized")
+        let decomposed = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: "/synthetic/e\u{301}.jpg",
+            absolute_path: nil, message: "unknown original", run_id: "r", invocation_id: "i", reason_code: "unrecognized")
+        guard Set([composed, decomposed]).count == 2, Set([FailureSourceKey(composed), FailureSourceKey(decomposed)]).count == 2,
+              composed.userReason == "unknown original [unrecognized]" else {
+            throw HostError(message: "Source grouping normalized recorded paths or invented an unknown reason")
+        }
+        batchIssueResult = issues
         detailMode.selectedSegment = 0
         detailModeChanged()
         guard detail.string.contains(entry.context!.run_id!) else { throw HostError(message: "History overview lost run identity") }
@@ -3084,8 +3659,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
-              logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
-              detailMode.segmentCount == 4, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
+              logButton.isEnabled == false, revealButton.isEnabled == false, !cleanupButton.isEnabled, table.numberOfRows == 0,
+              detailMode.segmentCount == 5, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
+              !detailMode.isEnabled(forSegment: 4), ignoredView.isHidden,
                failedContent.isHidden, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
                table.allowsMultipleSelection, table.allowsEmptySelection,
                window?.styleMask.contains(.resizable) == true else {
@@ -3123,7 +3699,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
         showSelected()
-        guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled,
+        guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled, !cleanupButton.isEnabled,
               !detailMode.isEnabled(forSegment: 1), !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
               !olderButton.isEnabled, !newerButton.isEnabled,
               !outputFilter.isEnabled, detail.string.contains(localized("history.compare")),
@@ -3746,6 +4322,82 @@ func runProcessingHistorySelfTests() throws {
         "source_path": "/synthetic/input", "output_path": "/synthetic/output",
         "failed_sources_verified": 1, "primary_cleanup_complete": true]
     let preservedEvent = try payload("MFB_HISTORY_VERIFICATION", preservedReceipt)
+    do {
+        func bound(_ name: String, _ fields: [String: Any]) throws -> String {
+            var fields = fields
+            fields["run_id"] = "synthetic-cleanup-run"
+            return try payload(name, fields)
+        }
+        let cleanupContext = try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+            "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": true])
+        let cleanup: [String: Any] = ["schema_version": 1, "output_path": "/synthetic/output", "outcome": "residual",
+            "removed_files": 2, "already_absent_files": 1, "pruned_directories": 0, "error": NSNull()]
+        let event = try bound("MFB_HISTORY_OUTPUT_CLEANUP", cleanup)
+        let end = try bound("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "completed", "error": NSNull()])
+        let events = [cleanupContext, event, event, try bound("MFB_HISTORY_VERIFICATION", preservedReceipt),
+            try bound("MFB_HISTORY_SUMMARY", mixedSummary), end]
+        let entry = try parsed(events).entries[0]
+        try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: fixtureURL.deletingLastPathComponent()).validateCleanupForSelfTest(entry) }
+        try require(entry.outputCleanups.count == 1 && !entry.outputCleanupInvalid && entry.summary?.img.succeeded == 2
+                    && entry.outputCleanups[0].removed_files == 2
+                    && ProcessingHistoryPanel.render(entry).contains(localized("cleanup.outcome.residual")),
+                    "Output cleanup observations inflated counts or lost their separate historical status")
+        let noFailures = try parsed([cleanupContext, event, try bound("MFB_HISTORY_SUMMARY", summaryValue), end]).entries[0]
+        try require(noFailures.statusKey == "history.status.completed" && noFailures.needsAttention
+                    && noFailures.succeededLabel == "2" && noFailures.statusLabel.contains(localized("cleanup.attention.short"))
+                    && noFailures.searchable.contains(localized("cleanup.outcome.residual")),
+                    "Cleanup attention disappeared from the filter, search or label, or changed media completion")
+        let old = try parsed([fastContext, mixedEvent, preservedEvent, fileFailureFinish]).entries[0]
+        try require(ProcessingHistoryPanel.render(old).contains(localized("cleanup.not_recorded")),
+                    "Primary source cleanup was used to infer output folder removal")
+        var wrongOutput = preservedReceipt
+        wrongOutput["output_path"] = "/synthetic/other"
+        var wrongCleanup = cleanup
+        wrongCleanup["output_path"] = "/synthetic/other"
+        let inconsistentPaths = try parsed([cleanupContext, try bound("MFB_HISTORY_VERIFICATION", wrongOutput),
+            try bound("MFB_HISTORY_OUTPUT_CLEANUP", wrongCleanup), end]).entries[0]
+        try require(inconsistentPaths.outputCleanupInvalid && inconsistentPaths.outputCleanups.isEmpty,
+                    "Verification and cleanup paths overrode a conflicting recorded output target")
+        for (key, value) in [("schema_version", 2 as Any), ("outcome", "guessed"), ("removed_files", -1),
+                              ("removed_files", true), ("output_path", "/synthetic/other"), ("run_id", "different-run")] {
+            var changed = cleanup
+            changed["run_id"] = "synthetic-cleanup-run"
+            changed[key] = value
+            let bad = try payload("MFB_HISTORY_OUTPUT_CLEANUP", changed)
+            let invalid = try parsed([cleanupContext, event, bad, event, end]).entries[0]
+            try require(invalid.outputCleanupInvalid && invalid.outputCleanups.isEmpty,
+                        "Invalid, conflicting or unbound output cleanup evidence was accepted: \(key)")
+        }
+        for outcome in ["not_requested", "verification_blocked", "already_absent"] {
+            var unmeasured = cleanup
+            unmeasured["outcome"] = outcome
+            for key in ["removed_files", "already_absent_files", "pruned_directories"] { unmeasured[key] = NSNull() }
+            let noAttempt = try bound("MFB_HISTORY_OUTPUT_CLEANUP", unmeasured)
+            let operationContext = outcome == "not_requested"
+                ? try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+                    "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false])
+                : cleanupContext
+            let recorded = try parsed([operationContext, noAttempt, end]).entries[0]
+            try require(recorded.outputCleanups.first?.removed_files == nil
+                        && recorded.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == true,
+                        "An unmeasured cleanup invented zero counts")
+            let contradictory = try parsed([outcome == "not_requested" ? cleanupContext
+                : try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+                    "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false]),
+                noAttempt, end]).entries[0]
+            try require(contradictory.outputCleanupInvalid && contradictory.outputCleanups.isEmpty,
+                        "Cleanup outcome contradicted whether folder removal was requested")
+        }
+        var failedCleanup = cleanup
+        failedCleanup["outcome"] = "failed"
+        failedCleanup["pruned_directories"] = NSNull()
+        failedCleanup["error"] = "synthetic permission denied after two removals"
+        let partial = try parsed([cleanupContext, try bound("MFB_HISTORY_OUTPUT_CLEANUP", failedCleanup), end]).entries[0]
+        try require(partial.outputCleanups.first?.removed_files == 2
+                    && partial.outputCleanups.first?.pruned_directories == nil
+                    && partial.outputCleanups.first?.error == failedCleanup["error"] as? String,
+                    "Partial cleanup erased completed work or invented an unmeasured directory count")
+    }
     for finish in [completed, failed] {
         let mixed = try parsed([context, mixedEvent, finish]).entries[0]
         try require(!mixed.hasPartialSuccess && mixed.needsAttention
@@ -4864,6 +5516,120 @@ func runProcessingHistorySelfTests() throws {
     try refuseExport({ _ = try HistoryStore.batchIssues(for: reasonEntry) }, "Malformed file failure evidence appeared as zero observations")
     try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: reasonEntry) }, "Malformed file failure evidence was silently excluded from export")
     sqlite3_close(reasonDB)
+    var ignoredSummary = identitySummary
+    var ignoredMedia = identityMedia
+    ignoredMedia["ignored"] = 2
+    ignoredSummary["img"] = ignoredMedia
+    let ignoredFinished: [String: Any] = ["schema_version": 1, "outcome": "failed", "error": "synthetic",
+        "run_id": "run-synthetic-1", "output_sequence": 4]
+    let ignoredEvents = [identityContextLine, identityLaunchLine,
+        try payload("MFB_HISTORY_SUMMARY", ignoredSummary), try payload("MFB_HISTORY_FINISHED", ignoredFinished)]
+    var ignoredValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "run_id": "run-synthetic-1",
+        "invocation_id": "synthetic-call-1", "source_path": "ignored/映像\nfile's.png",
+        "absolute_path": "/synthetic/absent/映像\nfile's.png", "reason_code": "outside_current_policy_scope",
+        "message": "Synthetic policy scope observation", "ordinal": 1, "total": 2]
+    let firstIgnoredLine = try payload("MFB_FAST_IMG_IGNORED", ignoredValue)
+    let firstIgnored = try HistoryIgnoredSource.decode(firstIgnoredLine)!
+    ignoredValue["source_path"] = "ignored/live.heic"
+    ignoredValue["absolute_path"] = "/synthetic/absent/live.heic"
+    ignoredValue["reason_code"] = "live_photo_pair_member"
+    ignoredValue["message"] = "Synthetic Live Photo policy observation"
+    ignoredValue["ordinal"] = 2
+    let secondIgnoredLine = try payload("MFB_FAST_IMG_IGNORED", ignoredValue)
+    let secondIgnored = try HistoryIgnoredSource.decode(secondIgnoredLine)!
+    let ignoredRecords = try HistoryIgnoredSource.reconcile([firstIgnored, secondIgnored, firstIgnored], expected: 2)
+    try require(ignoredRecords.count == 2 && ignoredRecords[0].source_path.utf8.elementsEqual(firstIgnored.source_path.utf8),
+                "Repeated ignored observations inflated counts or changed the exact source path")
+    for (values, expected) in [([firstIgnored], 2), ([firstIgnored, secondIgnored], 3), ([], 2)] {
+        try refuseExport({ _ = try HistoryIgnoredSource.reconcile(values, expected: expected) }, "Missing ignored evidence appeared as a matched inventory")
+    }
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([], expected: nil) }, "Missing ignored count became zero")
+    try require(try HistoryIgnoredSource.reconcile([], expected: 0).isEmpty, "An explicit zero ignored count required invented file records")
+    var conflictingIgnored = ignoredValue
+    conflictingIgnored["ordinal"] = 1
+    let conflictingIgnoredRecord = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", conflictingIgnored))!
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([firstIgnored, secondIgnored, conflictingIgnoredRecord], expected: 2) }, "A conflicting ordinal replaced recorded ignored evidence")
+    conflictingIgnored["ordinal"] = 2
+    conflictingIgnored["source_path"] = firstIgnored.source_path
+    let duplicatePath = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", conflictingIgnored))!
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([firstIgnored, duplicatePath], expected: 2) }, "Duplicate ignored paths inflated the classified inventory")
+    for invalid in [ignoredValue.merging(["source_path": "../escape.png"]) { _, new in new },
+                    ignoredValue.merging(["total": 1]) { _, new in new },
+                    ignoredValue.merging(["schema_version": 2]) { _, new in new },
+                    ignoredValue.merging(["guessed_stage": "safe"]) { _, new in new }] {
+        try refuseExport({ _ = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", invalid)) }, "Invalid ignored marker was accepted")
+    }
+    try writeDatabase([("ignored", ignoredEvents)], schema: 2)
+    var ignoredDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &ignoredDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let ignoredDB else {
+        throw HostError(message: "Synthetic ignored database open failed")
+    }
+    func insertIgnoredOutput(_ line: String) throws {
+        var query: OpaquePointer?
+        guard sqlite3_prepare_v2(ignoredDB, "INSERT INTO history_output(session_id,ts,pipeline,line) VALUES ('ignored','synthetic','IMG',?)", -1, &query, nil) == SQLITE_OK,
+              let query else { throw HostError(message: "Synthetic ignored output prepare failed") }
+        defer { sqlite3_finalize(query) }
+        guard line.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(query) == SQLITE_DONE else { throw HostError(message: "Synthetic ignored output insert failed") }
+    }
+    for line in [firstIgnoredLine, secondIgnoredLine, firstIgnoredLine, "ordinary output with embedded MFB_FAST_IMG_IGNORED= text"] { try insertIgnoredOutput(line) }
+    guard let ignoredEntry = try HistoryStore.load(directory: directory).entries.first(where: { $0.stamp == "ignored" }) else {
+        throw HostError(message: "The synthetic ignored batch is absent")
+    }
+    let ignoredSnapshot = try Data(contentsOf: databaseURL)
+    let ignoredIssues: HistoryStore.BatchIssues
+    do { ignoredIssues = try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true) }
+    catch { throw HostError(message: "Initial ignored inventory read failed: \(error.localizedDescription); audit issues: \(ignoredEntry.issues.joined(separator: "; "))") }
+    try require(ignoredIssues.scannedRows == 3 && ignoredIssues.ignoredSources.count == 2 && ignoredIssues.fileFailures.isEmpty,
+                "Ignored-only scan included unrelated text, inflated repeats or mixed failure records")
+    let ignoredDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: ignoredEntry)) as? [String: Any]
+    try require((ignoredDocument?["ignored_inventory"] as? [String: Any])?["state"] as? String == "matches_reported_total"
+                && (ignoredDocument?["scope"] as? [String: Any])?["ignored_source_observation_rows"] as? Int == 3
+                && (ignoredDocument?["records"] as? [[String: Any]])?.count == 3,
+                "Ignored export lost original observations or substituted observation count for item count")
+    try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateIgnoredForSelfTest(ignoredEntry, records: ignoredIssues.ignoredSources) }
+    try require(try Data(contentsOf: databaseURL) == ignoredSnapshot, "Ignored history inspection changed the stored database")
+    guard sqlite3_exec(ignoredDB, "UPDATE history_output SET line=zeroblob(2097153) WHERE sequence=4", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic unrelated large output update failed")
+    }
+    try require(try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true).ignoredSources.count == 2,
+                "Ignored inventory unnecessarily read unrelated oversized output")
+    guard sqlite3_exec(ignoredDB, "UPDATE history_output SET line='MFB_FAST_IMG_IGNORED={invalid}' WHERE sequence=1", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic ignored corruption failed")
+    }
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true) }, "Malformed ignored record became a complete list")
+    sqlite3_close(ignoredDB)
+    do {
+        var cleanupContext = identityContext
+        cleanupContext["mode"] = "fast-img"
+        cleanupContext["output"] = "/synthetic/output"
+        cleanupContext["shortest_path"] = true
+        var finish = ignoredFinished
+        finish["output_sequence"] = 0
+        let receipt: [String: Any] = ["schema_version": 1, "run_id": "run-synthetic-1", "output_path": "/synthetic/output",
+            "outcome": "failed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": NSNull(),
+            "error": "synthetic directory permission denied"]
+        let context = try payload("MFB_HISTORY_CONTEXT", cleanupContext)
+        let end = try payload("MFB_HISTORY_FINISHED", finish)
+        let cleanup = try payload("MFB_HISTORY_OUTPUT_CLEANUP", receipt)
+        try writeDatabase([("cleanup", [context, identitySummaryLine, cleanup, end])], schema: 2)
+        let entry = try HistoryStore.load(directory: directory).entries.first(where: { $0.stamp == "cleanup" })!
+        let before = try Data(contentsOf: databaseURL)
+        let document = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: entry)) as? [String: Any]
+        let exported = document?["output_cleanup"] as? [String: Any]
+        let rows = exported?["receipts"] as? [[String: Any]]
+        try require(exported?["state"] as? String == "recorded" && rows?.count == 1
+                    && rows?.first?["removed_files"] as? Int == 2 && rows?.first?["pruned_directories"] is NSNull
+                    && rows?.first?["error"] as? String == receipt["error"] as? String
+                    && Data(contentsOf: databaseURL) == before,
+                    "Read-only diagnostic export lost partial cleanup evidence or changed its database")
+        var conflicting = receipt
+        conflicting["removed_files"] = 3
+        try writeDatabase([("cleanup", [context, identitySummaryLine, cleanup,
+            try payload("MFB_HISTORY_OUTPUT_CLEANUP", conflicting), end])], schema: 2)
+        try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: entry) },
+                         "Conflicting output cleanup evidence exported a successful diagnostic")
+    }
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

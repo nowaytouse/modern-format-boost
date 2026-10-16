@@ -8,9 +8,9 @@ use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
 use dev::app::worker::{CollectedChildError, LaunchCommand, WorkerSession};
 use dev::infra::drag_drop::{
-    ContentScan, FastImgAction, ProcessingFilter, ScanRoute, acquire_global_lock,
-    adjacent_output_for_target, build_size_comparison_summary, confirm_in_place,
-    count_fast_img_jxl_outputs, create_directory_structure,
+    ContentScan, FastImgAction, OutputCleanupOutcome, OutputCleanupReceipt, ProcessingFilter,
+    ScanRoute, acquire_global_lock, adjacent_output_for_target, build_size_comparison_summary,
+    confirm_in_place, count_fast_img_jxl_outputs, create_directory_structure,
     delete_fast_img_shortest_path_output_dir, fast_img_partial_cleanup_verified,
     fast_img_retained_file_names, fast_img_session_size_metrics,
     prune_completed_fast_img_empty_outputs, run_unified_verification, safety_check, scan_content,
@@ -172,19 +172,20 @@ struct Args {
     #[command(flatten)]
     cache: foundation::runtime_config::cache_args::CacheArgs,
 
-    /// Permitted image encoding attempts, independent of batch failure handling.
+    /// Permit supported image compatibility retries or repairs; separate from tool permission and batch continuation.
     #[arg(long, value_enum)]
     img_fallback_policy: Option<FallbackPolicy>,
 
-    /// Whether image encoding can attempt configured fallback tools.
+    /// Permit alternate image encoding/recovery tools, not repairs by itself; required analysis, decoding, metadata and verification tools remain available.
     #[arg(long, value_enum)]
     img_tool_policy: Option<ToolPolicy>,
 
-    /// JPEG reversible recompression effort, from 1 through 11.
+    /// JPEG reversible recompression effort, from 1 through 11; full search compares all efforts.
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..=11))]
     img_jpeg_effort: Option<u8>,
+    /// JPEG search: fixed uses one effort, adaptive compares selected efforts, full compares all E1..E11.
     #[arg(long, value_enum)]
-    img_jpeg_effort_search: Option<foundation::runtime_config::EffortSearch>,
+    img_jpeg_effort_search: Option<foundation::runtime_config::JpegEffortSearch>,
 
     /// Override pixel distance only where the private media policy permits lossy encoding.
     #[arg(long, value_parser = foundation::infra::runtime_config::parse_jxl_distance)]
@@ -357,6 +358,19 @@ impl DragDropSession {
         }
         let event = format!("{name}={payload}");
         dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
+    }
+
+    fn record_output_cleanup(&self, mut receipt: OutputCleanupReceipt) -> Result<()> {
+        receipt.run_id.clone_from(&self.run_id);
+        let payload = serde_json::to_value(receipt).context("serialize output cleanup receipt")?;
+        let marker = serde_json::to_string(&payload).context("encode output cleanup marker")?;
+        anyhow::ensure!(
+            marker.len() < 64 * 1024 - "MFB_HISTORY_OUTPUT_CLEANUP=".len(),
+            "output cleanup marker exceeds 64 KiB"
+        );
+        self.append_history_event("MFB_HISTORY_OUTPUT_CLEANUP", payload)?;
+        writeln!(io::stdout().lock(), "MFB_OUTPUT_CLEANUP={marker}")
+            .context("write output cleanup marker to stdout")
     }
 
     fn record_history_verification(
@@ -1745,7 +1759,24 @@ fn run_fast_img_post_success(
     failed_sources_verified: Option<usize>,
 ) -> Result<()> {
     let verify_bin = cli_binary(project_root, "verify");
-    let (_, delivered_size) = count_fast_img_jxl_outputs(output_dir)?;
+    let cleanup_output_path =
+        std::path::absolute(output_dir).context("resolve output cleanup receipt path")?;
+    let delivered_size = match count_fast_img_jxl_outputs(output_dir) {
+        Ok((_, size)) => size,
+        Err(error) => {
+            let receipt = if args.shortest_path {
+                OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+            } else {
+                OutputCleanupReceipt::not_requested(&cleanup_output_path)
+            };
+            if let Err(receipt_error) = session.record_output_cleanup(receipt) {
+                return Err(error.context(format!(
+                    "also failed to persist output cleanup receipt: {receipt_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     summary.fast_img_size_after_override = summary
         .fast_img_session_output_bytes
         .or(Some(delivered_size));
@@ -1756,7 +1787,7 @@ fn run_fast_img_post_success(
         pick_symbol("🔍", "[CHECK]")
     );
     let target = args.inputs.first().context("input required")?;
-    let mut verify = run_unified_verification(
+    let verification = run_unified_verification(
         &verify_bin,
         target,
         Some(output_dir),
@@ -1770,7 +1801,23 @@ fn run_fast_img_post_success(
             fast_img: dev::infra::drag_drop::VerifyFastImgMode::Delivery,
             strategy: args.strategy.clone(),
         },
-    )?;
+    );
+    let mut verify = match verification {
+        Ok(verify) => verify,
+        Err(error) => {
+            let receipt = if args.shortest_path {
+                OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+            } else {
+                OutputCleanupReceipt::not_requested(&cleanup_output_path)
+            };
+            if let Err(receipt_error) = session.record_output_cleanup(receipt) {
+                return Err(error.context(format!(
+                    "also failed to persist output cleanup receipt: {receipt_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     summary.integrity_state = verify
         .warnings
         .map(|w| if w { "WARNINGS" } else { "CLEAN" });
@@ -1783,40 +1830,51 @@ fn run_fast_img_post_success(
         "[VERIFY] inventory: {} optimized, {} skipped, {} failed; processing counters unchanged",
         counts.optimized_count, counts.skipped_count, counts.failed_count
     );
-    if args.shortest_path && verify.warnings == Some(false) {
-        match delete_fast_img_shortest_path_output_dir(output_dir) {
-            Ok(true) => {
+    let receipt = if !args.shortest_path {
+        OutputCleanupReceipt::not_requested(&cleanup_output_path)
+    } else if verify.warnings != Some(false) {
+        OutputCleanupReceipt::verification_blocked(&cleanup_output_path)
+    } else {
+        let mut receipt = delete_fast_img_shortest_path_output_dir(output_dir);
+        receipt.output_path = cleanup_output_path;
+        match receipt.outcome {
+            OutputCleanupOutcome::Removed | OutputCleanupOutcome::AlreadyAbsent => {
                 summary.fast_img_size_after_override = summary
                     .fast_img_session_output_bytes
                     .or(Some(delivered_size));
             }
-            Ok(false) => {
-                summary.integrity_state = Some("WARNINGS");
-                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+            OutputCleanupOutcome::Residual => {
                 eprintln!(
                     "   {} Shortest Path cleanup left residual files in {}",
                     pick_symbol("⚠️", "[WARN]"),
                     output_dir.display()
                 );
             }
-            Err(err) => {
-                summary.integrity_state = Some("WARNINGS");
-                summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+            OutputCleanupOutcome::Failed => {
                 eprintln!(
-                    "   {} Shortest Path cleanup failed for {}: {err:#}",
+                    "   {} Shortest Path cleanup failed for {}: {}",
                     pick_symbol("❌", "[ERROR]"),
-                    output_dir.display()
+                    output_dir.display(),
+                    receipt.error.as_deref().unwrap_or("unknown cleanup error")
                 );
             }
+            OutputCleanupOutcome::NotRequested | OutputCleanupOutcome::VerificationBlocked => {
+                bail!("output cleanup returned an unattempted outcome after execution");
+            }
         }
-        if let Err(error) = prune_completed_fast_img_empty_outputs(
+        receipt
+    };
+    session.record_output_cleanup(receipt)?;
+    if args.shortest_path
+        && verify.warnings == Some(false)
+        && let Err(error) = prune_completed_fast_img_empty_outputs(
             &fast_img_source_root_for_run(target)?,
             args.strategy.as_deref().unwrap_or("jxl"),
-        ) {
-            summary.integrity_state = Some("WARNINGS");
-            summary.integrity_issue_count = summary.integrity_issue_count.max(1);
-            eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
-        }
+        )
+    {
+        summary.integrity_state = Some("WARNINGS");
+        summary.integrity_issue_count = summary.integrity_issue_count.max(1);
+        eprintln!("[WARN] checkpoint-owned empty output cleanup failed: {error:#}");
     }
     if summary.integrity_state == Some("WARNINGS") {
         verify.warnings = Some(true);
@@ -1923,7 +1981,6 @@ fn run_fast_img_task(
     let (command, output) = fast_img_launch_command(args, project_root, target)?;
     let stats = command.run_collecting(args.dry_run, Some(session), false);
     match &stats {
-        Ok(stats) if stats.exit_code != 0 => print_batch_result(&command, stats, args.dry_run),
         Ok(_) => {}
         Err(error) if error.downcast_ref::<CollectedChildError>().is_some() => {
             print_batch_result(
@@ -1998,11 +2055,10 @@ fn push_img_policy_args(command: &mut Vec<String>, args: &Args) -> Result<()> {
         command.extend(["--jpeg-effort".to_owned(), effort.to_string()]);
     }
     if let Some(strategy) = args.img_jpeg_effort_search {
-        let value = match strategy {
-            foundation::runtime_config::EffortSearch::Fixed => "fixed",
-            foundation::runtime_config::EffortSearch::Adaptive => "adaptive",
-        };
-        command.extend(["--jpeg-effort-search".to_owned(), value.to_owned()]);
+        command.extend([
+            "--jpeg-effort-search".to_owned(),
+            strategy.as_str().to_owned(),
+        ]);
     }
     if let Some(distance) = args.img_jxl_distance {
         command.extend(["--jxl-distance".to_owned(), distance.to_string()]);
@@ -2770,21 +2826,23 @@ fn run_drag_drop_inner(
                             stats.exit_code
                         ));
                     }
-                    if stats.exit_code == 0 || failed_sources_verified.is_some() {
-                        let verified = run_fast_img_post_success(
+                    let verified = if stats.exit_code == 0 || failed_sources_verified.is_some() {
+                        run_fast_img_post_success(
                             args,
                             &root,
                             session.expect("session"),
                             &mut summary,
                             &output,
                             failed_sources_verified,
-                        );
-                        if verified.is_err() {
-                            summary.img.exit_code = 1;
-                        }
-                        println!("{}", batch_result_line("img", &summary.img));
-                        verified?;
+                        )
+                    } else {
+                        Ok(())
+                    };
+                    if verified.is_err() {
+                        summary.img.exit_code = 1;
                     }
+                    println!("{}", batch_result_line("img", &summary.img));
+                    verified?;
                 }
                 Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
                     summary.img = err
@@ -3997,6 +4055,50 @@ mod tests {
     }
 
     #[test]
+    fn output_cleanup_receipt_is_persisted_with_the_active_run_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let run = session.for_run().unwrap();
+        let output_path = temp.path().join("output");
+
+        run.record_output_cleanup(OutputCleanupReceipt::verification_blocked(&output_path))
+            .unwrap();
+
+        let events = history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["schema_version"], 1);
+        assert_eq!(events[0]["run_id"], run.run_id.as_deref().unwrap());
+        assert_eq!(
+            events[0]["output_path"],
+            output_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(events[0]["outcome"], "verification_blocked");
+        assert!(events[0]["removed_files"].is_null());
+        assert!(events[0]["already_absent_files"].is_null());
+        assert!(events[0]["pruned_directories"].is_null());
+        assert!(events[0]["error"].is_null());
+
+        let mut boundary = OutputCleanupReceipt::not_requested(Path::new("/"));
+        boundary.run_id.clone_from(&run.run_id);
+        let base_bytes = serde_json::to_string(&boundary).unwrap().len();
+        let stdout_payload_budget = 64 * 1024 - "MFB_OUTPUT_CLEANUP=".len() - 1;
+        boundary.output_path = PathBuf::from(format!(
+            "/{}",
+            "x".repeat(stdout_payload_budget - base_bytes)
+        ));
+        assert_eq!(
+            serde_json::to_string(&boundary).unwrap().len(),
+            stdout_payload_budget
+        );
+        let error = run.record_output_cleanup(boundary).unwrap_err();
+        assert!(format!("{error:#}").contains("exceeds 64 KiB"));
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP").len(),
+            events.len()
+        );
+    }
+
+    #[test]
     fn explicit_standard_modes_and_filter_flags_share_scan_scope() {
         for (mode, expected) in [
             ("auto", ProcessingFilter::Both),
@@ -5196,7 +5298,7 @@ mod tests {
         fast.img_jxl_distance = Some(0.0);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = None;
-        fast.img_jpeg_effort_search = Some(foundation::runtime_config::EffortSearch::Adaptive);
+        fast.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Adaptive);
         validate_media_options(&fast)?;
         let (command, _) = fast_img_launch_command(&fast, Path::new("/repo"), input.path())?;
         assert!(
@@ -5208,6 +5310,30 @@ mod tests {
         assert!(!command.args.contains(&"--ultimate".to_owned()));
         assert!(!command.args.contains(&"--extreme-precision".to_owned()));
         assert!(!command.args.contains(&"--jxl-distance".to_owned()));
+        for mode in [LaunchMode::Images, LaunchMode::FastImg] {
+            let mut full = fast.clone();
+            full.mode = mode;
+            full.img_jpeg_effort = Some(1);
+            full.img_jpeg_effort_search = Some(foundation::runtime_config::JpegEffortSearch::Full);
+            validate_media_options(&full)?;
+            let command = if full.mode == LaunchMode::FastImg {
+                fast_img_launch_command(&full, Path::new("/repo"), input.path())?.0
+            } else {
+                rust_run_command(Path::new("/repo"), "img", &full, input.path())?
+            };
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--jpeg-effort-search", "full"])
+            );
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--jpeg-effort", "1"])
+            );
+        }
         fast.img_jxl_distance = Some(0.4);
         assert!(validate_media_options(&fast).is_err());
         fast.img_jxl_distance = Some(0.0);
@@ -5222,6 +5348,8 @@ mod tests {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-effort", &value]).is_ok());
         }
         assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "adaptive"]).is_ok());
+        assert!(Args::try_parse_from(["mfb", "--img-jpeg-effort-search", "full"]).is_ok());
+        assert!(Args::try_parse_from(["mfb", "--img-jxl-effort-search", "full"]).is_err());
         for value in ["-0.1", "25.1", "NaN", "inf"] {
             assert!(Args::try_parse_from(["mfb", "--img-jxl-distance", value]).is_err());
         }

@@ -1422,12 +1422,72 @@ fn remove_verified_fast_img_output(_root: &Path, target: &Path, _expected: &str)
     )
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputCleanupOutcome {
+    Removed,
+    AlreadyAbsent,
+    Residual,
+    Failed,
+    NotRequested,
+    VerificationBlocked,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[must_use = "inspect the cleanup outcome and preserve any partial failure"]
+pub struct OutputCleanupReceipt {
+    pub schema_version: u8,
+    pub run_id: Option<String>,
+    pub output_path: PathBuf,
+    pub outcome: OutputCleanupOutcome,
+    pub removed_files: Option<usize>,
+    pub already_absent_files: Option<usize>,
+    pub pruned_directories: Option<usize>,
+    pub error: Option<String>,
+}
+
+impl OutputCleanupReceipt {
+    pub fn not_requested(output_path: &Path) -> Self {
+        Self::without_operation(output_path, OutputCleanupOutcome::NotRequested)
+    }
+
+    pub fn verification_blocked(output_path: &Path) -> Self {
+        Self::without_operation(output_path, OutputCleanupOutcome::VerificationBlocked)
+    }
+
+    fn without_operation(output_path: &Path, outcome: OutputCleanupOutcome) -> Self {
+        Self {
+            schema_version: 1,
+            run_id: None,
+            output_path: output_path.to_path_buf(),
+            outcome,
+            removed_files: None,
+            already_absent_files: None,
+            pruned_directories: None,
+            error: None,
+        }
+    }
+}
+
 fn fast_img_prune_empty_dirs(
     output_root: &Path,
     candidate_dirs: &std::collections::HashSet<PathBuf>,
 ) -> Result<usize> {
-    if !output_root.exists() {
-        return Ok(0);
+    match fs::symlink_metadata(output_root) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Ok(_) => bail!(
+            "fast-img empty-directory cleanup root is not a directory: {}",
+            output_root.display()
+        ),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspect fast-img empty-directory cleanup root {}",
+                    output_root.display()
+                )
+            });
+        }
     }
     let candidates = candidate_dirs.iter().cloned().collect::<Vec<_>>();
     foundation::io_utils::prune_empty_directories_within(output_root, &candidates).with_context(
@@ -1486,27 +1546,75 @@ pub fn prune_completed_fast_img_empty_outputs(source: &Path, strategy: &str) -> 
 }
 
 /// Remove only unchanged, marker-recorded outputs after verified local Photos delivery.
-pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> Result<bool> {
-    if !output_dir.exists() {
-        return Ok(true);
-    }
-    if !fs::symlink_metadata(output_dir)?.file_type().is_dir() {
-        bail!(
-            "fast-img cleanup target is not a directory: {}",
-            output_dir.display()
-        );
-    }
-    let canonical_output = output_dir
-        .canonicalize()
-        .context("canonicalize fast-img cleanup output")?;
-    let output_dir = canonical_output.as_path();
-    let _lock = foundation::process_lock::acquire_output_dir_lock(output_dir)?;
-    let mut deleted = 0usize;
-    let mut already_absent = 0usize;
-    let mut prune_candidates = std::collections::HashSet::from([output_dir.to_path_buf()]);
-    for (target, expected) in fast_img_marker_cleanup_targets(output_dir)? {
-        if !target.exists() {
-            already_absent += 1;
+pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> OutputCleanupReceipt {
+    let mut receipt =
+        OutputCleanupReceipt::without_operation(output_dir, OutputCleanupOutcome::Failed);
+    let mut prune_candidates = std::collections::HashSet::new();
+    let result = (|| -> Result<bool> {
+        let metadata = match fs::symlink_metadata(output_dir) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                receipt.outcome = OutputCleanupOutcome::AlreadyAbsent;
+                return Ok(true);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.file_type().is_dir() {
+            bail!(
+                "fast-img cleanup target is not a directory: {}",
+                output_dir.display()
+            );
+        }
+        let canonical_output = output_dir
+            .canonicalize()
+            .context("canonicalize fast-img cleanup output")?;
+        let output_dir = canonical_output.as_path();
+        let _lock = foundation::process_lock::acquire_output_dir_lock(output_dir)?;
+        let targets = fast_img_marker_cleanup_targets(output_dir)?;
+        let mut removed = 0usize;
+        let mut already_absent = 0usize;
+        receipt.removed_files = Some(removed);
+        receipt.already_absent_files = Some(already_absent);
+        prune_candidates.insert(output_dir.to_path_buf());
+        for (target, expected) in targets {
+            match fs::symlink_metadata(&target) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    already_absent += 1;
+                    receipt.already_absent_files = Some(already_absent);
+                    prune_candidates.extend(
+                        target
+                            .ancestors()
+                            .skip(1)
+                            .take_while(|path| path.starts_with(output_dir))
+                            .map(Path::to_path_buf),
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
+            }
+            if !target.is_file() {
+                bail!(
+                    "fast-img cleanup target is not a file: {}",
+                    target.display()
+                );
+            }
+            let true_format = detect_true_format(&target).with_context(|| {
+                format!("fast-img cleanup probe failed for {}", target.display())
+            })?;
+            if !matches!(
+                true_format.as_str(),
+                "jxl" | "avif" | "webp" | "jpeg" | "png" | "heic" | "gif" | "bmp" | "tiff"
+            ) {
+                bail!(
+                    "fast-img cleanup refused non-image marker output {} (true_format={true_format})",
+                    target.display()
+                );
+            }
+            remove_verified_fast_img_output(output_dir, &target, &expected)
+                .with_context(|| format!("remove fast-img cleanup target {}", target.display()))?;
+            removed += 1;
+            receipt.removed_files = Some(removed);
             prune_candidates.extend(
                 target
                     .ancestors()
@@ -1514,55 +1622,35 @@ pub fn delete_fast_img_shortest_path_output_dir(output_dir: &Path) -> Result<boo
                     .take_while(|path| path.starts_with(output_dir))
                     .map(Path::to_path_buf),
             );
-            continue;
         }
-        if !target.is_file() {
-            bail!(
-                "fast-img cleanup target is not a file: {}",
-                target.display()
-            );
+        prune_candidates.insert(output_dir.to_path_buf());
+        let pruned = fast_img_prune_empty_dirs(output_dir, &prune_candidates)?;
+        receipt.pruned_directories = Some(pruned);
+        match fs::symlink_metadata(output_dir) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+            Ok(metadata) if metadata.file_type().is_dir() => Ok(false),
+            Ok(_) => bail!(
+                "fast-img cleanup target was replaced with a non-directory: {}",
+                output_dir.display()
+            ),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "inspect fast-img cleanup target {} after pruning",
+                    output_dir.display()
+                )
+            }),
         }
-        let true_format = detect_true_format(&target)
-            .with_context(|| format!("fast-img cleanup probe failed for {}", target.display()))?;
-        if !matches!(
-            true_format.as_str(),
-            "jxl" | "avif" | "webp" | "jpeg" | "png" | "heic" | "gif" | "bmp" | "tiff"
-        ) {
-            bail!(
-                "fast-img cleanup refused non-image marker output {} (true_format={true_format})",
-                target.display()
-            );
+    })();
+    match result {
+        Ok(true) if receipt.outcome == OutputCleanupOutcome::AlreadyAbsent => {}
+        Ok(true) => receipt.outcome = OutputCleanupOutcome::Removed,
+        Ok(false) => receipt.outcome = OutputCleanupOutcome::Residual,
+        Err(error) => {
+            receipt.outcome = OutputCleanupOutcome::Failed;
+            receipt.error = Some(format!("{error:#}"));
         }
-        remove_verified_fast_img_output(output_dir, &target, &expected)
-            .with_context(|| format!("remove fast-img cleanup target {}", target.display()))?;
-        deleted += 1;
-        prune_candidates.extend(
-            target
-                .ancestors()
-                .skip(1)
-                .take_while(|path| path.starts_with(output_dir))
-                .map(Path::to_path_buf),
-        );
     }
-    prune_candidates.insert(output_dir.to_path_buf());
-    let pruned = fast_img_prune_empty_dirs(output_dir, &prune_candidates)?;
-    let fully_removed = !output_dir.exists();
-    if fully_removed {
-        println!(
-            "   {} Shortest Path cleanup: removed {deleted} imported output file(s) and empty output \
-             folder after verified local Photos import: {}",
-            pick_symbol("✓", "[OK]"),
-            output_dir.display()
-        );
-    } else {
-        println!(
-            "   {} Shortest Path cleanup: removed {deleted} imported JXL file(s), already \
-             absent={already_absent}, empty dirs pruned={pruned}; preserved residual files in {}",
-            pick_symbol("✓", "[OK]"),
-            output_dir.display()
-        );
-    }
-    Ok(fully_removed)
+    receipt
 }
 
 fn read_line(prompt: &str) -> Result<String> {
@@ -1631,6 +1719,135 @@ mod tests {
             prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(),
             0
         );
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("MFB_HOME_ROOT", previous);
+            } else {
+                std::env::remove_var("MFB_HOME_ROOT");
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn output_cleanup_receipt_distinguishes_removed_residual_and_unmeasured_states() {
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgStageName, WorkingCopyMarker, write_marker_atomic,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("MFB_HOME_ROOT");
+        unsafe {
+            std::env::set_var("MFB_HOME_ROOT", root.path().join("state"));
+        }
+        let missing = root.path().join("missing-output");
+        let absent = delete_fast_img_shortest_path_output_dir(&missing);
+        assert_eq!(absent.outcome, OutputCleanupOutcome::AlreadyAbsent);
+        assert!(absent.removed_files.is_none());
+        assert!(absent.already_absent_files.is_none());
+        assert!(absent.pruned_directories.is_none());
+
+        let not_requested = OutputCleanupReceipt::not_requested(&missing);
+        let blocked = OutputCleanupReceipt::verification_blocked(&missing);
+        for receipt in [not_requested, blocked] {
+            assert!(receipt.removed_files.is_none());
+            assert!(receipt.already_absent_files.is_none());
+            assert!(receipt.pruned_directories.is_none());
+            assert!(receipt.error.is_none());
+        }
+
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&output).unwrap();
+        let unknown = output.join("user.txt");
+        fs::write(&unknown, b"preserve user data").unwrap();
+        let source = source.canonicalize().unwrap();
+        let output = output.canonicalize().unwrap();
+        let mut marker = WorkingCopyMarker::new(source, output.clone(), 0);
+        marker.stage = FastImgStageName::CleanupComplete;
+        for check in [
+            &mut marker.gate1_checks.count,
+            &mut marker.gate1_checks.blake3,
+            &mut marker.gate1_checks.metadata,
+            &mut marker.gate1_checks.size,
+            &mut marker.gate1_checks.orient,
+            &mut marker.gate1_checks.decode,
+            &mut marker.gate2_checks.count,
+            &mut marker.gate2_checks.blake3_sample,
+            &mut marker.gate2_checks.no_error,
+            &mut marker.gate3_checks.count_x3,
+            &mut marker.gate3_checks.sync,
+            &mut marker.gate3_checks.quarantine,
+            &mut marker.gate3_checks.chain,
+        ] {
+            *check = true.into();
+        }
+        write_marker_atomic(&marker).unwrap();
+
+        let residual = delete_fast_img_shortest_path_output_dir(&output);
+        assert_eq!(
+            residual.outcome,
+            OutputCleanupOutcome::Residual,
+            "cleanup failure: {:?}",
+            residual.error
+        );
+        assert_eq!(residual.removed_files, Some(0));
+        assert_eq!(residual.already_absent_files, Some(0));
+        assert_eq!(residual.pruned_directories, Some(0));
+        assert_eq!(fs::read(&unknown).unwrap(), b"preserve user data");
+
+        fs::remove_file(unknown).unwrap();
+        let first_bytes = [0xFF, 0x0A];
+        let second_actual_bytes = [0xFF, 0x0A, 0x02];
+        let second_expected_bytes = [0xFF, 0x0A, 0x01];
+        let first_output = output.join("a.JXL");
+        let second_output = output.join("b.JXL");
+        fs::write(&first_output, first_bytes).unwrap();
+        fs::write(&second_output, second_actual_bytes).unwrap();
+        let first_hash = blake3::hash(&first_bytes).to_hex().to_string();
+        let second_expected_hash = blake3::hash(&second_expected_bytes).to_hex().to_string();
+        let entry = |source: &str, out_rel: &str, hash: String| Blake3Entry {
+            out_rel: Some(out_rel.to_owned()),
+            src: format!("source/{source}"),
+            out: hash.clone(),
+            library_asset: Some(hash),
+        };
+        marker
+            .blake3_log
+            .insert("a.jpg".to_owned(), entry("a.jpg", "a.JXL", first_hash));
+        marker.blake3_log.insert(
+            "b.jpg".to_owned(),
+            entry("b.jpg", "b.JXL", second_expected_hash),
+        );
+        write_marker_atomic(&marker).unwrap();
+
+        let failed = delete_fast_img_shortest_path_output_dir(&output);
+        assert_eq!(failed.outcome, OutputCleanupOutcome::Failed);
+        assert_eq!(failed.removed_files, Some(1));
+        assert_eq!(failed.pruned_directories, None);
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("refused changed output"))
+        );
+        assert!(!first_output.exists());
+        assert_eq!(fs::read(&second_output).unwrap(), second_actual_bytes);
+
+        let second_actual_hash = blake3::hash(&second_actual_bytes).to_hex().to_string();
+        marker.blake3_log.insert(
+            "b.jpg".to_owned(),
+            entry("b.jpg", "b.JXL", second_actual_hash),
+        );
+        write_marker_atomic(&marker).unwrap();
+        let removed = delete_fast_img_shortest_path_output_dir(&output);
+        assert_eq!(removed.outcome, OutputCleanupOutcome::Removed);
+        assert_eq!(removed.removed_files, Some(1));
+        assert_eq!(removed.already_absent_files, Some(1));
+        assert!(removed.pruned_directories.is_some());
+        assert!(!output.exists());
+
         unsafe {
             if let Some(previous) = previous {
                 std::env::set_var("MFB_HOME_ROOT", previous);

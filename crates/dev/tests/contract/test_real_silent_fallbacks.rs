@@ -7465,12 +7465,14 @@ fn media_conversion_explore_jxl_guards_m41() {
         (
             "crates/foundation/src/jxl_explorer.rs",
             &[
-                "jxl_best_telemetry_optional",
+                "Result<JxlScreeningResult, String>",
+                "JXL screening winner index",
                 "jxl_screened_output_size_or_max",
             ][..],
             &[
                 "best_candidate.map_or((0.0, 0), |c| (c.distance, c.output_size))",
                 ".map_or(u64::MAX, |candidate| candidate.output_size)",
+                "best_distance: f32::NAN",
             ][..],
         ),
     ] {

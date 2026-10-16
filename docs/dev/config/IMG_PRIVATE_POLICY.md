@@ -14,10 +14,11 @@ and cannot authorize lossy conversion, container flattening or source deletion.
 Nullable pixel D/E preferences retain source/mode decisions when unset. CLI,
 configuration and GUI use the same typed preferences. Existing mode flags remain
 interfaces to their existing behavior, not an additional source of quality rules.
-Normal direct encoding uses E7; Ultimate/archive uses E10. The native launcher
+Normal direct encoding has an E7 policy ceiling; Ultimate/archive uses E10. The native launcher
 retains its historical Ultimate mode. PNG's dedicated default is E10, while
-ordinary reversible JPEG transcode defaults to E11. Explicit E overrides and
-opt-in E comparison are separate from those defaults.
+ordinary reversible JPEG transcode defaults to full E1..E11 comparison. E11 is
+the initial manual value if fixed is explicitly chosen. Eligible pixel E and D
+searches default to adaptive. Persisted explicit choices are not overwritten.
 
 ## Source Routes
 
@@ -30,7 +31,7 @@ opt-in E comparison are separate from those defaults.
 | Unknown or structurally protected containers | Existing retain/ignore/error decisions | Missing evidence does not unlock lossy encoding |
 | Strictly verified one-frame video container | Existing static IMG route | Frame count, streams, timing and metadata admission remain required; not a VID handoff |
 | HEIC/UltraHDR synthesis helpers | Historical mode D1 or Ultimate D0.001 | These helpers are not ordinary lossless PNG encoding |
-| Independent UltraHDR JPEG migration helper | Historical mode E7/E10 with reversible JPEG encoding | Not the ordinary JPEG E11 default; retain reconstruction proof |
+| Independent UltraHDR JPEG migration helper | Historical mode E7/E10 with reversible JPEG encoding | Unused legacy representation; explicitly rejects full search rather than claiming the current archive minimum |
 
 These are route summaries, not substitutes for detailed container admission.
 For example, complex TIFF/ICO/auxiliary-image inputs may require retaining their
@@ -41,9 +42,19 @@ those checks, source identity, XMP relationships, ICC, gain maps or timestamps.
 
 Fixed E passes one effort to the encoder. Optional E exploration compares
 verified pure-media payload sizes at one quality in a bounded candidate range;
-equal sizes prefer lower E. It is off by default. A selected E is not evidence
+equal sizes prefer lower E. Search is the default, subject to the policy ceiling:
+Normal E7 may admit E7 alone. A selected E is not evidence
 that an exhaustive optimum was found, and E exploration is not a speed optimizer.
-JPEG E comparison independently proves exact reconstruction for every candidate.
+JPEG `adaptive` E comparison independently proves exact reconstruction for every
+bounded candidate. Default `full` comparison covers all eleven E values using
+complete JXL bytes after the same metadata enrichment, with lower E breaking
+ties. It verifies the first candidate and each smaller contender, retains only
+the winner and challenger, and reuses the winning physical file. It neither
+changes JPEG quality nor uses pixel D. Fixed is an explicit manual alternative.
+Full comparison does not use compatibility/repair retries or unproven equivalent
+Effort groups: a failed/unsupported candidate makes the search incomplete and
+preserves the source. Input, associated XMP and encoder executable content must
+remain stable. Normal delivery verification and cleanup ownership still apply.
 
 The existing Distance Explorer starts from the encoded D0 baseline when the
 active size policy requires further work. That measurement is explicitly D0:
@@ -54,6 +65,23 @@ algorithm regression. Ladder screening, finalist selection,
 binary search and refinement remain in the same selected E domain. Among fitting
 candidates the lower D is preferred; file size breaks ties at equal D.
 Source admission and the minimum source-size gate still apply.
+
+Distance screening returns its bounded-search report even when there is no
+shortlist. It distinguishes the caller-supplied baseline measurement from floor,
+ladder, discovery and binary probe requests, and records the measurement budget
+and actual stop condition. A probe request is not an encoder-process count: a
+request may include compatibility work or fail before launching an encoder.
+Empty payload measurements and invalid baseline coordinates are rejected rather
+than treated as evidence of a fitting or oversized candidate. Invalid final
+distance/telemetry evidence is not clamped into a valid delivery result.
+
+The final log separately records finalist attempts/failures, refinement attempts
+and whether refinement stopped at local precision, its budget, an unavailable new
+coordinate or a failed probe. A failed refinement can retain an already verified
+candidate under the existing rules, but its failure stays visible. The selected
+result is the best verified tested candidate; local binary-search precision does
+not prove monotonic file sizes, a continuous global optimum or full media delivery.
+
 `mode-default` retains the historical mode trigger and the manual D where that
 route does not explore. Explicit adaptive D search leaves the saved manual D
 inactive without replacing it. The native checkbox distinguishes inherited
@@ -74,8 +102,10 @@ authorize otherwise forbidden repairs or weaken the route's fidelity checks.
 
 Fast JXL retains its independent JPEG reconstruction and native-media delivery
 workflow. Its settings expose JPEG E and applicable verified E comparison, not
-the pixel encoder's D. Same-semantics compatibility retries remain subject to
-the configured fallback policy and exact reconstruction checks.
+the pixel encoder's D. Normal IMG and Fast JXL use the same full-search engine,
+while GUI profiles keep their own selected settings. Same-semantics compatibility
+retries in fixed/adaptive modes remain subject to the configured fallback policy
+and exact reconstruction checks; full mode requires exact independent efforts.
 
 Fast AVIF retains the existing bounded Q search, locator Speed and final Speed
 domains. `img.avif_quality` (10..100, default 100) supplies the one requested

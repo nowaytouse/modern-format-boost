@@ -86,6 +86,17 @@ Image and Fast IMG tool selection (`single`/`fallback`) lives in their processin
 and does not relax codec fallback or mandatory verification. Photos settings remain
 available. Unchanged inherited values are not saved as GUI overrides; different
 IMG/VID performance defaults remain separate unless a shared GUI mode is selected.
+**Encoding retries and repair** selects supported recovery operations; **Permitted
+encoding tools** separately authorizes alternative encoders. Both have visible
+scope notes and a direct link to the native guide's retry, ICC repair and tool-use
+examples. Neither controls batch continuation or disables required verification.
+These are clearer labels for the existing configuration, not new processing modes.
+**Inspect Processing Tools** is available in the Images and Videos tabs, including
+Fast IMG. It uses the current settings draft and the worker's resolver to show a
+common tool's role, selected executable, version output, configured override/source
+and bounded failure diagnostic. It neither saves settings nor processes media.
+Version-command success is not codec-capability or delivery proof. CLI users can
+request the same versioned JSON with `img config tool cjxl` or `vid config tool ffmpeg`.
 Search Settings by a localized option name, section or choice, then jump directly
 to its existing control. Developer mode also accepts configuration keys and flags.
 Search preserves unsaved edits and reveals applicable advanced Photos fields.
@@ -301,9 +312,17 @@ without opening logs. Versioned `MFB_FILE_FAILURE` observations bind the exact
 reported path, optional absolute path, reason and optional explicit code to the
 run and worker invocation. It reads the selected SQLite snapshot under the same
 bounded whole-batch scan; malformed, oversized or unbound evidence is unavailable,
-not zero. Equal observations share a display row; different reasons stay separate.
-Observation counts are log records, never authoritative failed-file counts or root
-causes. Earlier path-only records say no file-linked reason was recorded.
+not zero. Exact run, invocation, pipeline and recorded source paths form one table
+row. Different reasons remain distinct inside that row's full details; repeated
+observations retain their occurrence counts. Different invocations are not merged.
+Source-group and observation counts are not final failed-file counts, content
+deduplication or proof of a shared root cause. Earlier path-only records say no
+file-linked reason was recorded. Use the information button or double-click a row
+to read/copy complete recorded diagnostics and fields, without opening a log folder.
+Only explicit known reason codes receive translated explanations; unknown codes
+retain the original message. A missing JPEG end marker has its own code, distinct
+from other failures to confirm reversible reconstruction. Stage and current source
+safety are not inferred from a diagnostic record.
 The table is bounded to 1,000 rows and 2 MiB of retained text, with shown/matched
 and recorded-row totals. Copy preserves the reported path; Finder uses an explicit
 absolute observation when available, otherwise an absolute reported path. Missing
@@ -312,6 +331,46 @@ each original observation with separate row accounting and its run ID; this is
 still not a complete Run Manifest or proof that every failure was captured.
 Diagnostic export schema 2 separates `history_entry_id` from the recorded `run_id`;
 unidentified earlier runs export a null run ID. The History database schema is unchanged.
+The Fast IMG **Ignored** tab shows the reasons recorded during that batch's scan,
+with category totals, path/reason search and selected-record copying. The backend
+records Live Photo members, animated image exclusions, out-of-scope formats and
+modern originals not admitted for delivery; it does not guess a more specific
+cause. Versioned `MFB_FAST_IMG_IGNORED` observations bind each ordinal and inventory
+total to the run and worker invocation. The reader requires complete, nonconflicting
+ordinals and distinct recorded paths within each invocation, then reconciles the
+item total against the batch's reported ignored count. Repeated identical observations
+do not inflate that count. Missing older evidence, gaps, conflicts or limits show
+unavailable, not an empty or invented list. Ignored never means converted or imported.
+The read-only query selects only this marker stream, so unrelated large output is
+not loaded to browse the inventory. It retains at most 4,096 observations / 2 MiB;
+the table shows at most 1,000 rows / 2 MiB and searches the complete accepted list.
+Diagnostic JSON keeps the original observations and explicitly reports whether
+their inventory matches the recorded total; it is not a new media-verification proof.
+Direct CLI runs without run/invocation identity print one `[IGNORED]` line per item;
+GUI runs capture one structured observation instead of duplicate plain/JSON lines.
+
+Fast IMG records **output folder cleanup separately from primary source cleanup**.
+The completion overview keeps leftovers and blocked cleanup visible, while History
+shows the recorded path, exact error and measured counts for removed files,
+already-absent marker targets and removed empty directories. A folder already absent
+before cleanup is not counted as removed by this operation; work not attempted or
+not measured stays unknown rather than zero. Run-bound `MFB_HISTORY_OUTPUT_CLEANUP`
+events and `MFB_OUTPUT_CLEANUP` live observations distinguish removed, already absent,
+residual, failed, not requested and verification blocked. History rejects conflicting
+records or output identities, and diagnostic exports retain accepted receipts. Missing
+older evidence remains explicitly unavailable. These observations describe only that
+operation on that output folder, not current filesystem state, all temporary folders,
+recovery ownership, safe deletion candidates or new Photos delivery proof.
+
+Select a Fast IMG batch in History and use **Inspect Output Folders and Cleanup**
+to open a read-only detail sheet and copy the complete recorded receipt. **Reveal
+Folders in Finder** rechecks recorded paths and is unavailable for missing,
+inaccessible or replaced non-directory/symbolic-link targets; it never guesses a
+parent folder or deletes anything. Cleanup attention appears in the **Needs
+Attention** filter and path/status/error search without changing media counts or
+the recorded processing outcome. A receipt contradicting whether folder removal
+was requested is rejected, not turned into a usable cleanup result.
+
 History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
 read-only system SQLite can open cold WAL histories without initializing them
 writable. Full synchronous writes and checkpoints remain enabled; the reader
@@ -1450,17 +1509,32 @@ the current workflow, and puts HEVC/AV1 selection on the main screen. Advanced
 Photos batch sizes expand on demand; failure policies and configuration sources
 belong to Developer mode, enabled from About.
 The Image tab separates parameter values from independent D and E exploration.
-New users can keep **Follow archive rules**. Quality (D) controls permitted
+The question-mark button opens the native processing guide, not a browser. Its
+five topics explain the private policy, per-format routes, the different search
+goals, mandatory verification/Photos delivery, and results/recovery. Read it in
+the selected language without leaving the app; text can be selected and searched.
+New users can keep the automatic defaults. Quality (D) controls permitted
 distortion; compression level (E) controls encoding work, not a quality rating.
 With **Compare compression levels** enabled, **Compare up to level (E)** marks
 the highest permitted comparison level, not a promised final effort. JPEG
 lossless transcoding retains its own independent controls and reconstruction
 requirements. Short tooltips explain the applicable scope without requiring
 knowledge of search internals or configuration provenance.
+JPEG compression offers **Fixed level**, **Compare selected levels**, and
+**Compare all 11 levels, choose smallest** in ordinary IMG and Fast JXL. The last
+option measures complete metadata-enriched JXL files from E1 through E11 and
+reuses the smallest byte-reconstructible winner; it does not change JPEG quality.
+It ignores the saved fixed E value, takes more encoding work and fails closed if
+any level cannot complete. Full JPEG comparison and guarded pixel D/E search are
+now the defaults; fixed levels remain explicit manual alternatives. Saved explicit
+choices are preserved. Final delivery Gates are unchanged.
+CLI: `img run PATH --jpeg-effort-search full` or
+`img fast-img PATH --jpeg-effort-search full`.
 Unset overrides retain the existing private source/mode policy: Normal E7,
-Ultimate/archive E10, PNG E10 and ordinary JPEG reconstruction E11.
+Ultimate/archive E10 and PNG E10 as pixel comparison ceilings. JPEG independently
+compares E1..E11; its stored E11 is inactive unless manual fixed mode is selected.
 Protected pixel sources keep D0 by policy; settings do not authorize weakening
-their fidelity requirements. Fixed E is an encoder target. Opt-in E exploration
+their fidelity requirements. Fixed E is an encoder target. Default E exploration
 compares verified payloads at one quality, preferring lower E on equal sizes.
 D exploration retains the original D0 baseline, ladder, binary search and
 refinement in one selected E domain. Both enabled means sequential E-then-D,
@@ -1614,9 +1688,10 @@ heuristic, fallback, tool-path and Photos naming/backend settings.
   and selects production JXL effort 10. It costs substantially more CPU time.
 - `img run --archive`: expresses maximum-compression intent. Direct pixel
   encoding remains bounded at effort 7 normally and effort 10 for
-  ultimate/archive. JPEG bitstream transcode defaults to effort 11 with strict
-  failure handling. `--fallback-policy same-semantics` explicitly permits
-  compatibility retries at effort 10; exact reconstruction still decides delivery.
+  ultimate/archive. JPEG bitstream transcode now defaults to full E1..E11 comparison
+  with strict failure handling. Explicit fixed/adaptive modes can permit compatible
+  effort-10 retries with `--fallback-policy same-semantics`; full comparison does not
+  change candidate parameters. Exact reconstruction still decides delivery.
 - `img run --apple-compat`: enabled by default; selects Apple-safe JXL box
   handling and Apple-aware metadata policy. `--no-apple-compat` disables those
   encoding choices; AAE edit sidecars remain preserved as archive data.
