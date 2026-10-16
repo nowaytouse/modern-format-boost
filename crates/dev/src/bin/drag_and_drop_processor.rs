@@ -1924,7 +1924,6 @@ fn run_fast_img_task(
     let (command, output) = fast_img_launch_command(args, project_root, target)?;
     let stats = command.run_collecting(args.dry_run, Some(session), false);
     match &stats {
-        Ok(stats) if stats.exit_code != 0 => print_batch_result(&command, stats, args.dry_run),
         Ok(_) => {}
         Err(error) if error.downcast_ref::<CollectedChildError>().is_some() => {
             print_batch_result(
@@ -2770,21 +2769,23 @@ fn run_drag_drop_inner(
                             stats.exit_code
                         ));
                     }
-                    if stats.exit_code == 0 || failed_sources_verified.is_some() {
-                        let verified = run_fast_img_post_success(
+                    let verified = if stats.exit_code == 0 || failed_sources_verified.is_some() {
+                        run_fast_img_post_success(
                             args,
                             &root,
                             session.expect("session"),
                             &mut summary,
                             &output,
                             failed_sources_verified,
-                        );
-                        if verified.is_err() {
-                            summary.img.exit_code = 1;
-                        }
-                        println!("{}", batch_result_line("img", &summary.img));
-                        verified?;
+                        )
+                    } else {
+                        Ok(())
+                    };
+                    if verified.is_err() {
+                        summary.img.exit_code = 1;
                     }
+                    println!("{}", batch_result_line("img", &summary.img));
+                    verified?;
                 }
                 Err(err) if err.downcast_ref::<CollectedChildError>().is_some() => {
                     summary.img = err

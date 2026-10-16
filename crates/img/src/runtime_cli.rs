@@ -86,6 +86,8 @@ pub(super) enum ConfigCommand {
     },
     /// Validate the effective configuration, without processing or accessing Photos.
     Validate,
+    /// Inspect one resolved tool using bounded version commands, without processing media.
+    Tool { name: String },
     /// List configuration paths in precedence order without loading them.
     Path,
     /// Create a default configuration at an explicit path; never overwrite an existing file.
@@ -128,6 +130,14 @@ impl RuntimeArgs {
     pub(crate) fn inspect(&self, command: &ConfigCommand) -> Result<()> {
         match command {
             ConfigCommand::Show { .. } => println!("{}", self.resolve(false)?.to_json(true)?),
+            ConfigCommand::Tool { name } => {
+                let loaded = self.resolve(false)?;
+                let source = loaded.sources.get(&format!("tools.paths.{name}")).cloned();
+                runtime_config::install(loaded.config)?;
+                let mut inspection = foundation::tools::inspect_tool(name)?;
+                inspection.configuration_source = source;
+                println!("{}", serde_json::to_string(&inspection)?);
+            }
             ConfigCommand::Validate => {
                 let loaded = self.resolve(false)?;
                 println!(

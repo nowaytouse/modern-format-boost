@@ -153,6 +153,8 @@ enum ConfigCommand {
     },
     /// Validate the effective configuration, without processing or accessing databases.
     Validate,
+    /// Inspect one resolved tool using bounded version commands, without processing media.
+    Tool { name: String },
 }
 
 fn resolve_runtime(cli: &Cli) -> anyhow::Result<foundation::runtime_config::LoadedConfig> {
@@ -199,6 +201,13 @@ fn inspect_config(cli: &Cli, command: &ConfigCommand) -> anyhow::Result<()> {
     let loaded = resolve_runtime(cli)?;
     match command {
         ConfigCommand::Show { .. } => println!("{}", loaded.to_json(true)?),
+        ConfigCommand::Tool { name } => {
+            let source = loaded.sources.get(&format!("tools.paths.{name}")).cloned();
+            foundation::runtime_config::install(loaded.config)?;
+            let mut inspection = foundation::tools::inspect_tool(name)?;
+            inspection.configuration_source = source;
+            println!("{}", serde_json::to_string(&inspection)?);
+        }
         ConfigCommand::Validate => println!(
             "{}",
             serde_json::json!({"valid": true, "sources": loaded.sources})

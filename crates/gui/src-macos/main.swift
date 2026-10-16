@@ -1323,6 +1323,189 @@ private func queryLocalCache(action: LocalCacheAction, policyArguments: [String]
 }
 
 @MainActor
+private final class ToolInspectionPanel: NSObject, NSWindowDelegate {
+    private struct Observation: Decodable {
+        let schemaVersion: Int
+        let name: String
+        let path: String?
+        let status: String
+        let version: String?
+        let diagnostic: String?
+        let configurationSource: String?
+        let configuredPath: String?
+
+        static func decode(_ data: Data, name: String) throws -> Self {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let value = try decoder.decode(Self.self, from: data)
+            guard value.schemaVersion == 1, value.name == name,
+                  ["version_reported", "version_unconfirmed", "unresolved"].contains(value.status),
+                  value.path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? (value.status == "unresolved"),
+                  value.configuredPath.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+                  (value.status == "version_reported") == !(value.version ?? "").isEmpty,
+                  value.status != "unresolved" || value.path == nil,
+                  value.status == "version_reported" || !(value.diagnostic ?? "").isEmpty else {
+                throw HostError(message: localized("settings.tools.inspect_invalid"))
+            }
+            return value
+        }
+    }
+
+    private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 430),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    private let tools = NSPopUpButton()
+    private let details = NSTextView()
+    private let refresh = NSButton()
+    private let pipeline: ToolPipeline
+    private let avif: Bool
+    private let settings: MediaSettings
+    private let completed: () -> Void
+    private var generation = UUID()
+
+    init(settings: MediaSettings, pipeline: ToolPipeline, avif: Bool, completed: @escaping () -> Void) {
+        self.settings = settings
+        self.pipeline = pipeline
+        self.avif = avif
+        self.completed = completed
+        super.init()
+        panel.title = localized("settings.tools.inspect") + " · " + pipeline.title
+        panel.delegate = self
+        tools.addItems(withTitles: pipeline == .video ? ["ffmpeg", "ffprobe", "exiftool"]
+            : (avif ? ["avifenc", "avifdec", "exiftool", "ffprobe", "ffmpeg", "magick"]
+                : ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick"]))
+        tools.target = self
+        tools.action = #selector(inspect)
+        tools.setAccessibilityLabel(localized("settings.tools.tool"))
+        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        refresh.isBordered = false
+        refresh.target = self
+        refresh.action = #selector(inspect)
+        refresh.toolTip = localized("settings.tools.inspect_refresh")
+        refresh.setAccessibilityLabel(refresh.toolTip)
+        refresh.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        refresh.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        let selector = NSStackView(views: [NSTextField(labelWithString: localized("settings.tools.tool")), tools, refresh])
+        selector.spacing = 12
+        let note = NSTextField(wrappingLabelWithString: localized("settings.tools.inspect_note"))
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = .secondaryLabelColor
+        details.isEditable = false
+        details.isSelectable = true
+        details.drawsBackground = false
+        details.font = .systemFont(ofSize: 12)
+        details.textColor = .labelColor
+        details.isHorizontallyResizable = false
+        details.isVerticallyResizable = true
+        details.minSize = .zero
+        details.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        details.autoresizingMask = [.width]
+        details.textContainer?.widthTracksTextView = true
+        details.setAccessibilityLabel(localized("settings.tools.inspect"))
+        let scroll = NSScrollView()
+        scroll.documentView = details
+        scroll.hasVerticalScroller = true
+        let done = NSButton(title: localized("settings.tools.inspect_done"), target: self, action: #selector(close))
+        done.bezelStyle = .rounded
+        done.keyEquivalent = "\u{1b}"
+        let root = NSStackView(views: [selector, note, scroll, done])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 12
+        root.translatesAutoresizingMaskIntoConstraints = false
+        panel.contentView?.addSubview(root)
+        if let content = panel.contentView {
+            NSLayoutConstraint.activate([
+                root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+                root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+                root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+                note.widthAnchor.constraint(equalTo: root.widthAnchor),
+                scroll.widthAnchor.constraint(equalTo: root.widthAnchor),
+            ])
+        }
+    }
+
+    func show(for parent: NSWindow) { parent.beginSheet(panel); inspect() }
+
+    @objc private func inspect() {
+        generation = UUID()
+        let token = generation
+        let name = tools.titleOfSelectedItem ?? ""
+        let worker = pipeline == .video ? "vid" : "img"
+        let arguments = pipeline == .video ? settings.videoRuntimeArguments(inheritedOnly: false)
+            : settings.runtimeArguments(fast: pipeline == .fastImage, inheritedOnly: false, avif: avif)
+        tools.isEnabled = false
+        refresh.isEnabled = false
+        details.string = localized("settings.tools.inspect_loading")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                guard let binary = ProcessorLocator.resolveTool(named: worker) else {
+                    throw HostError(message: localized(worker == "vid" ? "error.vid_backend_missing" : "error.img_backend_missing"))
+                }
+                return try Observation.decode(settingsToolOutput(binary, arguments: ["config", "tool", name] + arguments, timeout: 40), name: name)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.tools.isEnabled = true
+                self.refresh.isEnabled = true
+                switch result {
+                case let .success(value):
+                    self.details.string = [
+                        localized("settings.tools.inspect_status", localized("settings.tools.inspect_\(value.status)")),
+                        localized("settings.tools.inspect_role", localized("settings.tools.role.\(name)")),
+                        localized("settings.tools.inspect_path", value.path ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_version", value.version ?? localized("result.unknown")),
+                        localized("settings.tools.inspect_source", value.configurationSource ?? localized("settings.tools.inspect_discovery")),
+                        value.configuredPath.map { localized("settings.tools.inspect_override", $0) } ?? "",
+                        value.diagnostic.map { localized("settings.tools.inspect_diagnostic", $0) } ?? "",
+                    ].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                case let .failure(error): self.details.string = error.localizedDescription
+                }
+                self.details.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            }
+        }
+    }
+
+    @objc private func close() { generation = UUID(); panel.sheetParent?.endSheet(panel); completed() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { close(); return false }
+
+    static func selfTest() throws {
+        let keys = ["inspect", "inspect_refresh", "inspect_done", "inspect_note", "inspect_loading", "inspect_invalid",
+            "inspect_status", "inspect_version_reported", "inspect_version_unconfirmed", "inspect_unresolved",
+            "inspect_role", "inspect_path", "inspect_version", "inspect_source", "inspect_discovery", "inspect_diagnostic", "inspect_override"]
+            + ["cjxl", "djxl", "exiftool", "ffprobe", "ffmpeg", "magick", "avifenc", "avifdec"].map { "role.\($0)" }
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing tool inspection language bundle")
+            }
+            for suffix in keys {
+                let key = "settings.tools.\(suffix)"
+                guard bundle.localizedString(forKey: key, value: key, table: nil) != key else {
+                    throw HostError(message: "Missing tool inspection translation: \(language)/\(key)")
+                }
+            }
+        }
+        let valid: [String: Any] = ["schema_version": 1, "name": "cjxl", "path": "/synthetic/cjxl",
+            "status": "version_reported", "version": "cjxl 1"]
+        _ = try Observation.decode(JSONSerialization.data(withJSONObject: valid), name: "cjxl")
+        for patch: [String: Any] in [["schema_version": 2], ["name": "ffmpeg"],
+            ["path": "relative/cjxl"], ["status": "ready"], ["version": ""], ["path": NSNull()]] {
+            let invalid = valid.merging(patch) { _, value in value }
+            do {
+                _ = try Observation.decode(JSONSerialization.data(withJSONObject: invalid), name: "cjxl")
+            } catch { continue }
+            throw HostError(message: "Invalid tool inspection was accepted")
+        }
+        for status in ["unresolved", "version_unconfirmed"] {
+            var observation: [String: Any] = ["schema_version": 1, "name": "cjxl", "status": status,
+                "diagnostic": "synthetic probe failure"]
+            if status != "unresolved" { observation["path"] = "/synthetic/cjxl" }
+            _ = try Observation.decode(JSONSerialization.data(withJSONObject: observation), name: "cjxl")
+        }
+    }
+}
+
+@MainActor
 private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 240),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -1581,6 +1764,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var cacheLoaded = false
     private var cacheBusy = false
     private var toolEditor: ToolPathsPanel?
+    private var toolInspector: ToolInspectionPanel?
     private var processingGuide: ProcessingGuideController?
     private var validatingLayout = false
 
@@ -1726,6 +1910,16 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 guide.contentTintColor = .linkColor
                 guide.setAccessibilityLabel(guide.title)
                 grid.addRow(with: developer ? [NSView(), guide, NSView()] : [NSView(), guide]).yPlacement = .center
+            }
+            if section == "img" || section == "vid" {
+                let inspect = NSButton(title: localized("settings.tools.inspect"), target: self, action: #selector(inspectTools(_:)))
+                inspect.tag = section == "vid" ? 1 : 0
+                inspect.image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: nil)
+                inspect.imagePosition = .imageLeading
+                inspect.isBordered = false
+                inspect.alignment = .left
+                inspect.contentTintColor = .linkColor
+                grid.addRow(with: developer ? [NSView(), inspect, NSView()] : [NSView(), inspect]).yPlacement = .center
             }
             if section == "cache" { addCacheRows(to: grid) }
             if section == "developer" {
@@ -2741,6 +2935,15 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     private var toolPipelines: [ToolPipeline] { fast ? [.fastImage] : (videos ? [.video] : [.image, .video]) }
+
+    @objc private func inspectTools(_ sender: NSButton) {
+        guard !applying, !cacheBusy, toolInspector == nil else { return }
+        let pipeline: ToolPipeline = sender.tag == 1 ? .video : (fast ? .fastImage : .image)
+        toolInspector = ToolInspectionPanel(settings: draft(), pipeline: pipeline, avif: avif) { [weak self] in
+            self?.toolInspector = nil
+        }
+        toolInspector?.show(for: panel)
+    }
 
     @objc private func editToolPaths() {
         guard !applying, !cacheBusy, toolEditor == nil else { return }
@@ -6994,6 +7197,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let photos = lastRequest?.shortestPath ?? false
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: processExit ?? host.lastExitStatus,
             exitedNormally: exitedNormally ?? host.lastExitWasNormal)
+        let verifiedPartialFailure = confirmed && photos && countStatus?.uppercased() == "MATCH"
+            && batchResults.hasPartialSuccess
         let previousConfirmation = hasConfirmedFileFailures
         hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
         if previousConfirmation != hasConfirmedFileFailures, let storage = logView.textStorage {
@@ -7014,7 +7219,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
-            : uncertain ? .systemRed : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
+            : uncertain ? .systemRed : verifiedPartialFailure ? .secondaryLabelColor
+            : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
             : batchResults.compactSummary
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
@@ -8183,6 +8389,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 private func runSelfTest() -> Int32 {
     do {
         try ProcessingGuideController.selfTest()
+        try ToolInspectionPanel.selfTest()
         let menuDelegate = AppDelegate()
         menuDelegate.configureMenus()
         guard NSApp.windowsMenu?.items.contains(where: {

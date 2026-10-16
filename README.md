@@ -91,6 +91,12 @@ encoding tools** separately authorizes alternative encoders. Both have visible
 scope notes and a direct link to the native guide's retry, ICC repair and tool-use
 examples. Neither controls batch continuation or disables required verification.
 These are clearer labels for the existing configuration, not new processing modes.
+**Inspect Processing Tools** is available in the Images and Videos tabs, including
+Fast IMG. It uses the current settings draft and the worker's resolver to show a
+common tool's role, selected executable, version output, configured override/source
+and bounded failure diagnostic. It neither saves settings nor processes media.
+Version-command success is not codec-capability or delivery proof. CLI users can
+request the same versioned JSON with `img config tool cjxl` or `vid config tool ffmpeg`.
 Search Settings by a localized option name, section or choice, then jump directly
 to its existing control. Developer mode also accepts configuration keys and flags.
 Search preserves unsaved edits and reveals applicable advanced Photos fields.

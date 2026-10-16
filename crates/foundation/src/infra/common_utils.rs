@@ -930,6 +930,13 @@ fn tool_override_env_name(name: &str) -> String {
 
 #[must_use]
 pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
+    resolve_tool_path_with_health(name, multimedia_tool_is_healthy)
+}
+
+pub(crate) fn resolve_tool_path_with_health(
+    name: &str,
+    mut healthy: impl FnMut(&Path) -> bool,
+) -> Option<PathBuf> {
     // GUI-launched macOS apps often miss shell PATH. An explicit developer
     // override and an explicitly selected PATH entry take priority over fixed
     // install locations, so nightly or locally built tools can be used safely.
@@ -990,7 +997,7 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     for fallback in &fallbacks {
         let path = std::path::Path::new(fallback);
         if path.is_file() {
-            let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(path);
+            let is_healthy = !is_multimedia_tool || healthy(path);
 
             if is_healthy {
                 return Some(path.to_path_buf());
@@ -1022,7 +1029,7 @@ pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
     // to spuriously failing every file in a batch.
     match which::which(name) {
         Ok(path) => {
-            let is_healthy = !is_multimedia_tool || multimedia_tool_is_healthy(&path);
+            let is_healthy = !is_multimedia_tool || healthy(&path);
 
             if is_healthy {
                 return Some(path);

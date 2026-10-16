@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Worker-Backed Tool Inspection (2026-10-16)
+
+- Add a read-only **Inspect Processing Tools** window to ordinary image, Fast IMG
+  and video Settings. Show common tool roles, resolved paths, versions,
+  configuration sources/overrides and explicit unresolved/unconfirmed diagnostics
+  from the selected pipeline's current draft. Do not save settings or process media.
+- Share the worker's selection order with `img config tool NAME` and
+  `vid config tool NAME`. Version commands use bounded capture and per-probe
+  deadlines and opt-in Unix process-group cleanup, including background pipe
+  holders after the version-command parent exits. Stderr versions, empty output,
+  nonzero exits and timeouts remain distinct from success. Normal processing's
+  resolver behavior is retained; unsupported isolated inspection is explicit.
+- Validate versioned reports and stale-response boundaries in the native UI;
+  permission, path discovery, a successful version command, codec capability,
+  actual invocation and delivery proof remain separate facts.
+- Preserve the existing source updates for flate2 and the matched thiserror macro
+  pair, and pinned Rust toolchain action refresh. Fast IMG emits its final batch
+  count after post-processing rather than an early duplicate nonzero result;
+  confirmed partial Photos outcomes retain their explicit failure counts with a
+  restrained heading, while unconfirmed evidence remains visibly separate.
+
 ### Clear Recovery And Tool Permissions (2026-10-16)
 
 - Replace ambiguous encoding-fallback/alternative-tool labels with **Encoding

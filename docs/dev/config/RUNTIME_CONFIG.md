@@ -369,6 +369,41 @@ operation ran, a tool is available, or a file passed verification.
 The native guide explains these cases directly from Settings. Per-file executed
 tool identities and recovery outcomes remain distinct from the saved permission.
 
+### Inspect A Tool Without Processing Media
+
+```sh
+img config tool cjxl
+img config tool cjxl --tool cjxl=/absolute/path/to/cjxl
+vid config tool ffmpeg
+```
+
+This opt-in diagnostic loads the same effective configuration as the worker,
+installs it only in the short-lived inspection process, and uses the shared tool
+selection order. It executes bounded version commands, not a media conversion.
+The GUI calls it using its immutable current draft, independently for IMG, Fast
+IMG or VID; opening or closing the report does not apply the draft.
+
+The schema-1 JSON reports `name`, `path`, `configured_path`,
+`configuration_source`, `status`, `version` and `diagnostic`. A successful version
+command with nonempty output is `version_reported`. A resolved tool whose version
+cannot be established is `version_unconfirmed`; an unresolved selection is
+`unresolved`. Missing information remains null, never an invented version.
+Commands use the tool-appropriate version argument, accept version text from
+stdout or stderr, and have a three-second deadline per probe. On Unix, each
+diagnostic runs in an isolated process group; ordinary background descendants in
+that group are stopped before output is drained, including when the parent exits
+first. This is not a sandbox for programs that deliberately detach from the group.
+Platforms without this isolation report unsupported inspection rather than run an
+unbounded version command. Diagnostics and version lines are bounded; normal
+processing's resolver/cache behavior is unchanged.
+
+This is a fresh path/version observation, not an inventory of every route
+dependency, a codec capability test, proof of an actual per-file invocation, or
+permission to bypass tool/recovery policy. The common-tool GUI view does not claim
+that every listed tool is needed for the selected file. Inspect again after a
+configuration or environment change; execution still resolves and verifies its
+own tools and artifacts.
+
 ### Photos Import And Verification Windows
 
 Native import and verification windows can have unequal sizes. Only committed
