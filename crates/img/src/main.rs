@@ -1,4 +1,5 @@
 use anyhow::Context;
+pub mod fast_img_ignored;
 mod fast_img_result;
 mod runtime_cli;
 use clap::{Parser, Subcommand};
@@ -3462,7 +3463,7 @@ struct FastImgSourceInventory {
     scan_failures: BTreeMap<String, String>,
     modern_lossy_candidates: Vec<ModernLossyStaticCandidate>,
     modern_probe_failure_count: usize,
-    ignored_count: usize,
+    ignored: fast_img_ignored::IgnoredInventory,
     source_hashes: BTreeMap<String, String>,
     planned_encode_count: usize,
 }
@@ -3497,6 +3498,7 @@ fn scan_fast_img_sources(
     let mut source_files = Vec::new();
     let candidate_count = candidates.len();
     let mut scan_failures = BTreeMap::new();
+    let mut ignored_candidates = Vec::new();
     let format_identities =
         foundation::image::format_identity::resolve_format_identities(&candidates)
             .context("fast-img batched content identity scan failed")?;
@@ -3515,6 +3517,16 @@ fn scan_fast_img_sources(
         scan_modern_lossy_static_candidates(src_dir, &tier2_paths)?
     };
     let modern_probe_failure_count = modern_lossy_scan.probe_failures.len();
+    let modern_candidate_paths = modern_lossy_scan
+        .candidates
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect::<BTreeSet<_>>();
+    let modern_probe_failure_paths = modern_lossy_scan
+        .probe_failures
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
     for (path, reason) in &modern_lossy_scan.probe_failures {
         println!(
             "[RETAIN  ] modern source could not be classified safely and will remain: {} ({reason})",
@@ -3523,10 +3535,7 @@ fn scan_fast_img_sources(
     }
     for (path, identity) in candidates.into_iter().zip(format_identities) {
         if foundation::live_photo::is_live(&path) {
-            println!(
-                "[RETAIN  ] Live Photo pair member is not eligible for standalone fast-img processing: {}",
-                path.display()
-            );
+            ignored_candidates.push((path, fast_img_ignored::IgnoredReason::LivePhotoPairMember));
             continue;
         }
         if identity.extension_mismatch {
@@ -3540,7 +3549,7 @@ fn scan_fast_img_sources(
         }
         if strategy == "avif" {
             let format = identity.family;
-            if !matches!(
+            if matches!(
                 format,
                 FormatKind::Mp4
                     | FormatKind::Mov
@@ -3548,12 +3557,17 @@ fn scan_fast_img_sources(
                     | FormatKind::Webm
                     | FormatKind::Unknown
             ) {
+                let reason = fast_img_ignored::IgnoredReason::OutsideCurrentPolicyScope;
+                ignored_candidates.push((path, reason));
+            } else {
                 match fast_img_container_is_static(&path, format) {
                     Ok(true) => source_files.push(path),
-                    Ok(false) => println!(
-                        "[SKIP    ] Meme Mode rejects animated image container {}",
-                        path.display()
-                    ),
+                    Ok(false) => {
+                        ignored_candidates.push((
+                            path,
+                            fast_img_ignored::IgnoredReason::AnimatedImageContainer,
+                        ));
+                    }
                     Err(error) => {
                         println!(
                             "[ERROR   ] Failed to read static-container metadata for {}: {}",
@@ -3568,8 +3582,32 @@ fn scan_fast_img_sources(
             }
         } else if identity.family == FormatKind::Jpeg {
             source_files.push(path);
+        } else if fast_img_tier2_source_format(strategy, identity.family) {
+            let admitted = modern_candidate_paths.contains(&path);
+            let probe_failed = modern_probe_failure_paths.contains(&path);
+            if !admitted && !probe_failed {
+                let reason = fast_img_ignored::IgnoredReason::ModernTierNotAdmitted;
+                ignored_candidates.push((path, reason));
+            }
+        } else {
+            let reason = fast_img_ignored::IgnoredReason::OutsideCurrentPolicyScope;
+            ignored_candidates.push((path, reason));
         }
     }
+    let classified_count = source_files
+        .len()
+        .checked_add(modern_lossy_scan.candidates.len())
+        .and_then(|count| count.checked_add(modern_probe_failure_count))
+        .context("fast-img scan classification count overflow")?;
+    let expected_ignored_count = candidate_count
+        .checked_sub(classified_count)
+        .context("fast-img scan classifications overlap")?;
+    let ignored = fast_img_ignored::IgnoredInventory::new(
+        src_dir,
+        ignored_candidates,
+        expected_ignored_count,
+    )?;
+    ignored.emit_markers_from_environment()?;
     let source_hashes = fast_img_source_hash_set(src_dir, &source_files)?;
     let planned_encode_count = source_files.len().saturating_sub(scan_failures.len());
     if strategy == "avif" {
@@ -3595,13 +3633,7 @@ fn scan_fast_img_sources(
         );
     }
     Ok(FastImgSourceInventory {
-        ignored_count: candidate_count
-            .checked_sub(
-                source_files.len()
-                    + modern_lossy_scan.candidates.len()
-                    + modern_probe_failure_count,
-            )
-            .context("fast-img scan classifications overlap")?,
+        ignored,
         source_files,
         scan_failures,
         modern_lossy_candidates: modern_lossy_scan.candidates,
@@ -4037,9 +4069,10 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         modern_lossy_candidates,
         modern_probe_failure_count,
         source_hashes: current_source_hashes,
-        ignored_count,
+        ignored,
         planned_encode_count,
     } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
+    let ignored_count = ignored.count();
     let marker_context = FastImgMarkerContext {
         src_dir: &src_dir,
         working_copy: &working_copy,

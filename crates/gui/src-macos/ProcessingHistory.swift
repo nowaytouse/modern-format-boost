@@ -5,7 +5,7 @@ import Darwin
 import CoreFoundation
 import UniformTypeIdentifiers
 
-private enum HistoryLayout {
+enum HistoryLayout {
     static let margin: CGFloat = 16
     static let spacing: CGFloat = 10
     static let rowHeight: CGFloat = 28
@@ -32,7 +32,7 @@ private struct HistoryContext: Decodable, Equatable {
     let run_id: String?
 }
 
-private func validHistoryIdentity(_ value: String) -> Bool {
+func validHistoryIdentity(_ value: String) -> Bool {
     !value.isEmpty && value.utf8.count <= 256 && value.utf8.allSatisfy { (33...126).contains($0) }
 }
 
@@ -710,6 +710,7 @@ private enum HistoryStore {
         let start: Int64
         let upper: Int64
         let endSource: String
+        var ignoredSources: [HistoryIgnoredSource] = []
     }
 
     final class IssueScanControl {
@@ -1162,7 +1163,7 @@ private enum HistoryStore {
         return Output(rows: rows, total: total, upper: end, firstOrdinal: ordinal, issues: issues)
     }
 
-    static func batchIssues(for selected: HistoryEntry, control: IssueScanControl = IssueScanControl()) throws -> BatchIssues {
+    static func batchIssues(for selected: HistoryEntry, control: IssueScanControl = IssueScanControl(), ignoredOnly: Bool = false) throws -> BatchIssues {
         try control.check()
         guard selected.hasStoredOutput, let selectedContext = selected.context,
               let start = selectedContext.output_sequence, start >= 0, regularFile(selected.audit) else {
@@ -1222,8 +1223,14 @@ private enum HistoryStore {
                   sqlite3_bind_int64(query, 2, start) == SQLITE_OK, sqlite3_bind_int64(query, 3, end) == SQLITE_OK else {
                 throw databaseError(database)
             }
+            if ignoredOnly {
+                guard HistoryIgnoredSource.prefix.withCString({ sqlite3_bind_text(query, 4, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK else {
+                    throw databaseError(database)
+                }
+            }
         }
-        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?")
+        let markerFilter = ignoredOnly ? " AND substr(CAST(line AS BLOB),1,\(HistoryIgnoredSource.prefix.utf8.count))=CAST(?4 AS BLOB)" : ""
+        let count = try statement(database, "SELECT COUNT(*) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?" + markerFilter)
         defer { sqlite3_finalize(count) }
         try bind(count)
         guard sqlite3_step(count) == SQLITE_ROW, sqlite3_column_type(count, 0) == SQLITE_INTEGER else {
@@ -1235,11 +1242,12 @@ private enum HistoryStore {
         let columns = ["ts", "pipeline", "line"].map {
             "CASE WHEN typeof(\($0))='text' AND length(CAST(\($0) AS BLOB))<=\(maximumOutputBytes) THEN \($0) ELSE NULL END"
         }.joined(separator: ", ")
-        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=? ORDER BY sequence")
+        let query = try statement(database, "SELECT sequence, \(columns) FROM history_output WHERE session_id=? AND sequence>? AND sequence<=?" + markerFilter + " ORDER BY sequence")
         defer { sqlite3_finalize(query) }
         try bind(query)
         var accumulator = Output.DiagnosticAccumulator()
         var fileFailures: [HistoryFileFailure] = []
+        var ignoredSources: [HistoryIgnoredSource] = []
         var failureBytes = 0
         var scanned: Int64 = 0
         var previous = start
@@ -1261,7 +1269,19 @@ private enum HistoryStore {
             let line = try databaseText(query, 3, database: database)
             guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.batch_issues.invalid")) }
             do {
-                if let failure = try HistoryFileFailure.parse(line, context: selectedContext, invocations: entry.invocations, pipeline: pipeline) {
+                if let ignored = try HistoryIgnoredSource.decode(line) {
+                    guard ignored.run_id == selectedContext.run_id, ignored.pipeline == pipeline.lowercased(),
+                          entry.invocations.contains(where: { $0.invocation_id == ignored.invocation_id && $0.run_id == ignored.run_id && $0.pipeline == ignored.pipeline }) else {
+                        throw HistoryIgnoredSource.invalid()
+                    }
+                    if ignoredOnly {
+                        guard ignoredSources.count < 4_096, length <= maximumOutputBytes - failureBytes else {
+                            throw HostError(message: localized("history.batch_issues.limit"))
+                        }
+                        ignoredSources.append(ignored)
+                        failureBytes += length
+                    }
+                } else if !ignoredOnly, let failure = try HistoryFileFailure.parse(line, context: selectedContext, invocations: entry.invocations, pipeline: pipeline) {
                     guard fileFailures.count < 4_096, length <= maximumOutputBytes - failureBytes else {
                         throw HostError(message: localized("history.batch_issues.limit"))
                     }
@@ -1270,9 +1290,11 @@ private enum HistoryStore {
                 }
             } catch let error as HostError { throw error }
             catch { throw HostError(message: localized("history.batch_issues.invalid")) }
-            let tone = LogTone.classify(line)
-            accumulator.ingest(Output.Row(sequence: sequence, text: "[\(timestamp)] \(pipeline): \(line)",
-                diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line))
+            if !ignoredOnly && !line.hasPrefix(HistoryIgnoredSource.prefix) {
+                let tone = LogTone.classify(line)
+                accumulator.ingest(Output.Row(sequence: sequence, text: "[\(timestamp)] \(pipeline): \(line)",
+                    diagnostic: tone == .warning || tone == .failure, pipeline: pipeline, line: line))
+            }
             guard !accumulator.invalidPhaseSeen else { throw HostError(message: localized("history.batch_issues.invalid")) }
             guard accumulator.groups.count <= 4_096, accumulator.retainedBytes <= maximumOutputBytes - failureBytes else {
                 throw HostError(message: localized("history.batch_issues.limit"))
@@ -1283,12 +1305,14 @@ private enum HistoryStore {
         }
         try control.check()
         guard scanned == total else { throw HostError(message: localized("history.batch_issues.invalid")) }
+        if ignoredOnly { ignoredSources = try HistoryIgnoredSource.reconcile(ignoredSources, expected: entry.summary?.img.ignored) }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
             try control.check()
             throw databaseError(database)
         }
         return BatchIssues(groups: accumulator.groups, occurrences: accumulator.occurrences,
-            fileFailures: fileFailures, scannedRows: scanned, start: start, upper: end, endSource: entry.outputEndSource)
+            fileFailures: fileFailures, scannedRows: scanned, start: start, upper: end, endSource: entry.outputEndSource,
+            ignoredSources: ignoredSources)
     }
 
     static func diagnosticArtifact(for selected: HistoryEntry) throws -> Data {
@@ -1339,6 +1363,7 @@ private enum HistoryStore {
         var phaseCount = 0
         var activityCount = 0
         var fileFailureCount = 0
+        var ignoredObservations: [HistoryIgnoredSource] = []
         var phases: [String: PhaseLogPresentation] = [:]
         var activities: [String: GateCheckActivity] = [:]
         while true {
@@ -1357,6 +1382,15 @@ private enum HistoryStore {
             let line = try databaseText(query, 3, database: database)
             guard !timestamp.isEmpty, !pipeline.isEmpty else { throw HostError(message: localized("history.export.invalid")) }
             do {
+                if let ignored = try HistoryIgnoredSource.decode(line) {
+                    guard ignored.run_id == context.run_id, ignored.pipeline == pipeline.lowercased(),
+                          entry.invocations.contains(where: { $0.invocation_id == ignored.invocation_id && $0.run_id == ignored.run_id && $0.pipeline == ignored.pipeline }),
+                          ignoredObservations.count < 4_096 else { throw HistoryIgnoredSource.invalid() }
+                    ignoredObservations.append(ignored)
+                    retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
+                        "kind": "ignored_source_observation", "observation": try JSONSerialization.jsonObject(with: ignored.recordedJSON())])
+                    continue
+                }
                 if let failure = try HistoryFileFailure.parse(line, context: context, invocations: entry.invocations, pipeline: pipeline) {
                     fileFailureCount += 1
                     retained.append(["sequence": sequence, "timestamp": timestamp, "pipeline": pipeline, "line": line,
@@ -1448,6 +1482,15 @@ private enum HistoryStore {
                 ["source": $0.source, "output": nullable($0.output), "in_place": $0.in_place, "requires_verification": $0.requires_verification]
             }]
         }
+        let ignoredInventory: [String: Any]
+        do {
+            let rows = try HistoryIgnoredSource.reconcile(ignoredObservations, expected: entry.summary?.img.ignored)
+            ignoredInventory = ["state": "matches_reported_total", "listed_items": rows.count,
+                "reported_ignored": nullable(entry.summary?.img.ignored), "diagnostic": NSNull()]
+        } catch {
+            ignoredInventory = ["state": ignoredObservations.isEmpty ? "unavailable" : "inconsistent",
+                "listed_items": NSNull(), "reported_ignored": nullable(entry.summary?.img.ignored), "diagnostic": error.localizedDescription]
+        }
         let artifact: [String: Any] = ["schema_version": 2, "artifact_kind": "mfb_selected_run_diagnostic",
             "authoritative_state": false, "full_run_manifest": false,
             "exported_at": ISO8601DateFormatter().string(from: Date()), "session_id": entry.stamp,
@@ -1456,13 +1499,14 @@ private enum HistoryStore {
                 "end_source": entry.outputEndSource,
                 "total_output_rows": total, "retained_output_rows": retained.count, "diagnostic_log_rows": diagnosticCount,
                 "phase_control_rows": phaseCount, "verification_activity_rows": activityCount, "file_failure_observation_rows": fileFailureCount,
+                "ignored_source_observation_rows": ignoredObservations.count,
                 "omitted_non_diagnostic_output_rows": total - retained.count,
                 "scan_complete": true, "count_scope": "log_records_not_files", "contains_local_paths_and_diagnostics": true],
             "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
             "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
             "worker_launches": launches.isEmpty ? NSNull() : launches,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
-            "input_verifications": entry.inputVerifications.mapValues(verification), "records": retained]
+            "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory, "records": retained]
         let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
         guard data.count <= maximumScanBytes else { throw HostError(message: localized("history.export.limit")) }
         guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else { throw databaseError(database) }
@@ -1877,7 +1921,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
-    private let detailMode = NSSegmentedControl(labels: ["", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let detailMode = NSSegmentedControl(labels: ["", "", "", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let ignoredView = HistoryIgnoredView()
+    private var ignoredSources: [HistoryIgnoredSource]?
     private let outputFilter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let failedTable = NSTableView()
     private let failedSearch = NSSearchField()
@@ -1946,6 +1992,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var batchIssueResult: HistoryStore.BatchIssues?
     private var comparisonIssues: [HistoryStore.BatchIssues]?
     private var issueScanControl: HistoryStore.IssueScanControl?
+    private var issueScanIsIgnored = false
     private var issueGeneration = UUID()
     private let status = NSTextField(labelWithString: "")
     private let progress = NSProgressIndicator()
@@ -2130,7 +2177,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         outputNavigation = NSStackView(views: [outputFilter, olderButton, newerButton])
         outputNavigation.spacing = 4
         configureFailedFiles()
-        let detailRoot = NSStackView(views: [detailMode, outputNavigation, detailScroll, failedContent])
+        let detailRoot = NSStackView(views: [detailMode, outputNavigation, detailScroll, failedContent, ignoredView])
         detailRoot.orientation = .vertical
         detailRoot.alignment = .leading
         detailRoot.spacing = 6
@@ -2138,6 +2185,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         detailScroll.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
         failedContent.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
+        ignoredView.widthAnchor.constraint(equalTo: detailRoot.widthAnchor).isActive = true
         // Keep toolbar intrinsic widths out of the split item's sizing negotiation.
         let detailContainer = NSView(frame: NSRect(x: 0, y: 0, width: 433, height: 540))
         detailContainer.addSubview(detailRoot)
@@ -2246,6 +2294,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setLabel(localized("history.output.title"), forSegment: 1)
         detailMode.setLabel(localized("history.failed_files"), forSegment: 2)
         detailMode.setLabel(localized("history.batch_issues.tab"), forSegment: 3)
+        detailMode.setLabel(localized("history.ignored.tab"), forSegment: 4)
+        ignoredView.updateLocalization()
         detailMode.setAccessibilityLabel(localized("history.details"))
         failedSearch.placeholderString = localized("history.failed_files.search")
         failedSearch.setAccessibilityLabel(localized("history.failed_files.search"))
@@ -2612,8 +2662,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         search.isEnabled = ready
         filter.isEnabled = ready
         let failuresVisible = single && detailMode.selectedSegment == 2
+        let ignoredVisible = single && detailMode.selectedSegment == 4
         failedContent.isHidden = !failuresVisible
-        detailScroll.isHidden = failuresVisible
+        ignoredView.isHidden = !ignoredVisible
+        ignoredView.setEnabled(ignoredVisible)
+        detailScroll.isHidden = failuresVisible || ignoredVisible
         outputNavigation.isHidden = detailMode.selectedSegment != 1
         failedSearch.isEnabled = failuresVisible
         failedTable.isEnabled = failuresVisible
@@ -2625,6 +2678,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single || pair, forSegment: 2)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
+        detailMode.setEnabled(single && selected?.hasStoredOutput == true && selected?.context?.mode == "fast-img", forSegment: 4)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
@@ -2711,6 +2765,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         clearFailureDetails()
         cancelIssueScan()
         batchIssueResult = nil
+        ignoredSources = nil
+        ignoredView.reset(localized("history.ignored.loading"))
         comparisonIssues = nil
         outputGeneration = UUID()
         outputLoading = false
@@ -2736,7 +2792,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard selected != nil else { showSelected(); return }
         outputGeneration = UUID()
         outputLoading = false
-        if ![2, 3].contains(detailMode.selectedSegment) { cancelIssueScan() }
+        if ![2, 3, 4].contains(detailMode.selectedSegment)
+            || (issueScanControl != nil && issueScanIsIgnored != (detailMode.selectedSegment == 4)) { cancelIssueScan() }
         if detailMode.selectedSegment == 0 {
             detail.string = selected.map { Self.render($0) } ?? localized("history.select")
             updateHistoryStatus()
@@ -2748,6 +2805,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
         else if detailMode.selectedSegment == 3 {
             if batchIssueResult != nil { renderBatchIssues() }
+            else if issueScanControl == nil, let entry = selected { loadBatchIssues(entry: entry) }
+        }
+        else if detailMode.selectedSegment == 4 {
+            if let ignoredSources { ignoredView.show(ignoredSources) }
             else if issueScanControl == nil, let entry = selected { loadBatchIssues(entry: entry) }
         }
         else if outputPage != nil { renderOutput() }
@@ -3115,31 +3176,47 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         issueGeneration = token
         let control = HistoryStore.IssueScanControl()
         issueScanControl = control
-        batchIssueResult = nil
+        let ignoredOnly = detailMode.selectedSegment == 4
+        issueScanIsIgnored = ignoredOnly
+        if ignoredOnly {
+            ignoredSources = nil
+            ignoredView.reset(localized("history.ignored.loading"))
+        } else { batchIssueResult = nil }
         detail.string = localized("history.batch_issues.loading")
         if detailMode.selectedSegment == 2 { failedStatus.stringValue = localized("history.file_failure.loading") }
         status.stringValue = detail.string
         updateActions()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Swift.Result { try HistoryStore.batchIssues(for: entry, control: control) }
+            let result = Swift.Result { try HistoryStore.batchIssues(for: entry, control: control, ignoredOnly: ignoredOnly) }
             DispatchQueue.main.async {
                 guard let self, self.issueGeneration == token, self.selected?.id == entry.id,
-                      [2, 3].contains(self.detailMode.selectedSegment), !control.isCancelled else { return }
+                      (ignoredOnly ? self.detailMode.selectedSegment == 4 : [2, 3].contains(self.detailMode.selectedSegment)), !control.isCancelled else { return }
                 self.issueScanControl = nil
                 switch result {
                 case let .success(issues):
-                    self.batchIssueResult = issues
-                    if self.detailMode.selectedSegment == 2 {
-                        self.filterFailedFiles()
+                    if ignoredOnly {
+                        self.ignoredSources = issues.ignoredSources
+                        self.ignoredView.show(issues.ignoredSources)
                         self.updateHistoryStatus()
+                    } else {
+                        self.batchIssueResult = issues
+                        if self.detailMode.selectedSegment == 2 {
+                            self.filterFailedFiles()
+                            self.updateHistoryStatus()
+                        }
+                        else { self.renderBatchIssues() }
                     }
-                    else { self.renderBatchIssues() }
                 case let .failure(error):
-                    self.batchIssueResult = nil
-                    self.detail.string = error.localizedDescription
-                    if self.detailMode.selectedSegment == 2 {
-                        self.filterFailedFiles()
-                        self.failedStatus.stringValue = error.localizedDescription + "\n" + localized("history.file_failure.not_recorded")
+                    if ignoredOnly {
+                        self.ignoredSources = nil
+                        self.ignoredView.reset(error.localizedDescription)
+                    } else {
+                        self.batchIssueResult = nil
+                        self.detail.string = error.localizedDescription
+                        if self.detailMode.selectedSegment == 2 {
+                            self.filterFailedFiles()
+                            self.failedStatus.stringValue = error.localizedDescription + "\n" + localized("history.file_failure.not_recorded")
+                        }
                     }
                     self.status.stringValue = error.localizedDescription
                 }
@@ -3160,6 +3237,40 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         status.stringValue = localized("history.copied")
+    }
+
+    fileprivate func validateIgnoredForSelfTest(_ entry: HistoryEntry, records: [HistoryIgnoredSource]) throws {
+        entries = [entry]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        ignoredSources = records
+        detailMode.selectedSegment = 4
+        detailModeChanged()
+        guard !ignoredView.isHidden, failedContent.isHidden, detailScroll.isHidden,
+              entry.summary?.img.ignored == records.count, detailMode.isEnabled(forSegment: 4) else {
+            throw HostError(message: "Ignored history tab mixed failures, changed counts or lost supported controls")
+        }
+        try ignoredView.validateForSelfTest(records)
+        defer { window?.orderOut(nil) }
+        for width in [1_040.0, 780.0, 1_040.0] {
+            window?.setContentSize(NSSize(width: width, height: 620))
+            ignoredSources = records
+            detailMode.selectedSegment = 4
+            detailModeChanged()
+            showWindow(nil)
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            close()
+            show()
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.displayIfNeeded()
+            guard window?.isVisible == true else { throw HostError(message: "Ignored history failed to reopen") }
+        }
+        resetOutput()
+        updateActions()
+        guard ignoredSources == nil, ignoredView.isHidden else {
+            throw HostError(message: "History reset retained another batch's ignored inventory")
+        }
     }
 
     fileprivate func validateFileReasonsForSelfTest(_ entry: HistoryEntry, issues: HistoryStore.BatchIssues) throws {
@@ -3282,7 +3393,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
               logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
-              detailMode.segmentCount == 4, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
+              detailMode.segmentCount == 5, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
+              !detailMode.isEnabled(forSegment: 4), ignoredView.isHidden,
                failedContent.isHidden, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
                table.allowsMultipleSelection, table.allowsEmptySelection,
                window?.styleMask.contains(.resizable) == true else {
@@ -5061,6 +5173,89 @@ func runProcessingHistorySelfTests() throws {
     try refuseExport({ _ = try HistoryStore.batchIssues(for: reasonEntry) }, "Malformed file failure evidence appeared as zero observations")
     try refuseExport({ _ = try HistoryStore.diagnosticArtifact(for: reasonEntry) }, "Malformed file failure evidence was silently excluded from export")
     sqlite3_close(reasonDB)
+    var ignoredSummary = identitySummary
+    var ignoredMedia = identityMedia
+    ignoredMedia["ignored"] = 2
+    ignoredSummary["img"] = ignoredMedia
+    let ignoredFinished: [String: Any] = ["schema_version": 1, "outcome": "failed", "error": "synthetic",
+        "run_id": "run-synthetic-1", "output_sequence": 4]
+    let ignoredEvents = [identityContextLine, identityLaunchLine,
+        try payload("MFB_HISTORY_SUMMARY", ignoredSummary), try payload("MFB_HISTORY_FINISHED", ignoredFinished)]
+    var ignoredValue: [String: Any] = ["schema_version": 1, "pipeline": "img", "run_id": "run-synthetic-1",
+        "invocation_id": "synthetic-call-1", "source_path": "ignored/映像\nfile's.png",
+        "absolute_path": "/synthetic/absent/映像\nfile's.png", "reason_code": "outside_current_policy_scope",
+        "message": "Synthetic policy scope observation", "ordinal": 1, "total": 2]
+    let firstIgnoredLine = try payload("MFB_FAST_IMG_IGNORED", ignoredValue)
+    let firstIgnored = try HistoryIgnoredSource.decode(firstIgnoredLine)!
+    ignoredValue["source_path"] = "ignored/live.heic"
+    ignoredValue["absolute_path"] = "/synthetic/absent/live.heic"
+    ignoredValue["reason_code"] = "live_photo_pair_member"
+    ignoredValue["message"] = "Synthetic Live Photo policy observation"
+    ignoredValue["ordinal"] = 2
+    let secondIgnoredLine = try payload("MFB_FAST_IMG_IGNORED", ignoredValue)
+    let secondIgnored = try HistoryIgnoredSource.decode(secondIgnoredLine)!
+    let ignoredRecords = try HistoryIgnoredSource.reconcile([firstIgnored, secondIgnored, firstIgnored], expected: 2)
+    try require(ignoredRecords.count == 2 && ignoredRecords[0].source_path.utf8.elementsEqual(firstIgnored.source_path.utf8),
+                "Repeated ignored observations inflated counts or changed the exact source path")
+    for (values, expected) in [([firstIgnored], 2), ([firstIgnored, secondIgnored], 3), ([], 2)] {
+        try refuseExport({ _ = try HistoryIgnoredSource.reconcile(values, expected: expected) }, "Missing ignored evidence appeared as a matched inventory")
+    }
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([], expected: nil) }, "Missing ignored count became zero")
+    try require(try HistoryIgnoredSource.reconcile([], expected: 0).isEmpty, "An explicit zero ignored count required invented file records")
+    var conflictingIgnored = ignoredValue
+    conflictingIgnored["ordinal"] = 1
+    let conflictingIgnoredRecord = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", conflictingIgnored))!
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([firstIgnored, secondIgnored, conflictingIgnoredRecord], expected: 2) }, "A conflicting ordinal replaced recorded ignored evidence")
+    conflictingIgnored["ordinal"] = 2
+    conflictingIgnored["source_path"] = firstIgnored.source_path
+    let duplicatePath = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", conflictingIgnored))!
+    try refuseExport({ _ = try HistoryIgnoredSource.reconcile([firstIgnored, duplicatePath], expected: 2) }, "Duplicate ignored paths inflated the classified inventory")
+    for invalid in [ignoredValue.merging(["source_path": "../escape.png"]) { _, new in new },
+                    ignoredValue.merging(["total": 1]) { _, new in new },
+                    ignoredValue.merging(["schema_version": 2]) { _, new in new },
+                    ignoredValue.merging(["guessed_stage": "safe"]) { _, new in new }] {
+        try refuseExport({ _ = try HistoryIgnoredSource.decode(payload("MFB_FAST_IMG_IGNORED", invalid)) }, "Invalid ignored marker was accepted")
+    }
+    try writeDatabase([("ignored", ignoredEvents)], schema: 2)
+    var ignoredDB: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &ignoredDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let ignoredDB else {
+        throw HostError(message: "Synthetic ignored database open failed")
+    }
+    func insertIgnoredOutput(_ line: String) throws {
+        var query: OpaquePointer?
+        guard sqlite3_prepare_v2(ignoredDB, "INSERT INTO history_output(session_id,ts,pipeline,line) VALUES ('ignored','synthetic','IMG',?)", -1, &query, nil) == SQLITE_OK,
+              let query else { throw HostError(message: "Synthetic ignored output prepare failed") }
+        defer { sqlite3_finalize(query) }
+        guard line.withCString({ sqlite3_bind_text(query, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }) == SQLITE_OK,
+              sqlite3_step(query) == SQLITE_DONE else { throw HostError(message: "Synthetic ignored output insert failed") }
+    }
+    for line in [firstIgnoredLine, secondIgnoredLine, firstIgnoredLine, "ordinary output with embedded MFB_FAST_IMG_IGNORED= text"] { try insertIgnoredOutput(line) }
+    guard let ignoredEntry = try HistoryStore.load(directory: directory).entries.first(where: { $0.stamp == "ignored" }) else {
+        throw HostError(message: "The synthetic ignored batch is absent")
+    }
+    let ignoredSnapshot = try Data(contentsOf: databaseURL)
+    let ignoredIssues: HistoryStore.BatchIssues
+    do { ignoredIssues = try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true) }
+    catch { throw HostError(message: "Initial ignored inventory read failed: \(error.localizedDescription); audit issues: \(ignoredEntry.issues.joined(separator: "; "))") }
+    try require(ignoredIssues.scannedRows == 3 && ignoredIssues.ignoredSources.count == 2 && ignoredIssues.fileFailures.isEmpty,
+                "Ignored-only scan included unrelated text, inflated repeats or mixed failure records")
+    let ignoredDocument = try JSONSerialization.jsonObject(with: HistoryStore.diagnosticArtifact(for: ignoredEntry)) as? [String: Any]
+    try require((ignoredDocument?["ignored_inventory"] as? [String: Any])?["state"] as? String == "matches_reported_total"
+                && (ignoredDocument?["scope"] as? [String: Any])?["ignored_source_observation_rows"] as? Int == 3
+                && (ignoredDocument?["records"] as? [[String: Any]])?.count == 3,
+                "Ignored export lost original observations or substituted observation count for item count")
+    try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: directory).validateIgnoredForSelfTest(ignoredEntry, records: ignoredIssues.ignoredSources) }
+    try require(try Data(contentsOf: databaseURL) == ignoredSnapshot, "Ignored history inspection changed the stored database")
+    guard sqlite3_exec(ignoredDB, "UPDATE history_output SET line=zeroblob(2097153) WHERE sequence=4", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic unrelated large output update failed")
+    }
+    try require(try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true).ignoredSources.count == 2,
+                "Ignored inventory unnecessarily read unrelated oversized output")
+    guard sqlite3_exec(ignoredDB, "UPDATE history_output SET line='MFB_FAST_IMG_IGNORED={invalid}' WHERE sequence=1", nil, nil, nil) == SQLITE_OK else {
+        throw HostError(message: "Synthetic ignored corruption failed")
+    }
+    try refuseExport({ _ = try HistoryStore.batchIssues(for: ignoredEntry, ignoredOnly: true) }, "Malformed ignored record became a complete list")
+    sqlite3_close(ignoredDB)
     try writeDatabase([("test", [context, summary, completed])], schema: 99)
     let futureDatabase = try Data(contentsOf: databaseURL)
     try requireReadFailure("Unsupported database schema appeared successful")

@@ -1501,6 +1501,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         ])
         .arg(&swift_src)
         .arg(native_dir.join("ProcessingHistory.swift"))
+        .arg(native_dir.join("ProcessingIgnored.swift"))
         .arg(native_dir.join("PreflightInspector.swift"))
         .arg(native_dir.join("ProcessingGuide.swift"))
         .arg("-o")

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Explainable Fast IMG Ignored Inventory (2026-10-16)
+
+- Preserve exact scan exclusions with explicit policy reason codes and source paths,
+  then reconcile the inventory against the existing ignored-count partition. Keep
+  probe failures out of ignored records and preserve processing/deletion policy.
+- Add run/invocation-bound, ordered `MFB_FAST_IMG_IGNORED` observations with bounded
+  transport and explicit identity, serialization and output errors. Direct CLI
+  output uses one ignored line per item; captured GUI output avoids duplicate lines
+  and no longer presents animation exclusions as successful skips.
+- Add a separate History ignored-items view with category totals, localized reason
+  and path search, bounded rows, exact-record copying and guarded Finder navigation.
+  Validate complete ordinals, conflicting duplicates, recorded-path uniqueness and
+  the reported batch total; absent or inconsistent evidence stays unavailable.
+- Query only the ignored-observation stream when browsing this inventory. Retain
+  original observations and a separate inventory reconciliation status in diagnostic
+  exports without changing History database schema, media counters or delivery proof.
+- Escape control characters in direct CLI path labels while retaining exact paths
+  in structured records. Do not classify a literal warning/error tag in an ignored
+  filename as a diagnostic. The ignored table uses vertical scrolling only to avoid
+  horizontal/vertical scroller retiling when the History window is reopened.
+- Retain the workspace's bitflags Git refresh from `8df4d4eb` to `74c6fd12` at
+  version 2.13.2; the upstream diff changes only a compile-fail diagnostic fixture.
+
 ### File Failure Details And Traceable Reasons (2026-10-16)
 
 - Group History failure observations by exact run/invocation/pipeline/source paths,

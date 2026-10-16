@@ -249,7 +249,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.13.2"
-source = "git+https://github.com/bitflags/bitflags#8df4d4ebb26fc35d49515972ede9dc77e5b43599"
+source = "git+https://github.com/bitflags/bitflags#74c6fd129967093b048bf71bf3ffbdadfbc76225"
 dependencies = [
  "serde_core",
 ]

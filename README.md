@@ -331,6 +331,24 @@ each original observation with separate row accounting and its run ID; this is
 still not a complete Run Manifest or proof that every failure was captured.
 Diagnostic export schema 2 separates `history_entry_id` from the recorded `run_id`;
 unidentified earlier runs export a null run ID. The History database schema is unchanged.
+The Fast IMG **Ignored** tab shows the reasons recorded during that batch's scan,
+with category totals, path/reason search and selected-record copying. The backend
+records Live Photo members, animated image exclusions, out-of-scope formats and
+modern originals not admitted for delivery; it does not guess a more specific
+cause. Versioned `MFB_FAST_IMG_IGNORED` observations bind each ordinal and inventory
+total to the run and worker invocation. The reader requires complete, nonconflicting
+ordinals and distinct recorded paths within each invocation, then reconciles the
+item total against the batch's reported ignored count. Repeated identical observations
+do not inflate that count. Missing older evidence, gaps, conflicts or limits show
+unavailable, not an empty or invented list. Ignored never means converted or imported.
+The read-only query selects only this marker stream, so unrelated large output is
+not loaded to browse the inventory. It retains at most 4,096 observations / 2 MiB;
+the table shows at most 1,000 rows / 2 MiB and searches the complete accepted list.
+Diagnostic JSON keeps the original observations and explicitly reports whether
+their inventory matches the recorded total; it is not a new media-verification proof.
+Direct CLI runs without run/invocation identity print one `[IGNORED]` line per item;
+GUI runs capture one structured observation instead of duplicate plain/JSON lines.
+
 History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
 read-only system SQLite can open cold WAL histories without initializing them
 writable. Full synchronous writes and checkpoints remain enabled; the reader

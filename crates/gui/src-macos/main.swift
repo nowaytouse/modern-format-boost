@@ -4912,6 +4912,11 @@ enum LogTone: Equatable {
 
     static func classify(_ line: String) -> Self {
         let line = message(line)
+        if line.hasPrefix(HistoryIgnoredSource.prefix) {
+            do { return try HistoryIgnoredSource.decode(line) == nil ? .warning : .muted }
+            catch { return .warning }
+        }
+        if ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: line.hasPrefix) { return .normal }
         if line.hasPrefix(HistoryFileFailure.prefix) { return .muted }
         if line == "WARNING: Always keep a backup of your original media before optimization." { return .muted }
         if line.range(of: #"(?i)^Error: fast-img exited with (?:code|status) \d+$"#, options: .regularExpression) != nil {
@@ -6903,6 +6908,21 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if developerMode { displayLines.append(line) }
                 continue
             }
+            if line.hasPrefix(HistoryIgnoredSource.prefix) {
+                do {
+                    if let ignored = try HistoryIgnoredSource.decode(line) {
+                        displayLines.append(localized("history.ignored.live", ignored.source_path, ignored.userReason))
+                        if developerMode { displayLines.append(line) }
+                    }
+                } catch {
+                    let warning = "[WARN] " + localized("history.ignored.invalid")
+                    displayLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                }
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                continue
+            }
             batchResults.observeMandatoryEvidence(line)
             var visibleLine = line
             if line.hasPrefix(HistoryFileFailure.prefix) {
@@ -7909,6 +7929,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard latestDiagnostics.failure == "[FAIL] /synthetic/incomplete.jpg: " + localized("history.file_failure.reason.jpeg_missing_eoi"),
               incompleteJpeg.message == "synthetic original diagnostic", !batchResults.hasFailure else {
             throw HostError(message: "A verified reason code lost its localized explanation, original diagnostic or count boundary")
+        }
+        clearBatchLog()
+        let ignored = HistoryIgnoredSource(schema_version: 1, pipeline: "img", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", source_path: "[FAIL] invariant failed\nname.png",
+            absolute_path: "/synthetic/absent/name.png", reason_code: "outside_current_policy_scope",
+            message: "Synthetic scope observation", ordinal: 1, total: 1)
+        appendLog(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self))
+        guard latestDiagnostics.failure == nil, latestDiagnostics.warning == nil,
+              !batchResults.hasFailure, batchResults.totals.isEmpty,
+              LogTone.classify(localized("history.ignored.live", ignored.source_path, ignored.userReason)) == .normal,
+              LogTone.classify(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self)) == .muted else {
+            throw HostError(message: "An ignored record's literal path became a failure or changed media counts")
         }
     }
 
