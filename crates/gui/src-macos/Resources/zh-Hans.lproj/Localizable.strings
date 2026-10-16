@@ -425,6 +425,14 @@
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
 "result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
 "cleanup.history_title" = "输出目录清理（当时记录）";
+"cleanup.inspect" = "查看输出目录与清理详情";
+"cleanup.attention.short" = "清理需关注";
+"cleanup.inspect.note" = "显示当时记录；定位前会重新检查目录是否可访问，不会删除内容，也不代表现在可以安全清理。";
+"cleanup.inspect.copy" = "复制完整记录";
+"cleanup.inspect.reveal" = "在访达中显示目录";
+"cleanup.inspect.unavailable" = "没有可安全定位的已记录目录：目录可能不存在、不可访问或已变为链接。不会猜测其他位置。";
+"cleanup.inspect.copied" = "已复制清理详情和原始回执";
+"cleanup.inspect.copy_failed" = "未能复制记录，请重新打开详情后重试。";
 "cleanup.not_recorded" = "输出目录清理情况未记录，不能确认是否仍有残留。";
 "cleanup.invalid" = "输出目录清理记录不完整或相互矛盾，请查看原始诊断。";
 "cleanup.not_measured" = "未测量";

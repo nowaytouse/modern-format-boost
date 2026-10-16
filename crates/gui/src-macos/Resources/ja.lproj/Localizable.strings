@@ -425,6 +425,14 @@
 "result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "cleanup.history_title" = "出力フォルダの整理（実行時の記録）";
+"cleanup.inspect" = "出力フォルダと整理の詳細を確認";
+"cleanup.attention.short" = "整理の確認が必要";
+"cleanup.inspect.note" = "実行時の記録です。表示前にフォルダを再確認します。内容は削除せず、整理の安全性も保証しません。";
+"cleanup.inspect.copy" = "記録全体をコピー";
+"cleanup.inspect.reveal" = "フォルダをFinderに表示";
+"cleanup.inspect.unavailable" = "安全に表示できる記録済みフォルダがありません。存在しない、アクセス不可、リンクの可能性があります。他の場所は推測しません。";
+"cleanup.inspect.copied" = "整理の詳細と元の記録をコピーしました";
+"cleanup.inspect.copy_failed" = "記録をコピーできませんでした。詳細を開き直して再試行してください。";
 "cleanup.not_recorded" = "出力フォルダの整理記録がないため、残存内容は不明です。";
 "cleanup.invalid" = "出力フォルダの整理記録が不完全、または矛盾しています。元の診断を確認してください。";
 "cleanup.not_measured" = "未計測";

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Inspectable History Cleanup Details (2026-10-16)
+
+- Add a dedicated Fast IMG History action for a selectable, read-only cleanup
+  detail sheet and full receipt copying, including explicit clipboard failure.
+- Locate only recorded directories that pass current non-link directory checks;
+  recheck immediately before Finder navigation. Missing or conflicting evidence
+  never creates a guessed path or deletion action.
+- Include cleanup attention in filtering, search and a wrapping result label,
+  without changing media counters or the underlying processing outcome.
+- Reject cleanup outcomes inconsistent with the batch's folder-removal request.
+  Cover missing/conflicting receipts, replaced links/files and sheet lifecycle
+  in native self-tests. This is not a complete residual inventory or safe-delete UI.
+
 ### Independent Fast IMG Output Cleanup Receipts (2026-10-16)
 
 - Record output-folder cleanup independently of primary source cleanup, with the

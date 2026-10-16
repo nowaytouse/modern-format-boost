@@ -362,6 +362,15 @@ older evidence remains explicitly unavailable. These observations describe only 
 operation on that output folder, not current filesystem state, all temporary folders,
 recovery ownership, safe deletion candidates or new Photos delivery proof.
 
+Select a Fast IMG batch in History and use **Inspect Output Folders and Cleanup**
+to open a read-only detail sheet and copy the complete recorded receipt. **Reveal
+Folders in Finder** rechecks recorded paths and is unavailable for missing,
+inaccessible or replaced non-directory/symbolic-link targets; it never guesses a
+parent folder or deletes anything. Cleanup attention appears in the **Needs
+Attention** filter and path/status/error search without changing media counts or
+the recorded processing outcome. A receipt contradicting whether folder removal
+was requested is rejected, not turned into a usable cleanup result.
+
 History writers retain SQLite-managed WAL/shared-memory sidecars after closing so
 read-only system SQLite can open cold WAL histories without initializing them
 writable. Full synchronous writes and checkpoints remain enabled; the reader

@@ -595,8 +595,12 @@ private struct HistoryEntry {
         if hasVerificationWarnings { return "history.status.verification_warnings" }
         return "history.status.completed"
     }
+    var hasCleanupAttention: Bool { outputCleanupInvalid || outputCleanups.contains(where: \.needsAttention) }
+    var statusLabel: String {
+        localized(statusKey) + (hasCleanupAttention ? " · " + localized("cleanup.attention.short") : "")
+    }
     var needsAttention: Bool {
-        !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings
+        !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings || hasCleanupAttention
     }
     var statusColor: NSColor {
         if hasVerificationFailure { return .systemRed }
@@ -605,8 +609,9 @@ private struct HistoryEntry {
         return needsAttention ? .systemOrange : .labelColor
     }
     var searchable: String {
-        ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", localized(statusKey)] + (context?.inputs ?? [])
-            + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""])
+        ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", statusLabel] + (context?.inputs ?? [])
+            + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""]
+            + outputCleanups.flatMap { [$0.output_path, $0.outcome, $0.statusText, $0.error ?? ""] })
             .joined(separator: " ")
     }
     var succeededLabel: String {
@@ -971,6 +976,7 @@ private enum HistoryStore {
                     guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
                           let context = current.context, context.mode == "fast-img", !context.dry_run,
                           let runID = context.run_id, receipt.run_id == runID,
+                          context.shortest_path == (receipt.outcome != "not_requested"),
                           !current.outputCleanupInvalid, current.outputCleanups.count < 64 else { throw HistoryParseError.invalid }
                     if let previous = current.outputCleanups.first(where: { Data($0.output_path.utf8) == Data(receipt.output_path.utf8) }) {
                         guard previous == receipt else { throw HistoryParseError.invalid }
@@ -2079,6 +2085,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var failureDisplayRows: [FailureDisplayRow] = []
     private var failureDetailAlert: NSAlert?
     private var failureDetailGeneration = UUID()
+    private var cleanupDetailAlert: NSAlert?
+    private var cleanupDetailGeneration = UUID()
     private var detailScroll = NSScrollView()
     private var outputNavigation = NSStackView()
     private var olderButton = NSButton()
@@ -2099,6 +2107,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var revealButton = NSButton()
     private var copyButton = NSButton()
     private var exportButton = NSButton()
+    private var cleanupButton = NSButton()
     private var entries: [HistoryEntry] = []
     private var displayed: [HistoryEntry] = []
     private var directory: URL
@@ -2306,6 +2315,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit))
         copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
         exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
+        cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails))
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -2313,7 +2323,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, progress, status])
+        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, cleanupButton, progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -2405,6 +2415,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         for (button, key) in [(refreshButton, "history.refresh"), (logButton, "history.open_log"),
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
                               (exportButton, "history.export.title"),
+                               (cleanupButton, "cleanup.inspect"),
                                (failedDetailsButton, "history.file_failure.detail"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
@@ -2495,7 +2506,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 label.stringValue = paths.count == 1 ? first : localized("history.source_multiple", first, paths.count)
                 label.toolTip = paths.joined(separator: "\n")
             } else { label.stringValue = localized("result.unknown") }
-        case "status": label.stringValue = localized(entry.statusKey); resultColor = entry.statusColor
+        case "status":
+            label.stringValue = localized(entry.statusKey)
+                + (entry.hasCleanupAttention ? "\n" + localized("cleanup.attention.short") : "")
+            label.toolTip = entry.statusLabel
+            label.setAccessibilityLabel(entry.statusLabel)
+            label.maximumNumberOfLines = 2
+            label.lineBreakMode = .byWordWrapping
+            resultColor = entry.statusColor
         case "verification":
             label.stringValue = entry.verification?.count_status ?? localized("result.unknown")
             resultColor = entry.hasVerificationFailure ? .systemRed : .secondaryLabelColor
@@ -2645,7 +2663,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
              row("remaining_inventory", String(verification.source_remaining_count)),
              row("deleted_inventory", String(verification.verified_deleted_count))]
         }
-        var lines = [localized(entry.statusKey), Self.timestampLabel(entry.timestamp), ""]
+        var lines = [entry.statusLabel, Self.timestampLabel(entry.timestamp), ""]
         if entry.isRestoreJpeg {
             lines.append(entry.sizeOutcome)
             if entry.summary?.sizeInvalid == true { lines.append(localized("history.space.invalid")) }
@@ -2787,9 +2805,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         revealButton.isEnabled = single
         copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
         exportButton.isEnabled = single && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
+        cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img"
     }
 
     func windowWillClose(_ notification: Notification) {
+        clearCleanupDetails()
         clearFailureDetails()
         cancelIssueScan()
         exportGeneration = UUID()
@@ -2864,6 +2884,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func resetOutput() {
+        clearCleanupDetails()
         clearFailureDetails()
         cancelIssueScan()
         batchIssueResult = nil
@@ -2878,6 +2899,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func detailModeChanged() {
+        clearCleanupDetails()
         clearFailureDetails()
         if selectedEntries.count == 2 {
             if detailMode.selectedSegment == 2 {
@@ -2992,6 +3014,86 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 : localized("history.file_failure.source_observations", sourceRows.count, batchIssueResult!.fileFailures.count)
                     + "\n" + localized("history.file_failure.note"))
         updateActions()
+    }
+
+    private func clearCleanupDetails() {
+        cleanupDetailGeneration = UUID()
+        if let alert = cleanupDetailAlert, let window, window.attachedSheet === alert.window {
+            window.endSheet(alert.window)
+        }
+        cleanupDetailAlert = nil
+    }
+
+    private static func cleanupDirectories(for entry: HistoryEntry) -> [URL] {
+        guard !entry.outputCleanupInvalid else { return [] }
+        return entry.outputCleanups.compactMap { receipt in
+            let url = URL(fileURLWithPath: receipt.output_path)
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+                  values.isDirectory == true, values.isSymbolicLink != true else { return nil }
+            return url
+        }
+    }
+
+    private static func cleanupDetailText(for entry: HistoryEntry) throws -> String {
+        let state = entry.outputCleanupInvalid ? "inconsistent" : entry.outputCleanups.isEmpty ? "unavailable" : "recorded"
+        let object: [String: Any] = ["run_id": entry.context?.run_id as Any? ?? NSNull(),
+            "state": state, "receipts": entry.outputCleanupInvalid ? [] : entry.outputCleanups.map(\.recordedObject)]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        let details = entry.outputCleanupInvalid ? localized("cleanup.invalid") : entry.outputCleanups.isEmpty
+            ? localized("cleanup.not_recorded") : entry.outputCleanups.map(\.detailText).joined(separator: "\n\n")
+        return [localized("cleanup.history_title"), localized("cleanup.inspect.note"), details,
+            localized("history.file_failure.detail.json"), String(decoding: data, as: UTF8.self)].joined(separator: "\n\n")
+    }
+
+    @objc private func openCleanupDetails() {
+        guard cleanupButton.isEnabled, let entry = selected, let window, window.attachedSheet == nil else { return }
+        do {
+            let text = try Self.cleanupDetailText(for: entry)
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = localized("cleanup.inspect")
+            alert.informativeText = localized("cleanup.inspect.note")
+            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 320))
+            textView.string = text
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isHorizontallyResizable = false
+            textView.isVerticallyResizable = true
+            textView.minSize = .zero
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.autoresizingMask = [.width]
+            textView.textContainer?.widthTracksTextView = true
+            textView.font = HistoryLayout.detailFont
+            textView.textContainerInset = NSSize(width: HistoryLayout.spacing, height: HistoryLayout.spacing)
+            textView.setAccessibilityLabel(localized("cleanup.history_title"))
+            let scroll = NSScrollView(frame: textView.frame)
+            scroll.hasVerticalScroller = true
+            scroll.documentView = textView
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("history.file_failure.detail.close"))
+            alert.addButton(withTitle: localized("cleanup.inspect.copy"))
+            let reveal = alert.addButton(withTitle: localized("cleanup.inspect.reveal"))
+            reveal.isEnabled = !Self.cleanupDirectories(for: entry).isEmpty
+            if !reveal.isEnabled { reveal.toolTip = localized("cleanup.inspect.unavailable") }
+            let token = UUID()
+            cleanupDetailGeneration = token
+            cleanupDetailAlert = alert
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, self.cleanupDetailGeneration == token else { return }
+                self.cleanupDetailAlert = nil
+                if response == .alertSecondButtonReturn {
+                    NSPasteboard.general.clearContents()
+                    self.status.stringValue = localized(NSPasteboard.general.setString(text, forType: .string)
+                        ? "cleanup.inspect.copied" : "cleanup.inspect.copy_failed")
+                } else if response == .alertThirdButtonReturn {
+                    let urls = Self.cleanupDirectories(for: entry)
+                    guard !urls.isEmpty else {
+                        self.status.stringValue = localized("cleanup.inspect.unavailable"); return
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting(urls)
+                }
+            }
+        } catch { status.stringValue = error.localizedDescription }
     }
 
     private func clearFailureDetails() {
@@ -3341,6 +3443,69 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.stringValue = localized("history.copied")
     }
 
+    fileprivate func validateCleanupForSelfTest(_ entry: HistoryEntry) throws {
+        entries = [entry]
+        filter.selectedSegment = 0
+        search.stringValue = ""
+        applyFilter()
+        show()
+        guard cleanupButton.isEnabled else { throw HostError(message: "Cleanup inspection is missing for a recorded Fast IMG batch") }
+        let text = try Self.cleanupDetailText(for: entry)
+        guard text.contains(entry.context!.run_id!), text.contains("\"removed_files\""),
+              text.contains("\"outcome\""), text.contains("\"residual\"") else {
+            throw HostError(message: "Cleanup inspection lost the original run-bound receipt")
+        }
+        openCleanupDetails()
+        guard let alert = cleanupDetailAlert, window?.attachedSheet === alert.window,
+              alert.buttons.count == 3, alert.buttons[1].title == localized("cleanup.inspect.copy"),
+              alert.buttons[2].isEnabled == false,
+              let scroll = alert.accessoryView as? NSScrollView, let view = scroll.documentView as? NSTextView,
+              !view.isEditable, view.isSelectable, !scroll.hasHorizontalScroller,
+              view.string == text else { throw HostError(message: "Cleanup inspector is not read-only or enables an unavailable folder") }
+        resetOutput()
+        guard cleanupDetailAlert == nil, window?.attachedSheet == nil else {
+            throw HostError(message: "A stale cleanup inspector remained after selection reset")
+        }
+        var old = entry
+        old.outputCleanups = []
+        guard try Self.cleanupDetailText(for: old).contains(localized("cleanup.not_recorded")),
+              Self.cleanupDirectories(for: old).isEmpty else {
+            throw HostError(message: "Missing cleanup evidence invented actionable folders")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { fputs("MFB: cleanup inspector fixture removal failed: \(error.localizedDescription)\n", stderr) }
+        }
+        let folder = root.appendingPathComponent("output\n映像", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let recorded = entry.outputCleanups[0]
+        var current = entry
+        current.outputCleanups = [OutputCleanupReceipt(schema_version: 1, run_id: recorded.run_id, output_path: folder.path,
+            outcome: recorded.outcome, removed_files: recorded.removed_files, already_absent_files: recorded.already_absent_files,
+            pruned_directories: recorded.pruned_directories, error: recorded.error)]
+        guard Self.cleanupDirectories(for: current).map(\.path) == [folder.path] else {
+            throw HostError(message: "An accessible recorded directory cannot be located")
+        }
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: root)
+        guard Self.cleanupDirectories(for: current).isEmpty else {
+            throw HostError(message: "A replaced directory symlink became a cleanup action")
+        }
+        try FileManager.default.removeItem(at: folder)
+        try Data("synthetic non-directory".utf8).write(to: folder)
+        guard Self.cleanupDirectories(for: current).isEmpty else {
+            throw HostError(message: "A regular file became an output folder action")
+        }
+        current.outputCleanupInvalid = true
+        guard Self.cleanupDirectories(for: current).isEmpty,
+              try Self.cleanupDetailText(for: current).contains(localized("cleanup.invalid")) else {
+            throw HostError(message: "Conflicting cleanup records became actionable")
+        }
+        window?.close()
+    }
+
     fileprivate func validateIgnoredForSelfTest(_ entry: HistoryEntry, records: [HistoryIgnoredSource]) throws {
         entries = [entry]
         applyFilter()
@@ -3494,7 +3659,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
-              logButton.isEnabled == false, revealButton.isEnabled == false, table.numberOfRows == 0,
+              logButton.isEnabled == false, revealButton.isEnabled == false, !cleanupButton.isEnabled, table.numberOfRows == 0,
               detailMode.segmentCount == 5, !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
               !detailMode.isEnabled(forSegment: 4), ignoredView.isHidden,
                failedContent.isHidden, !failedCopyButton.isEnabled, !failedRevealButton.isEnabled,
@@ -3534,7 +3699,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
         showSelected()
-        guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled,
+        guard selected == nil, selectedEntries.count == 2, !logButton.isEnabled, !revealButton.isEnabled, !cleanupButton.isEnabled,
               !detailMode.isEnabled(forSegment: 1), !detailMode.isEnabled(forSegment: 2), !detailMode.isEnabled(forSegment: 3),
               !olderButton.isEnabled, !newerButton.isEnabled,
               !outputFilter.isEnabled, detail.string.contains(localized("history.compare")),
@@ -4172,10 +4337,16 @@ func runProcessingHistorySelfTests() throws {
         let events = [cleanupContext, event, event, try bound("MFB_HISTORY_VERIFICATION", preservedReceipt),
             try bound("MFB_HISTORY_SUMMARY", mixedSummary), end]
         let entry = try parsed(events).entries[0]
+        try MainActor.assumeIsolated { try ProcessingHistoryPanel(directory: fixtureURL.deletingLastPathComponent()).validateCleanupForSelfTest(entry) }
         try require(entry.outputCleanups.count == 1 && !entry.outputCleanupInvalid && entry.summary?.img.succeeded == 2
                     && entry.outputCleanups[0].removed_files == 2
                     && ProcessingHistoryPanel.render(entry).contains(localized("cleanup.outcome.residual")),
                     "Output cleanup observations inflated counts or lost their separate historical status")
+        let noFailures = try parsed([cleanupContext, event, try bound("MFB_HISTORY_SUMMARY", summaryValue), end]).entries[0]
+        try require(noFailures.statusKey == "history.status.completed" && noFailures.needsAttention
+                    && noFailures.succeededLabel == "2" && noFailures.statusLabel.contains(localized("cleanup.attention.short"))
+                    && noFailures.searchable.contains(localized("cleanup.outcome.residual")),
+                    "Cleanup attention disappeared from the filter, search or label, or changed media completion")
         let old = try parsed([fastContext, mixedEvent, preservedEvent, fileFailureFinish]).entries[0]
         try require(ProcessingHistoryPanel.render(old).contains(localized("cleanup.not_recorded")),
                     "Primary source cleanup was used to infer output folder removal")
@@ -4202,10 +4373,20 @@ func runProcessingHistorySelfTests() throws {
             unmeasured["outcome"] = outcome
             for key in ["removed_files", "already_absent_files", "pruned_directories"] { unmeasured[key] = NSNull() }
             let noAttempt = try bound("MFB_HISTORY_OUTPUT_CLEANUP", unmeasured)
-            let recorded = try parsed([cleanupContext, noAttempt, end]).entries[0]
+            let operationContext = outcome == "not_requested"
+                ? try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+                    "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false])
+                : cleanupContext
+            let recorded = try parsed([operationContext, noAttempt, end]).entries[0]
             try require(recorded.outputCleanups.first?.removed_files == nil
                         && recorded.outputCleanups.first?.detailText.contains(localized("cleanup.not_measured")) == true,
                         "An unmeasured cleanup invented zero counts")
+            let contradictory = try parsed([outcome == "not_requested" ? cleanupContext
+                : try bound("MFB_HISTORY_CONTEXT", ["schema_version": 1, "inputs": ["/synthetic/input"],
+                    "output": "/synthetic/output", "mode": "fast-img", "dry_run": false, "in_place": false, "shortest_path": false]),
+                noAttempt, end]).entries[0]
+            try require(contradictory.outputCleanupInvalid && contradictory.outputCleanups.isEmpty,
+                        "Cleanup outcome contradicted whether folder removal was requested")
         }
         var failedCleanup = cleanup
         failedCleanup["outcome"] = "failed"
