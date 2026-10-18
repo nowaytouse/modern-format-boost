@@ -1161,8 +1161,21 @@ fn parse_metadata_records_for_requested_paths(
                         })
                 })
             {
-                file_failure
-                    .get_or_insert_with(|| io::Error::new(io::ErrorKind::InvalidData, message));
+                let role = match pair {
+                    Some([src, _]) if Path::new(path) == src => "source",
+                    Some([_, dst]) if Path::new(path) == dst => "output",
+                    _ => "file",
+                };
+                file_failure.get_or_insert_with(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{message}; {role} embedded ICC profile has an invalid declared length. \
+                             Byte-exact JPEG reconstruction does not prove color-profile renderability; \
+                             the profile has not been repaired or discarded"
+                        ),
+                    )
+                });
                 continue;
             }
             return Err(io::Error::other(message));
@@ -1342,6 +1355,37 @@ mod tests {
         assert!(parse_metadata_records(
             br#"[{"SourceFile":"a","ExifTool:Warning":"IPTCDigest is not current. XMP may be out of sync [x2]; read failed"}]"#,
         ).is_err());
+    }
+
+    #[test]
+    fn invalid_icc_diagnostic_distinguishes_source_from_output_without_allowing_custody() {
+        let pair = [Path::new("source"), Path::new("output")];
+        for (index, role) in [(0, "source"), (1, "output")] {
+            let mut records = serde_json::json!([
+                {"SourceFile":"source", "EXIF:EXIF":"base64:YWJj"},
+                {"SourceFile":"output", "EXIF:EXIF":"base64:YWJj"},
+            ]);
+            records[index]["ExifTool:Warning"] = Value::from("Bad length ICC_Profile (length 548)");
+            let error = parse_metadata_records_with_exif_custody(
+                &serde_json::to_vec(&records).unwrap(),
+                Some(pair),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("{role} embedded ICC profile")),
+                "{message}"
+            );
+            assert!(
+                message.contains("does not prove color-profile renderability"),
+                "{message}"
+            );
+            assert!(
+                message.contains("has not been repaired or discarded"),
+                "{message}"
+            );
+        }
     }
 
     #[test]

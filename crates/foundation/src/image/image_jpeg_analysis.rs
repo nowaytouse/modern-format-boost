@@ -468,30 +468,20 @@ const ZIGZAG_ORDER: [usize; 64] = [
 /// Returns true if the JPEG data is complete (starts with SOI and contains
 /// EOI).
 ///
-/// This implementation is robust against trailing metadata (common in mobile
-/// captures like Vivo/Samsung) by searching for the EOI marker (FF D9) in the
-/// data.
+/// Walks the primary JPEG's segments and scans; embedded thumbnails and opaque
+/// trailing metadata cannot supply or invalidate its end marker.
 #[must_use]
 pub fn is_jpeg_complete(data: &[u8]) -> bool {
-    if data.len() < 4 {
-        return false;
-    }
-
-    // 1) Verify Start of Image (SOI): FF D8
-    if data.get(0..2) != Some(&[0xFF, 0xD8]) {
-        return false;
-    }
-
-    // 2) Verify End of Image (EOI): FF D9
-    // To avoid false positives from thumbnails (which have their own SOI/EOI),
-    // we ensure that the EOI marker follows the Start of Scan (SOS, FF DA) marker.
-    // SOS marks the beginning of the actual image data scan.
-    let last_sos = data.windows(2).rposition(|w| w == b"\xFF\xDA");
-    let last_eoi = data.windows(2).rposition(|w| w == b"\xFF\xD9");
-
-    match (last_sos, last_eoi) {
-        (Some(sos), Some(eoi)) => eoi > sos,
-        _ => false,
+    match scan_jpeg_primary_image(data, false) {
+        Ok((_, saw_scan)) => saw_scan,
+        Err((position, reason)) => {
+            tracing::debug!(
+                position,
+                reason,
+                "JPEG primary image structure is incomplete"
+            );
+            false
+        }
     }
 }
 
@@ -781,6 +771,13 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 pub(crate) fn extract_xmp_from_jpeg_markers(
     data: &[u8],
 ) -> Result<Option<Vec<String>>, (usize, &'static str)> {
+    scan_jpeg_primary_image(data, true).map(|(xmp, _)| xmp)
+}
+
+fn scan_jpeg_primary_image(
+    data: &[u8],
+    collect_xmp: bool,
+) -> Result<(Option<Vec<String>>, bool), (usize, &'static str)> {
     if data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {
         return Err((0, "missing SOI marker"));
     }
@@ -789,6 +786,7 @@ pub(crate) fn extract_xmp_from_jpeg_markers(
     let mut pos = 2;
     let mut in_scan = false;
     let mut saw_eoi = false;
+    let mut saw_scan = false;
     while pos < data.len() {
         if in_scan {
             // Scan data is opaque except for stuffed FF00 bytes and restart markers.
@@ -859,7 +857,7 @@ pub(crate) fn extract_xmp_from_jpeg_markers(
             return Err((marker_start, "segment exceeds input boundary"));
         };
 
-        if marker == 0xE1 {
+        if collect_xmp && marker == 0xE1 {
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 xmp_blocks.push(String::from_utf8_lossy(&payload[29..]).to_string());
             } else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
@@ -871,12 +869,13 @@ pub(crate) fn extract_xmp_from_jpeg_markers(
 
         pos = segment_end;
         in_scan = marker == MARKER_SOS || marker == MARKER_DNL;
+        saw_scan |= marker == MARKER_SOS;
     }
 
     if !saw_eoi {
         return Err((pos, "missing EOI marker"));
     }
-    Ok((!xmp_blocks.is_empty()).then_some(xmp_blocks))
+    Ok(((!xmp_blocks.is_empty()).then_some(xmp_blocks), saw_scan))
 }
 
 /// Extract gainmap image from `UltraHDR` JPEG.
@@ -2600,14 +2599,33 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_completeness_ignores_decoy_markers_in_segments_and_after_primary_eoi() {
+        let mut data = vec![
+            0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x06, 0xFF, 0xDA, 0xFF, 0xD9, 0xFF, 0xDA, 0x00, 0x02,
+            0x12, 0xFF, 0x00, 0xD9, 0xFF, 0xD0, 0x34,
+        ];
+        assert!(
+            !is_jpeg_complete(&data),
+            "embedded thumbnail EOI is not primary EOI"
+        );
+        data.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(is_jpeg_complete(&data));
+        data.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x00, 0xAA]);
+        assert!(
+            is_jpeg_complete(&data),
+            "opaque trailer is not another primary scan"
+        );
+    }
+
+    #[test]
     fn test_is_jpeg_complete_variants() {
         // Minimal valid (requires SOS for forensic scan tracking)
         assert!(is_jpeg_complete(&[
-            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x00, 0xFF, 0xD9
+            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9
         ]));
         // With trailing junk
         assert!(is_jpeg_complete(&[
-            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x00, 0xFF, 0xD9, 0x00, 0x11, 0x22
+            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9, 0x00, 0x11, 0x22
         ]));
         // Missing SOI
         assert!(!is_jpeg_complete(&[0x00, 0x00, 0xFF, 0xD9]));
@@ -2615,7 +2633,7 @@ mod tests {
         assert!(!is_jpeg_complete(&[0xFF, 0xD8, 0x00, 0x11]));
         // EOI inside data (should still be true if found after SOS)
         assert!(is_jpeg_complete(&[
-            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x00, 0xAA, 0xFF, 0xD9, 0xBB
+            0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02, 0xAA, 0xFF, 0xD9, 0xBB
         ]));
     }
 

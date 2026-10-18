@@ -4420,6 +4420,7 @@ struct GateCheckActivity {
             switch state {
             case "running": return completed == UInt64(index)
             case "failed": return completed == UInt64(index + 1)
+            case "file_failures": return index >= 3 && completed == UInt64(index + 1)
             case "passed": return check == "decode" && completed == total
             default: return false
             }
@@ -4446,10 +4447,12 @@ struct GateCheckActivity {
                       nextFiles.processed >= files.processed else { invalidate(); return true }
             }
             guard next.completed >= previous.completed,
-                  previous.state == "running" || previous == next,
+                  previous.state == "running" || previous == next
+                    || (previous.state == "file_failures" && previous.completed < previous.total && next.state == "running"),
                   next.completed != previous.completed || previous == next
                     || (previous.check == "inventory" && next.check == "count" && next.state == "running")
                     || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed")
+                    || (previous.state == "file_failures" && next.state == "running")
                     || (previous.check == "decode" && next.check == "decode" && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
@@ -4472,6 +4475,7 @@ struct GateCheckActivity {
         var text: String
         switch event.state {
         case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
+        case "file_failures": text = localized("gate.activity.file_failures", String(event.completed), String(event.total))
         case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
                                         String(event.completed), String(event.total), String(event.total - event.completed))
         default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
@@ -5075,6 +5079,7 @@ private struct LatestDiagnostics {
             let isSafety = hasSeriousProcessingDiagnostic(message)
             guard !failureIsSafety || isSafety else { return false }
             let isSummary = countStatusValue(in: message) != nil
+                || message.range(of: #"(?i)^Failed:\s*\d+\s*$"#, options: .regularExpression) != nil
                 || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?(?:exiting with failures\b|fast-img exited with (?:code|status)\b|fast-img (?:batch|original-media delivery) recorded \d+ failed source))"#,
                                  options: .regularExpression) != nil
             // A final aggregate must not hide the most recent actionable error.
@@ -7067,10 +7072,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
             let tone = LogTone.classify(String(line))
-            result.append(NSAttributedString(string: String(line), attributes: [
-                .foregroundColor: tone == .failure ? processDiagnosticColor(String(line), confirmedFileFailure: hasConfirmedFileFailures) : tone.color,
-                .font: tone.font,
-            ]))
+            let restrained = hasConfirmedFileFailures && (tone == .failure || tone == .warning)
+                && !hasSeriousProcessingDiagnostic(String(line))
+            let rendered = NSMutableAttributedString(string: String(line), attributes: [
+                .foregroundColor: restrained ? NSColor.labelColor
+                    : tone == .failure ? processDiagnosticColor(String(line)) : tone.color,
+                .font: restrained ? LogTone.normal.font : tone.font,
+            ])
+            if restrained, let marker = line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:\[(?:ERROR|FAIL(?:ED)?|WARN(?:ING)?)\s*\]|(?:Error|Failed|Warning|错误|失败|警告|エラー|失敗):)"#,
+                                                  options: .regularExpression) {
+                rendered.addAttribute(.foregroundColor,
+                    value: processDiagnosticColor(String(line), confirmedFileFailure: true), range: NSRange(marker, in: line))
+            }
+            result.append(rendered)
         }
         return result
     }
@@ -7084,8 +7098,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshLatestDiagnostics() {
+        let retainedFileFailure = hasConfirmedFileFailures
+            && latestDiagnostics.failure.map { !hasSeriousProcessingDiagnostic($0) } == true
         for (label, value, key) in [
-            (latestFailureLabel, latestDiagnostics.failure, "log.latest_failure"),
+            (latestFailureLabel, latestDiagnostics.failure,
+             retainedFileFailure ? "log.unsuccessful_file" : "log.latest_failure"),
             (latestWarningLabel, latestDiagnostics.warning, "log.latest_warning"),
         ] {
             label.isHidden = value == nil
@@ -7093,9 +7110,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.toolTip = label.stringValue
             label.setAccessibilityLabel(label.stringValue)
         }
-        latestFailureLabel.textColor = latestDiagnostics.failure.map {
-            processDiagnosticColor($0, confirmedFileFailure: hasConfirmedFileFailures)
-        } ?? .systemOrange
+        latestFailureLabel.textColor = retainedFileFailure ? .labelColor : .systemRed
+        latestFailureLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize,
+                                              weight: retainedFileFailure ? .regular : .medium)
         latestDiagnosticsRow.isHidden = !logDetailsExpanded || (latestDiagnostics.failure == nil && latestDiagnostics.warning == nil)
     }
 
@@ -7776,6 +7793,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         _ = diagnostics.ingest("[FAIL] h_1727272547459.jpeg: end-of-image marker is missing; source remains unmodified")
         _ = diagnostics.ingest("Error: fast-img exited with code 1")
         _ = diagnostics.ingest("Error: fast-img batch recorded 1 failed source(s); failed sources retained")
+        _ = diagnostics.ingest("Failed: 1")
         _ = diagnostics.ingest("WARNING: Always keep a backup of your original media before optimization.")
         guard diagnostics.failure?.contains("h_1727272547459.jpeg") == true, diagnostics.warning == nil else {
             throw HostError(message: "Generic exit or backup advice displaced an actionable media error")
@@ -7788,6 +7806,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
         }
         appendLog(try cleanupLine(cleanup))
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"metadata","completed":4,"total":6,"state":"file_failures"}"#)
+        appendLog("[GATE 1  ] metadata:❌ → FILE_FAILURES")
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"orient","completed":4,"total":6,"state":"running"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"decode","completed":6,"total":6,"state":"file_failures","file_progress":{"processed":2,"total":2}}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"remaining-verified","gate":"local","check":"decode","completed":6,"total":6,"state":"passed"}"#)
+        appendLog("[FAIL] sample.jpeg: decoder failed")
         appendLog(try line(receipt))
         appendLog(batch)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
@@ -7821,8 +7845,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
         guard !logScroll.isHidden, logScroll.frame.height >= 260,
               !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              latestFailureLabel.stringValue == localized("log.unsuccessful_file", "[FAIL] sample.jpeg: decoder failed"),
+              latestFailureLabel.textColor == .labelColor,
               logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
             throw HostError(message: "Expanding details lost original diagnostics or disclosure accessibility")
+        }
+        let fileDiagnostic = styledLog("[FAIL] sample.jpeg: decoder failed")
+        let paddedDiagnostic = styledLog("[FAIL    ] sample.jpeg: decoder failed")
+        let seriousDiagnostic = styledLog("[GATE 3] verification FAIL")
+        guard fileDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemOrange,
+              fileDiagnostic.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor == .labelColor,
+              fileDiagnostic.attribute(.font, at: 7, effectiveRange: nil) as? NSFont == LogTone.normal.font,
+              paddedDiagnostic.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemOrange,
+              paddedDiagnostic.attribute(.foregroundColor, at: 11, effectiveRange: nil) as? NSColor == .labelColor,
+              seriousDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed else {
+            throw HostError(message: "Confirmed file diagnostics were overemphasized or serious failures were muted")
         }
         logDetailsExpanded = false
         refreshBatchOverview(processExit: 1, exitedNormally: true)

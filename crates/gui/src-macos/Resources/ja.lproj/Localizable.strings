@@ -411,7 +411,7 @@
 "result.invalid" = "バッチ結果の形式が無効または未対応のため、件数を確認できません。";
 "result.incomplete" = "プロセス終了、一部の結果件数は未報告";
 "result.unfinished" = "処理終了、未完了の項目があります";
-"result.attention_count" = "一部完了 · %@ 件の対応が必要です";
+"result.attention_count" = "処理終了 · 成功しなかった項目: %@ 件";
 "result.completed_count" = "%@ 件完了";
 "result.failed_count" = "%@ 件失敗";
 "result.pending_count" = "%@ 件未完了";
@@ -560,6 +560,7 @@
 "progress.unavailable" = "ファイル進捗を取得できません";
 "gate.activity.running" = "Gate 1 の最新の検証：%@ · 実行済み %@ / %@ 項目";
 "gate.activity.passed" = "Gate 1 の検証に合格 · 実行済み %@ / %@ 項目";
+"gate.activity.file_failures" = "一部のファイルに問題 · 実行済み %@ / %@ 項目、最終結果は確認中";
 "gate.activity.failed" = "Gate 1 は%@で停止 · 実行済み %@ / %@ 項目、未実行 %@ 項目";
 "gate.activity.updated" = "%@ 秒前に受信";
 "gate.activity.invalid" = "検証の活動記録が無効です。保持した処理出力を確認してください。";
@@ -590,6 +591,7 @@
 "history.detail.worker_binary" = "起動前のサイズと BLAKE3";
 "history.detail.worker_observation_error" = "ファイル観測を取得できません";
 "log.latest_failure" = "直近のエラー: %@";
+"log.unsuccessful_file" = "成功しなかったファイル: %@";
 "log.latest_warning" = "直近の警告: %@";
 "log.repeated_occurrences" = "同じログが連続 %@ 回出現";
 "history.detail.run_id" = "実行 ID";

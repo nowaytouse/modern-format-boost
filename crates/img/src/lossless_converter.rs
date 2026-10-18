@@ -6810,6 +6810,7 @@ mod tests {
             fs::remove_file(candidate)?;
         }
         let (expected_effort, expected_bytes) = reference.unwrap();
+        let mut delivered = None;
         for mode in ["normal", "fast"] {
             let directory = root.path().join(mode);
             fs::create_dir_all(&directory)?;
@@ -6828,6 +6829,7 @@ mod tests {
                 "{mode}: final metadata changed candidate ranking or the winner was re-encoded"
             );
             foundation::fast_img::verify_final_jxl_delivery_integrity(&input, &output)?;
+            delivered = Some(output);
         }
         let prepared = root.path().join("prepared-winner.jxl");
         fs::write(&prepared, &expected_bytes)?;
@@ -6839,7 +6841,8 @@ mod tests {
                 "Changed after selection",
             ),
         )?;
-        let delivered = options.output_dir.as_ref().unwrap().join("synthetic.jxl");
+        // Path selection reserves unique names; reuse the actual committed path instead.
+        let delivered = delivered.expect("normal and fast outputs were verified");
         let changed_metadata = commit_jpeg_to_jxl_success(
             &input,
             &prepared,
@@ -7389,10 +7392,16 @@ mod tests {
                 |offset| start + offset,
             );
         let branch = &source[start..end];
+        let guard = branch
+            .split_once("Err(e)")
+            .and_then(|(_, error)| error.split_once("=>"))
+            .map(|(guard, _)| guard.split_whitespace().collect::<String>())
+            .expect("aggressive JPEG error guard");
 
-        assert!(
-            branch.contains("Err(e) if aggressive_e11 && same_semantics_retry_allowed() =>"),
-            "aggressive e11 process errors must not bypass Phase 2"
+        assert_eq!(
+            guard,
+            "ifaggressive_e11&&same_semantics_retry_allowed()&&!jpeg_full_effort_search_enabled()",
+            "only configured aggressive e11 process errors may retry; incomplete full search must fail closed"
         );
         assert!(
             branch.contains("run_standard_jpeg_lossless_fallback("),

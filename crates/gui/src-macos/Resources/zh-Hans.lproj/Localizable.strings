@@ -411,7 +411,7 @@
 "result.invalid" = "批次结果格式无效或不受支持，结果计数不可用。";
 "result.incomplete" = "进程已结束，但未报告全部结果计数";
 "result.unfinished" = "处理已结束，仍有未完成项目";
-"result.attention_count" = "部分完成 · %@ 项需要处理";
+"result.attention_count" = "本次处理已结束 · %@ 项未成功";
 "result.completed_count" = "已完成 %@ 项";
 "result.failed_count" = "%@ 项未成功";
 "result.pending_count" = "%@ 项未完成";
@@ -560,6 +560,7 @@
 "progress.unavailable" = "文件进度暂不可用";
 "gate.activity.running" = "最近的 Gate 1 核验：%@ · 已执行 %@ / %@ 项检查";
 "gate.activity.passed" = "Gate 1 检查通过 · 已执行 %@ / %@ 项检查";
+"gate.activity.file_failures" = "发现个别文件异常 · 已执行 %@ / %@ 项检查，最终结果待确认";
 "gate.activity.failed" = "Gate 1 在%@时停止 · 已执行 %@ / %@ 项检查；%@ 项未执行";
 "gate.activity.updated" = "%@ 秒前收到更新";
 "gate.activity.invalid" = "核验活动记录无效，请查看保留的处理输出。";
@@ -590,6 +591,7 @@
 "history.detail.worker_binary" = "启动前程序字节数与 BLAKE3";
 "history.detail.worker_observation_error" = "无法获取文件证据";
 "log.latest_failure" = "最近错误：%@";
+"log.unsuccessful_file" = "未成功文件：%@";
 "log.latest_warning" = "最近警告：%@";
 "log.repeated_occurrences" = "同一日志连续出现 %@ 次";
 "history.detail.run_id" = "运行标识";

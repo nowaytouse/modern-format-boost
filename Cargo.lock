@@ -249,7 +249,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.13.2"
-source = "git+https://github.com/bitflags/bitflags#74c6fd129967093b048bf71bf3ffbdadfbc76225"
+source = "git+https://github.com/bitflags/bitflags#8384f6f6e1fd1ab3f448ccf17d400a9e1d6a5280"
 dependencies = [
  "serde_core",
 ]
@@ -1648,7 +1648,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.34"
-source = "git+https://github.com/rust-lang/log#27e3cf7a021dab43430a70cb2909c06ca8141f79"
+source = "git+https://github.com/rust-lang/log#b408d2ca4edcd5544658e3d1db79aa86b0b8197f"
 
 [[package]]
 name = "loop9"

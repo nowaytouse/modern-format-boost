@@ -290,32 +290,25 @@ mod tests {
     }
 
     #[test]
-    fn records_all_explicit_ignored_categories_and_emits_ordered_markers() {
+    fn records_all_explicit_ignored_categories_and_emits_ordered_markers() -> anyhow::Result<()> {
         let values = inventory(&[
             ("live.heic", IgnoredReason::LivePhotoPairMember),
             ("animated.avif", IgnoredReason::AnimatedImageContainer),
             ("outside.mp4", IgnoredReason::OutsideCurrentPolicyScope),
             ("modern.jxl", IgnoredReason::ModernTierNotAdmitted),
-        ])
-        .expect("valid ignored inventory");
+        ])?;
         assert_eq!(values.count(), 4);
 
-        let lines = values
-            .marker_lines("run-1", "invocation-1")
-            .expect("valid markers");
+        let lines = values.marker_lines("run-1", "invocation-1")?;
         assert!(
             lines
                 .iter()
-                .all(|line| { MARKER_PREFIX.len() + line.len() + 1 <= MAX_MARKER_BYTES })
+                .all(|line| MARKER_PREFIX.len() + line.len() < MAX_MARKER_BYTES)
         );
         let decoded = lines
             .iter()
-            .map(|line| {
-                let json = std::str::from_utf8(&line["MFB_FAST_IMG_IGNORED=".len()..])
-                    .expect("marker JSON is UTF-8");
-                serde_json::from_str::<serde_json::Value>(json).expect("marker JSON parses")
-            })
-            .collect::<Vec<_>>();
+            .map(|line| serde_json::from_slice::<serde_json::Value>(&line[MARKER_PREFIX.len()..]))
+            .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(decoded.len(), 4);
         assert_eq!(decoded[0]["reason_code"], "live_photo_pair_member");
         assert_eq!(decoded[1]["reason_code"], "animated_image_container");
@@ -330,17 +323,17 @@ mod tests {
             assert_eq!(marker["pipeline"], "img");
             assert_eq!(marker["schema_version"], 1);
         }
+        Ok(())
     }
 
     #[test]
-    fn scan_classifies_synthetic_text_as_outside_policy_without_media_processing() {
-        let directory = tempfile::tempdir().expect("temporary source directory");
+    fn scan_classifies_synthetic_text_as_outside_policy_without_media_processing()
+    -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
         let source = directory.path().join("notes.txt");
-        std::fs::write(&source, b"synthetic text header only\n").expect("write synthetic text");
+        std::fs::write(&source, b"synthetic text header only\n")?;
 
-        let scan =
-            super::super::scan_fast_img_sources(vec![source.clone()], directory.path(), "jxl")
-                .expect("text source has an explicit ignored classification");
+        let scan = super::super::scan_fast_img_sources(vec![source], directory.path(), "jxl")?;
 
         assert_eq!(scan.ignored.count(), 1);
         assert_eq!(scan.ignored.items[0].source_path, "notes.txt");
@@ -348,8 +341,9 @@ mod tests {
             scan.ignored.items[0].reason,
             IgnoredReason::OutsideCurrentPolicyScope
         );
-        assert!(scan.source_files.is_empty());
+        assert_eq!(scan.source_files.len(), 0);
         assert_eq!(scan.ignored.count(), 1);
+        Ok(())
     }
 
     #[test]
@@ -392,13 +386,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_identity_and_oversized_marker_before_emission() {
-        let values = inventory(&[("ignored.mp4", IgnoredReason::OutsideCurrentPolicyScope)])
-            .expect("valid ignored inventory");
+    fn rejects_invalid_identity_and_oversized_marker_before_emission() -> anyhow::Result<()> {
+        let values = inventory(&[("ignored.mp4", IgnoredReason::OutsideCurrentPolicyScope)])?;
         assert!(values.marker_lines("", "invocation-1").is_err());
         assert!(resolve_identity(Some("run-1".to_owned()), None).is_err());
         assert!(resolve_identity(None, Some("invocation-1".to_owned())).is_err());
-        assert_eq!(resolve_identity(None, None).expect("no identity"), None);
+        assert_eq!(resolve_identity(None, None)?, None);
 
         let root = Path::new("/tmp/fast-img-source");
         let long_relative = format!("{}.mp4", "x".repeat(65 * 1024));
@@ -409,13 +402,13 @@ mod tests {
                 IgnoredReason::OutsideCurrentPolicyScope,
             )],
             1,
-        )
-        .expect("path is structurally valid");
+        )?;
         assert!(large.marker_lines("run-1", "invocation-1").is_err());
+        Ok(())
     }
 
     #[test]
-    fn reports_marker_output_failure() {
+    fn reports_marker_output_failure() -> anyhow::Result<()> {
         struct FailingWriter;
         impl Write for FailingWriter {
             fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
@@ -427,21 +420,23 @@ mod tests {
             }
         }
 
-        let error = write_lines(
+        let Err(error) = write_lines(
             &mut FailingWriter,
             &[b"marker".to_vec()],
             "write MFB_FAST_IMG_IGNORED marker to stdout",
-        )
-        .expect_err("output error must be surfaced");
+        ) else {
+            anyhow::bail!("output error must be surfaced");
+        };
         assert!(
             error
                 .to_string()
                 .contains("write MFB_FAST_IMG_IGNORED marker")
         );
+        Ok(())
     }
 
     #[test]
-    fn direct_cli_writer_emits_one_ignored_line_per_item() {
+    fn direct_cli_writer_emits_one_ignored_line_per_item() -> anyhow::Result<()> {
         let values = inventory(&[
             ("live.heic", IgnoredReason::LivePhotoPairMember),
             ("animated.avif", IgnoredReason::AnimatedImageContainer),
@@ -450,16 +445,14 @@ mod tests {
                 "line\n[FAIL] injected\x1b[31m\"é.mp4",
                 IgnoredReason::OutsideCurrentPolicyScope,
             ),
-        ])
-        .expect("valid ignored inventory");
+        ])?;
         let mut output = Vec::new();
         write_lines(
             &mut output,
             &values.cli_lines(),
             "write fast-img ignored classification to stdout",
-        )
-        .expect("write CLI inventory");
-        let output = String::from_utf8(output).expect("CLI lines are UTF-8");
+        )?;
+        let output = String::from_utf8(output)?;
         let lines = output.lines().collect::<Vec<_>>();
 
         assert_eq!(lines.len(), values.count());
@@ -498,5 +491,6 @@ mod tests {
                 .count(),
             1
         );
+        Ok(())
     }
 }

@@ -119,13 +119,17 @@ pub fn inspect_tool(name: &str) -> anyhow::Result<ToolInspection> {
         .cloned();
     let mut last_probe = None;
     let path = crate::common_utils::resolve_tool_path_with_health(name, |path| {
-        let probe = inspect_version_at(path, "-version", std::time::Duration::from_secs(3));
-        let healthy = probe.as_ref().is_ok_and(|output| {
-            !output.stdout.contains("Library not loaded")
-                && !output.stdout.contains("dyld:")
-                && !output.stderr.contains("Library not loaded")
-                && !output.stderr.contains("dyld:")
-        });
+        let (healthy, probe) =
+            match inspect_version_at(path, "-version", std::time::Duration::from_secs(3)) {
+                Ok(output) => {
+                    let healthy = !output.stdout.contains("Library not loaded")
+                        && !output.stdout.contains("dyld:")
+                        && !output.stderr.contains("Library not loaded")
+                        && !output.stderr.contains("dyld:");
+                    (healthy, Ok(output))
+                }
+                Err(error) => (false, Err(error)),
+            };
         last_probe = Some(probe);
         healthy
     });

@@ -93,6 +93,32 @@ pub struct GateResult {
 }
 
 impl GateResult {
+    /// Reporting only; isolating sources still requires validated source/output proofs.
+    #[must_use]
+    pub fn has_completed_file_failures(&self, error_mode: crate::BatchErrorMode) -> bool {
+        error_mode == crate::BatchErrorMode::LogAndContinue
+            && !self.passed
+            && self.checks.len() == LOCAL_REQUIRED_CHECKS.len()
+            && LOCAL_REQUIRED_CHECKS.iter().all(|(name, _)| {
+                self.checks
+                    .iter()
+                    .filter(|check| check.name == *name)
+                    .count()
+                    == 1
+            })
+            && ["count", "size", "blake3"].iter().all(|name| {
+                self.checks
+                    .iter()
+                    .any(|check| check.name == *name && check.passed)
+            })
+            && self.checks.iter().any(|check| !check.passed)
+            && self.checks.iter().all(|check| {
+                check.passed
+                    || (check.failure_scope == CheckFailureScope::Files
+                        && !check.affected_files.is_empty())
+            })
+    }
+
     /// Return exact source identities only after every local check completed and
     /// every failed check explicitly established a file-local failure.
     ///
@@ -301,18 +327,7 @@ where
         let mut file_progress = None;
         let mut last_emit = None;
         let cancellation = crate::batch_control::is_cancelled();
-        let check = if !matches!(cancellation, Ok(false)) {
-            detail(
-                name,
-                false,
-                "verification may continue".into(),
-                cancellation.map_or_else(
-                    |err| format!("cancellation state unavailable: {err}"),
-                    |_| "verification cancelled".into(),
-                ),
-                Vec::new(),
-            )
-        } else {
+        let check = if matches!(cancellation, Ok(false)) {
             probe(ctx, files, &mut |processed, total| {
                 file_progress = Some(crate::ui::progress::GateFileProgress { processed, total });
                 let now = std::time::Instant::now();
@@ -332,20 +347,36 @@ where
                     last_emit = Some(now);
                 }
             })
+        } else {
+            detail(
+                name,
+                false,
+                "verification may continue".into(),
+                cancellation.map_or_else(
+                    |err| format!("cancellation state unavailable: {err}"),
+                    |_| "verification cancelled".into(),
+                ),
+                Vec::new(),
+            )
         };
         tracing::info!(target: "verification_gate", gate = "local", check = check.name,
             duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
             "required check completed");
         let passed = check.passed;
         let can_continue = error_mode == crate::BatchErrorMode::LogAndContinue
-            && check.failure_scope == CheckFailureScope::Files;
+            && check.failure_scope == CheckFailureScope::Files
+            && !check.affected_files.is_empty();
         checks.push(check);
         if !passed {
             emit(
                 name,
                 checks.len(),
                 probes.len(),
-                GateActivityState::Failed,
+                if can_continue {
+                    GateActivityState::FileFailures
+                } else {
+                    GateActivityState::Failed
+                },
                 file_progress,
             );
             if !can_continue {
@@ -361,6 +392,14 @@ where
                 probes.len(),
                 if checks.iter().all(|check| check.passed) {
                     GateActivityState::Passed
+                } else if error_mode == crate::BatchErrorMode::LogAndContinue
+                    && checks.iter().all(|check| {
+                        check.passed
+                            || (check.failure_scope == CheckFailureScope::Files
+                                && !check.affected_files.is_empty())
+                    })
+                {
+                    GateActivityState::FileFailures
                 } else {
                     GateActivityState::Failed
                 },
@@ -640,7 +679,7 @@ const fn detail(
     }
 }
 
-fn file_failures(mut check: CheckDetail, file_local: bool) -> CheckDetail {
+const fn file_failures(mut check: CheckDetail, file_local: bool) -> CheckDetail {
     if file_local && !check.passed && !check.affected_files.is_empty() {
         check.failure_scope = CheckFailureScope::Files;
     }
@@ -1308,8 +1347,7 @@ fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
         if output_len > 0 {
             return Ok(());
         }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "avifdec decode probe returned success but produced an empty output",
         ));
     }
@@ -1317,14 +1355,11 @@ fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
     let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
         stderr.lines().rev().find(|line| !line.trim().is_empty()),
     );
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!(
-            "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
-            path.display(),
-            output.status.code()
-        ),
-    ))
+    Err(std::io::Error::other(format!(
+        "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
+        path.display(),
+        output.status.code()
+    )))
 }
 
 fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
@@ -1359,8 +1394,7 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
         if output_len > 0 {
             return Ok(());
         }
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "djxl decode probe returned success but produced an empty output",
         ));
     }
@@ -1402,8 +1436,7 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
                 ));
                 return Ok(());
             }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(std::io::Error::other(
                 "djxl JPEG decode probe returned success but produced an empty output",
             ));
         }
@@ -1421,13 +1454,10 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
             jpeg_temp.path().display(),
             jpeg_output.status.code()
         ));
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
-                jpeg_output.status.code()
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
+            jpeg_output.status.code()
+        )));
     }
     let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
         stderr.lines().rev().find(|line| !line.trim().is_empty()),
@@ -1438,13 +1468,10 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
         temp.path().display(),
         output.status.code()
     ));
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!(
-            "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
-            output.status.code()
-        ),
-    ))
+    Err(std::io::Error::other(format!(
+        "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
+        output.status.code()
+    )))
 }
 
 fn sample_size(expected_count: usize) -> usize {
@@ -1655,7 +1682,28 @@ mod tests {
             );
             assert!(!result.passed);
             assert_eq!(result.checks.len(), expected_checks);
-            assert_eq!(events.last().unwrap().1, super::GateActivityState::Failed);
+            let expected_state = if mode == crate::BatchErrorMode::LogAndContinue {
+                super::GateActivityState::FileFailures
+            } else {
+                super::GateActivityState::Failed
+            };
+            assert_eq!(events.last().unwrap().1, expected_state);
+            assert_eq!(
+                result.has_completed_file_failures(mode),
+                mode == crate::BatchErrorMode::LogAndContinue
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|(_, state)| *state == super::GateActivityState::Passed)
+            );
+            if mode == crate::BatchErrorMode::LogAndContinue {
+                assert!(
+                    !events
+                        .iter()
+                        .any(|(_, state)| *state == super::GateActivityState::Failed)
+                );
+            }
         }
         probes[3].1 = |ctx, _, _| {
             super::detail(
@@ -1666,19 +1714,45 @@ mod tests {
                 vec![ctx.working_copy.join("bad.jxl")],
             )
         };
+        let mut events = Vec::new();
         let result = super::run_required_checks(
             &probes,
             &ctx,
             &[],
-            |_, _, _, _, _| {},
+            |_, _, _, state, _| events.push(state),
             crate::BatchErrorMode::LogAndContinue,
         );
         assert!(!result.passed);
+        assert_eq!(events.last(), Some(&super::GateActivityState::Failed));
+        assert!(!result.has_completed_file_failures(crate::BatchErrorMode::LogAndContinue));
         assert_eq!(
             result.checks.len(),
             4,
             "shared failure still blocks later checks"
         );
+        probes[3].1 = |_, _, _| {
+            let mut check = super::detail(
+                "metadata",
+                false,
+                "identified affected files".into(),
+                "missing failure identities".into(),
+                vec![],
+            );
+            check.failure_scope = super::CheckFailureScope::Files;
+            check
+        };
+        events.clear();
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |_, _, _, state, _| events.push(state),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(result.checks.len(), 4);
+        assert_eq!(events.last(), Some(&super::GateActivityState::Failed));
+        assert!(!result.has_completed_file_failures(crate::BatchErrorMode::LogAndContinue));
     }
 
     #[test]

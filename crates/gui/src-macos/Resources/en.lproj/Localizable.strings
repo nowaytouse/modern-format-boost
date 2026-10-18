@@ -411,7 +411,7 @@
 "result.invalid" = "Batch result is malformed or unsupported; counts are unavailable.";
 "result.incomplete" = "Process exited; some result counts were not reported";
 "result.unfinished" = "Processing ended with unfinished items";
-"result.attention_count" = "Partially completed · Items needing attention: %@";
+"result.attention_count" = "Processing ended · Unsuccessful items: %@";
 "result.completed_count" = "%@ completed";
 "result.failed_count" = "%@ unsuccessful";
 "result.pending_count" = "%@ unfinished";
@@ -560,6 +560,7 @@
 "progress.unavailable" = "File progress unavailable";
 "gate.activity.running" = "Latest Gate 1 activity: %@ · Checks run %@ / %@";
 "gate.activity.passed" = "Gate 1 checks passed · %@ / %@ checks run";
+"gate.activity.file_failures" = "File issues found · %@ / %@ checks run; final result pending";
 "gate.activity.failed" = "Gate 1 stopped at %@ · %@ / %@ checks run; %@ not run";
 "gate.activity.updated" = "Received %@ s ago";
 "gate.activity.invalid" = "Verification activity is invalid; check the retained processing output.";
@@ -590,6 +591,7 @@
 "history.detail.worker_binary" = "Pre-launch binary size and BLAKE3";
 "history.detail.worker_observation_error" = "Observation unavailable";
 "log.latest_failure" = "Latest error: %@";
+"log.unsuccessful_file" = "Unsuccessful file: %@";
 "log.latest_warning" = "Latest warning: %@";
 "log.repeated_occurrences" = "same log appeared %@ consecutive times";
 "history.detail.run_id" = "Run ID";

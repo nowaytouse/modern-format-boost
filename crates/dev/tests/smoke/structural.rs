@@ -386,7 +386,7 @@ fn smoke_jpeg_integrity_with_thumbnail() {
 
     // App1 with thumbnail
     data.extend_from_slice(&[0xFF, 0xE1]);
-    data.extend_from_slice(&[0x00, 0x10]); // Length
+    data.extend_from_slice(&[0x00, 0x08]); // Length includes the six-byte thumbnail payload
     data.extend_from_slice(&[0xFF, 0xD8]); // Thumbnail SOI
     data.extend_from_slice(&[0x00, 0x00]); // Data
     data.extend_from_slice(&[0xFF, 0xD9]); // Thumbnail EOI
@@ -399,6 +399,7 @@ fn smoke_jpeg_integrity_with_thumbnail() {
 
     // Add main SOS and EOI
     data.extend_from_slice(&[0xFF, 0xDA]); // Main SOS
+    data.extend_from_slice(&[0x00, 0x02]); // Empty scan header for the structural fixture
     data.extend_from_slice(&[0xFF, 0xD9]); // Main EOI
     assert!(
         is_jpeg_complete(&data),

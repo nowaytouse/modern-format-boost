@@ -463,6 +463,11 @@ only its owned output. The remaining subset then runs all six checks again befor
 delivery; no source is removed by isolation. Fail-fast and shared tool, protocol,
 inventory, identity, persistence or cancellation failures still block delivery.
 Missing or ambiguous scope is shared, never inferred from a nonempty path list.
+Local progress reports these recoverable checks as `file_failures`, not a passed
+Gate or a shared terminal failure. The human summary uses `FILE_FAILURES` only
+after all six checks complete with identified file-local faults. GUI confirmation
+still requires the final delivery/retention receipt and successful survivor
+verification; shared `failed` events remain sticky even after a later PASS.
 Gate 2/3 shared custody and asset-relationship failures remain blocking; record mode
 does not waive them or turn unchecked assets into successful deliveries.
 An external decoder's nonzero exit alone does not prove a file-local defect: resource,

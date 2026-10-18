@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Failed Media Diagnosis And Calmer Results (2026-10-18)
+
+- Fix false incomplete-JPEG rejection when opaque mobile-camera trailer data
+  contains another SOS marker. Reuse the existing primary-image marker walker;
+  embedded thumbnail markers, stuffed scan bytes and missing EOI stay distinct.
+- Restore raw image-decoding geometry after the image dependency began applying
+  EXIF orientation automatically. Keep explicit dimension and allocation-budget
+  checks before decoding; cover all eight EXIF orientations and oversized output.
+- Explain source/output ICC length failures without treating exact JPEG recovery
+  as proof that its color profile renders correctly. Name filesystem metadata
+  verification precisely instead of claiming all metadata has passed.
+- Make verified partial-result summaries more neutral in all three languages.
+  Detailed file-failure text uses normal weight and color, with only its prefix
+  accented; shared safety failures keep their serious treatment.
+- Distinguish file-local Gate activity from shared terminal failure so an initial
+  isolated rejection does not permanently invalidate a later fully verified
+  survivor result. The rejected Gate remains failed; final receipts and survivor
+  verification are still required, and shared errors cannot be cleared by PASS.
+- Preserve encoder details and typed reason codes in Fast IMG error summaries.
+  Repair CI contracts, case-sensitive output-path tests and strict lint findings
+  without reducing exhaustive effort coverage or weakening rejection tests.
+- Retain the existing bitflags/log lockfile refreshes; those upstream commits
+  change maintenance workflows, not media-processing code or package versions.
+
 ### Complete JPEG Search With Fewer Reconstructions (2026-10-18)
 
 - Try E9 as a size reference, then complete E1..E8, E10 and E11. Keep all eleven

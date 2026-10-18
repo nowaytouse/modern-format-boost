@@ -34,6 +34,22 @@ searches default to adaptive. Persisted explicit choices are not overwritten.
 | Independent UltraHDR JPEG migration helper | Historical mode E7/E10 with reversible JPEG encoding | Unused legacy representation; explicitly rejects full search rather than claiming the current archive minimum |
 
 These are route summaries, not substitutes for detailed container admission.
+
+### JPEG Structure, Geometry And Color Evidence
+
+JPEG completeness follows the primary image's length-delimited segments and
+entropy scans through its EOI. Markers inside metadata or after that EOI do not
+define another primary scan; arbitrary trailer bytes remain covered by exact
+JPEG reconstruction. This structural check does not replace codec validation.
+
+Shared analysis decodes raw sample geometry with the configured dimension and
+output-allocation limits. EXIF orientation is applied explicitly by geometry
+verification, not implicitly a second time by a high-level image reader.
+
+Exact JPEG reconstruction, filesystem metadata, embedded tags and usable color
+profiles are separate proofs. A malformed embedded ICC profile is not accepted
+merely because the original JPEG can be reconstructed. Current reversible
+encoding does not silently trim, replace or discard such a source profile.
 For example, complex TIFF/ICO/auxiliary-image inputs may require retaining their
 original container despite having a recognizable raster. Nothing here changes
 those checks, source identity, XMP relationships, ICC, gain maps or timestamps.

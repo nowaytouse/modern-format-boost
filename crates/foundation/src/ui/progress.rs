@@ -74,6 +74,7 @@ pub(crate) fn emit_log_phase(phase: LogPhase) {
 pub(crate) enum GateActivityState {
     Running,
     Passed,
+    FileFailures,
     Failed,
 }
 
@@ -2159,6 +2160,18 @@ mod tests {
         for (check, completed, state, expected) in [
             ("inventory", 0, GateActivityState::Running, "running"),
             ("count", 1, GateActivityState::Failed, "failed"),
+            (
+                "metadata",
+                4,
+                GateActivityState::FileFailures,
+                "file_failures",
+            ),
+            (
+                "decode",
+                6,
+                GateActivityState::FileFailures,
+                "file_failures",
+            ),
             ("decode", 6, GateActivityState::Passed, "passed"),
         ] {
             let json = serde_json::to_vec(&GateActivityEvent {

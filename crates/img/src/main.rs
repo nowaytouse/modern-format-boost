@@ -1551,7 +1551,11 @@ struct ImageTaskFailure {
 
 impl std::fmt::Display for ImageTaskFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
+        formatter.write_str(&self.message)?;
+        if let Some(reason) = &self.reason_code {
+            write!(formatter, " [{reason}]")?;
+        }
+        Ok(())
     }
 }
 
@@ -5616,9 +5620,9 @@ fn fast_img_prepare_existing_avif(
 
 fn fast_img_encoded_output(result: &foundation::TaskResult) -> anyhow::Result<&Path> {
     if !result.success {
-        return Err(
-            image_task_failure(result).context(format!("encode failed for {}", result.input_path))
-        );
+        let failure = image_task_failure(result);
+        let detail = format!("encode failed for {}: {failure}", result.input_path);
+        return Err(failure.context(detail));
     }
     result.output_path.as_deref().map(Path::new).ok_or_else(|| {
         anyhow::anyhow!(
@@ -9393,7 +9397,15 @@ fn fast_img_skip_hashes_match(src: &Path, out: &Path, entry: &Blake3Entry) -> an
 }
 
 fn print_gate_result(name: &str, result: &foundation::pipeline::verification::GateResult) {
-    let status = if result.passed { "PASS" } else { "FAIL" };
+    let status = if result.passed {
+        "PASS"
+    } else if name == "GATE 1"
+        && result.has_completed_file_failures(foundation::BatchErrorMode::current())
+    {
+        "FILE_FAILURES"
+    } else {
+        "FAIL"
+    };
     let checks = result
         .checks
         .iter()
@@ -12570,9 +12582,12 @@ mod fast_img_hardening_tests {
             "cjxl e11 failed: EncodeImageJXL() failed",
             "jpeg_lossless_encode_unavailable",
         );
-        let detail = super::fast_img_encoded_output(&failure)
-            .unwrap_err()
-            .to_string();
+        let error = super::fast_img_encoded_output(&failure).unwrap_err();
+        assert_eq!(
+            super::image_failure_reason_code(&error),
+            Some("jpeg_lossless_encode_unavailable")
+        );
+        let detail = error.to_string();
         assert!(detail.contains("EncodeImageJXL() failed"));
         assert!(detail.contains("jpeg_lossless_encode_unavailable"));
         assert!(!detail.contains("no output path"));
