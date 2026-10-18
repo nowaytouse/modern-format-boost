@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Reliable Orientation And Cancellation Evidence (2026-10-18)
+
+- Correct reversible-JPEG geometry verification for mirrored and square images:
+  bind the reference to the JXL codestream orientation from the official bounded
+  header probe, not a same-dimensions guess. Keep ordinary pixel-encoded JXL's
+  source display geometry separate and retain all existing proof thresholds.
+- Keep known verification conflicts above the cancelled state in the native
+  result overview, bottom status and History. Ordinary cancellation alone does
+  not become an integrity failure merely because final delivery evidence is absent.
+- Preserve the actual cancelled process outcome, completed media counts and
+  original verification receipts. Later matching counts cannot erase an earlier
+  integrity conflict. Cover both serious and warning-only cancellation records
+  in the native self-test without changing the running production application.
+- Pass 34 focused orientation regressions, the eight-orientation JPEG production
+  matrix with exact reconstruction, strict Foundation library Clippy and the
+  isolated native self-test. Remote CI and production Photos are separate evidence.
+
 ### Failed Media Diagnosis And Calmer Results (2026-10-18)
 
 - Fix false incomplete-JPEG rejection when opaque mobile-camera trailer data

@@ -45,6 +45,14 @@ JPEG reconstruction. This structural check does not replace codec validation.
 Shared analysis decodes raw sample geometry with the configured dimension and
 output-allocation limits. EXIF orientation is applied explicitly by geometry
 verification, not implicitly a second time by a high-level image reader.
+After exact JPEG reconstruction, a separate geometry proof uses the JXL
+codestream orientation reported by the official `jxlinfo -v` header probe for
+`djxl` pixel output. It never infers that domain from matching dimensions or
+accepts whichever of raw and oriented pixels happens to match. Missing, invalid,
+duplicate or failed orientation probes reject the proof. The bounded managed
+probe does not decode pixels a second time. JPEG reconstruction fallback uses
+raw scan samples; ordinary pixel-encoded JXL keeps the source display-domain
+contract instead. Existing pixel/structure thresholds are unchanged.
 
 Exact JPEG reconstruction, filesystem metadata, embedded tags and usable color
 profiles are separate proofs. A malformed embedded ICC profile is not accepted

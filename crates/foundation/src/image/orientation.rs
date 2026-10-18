@@ -21,10 +21,12 @@ pub enum PixelDiffResult {
 pub enum DiffTolerance {
     /// Exact rendered-pixel match.
     Exact,
-    /// Lossless JXL orientation proof. Gate 1 separately proves JPEG bitstream
-    /// roundtrip with BLAKE3, so this check verifies geometry/structure only
-    /// and deliberately ignores decoder/color-management channel drift.
+    /// JXL geometry/structure proof against the source's EXIF display domain.
+    /// Deliberately ignores decoder/color-management channel drift.
     JxlOrientation,
+    /// Geometry proof after exact JPEG reconstruction has passed. The JXL
+    /// codestream, not its retained EXIF, defines djxl's rendered orientation.
+    JxlReconstructionOrientation,
     /// JXL proof used for final custody/source deletion. Unlike the
     /// orientation-only check, this requires channel-level pixel equivalence.
     JxlPixelEquivalent,
@@ -40,7 +42,7 @@ impl DiffTolerance {
             // Exact and LossyAvif both require bit-identical comparison
             // results; only their correlation preconditions differ.
             Self::Exact | Self::LossyAvif => 0,
-            Self::JxlOrientation => u8::MAX,
+            Self::JxlOrientation | Self::JxlReconstructionOrientation => u8::MAX,
             Self::JxlPixelEquivalent | Self::LsbAvif => 1,
         }
     }
@@ -155,10 +157,9 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
 /// Algorithm:
 /// 1. Read `src_orient` from source EXIF.
 /// 2. Decode output to PNG via format-specific tool.
-/// 3. Decode source JPEG. For normal formats, apply `src_orient` transform →
-///    reference pixels. For JXL lossless encodes that decode to the raw JPEG
-///    dimensions, compare against raw source pixels instead of treating the
-///    EXIF-rotated display dimensions as a hard failure.
+/// 3. Decode source samples and apply its EXIF orientation. After exact JPEG
+///    reconstruction, use the JXL codestream's orientation for djxl PNG pixels;
+///    its JPEG reconstruction fallback instead returns raw scan samples.
 /// 4. Pixel-diff reference vs decoded output.
 ///
 /// Decode tool absent → `PixelDiffResult::SkippedToolAbsent`. \[D11\]
@@ -171,6 +172,11 @@ pub fn verify_orientation_pixel_diff(
     fmt: FormatKind,
     diff_tolerance: DiffTolerance,
 ) -> Result<PixelDiffResult> {
+    if diff_tolerance == DiffTolerance::JxlReconstructionOrientation && fmt != FormatKind::Jxl {
+        return Err(ImgQualityError::AnalysisError(
+            "pixel-diff: JPEG reconstruction orientation requires a JXL output".to_string(),
+        ));
+    }
     let decoder_tool = match fmt {
         FormatKind::Jxl => "djxl",
         FormatKind::Avif => "avifdec",
@@ -292,7 +298,76 @@ pub fn verify_orientation_pixel_diff(
         &decode_output.stderr,
     );
 
-    verify_pixel_diff_against_decoded_image(source_image, tmp_decoded.path(), diff_tolerance)
+    let reconstruction_orientation =
+        if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
+            Some(
+                if tmp_decoded
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "jpg")
+                {
+                    1
+                } else {
+                    read_jxl_codestream_orientation(output)?
+                },
+            )
+        } else {
+            None
+        };
+    verify_pixel_diff_against_decoded_image(
+        source_image,
+        tmp_decoded.path(),
+        diff_tolerance,
+        reconstruction_orientation,
+    )
+}
+
+fn read_jxl_codestream_orientation(path: &Path) -> Result<u8> {
+    use crate::builder_base::ToolBuilder;
+
+    if !crate::tool_builders::JxlinfoBuilder::check_available() {
+        return Err(ImgQualityError::AnalysisError(
+            "pixel-diff: jxlinfo unavailable; cannot prove JXL reconstruction orientation".into(),
+        ));
+    }
+    let mut command = crate::tool_builders::JxlinfoBuilder::new()
+        .input(path)
+        .build();
+    command.arg("-v");
+    let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
+        .wait_timeout(
+            std::time::Duration::from_secs(30),
+            "JXL codestream orientation",
+        )?;
+    if !output.status.success() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: jxlinfo failed for {}: {}",
+            path.display(),
+            output.stderr.trim()
+        )));
+    }
+    parse_jxlinfo_orientation(&output.stdout)
+}
+
+fn parse_jxlinfo_orientation(stdout: &str) -> Result<u8> {
+    let invalid = || {
+        ImgQualityError::AnalysisError(
+            "pixel-diff: missing, duplicate or invalid JXL codestream orientation".into(),
+        )
+    };
+    let mut lines = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("Orientation: "));
+    let value = lines.next().ok_or_else(invalid)?;
+    if lines.next().is_some() {
+        return Err(invalid());
+    }
+    let (number, label) = value.split_once(' ').ok_or_else(invalid)?;
+    let orientation = number.parse::<u8>().map_err(|_| invalid())?;
+    if !(1..=8).contains(&orientation) || !label.starts_with('(') || !label.ends_with(')') {
+        return Err(invalid());
+    }
+    Ok(orientation)
 }
 
 fn orientation_decode_tempfile(suffix: &str) -> Result<tempfile::NamedTempFile> {
@@ -489,8 +564,17 @@ fn verify_pixel_diff_against_decoded_image(
     source_image: &Path,
     decoded_output: &Path,
     tol: DiffTolerance,
+    reconstruction_orientation: Option<u8>,
 ) -> Result<PixelDiffResult> {
-    let src_orient = read_exif_orientation(source_image)?;
+    let reference_orientation = match (tol, reconstruction_orientation) {
+        (DiffTolerance::JxlReconstructionOrientation, Some(orientation @ 1..=8)) => orientation,
+        (DiffTolerance::JxlReconstructionOrientation, _) | (_, Some(_)) => {
+            return Err(ImgQualityError::AnalysisError(
+                "pixel-diff: missing or invalid reconstruction orientation domain".to_string(),
+            ));
+        }
+        (_, None) => read_exif_orientation(source_image)?,
+    };
     let out_img = if decoded_output
         .extension()
         .is_some_and(|extension| extension == "pfm")
@@ -508,7 +592,13 @@ fn verify_pixel_diff_against_decoded_image(
         Err(open_error) => decode_source_with_official_tool(source_image, &open_error)?,
     };
 
-    diff_orientation_images(&src_img_raw, src_orient, &out_img, tol, decoded_output)
+    diff_orientation_images(
+        &src_img_raw,
+        reference_orientation,
+        &out_img,
+        tol,
+        decoded_output,
+    )
 }
 
 // PFM is the djxl float output without EXR's linear-light conversion. Reject
@@ -651,23 +741,6 @@ fn diff_orientation_images(
     let output_dims = (out_img.width(), out_img.height());
     let raw_dims = (raw_source.width(), raw_source.height());
 
-    // A byte-reconstructible JXL preserves the JPEG's raw scan order.  Its
-    // EXIF orientation describes display geometry, but `djxl` emits those raw
-    // pixels.  Compare raw dimensions for every orientation when the strict
-    // JXL delivery proof is active; restricting this to 5..=8 made 180°/mirror
-    // orientations fail even though their JPEG bitstream was exact.
-    if tol == DiffTolerance::JxlOrientation && raw_dims == output_dims {
-        tracing::info!(
-            target: "orientation_pixel_diff",
-            orientation = src_orient,
-            raw_width = raw_dims.0,
-            raw_height = raw_dims.1,
-            output = %output.display(),
-            "pixel-diff: JXL lossless output decodes to raw JPEG dimensions; verifying raw source structure"
-        );
-        return diff_dynamic_images(raw_source, out_img, tol, output);
-    }
-
     if tol == DiffTolerance::JxlPixelEquivalent
         && orientation_swaps_dimensions(src_orient)
         && oriented_dims != output_dims
@@ -708,7 +781,10 @@ fn diff_dynamic_images(
         )));
     }
 
-    if tol == DiffTolerance::JxlOrientation {
+    if matches!(
+        tol,
+        DiffTolerance::JxlOrientation | DiffTolerance::JxlReconstructionOrientation
+    ) {
         return diff_jxl_orientation_structure(ref_img, out_img);
     }
     if tol == DiffTolerance::JxlPixelEquivalent {
@@ -1172,21 +1248,108 @@ mod tests {
     }
 
     #[test]
-    fn jxl_orientation_diff_accepts_raw_source_dimensions_for_lossless_encode() {
+    fn jxl_reconstruction_orientation_accepts_the_explicit_raw_domain() {
         let raw_source = patterned_image(2, 3);
         let decoded_lossless_jxl = raw_source.clone();
 
-        for orientation in 1..=8 {
+        for tolerance in [
+            DiffTolerance::JxlOrientation,
+            DiffTolerance::JxlReconstructionOrientation,
+        ] {
             let result = diff_orientation_images(
                 &raw_source,
-                orientation,
+                1,
                 &decoded_lossless_jxl,
-                DiffTolerance::JxlOrientation,
+                tolerance,
                 std::path::Path::new("out.jxl"),
             )
             .expect("raw-orientation JXL proof should not fail dimension check");
 
-            assert_eq!(result, PixelDiffResult::Match, "orientation {orientation}");
+            assert_eq!(result, PixelDiffResult::Match);
+        }
+    }
+
+    #[test]
+    fn jxl_orientation_proof_uses_the_declared_pixel_domain_for_all_orientations() {
+        use std::hash::{Hash, Hasher};
+
+        let raw_source = DynamicImage::ImageRgb8(ImageBuffer::from_fn(32, 32, |x, y| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (x, y).hash(&mut hasher);
+            let bytes = hasher.finish().to_le_bytes();
+            Rgb([bytes[0], bytes[1], bytes[2]])
+        }));
+        for orientation in 1..=8 {
+            let rendered = super::apply_orientation_transform(raw_source.clone(), orientation);
+            for tolerance in [
+                DiffTolerance::JxlOrientation,
+                DiffTolerance::JxlReconstructionOrientation,
+            ] {
+                let result = diff_orientation_images(
+                    &raw_source,
+                    orientation,
+                    &rendered,
+                    tolerance,
+                    std::path::Path::new("rendered.png"),
+                )
+                .expect("declared orientation proof");
+                assert_eq!(result, PixelDiffResult::Match, "orientation {orientation}");
+                if orientation != 1 {
+                    assert!(matches!(
+                        diff_orientation_images(
+                            &raw_source,
+                            orientation,
+                            &raw_source,
+                            tolerance,
+                            std::path::Path::new("wrong-domain.png"),
+                        )
+                        .expect("wrong-domain comparison"),
+                        PixelDiffResult::Mismatch { .. }
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jxl_reconstruction_orientation_rejects_missing_or_invalid_domain() {
+        let source = std::path::Path::new("source.jpg");
+        for orientation in [None, Some(0), Some(9)] {
+            let error = verify_pixel_diff_against_decoded_image(
+                source,
+                std::path::Path::new("decoded.png"),
+                DiffTolerance::JxlReconstructionOrientation,
+                orientation,
+            )
+            .expect_err("unproven orientation domain must fail before file access");
+            assert!(
+                error
+                    .to_string()
+                    .contains("reconstruction orientation domain")
+            );
+        }
+    }
+
+    #[test]
+    fn jxl_codestream_orientation_requires_one_valid_official_field() {
+        for orientation in 1..=8 {
+            assert_eq!(
+                super::parse_jxlinfo_orientation(&format!(
+                    "JPEG XL image, 32x32\nOrientation: {orientation} (display geometry)\n"
+                ))
+                .expect("official orientation field"),
+                orientation
+            );
+        }
+        for text in [
+            "",
+            "Orientation: 0 (invalid)",
+            "Orientation: 9 (invalid)",
+            "Orientation: unknown",
+            "Orientation: 4",
+            "Orientation: 4 (flip)\nOrientation: 1 (normal)",
+        ] {
+            assert!(super::parse_jxlinfo_orientation(text).is_err());
         }
     }
 
@@ -1723,6 +1886,7 @@ mod tests {
             heic_stub.path(),
             decoded_stub.path(),
             DiffTolerance::Exact,
+            None,
         );
 
         match result {
@@ -1758,8 +1922,12 @@ mod tests {
         img2.save_with_format(f2.path(), image::ImageFormat::Png)
             .unwrap();
 
-        let result =
-            verify_pixel_diff_against_decoded_image(f1.path(), f2.path(), DiffTolerance::Exact);
+        let result = verify_pixel_diff_against_decoded_image(
+            f1.path(),
+            f2.path(),
+            DiffTolerance::Exact,
+            None,
+        );
 
         match result {
             Err(ImgQualityError::AnalysisError(msg)) => {

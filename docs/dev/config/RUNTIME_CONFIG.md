@@ -447,6 +447,16 @@ output-derived album. Legitimate suffixes in source names are preserved.
 Existing checkpointed asset UUIDs remain authoritative and are not reimported;
 this fix does not automatically merge or delete previously created albums.
 
+## Cancellation And Result Evidence
+
+Cancellation describes process control, not a reversal of completed work or an
+explanation for an existing integrity failure. The native result overview and
+History keep known verification conflicts above the cancelled status. Later
+matching counts cannot clear those conflicts or change recorded media counts.
+An ordinary cancellation without such evidence remains a neutral stopped state;
+missing completion receipts after cancellation alone do not invent an integrity
+failure. Original diagnostics and the cancelled process outcome remain available.
+
 ## Verification And Scheduling (2026-10-01)
 
 Apple Silicon memory sampling reads the actual `vm_stat` page size rather than

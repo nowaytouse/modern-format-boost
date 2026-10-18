@@ -7201,8 +7201,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 applyResumeDecision(fresh: false, to: &retry)
                 lastRequest = retry
             }
-            setLocalizedStatus("status.stopped")
-            appendLog(localized("status.stopped") + countSummary)
+            setLocalizedStatus(batchResults.mandatoryEvidenceConflict ? "result.unconfirmed" : "status.stopped")
+            appendLog(statusLabel.stringValue + countSummary)
             if closeWhenFinished { NSApp.terminate(nil) }
             return
         }
@@ -7304,7 +7304,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
         let title: String
-        if host.controlState == "cancelled" { title = localized("status.stopped") }
+        if batchResults.mandatoryEvidenceConflict { title = localized("result.unconfirmed") }
+        else if host.controlState == "cancelled" { title = localized("status.stopped") }
         else if uncertain { title = localized("result.unconfirmed") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
         else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
@@ -7312,7 +7313,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
-        batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
+        batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
+            : host.controlState == "cancelled" ? .secondaryLabelColor
             : uncertain ? .systemRed : verifiedPartialFailure ? .secondaryLabelColor
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
@@ -7356,7 +7358,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverview.isHidden = false
         updateLogPresentation()
         fileProgressRow.isHidden = true
-        if uncertain { setLocalizedStatus("result.unconfirmed") }
+        if batchResults.mandatoryEvidenceConflict { setLocalizedStatus("result.unconfirmed") }
+        else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
     }
 
@@ -7889,6 +7893,25 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
             throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
         }
+        clearBatchLog()
+        appendLog(batch)
+        try host.setControlState("cancelled")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("status.stopped"),
+              batchOverviewTitle.textColor == .secondaryLabelColor,
+              statusLabel.stringValue == localized("status.stopped") else {
+            throw HostError(message: "Ordinary cancellation became an integrity failure")
+        }
+        appendLog("Integrity Issues: 1")
+        appendLog("Count status: MATCH")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed,
+              statusLabel.stringValue == localized("result.unconfirmed"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Cancellation or later matching counts concealed an integrity failure")
+        }
+        try host.setControlState("running")
         clearBatchLog()
         guard batchOverview.isHidden, !batchResults.hasFastDelivery else {
             throw HostError(message: "Delivery overview leaked into the next batch")
