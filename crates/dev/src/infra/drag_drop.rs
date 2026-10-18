@@ -1138,6 +1138,14 @@ pub fn fast_img_session_size_metrics(summary: &str) -> FastImgSessionSizeMetrics
             metrics.resume_reused_count = parse_size_metric_u64("resume_reused_count", rest);
         }
     }
+    let byte_evidence = crate::infra::process_stream::parse_stats_from_output(summary);
+    if byte_evidence.converted_bytes_invalid
+        || byte_evidence
+            .converted_bytes
+            .is_some_and(|bytes| bytes.input_bytes.is_none() || bytes.output_bytes.is_none())
+    {
+        return FastImgSessionSizeMetrics::default();
+    }
     metrics
 }
 
@@ -2274,6 +2282,13 @@ mod tests {
         assert_eq!(metrics.files_converted, Some(0));
         assert_eq!(metrics.source_bytes_actual, Some(12_567_890_123));
         assert_eq!(metrics.output_bytes_actual, Some(8_804_321_456));
+        let rejected_outputs = format!(
+            "{summary}\nMFB_CONVERTED_BYTES={{\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":null,\"output_bytes\":null}}\n"
+        );
+        let metrics = fast_img_session_size_metrics(&rejected_outputs);
+        assert_eq!(metrics.source_bytes_actual, None);
+        assert_eq!(metrics.output_bytes_actual, None);
+        assert_eq!(metrics.files_converted, None);
         for invalid in [
             "1 KiB (-100 bytes)",
             "1 KiB (1x00 bytes)",

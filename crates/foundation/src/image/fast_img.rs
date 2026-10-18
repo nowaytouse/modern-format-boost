@@ -452,7 +452,7 @@ pub fn verify_final_delivery_integrity(
         false
     };
     let tolerance = if jxl_byte_reconstructible {
-        crate::image::orientation::DiffTolerance::JxlOrientation
+        crate::image::orientation::DiffTolerance::JxlReconstructionOrientation
     } else {
         pixel_tolerance
     };

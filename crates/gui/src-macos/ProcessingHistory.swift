@@ -579,8 +579,8 @@ private struct HistoryEntry {
                                            countsComplete: true)
     }
     var statusKey: String {
-        if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if hasVerificationFailure { return "result.unconfirmed" }
+        if finished?.outcome == "cancelled" { return "history.status.cancelled" }
         if hasPartialSuccess { return "history.status.partial" }
         if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
@@ -4455,6 +4455,24 @@ func runProcessingHistorySelfTests() throws {
                 && unfinishedMixed.statusKey != "history.status.partial" && !unfinishedMixed.hasPartialSuccess
                 && contradictoryMixed.statusKey == "history.status.incomplete" && !contradictoryMixed.hasPartialSuccess,
                 "Cancelled, unfinished, or contradictory history became an ordinary partial result")
+    let unsafeCancelled = try parsed([context, try payload("MFB_HISTORY_SUMMARY", integritySummary), cancelled]).entries[0]
+    try require(unsafeCancelled.statusKey == "result.unconfirmed" && unsafeCancelled.statusColor == .systemRed
+                && unsafeCancelled.finished?.outcome == "cancelled" && unsafeCancelled.succeededLabel == "2",
+                "Cancellation hid a known integrity failure or erased independent processing facts")
+    for (issueCount, countStatus) in [(0, "MATCH"), (1, "MATCH"), (0, "MISMATCH (1 invariant issue)")] {
+        var receipt = preservedReceipt
+        receipt["has_warnings"] = true
+        receipt["issue_count"] = issueCount
+        receipt["count_status"] = countStatus
+        let entry = try parsed([fastContext, mixedEvent,
+            try payload("MFB_HISTORY_VERIFICATION", receipt), cancelled]).entries[0]
+        let serious = issueCount > 0 || countStatus.hasPrefix("MISMATCH")
+        try require(entry.statusKey == (serious ? "result.unconfirmed" : "history.status.cancelled")
+                    && (!serious || entry.statusColor == .systemRed)
+                    && entry.finished?.outcome == "cancelled" && entry.succeededLabel == "2"
+                    && entry.verification?.count_status == countStatus && !entry.hasPartialSuccess,
+                    "Cancellation confused an independent verification failure with a warning-only receipt")
+    }
     for key in ["succeeded", "skipped", "ignored", "failed", "unprocessed", "exit_code"] {
         var unknownMedia = mixedMedia
         unknownMedia[key] = NSNull()

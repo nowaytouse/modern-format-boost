@@ -993,7 +993,8 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
     let mismatches = metadata_signature_mismatches(&src_signature, &dst_signature);
     if mismatches.is_empty() {
         let detail = format!(
-            "Metadata Audit: exact metadata copy verified {} -> {}",
+            "Metadata Audit: filesystem metadata copy verified {} -> {} \
+             (embedded tags and color profiles require separate checks)",
             src.display(),
             dst.display()
         );
@@ -1019,12 +1020,15 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
                 mismatches.join("; ")
             ),
         );
-        Err(io::Error::other(format!(
-            "Exact metadata copy mismatch from {} to {}: {}",
-            src.display(),
-            dst.display(),
-            mismatches.join("; ")
-        )))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Exact metadata copy mismatch from {} to {}: {}",
+                src.display(),
+                dst.display(),
+                mismatches.join("; ")
+            ),
+        ))
     }
 }
 

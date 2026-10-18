@@ -799,18 +799,31 @@ fn high_precision_jpegs_fail_closed_without_source_or_output_mutation() -> Resul
 
         let mut options = exact_jpeg_options(&output);
         options.flags.set(ConvertFlags::DELETE_ORIGINAL, true);
-        let result = convert_jpeg_to_jxl(&source, &options, None)?;
-        ensure!(
-            !result.success && !result.skipped,
-            "{label} must fail, not skip or succeed"
-        );
-        ensure!(
-            result
-                .message
-                .contains("JPEG cannot be byte-identically reconstructed"),
-            "{label} failure did not state the reconstruction boundary: {}",
-            result.message
-        );
+        match convert_jpeg_to_jxl(&source, &options, None) {
+            Ok(result) => {
+                ensure!(
+                    !result.success && !result.skipped,
+                    "{label} must fail, not skip or succeed"
+                );
+                ensure!(
+                    result
+                        .message
+                        .contains("JPEG cannot be byte-identically reconstructed"),
+                    "{label} failure did not state the reconstruction boundary: {}",
+                    result.message
+                );
+            }
+            Err(error) => {
+                let diagnostic = error.to_string();
+                ensure!(
+                    diagnostic.contains("JPEG full effort search incomplete")
+                        && diagnostic.contains("full effort candidate")
+                        && diagnostic.contains("stderr: ")
+                        && !diagnostic.contains("<empty stderr>"),
+                    "{label} did not preserve the full-search encoder rejection: {diagnostic}"
+                );
+            }
+        }
         ensure!(
             fs::read(&source)? == source_before,
             "{label} source JPEG changed"

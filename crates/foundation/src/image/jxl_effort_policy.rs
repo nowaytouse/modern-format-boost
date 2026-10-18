@@ -151,6 +151,9 @@ pub fn run_effort_search<T>(
     Ok((observation, effort))
 }
 
+// E9 establishes a reference; every other effort still competes independently.
+const JPEG_FULL_EFFORT_ORDER: [u8; 11] = [9, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
+
 /// Compare every independent JPEG reconstruction effort using complete candidate files.
 ///
 /// The run callback must finish identical archive metadata preparation for each effort.
@@ -186,8 +189,11 @@ pub fn run_jpeg_full_effort_search<T>(
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )?;
     let result = (|| {
+        crate::log_detail!(&format!(
+            "JPEG full effort execution order: {JPEG_FULL_EFFORT_ORDER:?}; every effort remains required; ties prefer lower effort"
+        ));
         let mut best = None;
-        for effort in 1..=11 {
+        for effort in JPEG_FULL_EFFORT_ORDER {
             // Pausing here would retain the file guard needed by the outer pause acknowledgment.
             anyhow::ensure!(
                 !crate::batch_control::is_cancelled()?,
@@ -218,7 +224,9 @@ pub fn run_jpeg_full_effort_search<T>(
             );
             let contender = best
                 .as_ref()
-                .is_none_or(|(_, _, best_size, _, _)| size < *best_size);
+                .is_none_or(|(_, best_effort, best_size, _, _)| {
+                    (size, effort) < (*best_size, *best_effort)
+                });
             if contender {
                 let candidate_hash = crate::common_utils::calculate_blake3_hash(&candidate)?;
                 verify_reconstruction(&candidate).with_context(|| {
@@ -371,6 +379,109 @@ mod tests {
     use super::*;
 
     #[test]
+    fn jpeg_full_search_starts_with_a_reference_but_low_efforts_can_still_win() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::write(&source, b"synthetic JPEG input")?;
+        let mut encoded = Vec::new();
+        let mut verified = Vec::new();
+        let (observed, effort) = run_jpeg_full_effort_search(
+            &source,
+            &output,
+            |effort, candidate| {
+                encoded.push(effort);
+                let size = if effort == 1 { 10 } else { 20 };
+                std::fs::write(candidate, vec![effort; size])?;
+                Ok(effort)
+            },
+            |_| true,
+            |candidate| {
+                verified.push(std::fs::read(candidate)?[0]);
+                Ok(())
+            },
+        )?;
+        assert_eq!(encoded, [9, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11]);
+        assert_eq!(verified, [9, 1]);
+        assert_eq!((observed, effort), (1, 1));
+        assert_eq!(std::fs::read(output)?, vec![1; 10]);
+        Ok(())
+    }
+
+    #[test]
+    fn jpeg_full_search_keeps_exact_minimum_and_verifies_every_possible_winner()
+    -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::write(&source, b"synthetic JPEG input")?;
+        for winner in 1..=11u8 {
+            for ties in [false, true] {
+                let sizes = std::array::from_fn::<_, 11, _>(|index| {
+                    if index + 1 == usize::from(winner)
+                        || (ties && index + 2 == usize::from(winner))
+                    {
+                        10
+                    } else {
+                        20 + (index * 7 % 9)
+                    }
+                });
+                let expected = (1..=11u8)
+                    .min_by_key(|effort| (sizes[usize::from(*effort - 1)], *effort))
+                    .unwrap();
+                let mut encoded = std::collections::BTreeSet::new();
+                let mut verified = std::collections::BTreeSet::new();
+                let (observed, selected) = run_jpeg_full_effort_search(
+                    &source,
+                    &output,
+                    |effort, candidate| {
+                        assert!(encoded.insert(effort));
+                        std::fs::write(candidate, vec![effort; sizes[usize::from(effort - 1)]])?;
+                        Ok(effort)
+                    },
+                    |_| true,
+                    |candidate| {
+                        verified.insert(std::fs::read(candidate)?[0]);
+                        Ok(())
+                    },
+                )?;
+                assert_eq!(encoded, (1..=11u8).collect());
+                assert_eq!((observed, selected), (expected, expected));
+                assert!(verified.contains(&expected));
+                assert_eq!(std::fs::read(&output)?, vec![expected; 10]);
+
+                let prior = std::fs::read(&output)?;
+                assert!(
+                    run_jpeg_full_effort_search(
+                        &source,
+                        &output,
+                        |effort, candidate| {
+                            std::fs::write(
+                                candidate,
+                                vec![effort; sizes[usize::from(effort - 1)]],
+                            )?;
+                            Ok(())
+                        },
+                        |()| true,
+                        |candidate| {
+                            anyhow::ensure!(
+                                std::fs::read(candidate)?[0] != expected,
+                                "synthetic winner reconstruction mismatch"
+                            );
+                            Ok(())
+                        },
+                    )
+                    .is_err()
+                );
+                assert_eq!(std::fs::read(&output)?, prior);
+                assert_eq!(std::fs::read_dir(root.path())?.count(), 2);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn jpeg_full_search_covers_all_efforts_and_reuses_nonmonotonic_minimum() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let source = root.path().join("source");
@@ -394,8 +505,8 @@ mod tests {
                 Ok(())
             },
         )?;
-        assert_eq!(encoded, (1..=11).collect::<Vec<_>>());
-        assert_eq!(verified, [1, 3, 7, 8, 9]);
+        assert_eq!(encoded, JPEG_FULL_EFFORT_ORDER);
+        assert_eq!(verified, [9]);
         assert_eq!((observation, effort), (9, 9));
         assert_eq!(std::fs::read(&output)?, vec![9; 70]);
         assert_eq!(std::fs::read_dir(root.path())?.count(), 2);
@@ -415,8 +526,8 @@ mod tests {
         )?;
         assert_eq!(effort, 1, "same-size ties retain lower effort");
         assert_eq!(
-            decodes, 1,
-            "larger/equal later candidates need no reconstruction"
+            decodes, 2,
+            "only the reference and the lower-effort tie winner need reconstruction"
         );
         Ok(())
     }
@@ -549,7 +660,7 @@ mod tests {
                 |()| true,
                 |_| Ok(()),
             )?;
-            assert_eq!(encoded, (1..=11).collect::<Vec<_>>());
+            assert_eq!(encoded, JPEG_FULL_EFFORT_ORDER);
             assert!(!ack.try_exists()?);
             drop(transaction);
             let previous = std::fs::read(&output)?;
@@ -575,7 +686,12 @@ mod tests {
                     result.is_err(),
                     "cancellation must reject the current winner"
                 );
-                assert_eq!(encoded, (1..=cancel_effort).collect::<Vec<_>>());
+                let prefix = JPEG_FULL_EFFORT_ORDER
+                    .into_iter()
+                    .take_while(|effort| *effort != cancel_effort)
+                    .chain([cancel_effort])
+                    .collect::<Vec<_>>();
+                assert_eq!(encoded, prefix);
                 assert_eq!(std::fs::read(&output)?, previous);
                 assert!(!ack.try_exists()?);
             }

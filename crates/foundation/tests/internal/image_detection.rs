@@ -3,6 +3,62 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 #[test]
+fn open_image_with_limits_preserves_raw_pixels_for_all_exif_orientations() {
+    use image::{ImageEncoder, codecs::jpeg::JpegEncoder};
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let pixels = image::RgbImage::from_fn(7, 11, |x, y| {
+        image::Rgb([
+            u8::try_from(x * 31).expect("bounded red sample"),
+            u8::try_from(y * 21).expect("bounded green sample"),
+            u8::try_from((x + y) * 13).expect("bounded blue sample"),
+        ])
+    });
+    let reference_path = directory.path().join("reference.jpg");
+    pixels.save(&reference_path).expect("write reference JPEG");
+    let reference = open_image_with_limits(&reference_path).expect("read reference");
+    for orientation in 1..=8 {
+        let path = directory
+            .path()
+            .join(format!("orientation-{orientation}.jpg"));
+        let mut encoder = JpegEncoder::new(std::fs::File::create(&path).expect("JPEG file"));
+        let mut exif = b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+        exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+        encoder.set_exif_metadata(exif).expect("set orientation");
+        encoder
+            .write_image(pixels.as_raw(), 7, 11, image::ExtendedColorType::Rgb8)
+            .expect("encode JPEG");
+        let decoded = open_image_with_limits(&path).expect("decode raw JPEG");
+        assert_eq!(decoded.dimensions(), (7, 11), "orientation {orientation}");
+        assert_eq!(
+            decoded.to_rgb8(),
+            reference.to_rgb8(),
+            "orientation {orientation}"
+        );
+    }
+}
+
+#[test]
+fn raw_jpeg_decode_rejects_output_allocation_before_reading_scan_data() {
+    use image::ImageEncoder;
+
+    let mut data = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut data)
+        .write_image(&[17, 31, 47], 1, 1, image::ExtendedColorType::Rgb8)
+        .expect("encode tiny JPEG");
+    let sof = data
+        .windows(2)
+        .position(|bytes| bytes == [0xFF, 0xC0])
+        .expect("SOF");
+    data[sof + 5..sof + 9].copy_from_slice(&[0xFF; 4]);
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("oversized.jpg");
+    std::fs::write(&path, data).expect("write header-only oversized fixture");
+    let error = open_image_with_limits(&path).expect_err("must reject a 12 GiB output layout");
+    assert!(error.to_string().contains("Memory limit"), "{error}");
+}
+
+#[test]
 fn open_image_with_limits_uses_magic_bytes_for_mislabeled_png() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("qqcache-mislabeled.gif");

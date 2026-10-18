@@ -1718,7 +1718,7 @@ mod tests {
         let visible = read(&terminal);
         let records = read(&durable);
         for message in [
-            "exact metadata copy verified",
+            "filesystem metadata copy verified",
             "portable embedded metadata verified",
         ] {
             assert_eq!(visible.matches(message).count(), 1, "{visible}");
@@ -1731,6 +1731,7 @@ mod tests {
         );
         assert!(visible.contains("reconstruction proof remains visible"));
         assert!(visible.contains("metadata failure remains visible"));
+        assert!(visible.contains("embedded tags and color profiles require separate checks"));
     }
 
     #[test]

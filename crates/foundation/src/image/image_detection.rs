@@ -143,7 +143,7 @@ fn open_image_with_limits_without_png_heuristic(path: &Path) -> Result<DynamicIm
 }
 
 fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::ImageFormat>)> {
-    use image::Limits;
+    use image::{ImageDecoder, Limits};
     let mut limits = Limits::default();
     limits.max_alloc = Some(crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES);
 
@@ -168,11 +168,17 @@ fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::
     };
 
     let mut reader = ImageReaderOptions::open(path)?;
-    reader.limits(limits);
+    reader.limits(limits.clone());
     if let Some(detected_format) = format {
         reader.set_format(detected_format);
     }
-    let img = reader.decode().map_err(ImgQualityError::from)?;
+    // Geometry and metadata gates apply orientation explicitly; never rotate during decoding.
+    let mut decoder = reader.into_decoder()?;
+    let layout = decoder.prepare_image()?;
+    let (width, height) = layout.layout.dimensions();
+    limits.check_dimensions(width, height)?;
+    limits.reserve(layout.total_bytes())?;
+    let img = DynamicImage::from_decoder(decoder).map_err(ImgQualityError::from)?;
 
     // Use detected format from magic bytes
     Ok((img, format))

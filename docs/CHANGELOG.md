@@ -4,6 +4,102 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Honest Log Visibility (2026-10-18)
+
+- Separate ordinary UI-omitted entry counts from lost important processing records. Critical
+  overflow still invalidates completion evidence, without counting log lines as
+  failed media or claiming that omitted content was successfully saved.
+- Explain live-log tail trimming and distinguish startup diagnostic byte truncation
+  from a busy batch log. Remove the fictitious single omitted entry and the promise
+  of a complete batch log for a startup check that has no such record.
+- Keep English, Simplified Chinese and Japanese wording consistent; cover separated
+  counts, consecutive deliveries, startup truncation and bounded native log tails
+  in the existing self-test. No encoding strategy or delivery gate changes.
+- Pass the isolated five-source native build and full native self-test, including
+  the new three-language queue and truncation regressions. Do not rebuild or replace
+  the running production app; durable-write receipts remain a separate task.
+
+### Reliable Orientation And Cancellation Evidence (2026-10-18)
+
+- Correct reversible-JPEG geometry verification for mirrored and square images:
+  bind the reference to the JXL codestream orientation from the official bounded
+  header probe, not a same-dimensions guess. Keep ordinary pixel-encoded JXL's
+  source display geometry separate and retain all existing proof thresholds.
+- Keep known verification conflicts above the cancelled state in the native
+  result overview, bottom status and History. Ordinary cancellation alone does
+  not become an integrity failure merely because final delivery evidence is absent.
+- Preserve the actual cancelled process outcome, completed media counts and
+  original verification receipts. Later matching counts cannot erase an earlier
+  integrity conflict. Cover both serious and warning-only cancellation records
+  in the native self-test without changing the running production application.
+- Pass 34 focused orientation regressions, the eight-orientation JPEG production
+  matrix with exact reconstruction, strict Foundation library Clippy and the
+  isolated native self-test. Remote CI and production Photos are separate evidence.
+
+### Failed Media Diagnosis And Calmer Results (2026-10-18)
+
+- Fix false incomplete-JPEG rejection when opaque mobile-camera trailer data
+  contains another SOS marker. Reuse the existing primary-image marker walker;
+  embedded thumbnail markers, stuffed scan bytes and missing EOI stay distinct.
+- Restore raw image-decoding geometry after the image dependency began applying
+  EXIF orientation automatically. Keep explicit dimension and allocation-budget
+  checks before decoding; cover all eight EXIF orientations and oversized output.
+- Explain source/output ICC length failures without treating exact JPEG recovery
+  as proof that its color profile renders correctly. Name filesystem metadata
+  verification precisely instead of claiming all metadata has passed.
+- Make verified partial-result summaries more neutral in all three languages.
+  Detailed file-failure text uses normal weight and color, with only its prefix
+  accented; shared safety failures keep their serious treatment.
+- Distinguish file-local Gate activity from shared terminal failure so an initial
+  isolated rejection does not permanently invalidate a later fully verified
+  survivor result. The rejected Gate remains failed; final receipts and survivor
+  verification are still required, and shared errors cannot be cleared by PASS.
+- Preserve encoder details and typed reason codes in Fast IMG error summaries.
+  Repair CI contracts, case-sensitive output-path tests and strict lint findings
+  without reducing exhaustive effort coverage or weakening rejection tests.
+- Retain the existing bitflags/log lockfile refreshes; those upstream commits
+  change maintenance workflows, not media-processing code or package versions.
+
+### Complete JPEG Search With Fewer Reconstructions (2026-10-18)
+
+- Try E9 as a size reference, then complete E1..E8, E10 and E11. Keep all eleven
+  independent encodes, identical metadata handling and exact winner reconstruction.
+  Rank explicitly by complete file size and lower effort, not execution order.
+- Preserve original-file/alias guards, source and candidate mutation detection,
+  cancellation, incomplete-search rejection and direct winner reuse. Cover every
+  possible winning effort and lower-effort ties in focused regressions.
+- Explain the execution order in the English, Simplified Chinese and Japanese
+  native processing guide without adding another setting or changing search scope.
+- Compare 30 full searches on five inputs, including disposable media copies and
+  synthetic XMP. All complete candidate/output bytes matched the ascending baseline.
+  Reconstruction calls fell from 17 to 7 per five-input sweep; the sum of per-input
+  timing medians improved by 2.6% in this small experiment, not a general speed claim.
+  Measurement details and the equal-size extra-check tradeoff are in the private
+  IMG policy's evidence section.
+- Pass 14 focused policy regressions, local ordinary IMG/Fast IMG processing and
+  independent exact reconstruction checks. Native self-test, signing verification
+  and the Simplified Chinese guide window were checked; Photos and remote CI were not.
+
+### Scoped Fast IMG Failures And Reliable Finalization (2026-10-18)
+
+- Read only current-attempt finalization evidence instead of loading all verbose
+  output. Keep the existing evidence-size bound and duplicate-receipt rejection;
+  logs over 64 MiB no longer suppress independent partial-result verification.
+- Distinguish file-local Gate 1 failures from shared safety faults. Record mode
+  completes applicable checks, persists rejected sources, rechecks source/output
+  identity before excluding owned failed outputs, then fully verifies survivors.
+  Original sources remain untouched by isolation; no failed Gate is relabeled PASS.
+- Expose independent Fast IMG failure handling in Image settings and forward its
+  typed policy to the worker. Fail-fast preserves completed in-flight wave results
+  before stopping. Missing evidence and blocked cleanup receive explicit receipts.
+- Preserve the complete E1–E11 JPEG effort search and all fidelity requirements.
+  Existing workspace dependency refreshes are retained, not rolled back.
+- Classify malformed ICC data only after complete, exact metadata-response identity
+  validation. Unknown warnings, protocol failures and unclassified decoder exits
+  remain shared blockers. Invalidate pre-Gate byte savings after output rejection.
+- Verify mixed valid/invalid-ICC inputs using disposable copies and local-only
+  delivery; this does not certify Photos import or retroactively clear old residues.
+
 ### Inspectable History Cleanup Details (2026-10-16)
 
 - Add a dedicated Fast IMG History action for a selectable, read-only cleanup

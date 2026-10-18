@@ -18265,7 +18265,7 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         "rust-toolchain.toml must pin a dated nightly channel"
     );
     assert!(
-        workflow.contains("dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f"),
+        workflow.contains("dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"),
         "ci-quality workflow must use the audited rust-toolchain commit"
     );
     for job in ["dispatch2-macos", "dispatch2-linux"] {
@@ -18278,7 +18278,7 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
             .0;
         assert!(
             setup.contains(concat!(
-                "uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1\n",
+                "uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1\n",
                 "        with:\n",
                 "          toolchain: stable\n"
             )),

@@ -105,9 +105,11 @@ pub struct ExecutionPolicy {
 
 #[derive(Debug, Clone, Default, clap::Args)]
 pub struct ExecutionArgs {
-    /// Failure handling for standard IMG/VID conversion and shared Photos import.
-    /// Record and continue, or stop on the first recoverable failure. Fatal errors always stop.
-    /// Fast encoding loops keep their existing handling; intentional skips remain skips.
+    /// Failure handling for IMG/VID conversion, Fast IMG, and shared Photos import.
+    /// Record and continue is the default. Fast IMG also isolates fully identified
+    /// file-local Gate 1 failures and re-verifies the remaining outputs.
+    /// Fail-fast stops before the next Fast IMG wave after checkpointing started work.
+    /// Shared safety failures always block; intentional skips remain skips.
     #[arg(long, global = true, value_enum)]
     error_mode: Option<BatchErrorMode>,
 }

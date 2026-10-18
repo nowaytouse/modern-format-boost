@@ -249,7 +249,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.13.2"
-source = "git+https://github.com/bitflags/bitflags#74c6fd129967093b048bf71bf3ffbdadfbc76225"
+source = "git+https://github.com/bitflags/bitflags#8384f6f6e1fd1ab3f448ccf17d400a9e1d6a5280"
 dependencies = [
  "serde_core",
 ]
@@ -521,7 +521,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "console"
 version = "0.16.6"
-source = "git+https://github.com/console-rs/console#4329b774d2e7117df706193636b4734b147e6554"
+source = "git+https://github.com/console-rs/console#219c8418c03edf5bc387acb8a18e51299370fa4d"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -873,7 +873,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#6860418f169627798aee13e7403e2daca4a9cd43"
+source = "git+https://github.com/rust-lang/flate2-rs#d7d70cf9b7889ac0e6c02a575820b66f679fe6b9"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1555,9 +1555,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1648,7 +1648,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.34"
-source = "git+https://github.com/rust-lang/log#27e3cf7a021dab43430a70cb2909c06ca8141f79"
+source = "git+https://github.com/rust-lang/log#b408d2ca4edcd5544658e3d1db79aa86b0b8197f"
 
 [[package]]
 name = "loop9"
@@ -3096,9 +3096,9 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.25"
+version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
 dependencies = [
  "tinyvec",
 ]

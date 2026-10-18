@@ -276,7 +276,7 @@ private struct ProcessorRequest {
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy, fastErrorMode
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -287,7 +287,7 @@ private enum MediaSetting: String, CaseIterable {
     var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
-    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
+    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode || self == .fastErrorMode }
     var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
     var isJpegSearch: Bool { self == .imgJpegSearch || self == .fastJpegSearch }
     var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
@@ -345,7 +345,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgSizeTolerance: "--img-allow-size-tolerance"
         case .imgSizeToleranceBytes: "--img-size-tolerance-bytes"
         case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
-        case .imgErrorMode: "--img-error-mode"
+        case .imgErrorMode, .fastErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
         case .vidErrorMode: "--vid-error-mode"
         case .vidConfig: "--vid-config"
@@ -369,7 +369,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
-        case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
         case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
         case .imgJxlSearch, .fastJxlSearch: ["fixed", "adaptive"]
         case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive", "fixed"]
@@ -411,7 +411,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgSizeTolerance: "img.allow_size_tolerance"
         case .imgSizeToleranceBytes: "img.size_tolerance_bytes"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
-        case .imgErrorMode, .vidErrorMode: "execution.error_mode"
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
         case .vidForceMsSsimLong: "vid.force_ms_ssim_long"
         case .photosBackend: "photos.backend"
@@ -503,6 +503,7 @@ private struct MediaSettings {
     var fastImage = ImageSettings()
     var photos = PhotosImportSettings()
     var imageFailure: FileFailurePolicy?
+    var fastImageFailure: FileFailurePolicy?
     var imageSizeTolerance: Bool?
     var imageSizeToleranceBytes: Int?
     var videoFailure: FileFailurePolicy?
@@ -541,6 +542,7 @@ private struct MediaSettings {
                 .fastQualitySearch: fastImage.qualitySearch?.rawValue,
                 .fastAvifQuality: fastImage.avifQuality.map(String.init), .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
+                .fastErrorMode: fastImageFailure?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
                 .vidForceMsSsimLong: videoForceMsSsimLong.map(String.init),
@@ -600,6 +602,7 @@ private struct MediaSettings {
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
                 case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
+                case .fastErrorMode: fastImageFailure = FileFailurePolicy(rawValue: value)
                 case .vidCodec: videoCodec = VideoCodec(rawValue: value)
                 case .vidConfig: videoConfigurationFile = value
                 case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
@@ -1869,7 +1872,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 let fieldView: NSView
-                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy].contains(field) {
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode].contains(field) {
                     let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
                     note.font = .systemFont(ofSize: 11)
                     note.textColor = .secondaryLabelColor
@@ -3062,7 +3065,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         validatingLayout = true
         defer { validatingLayout = false }
         try validateEncodingScopesForSelfTest()
-        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy] {
+        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode] {
             guard let row = rows[field] else { continue }
             guard let stack = row.cell(at: 1).contentView as? NSStackView,
                   let note = stack.arrangedSubviews.last as? NSTextField,
@@ -3572,13 +3575,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     private func validateFailurePolicyForSelfTest() throws {
         let key = "execution.error_mode"
-        guard MediaSetting.imgErrorMode.runtimeKey == key, MediaSetting.vidErrorMode.runtimeKey == key else {
+        guard [MediaSetting.imgErrorMode, .vidErrorMode, .fastErrorMode].allSatisfy({ $0.runtimeKey == key }) else {
             throw HostError(message: "Failure policies are missing their effective configuration key")
         }
-        if !developer || fast {
-            guard popups[.imgErrorMode] == nil, popups[.vidErrorMode] == nil else {
-                throw HostError(message: "Standard failure controls escaped Developer mode or entered Fast mode")
+        var independent = MediaSettings()
+        independent.values = [.imgErrorMode: "fail-fast", .vidErrorMode: "fail-fast", .fastErrorMode: "log-and-continue"]
+        for operation in [OperationMode.fastImgJxl, .fastImgAvif] {
+            guard try independent.arguments(operation: operation, processing: .imagesOnly)
+                    == ["--img-error-mode", "log-and-continue"],
+                  independent.runtimeArguments(fast: true, inheritedOnly: false, avif: operation == .fastImgAvif)
+                    == ["--error-mode", "log-and-continue"] else {
+                throw HostError(message: "Fast IMG failure handling leaked another mode's setting")
             }
+        }
+        guard (popups[.fastErrorMode] != nil) == fast,
+              (!fast && developer) || (popups[.imgErrorMode] == nil && popups[.vidErrorMode] == nil) else {
+            throw HostError(message: "Failure controls leaked between standard and Fast settings")
+        }
+        let fields: [MediaSetting] = fast ? [.fastErrorMode]
+            : (developer ? (videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]) : [])
+        if fields.isEmpty {
             return
         }
         let previous = restored
@@ -3595,19 +3611,24 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                                              sourceChain: [key: ["default", "MFB_ERROR_MODE"]])
         let video = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "/synthetic/vid.json"],
                                              sourceChain: [key: ["default", "/synthetic/vid.json"]])
-        setInheritedValues(standard: image, fast: image, video: video)
+        let fastImage = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "default"],
+                                                  sourceChain: [key: ["default"]])
+        setInheritedValues(standard: image, fast: fastImage, video: video)
         restore(MediaSettings())
         restore(MediaSettings())
-        let fields: [MediaSetting] = videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]
         for field in fields {
+            let expectedValue = field == .imgErrorMode ? "fail-fast" : "log-and-continue"
+            let expectedSource = field == .fastErrorMode ? "default"
+                : (field == .imgErrorMode ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json")
             guard let popup = popups[field], popup.indexOfSelectedItem == 0,
-                  popup.numberOfItems == field.choices.count + 1, sourceButtons[field] != nil,
-                  inherited[field] == (field.isImage ? "fail-fast" : "log-and-continue"),
-                  inheritedSources[field] == (field.isImage ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json"),
+                  popup.numberOfItems == field.choices.count + 1,
+                  (sourceButtons[field] != nil) == developer,
+                  fieldSections[field] == (fast ? "img" : "developer"),
+                  inherited[field] == expectedValue, inheritedSources[field] == expectedSource,
                   draft().values[field] == nil else {
                 throw HostError(message: "Failure inheritance fabricated an override or used the wrong pipeline")
             }
-            popup.selectItem(at: field.isImage ? 2 : 1)
+            popup.selectItem(at: expectedValue == "fail-fast" ? 2 : 1)
             guard draft().values[field] == inherited[field] else {
                 throw HostError(message: "Choosing the inherited failure value explicitly lost its override")
             }
@@ -3622,12 +3643,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         var explicit = MediaSettings()
-        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast"]
+        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast", .fastErrorMode: "fail-fast"]
         restore(explicit)
-        tabs.selectTabViewItem(withIdentifier: "developer")
+        tabs.selectTabViewItem(withIdentifier: fast ? "img" : "developer")
         resetTab()
         guard fields.allSatisfy({ draft().values[$0] == nil && popups[$0]?.indexOfSelectedItem == 0 }) else {
-            throw HostError(message: "Developer reset forced a failure default instead of inheritance")
+            throw HostError(message: "Settings reset forced a failure default instead of inheritance")
         }
         inherited.removeAll()
         inheritedSources.removeAll()
@@ -4399,6 +4420,7 @@ struct GateCheckActivity {
             switch state {
             case "running": return completed == UInt64(index)
             case "failed": return completed == UInt64(index + 1)
+            case "file_failures": return index >= 3 && completed == UInt64(index + 1)
             case "passed": return check == "decode" && completed == total
             default: return false
             }
@@ -4425,10 +4447,12 @@ struct GateCheckActivity {
                       nextFiles.processed >= files.processed else { invalidate(); return true }
             }
             guard next.completed >= previous.completed,
-                  previous.state == "running" || previous == next,
+                  previous.state == "running" || previous == next
+                    || (previous.state == "file_failures" && previous.completed < previous.total && next.state == "running"),
                   next.completed != previous.completed || previous == next
                     || (previous.check == "inventory" && next.check == "count" && next.state == "running")
                     || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed")
+                    || (previous.state == "file_failures" && next.state == "running")
                     || (previous.check == "decode" && next.check == "decode" && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
@@ -4451,6 +4475,7 @@ struct GateCheckActivity {
         var text: String
         switch event.state {
         case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
+        case "file_failures": text = localized("gate.activity.file_failures", String(event.completed), String(event.total))
         case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
                                         String(event.completed), String(event.total), String(event.total - event.completed))
         default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
@@ -5054,6 +5079,7 @@ private struct LatestDiagnostics {
             let isSafety = hasSeriousProcessingDiagnostic(message)
             guard !failureIsSafety || isSafety else { return false }
             let isSummary = countStatusValue(in: message) != nil
+                || message.range(of: #"(?i)^Failed:\s*\d+\s*$"#, options: .regularExpression) != nil
                 || message.range(of: #"(?i)^(?:\[Summary\]|\[GATE\s*\d+\s*\]|Integrity(?: Issues)?:|(?:(?:Error:|\[ERROR\s*\])\s*)?(?:exiting with failures\b|fast-img exited with (?:code|status)\b|fast-img (?:batch|original-media delivery) recorded \d+ failed source))"#,
                                  options: .regularExpression) != nil
             // A final aggregate must not hide the most recent actionable error.
@@ -5151,7 +5177,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     private var pendingEntries = 0
     private var criticalBytes = 0
     private var criticalEntries = 0
-    private var criticalOverflow = false
+    private var omittedCriticalEntries: UInt64 = 0
     private var pendingProgress: String?
     private var omittedEntries: UInt64 = 0
     private var deliveryInFlight = false
@@ -5188,8 +5214,9 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
             let entryBytes = text.utf8.count
             if entries >= entryLimit || separatorBytes > limit - used
                 || entryBytes > limit - used - separatorBytes {
-                if critical { criticalOverflow = true }
-                if omittedEntries < UInt64.max { omittedEntries += 1 }
+                if critical {
+                    if omittedCriticalEntries < UInt64.max { omittedCriticalEntries += 1 }
+                } else if omittedEntries < UInt64.max { omittedEntries += 1 }
                 continue
             }
             if separatorBytes > 0 { pending.append("\n") }
@@ -5220,17 +5247,17 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
             if !payload.isEmpty { payload.append("\n") }
             payload.append(localized("log.omitted", omittedEntries))
         }
-        if criticalOverflow {
+        if omittedCriticalEntries > 0 {
             // Missing control records must invalidate completion, even if a later record is valid.
             if !payload.isEmpty { payload.append("\n") }
-            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow"))")
+            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow", omittedCriticalEntries))")
         }
         pending.removeAll(keepingCapacity: true)
         pendingBytes = 0
         pendingEntries = 0
         criticalBytes = 0
         criticalEntries = 0
-        criticalOverflow = false
+        omittedCriticalEntries = 0
         omittedEntries = 0
         return payload
     }
@@ -5238,7 +5265,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     func finishDelivery() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0 || pendingProgress != nil
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0
+            || omittedCriticalEntries > 0 || pendingProgress != nil
         if !hasPending { deliveryInFlight = false }
         return hasPending
     }
@@ -5246,7 +5274,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     var isIdle: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0 && omittedEntries == 0 && pendingProgress == nil
+        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0
+            && omittedEntries == 0 && omittedCriticalEntries == 0 && pendingProgress == nil
     }
 }
 
@@ -5400,15 +5429,15 @@ private func queryPhotosAuditContainers(binary: URL, library: String) throws -> 
 
 private enum ProcessorReadiness: Equatable, Sendable {
     case checking, ready, unavailable
-    case failed(diagnostic: String, omitted: Bool)
+    case failed(diagnostic: String, truncated: Bool)
 
     var message: String {
         switch self {
         case .checking: return localized("status.checking_processor")
         case .ready: return localized("status.processor_ready")
         case .unavailable: return localized("status.processor_unavailable")
-        case let .failed(diagnostic, omitted):
-            let detail = [diagnostic, omitted ? localized("log.omitted", UInt64(1)) : ""]
+        case let .failed(diagnostic, truncated):
+            let detail = [diagnostic, truncated ? localized("status.processor_diagnostic_truncated") : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
             return localized("status.processor_failed") + (detail.isEmpty ? "" : ": " + detail)
         }
@@ -5512,9 +5541,9 @@ private final class NativeHost {
             }
             let diagnostic = String(decoding: capture.data, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failed(diagnostic: diagnostic, omitted: capture.exceeded)
+            return .failed(diagnostic: diagnostic, truncated: capture.exceeded)
         } catch {
-            return .failed(diagnostic: error.localizedDescription, omitted: false)
+            return .failed(diagnostic: error.localizedDescription, truncated: false)
         }
     }
 
@@ -7034,8 +7063,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             storage.append(styledLog(displayText))
             let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
             if lines.count > 3_000 {
-                let retained = lines.suffix(3_000).joined(separator: "\n")
-                storage.setAttributedString(styledLog(retained))
+                let retained = lines.suffix(2_999).joined(separator: "\n")
+                storage.setAttributedString(styledLog(localized("log.visible_tail") + "\n" + retained))
             }
         }
         logView.scrollToEndOfDocument(nil)
@@ -7046,10 +7075,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         for (index, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n")) }
             let tone = LogTone.classify(String(line))
-            result.append(NSAttributedString(string: String(line), attributes: [
-                .foregroundColor: tone == .failure ? processDiagnosticColor(String(line), confirmedFileFailure: hasConfirmedFileFailures) : tone.color,
-                .font: tone.font,
-            ]))
+            let restrained = hasConfirmedFileFailures && (tone == .failure || tone == .warning)
+                && !hasSeriousProcessingDiagnostic(String(line))
+            let rendered = NSMutableAttributedString(string: String(line), attributes: [
+                .foregroundColor: restrained ? NSColor.labelColor
+                    : tone == .failure ? processDiagnosticColor(String(line)) : tone.color,
+                .font: restrained ? LogTone.normal.font : tone.font,
+            ])
+            if restrained, let marker = line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:\[(?:ERROR|FAIL(?:ED)?|WARN(?:ING)?)\s*\]|(?:Error|Failed|Warning|错误|失败|警告|エラー|失敗):)"#,
+                                                  options: .regularExpression) {
+                rendered.addAttribute(.foregroundColor,
+                    value: processDiagnosticColor(String(line), confirmedFileFailure: true), range: NSRange(marker, in: line))
+            }
+            result.append(rendered)
         }
         return result
     }
@@ -7063,8 +7101,11 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshLatestDiagnostics() {
+        let retainedFileFailure = hasConfirmedFileFailures
+            && latestDiagnostics.failure.map { !hasSeriousProcessingDiagnostic($0) } == true
         for (label, value, key) in [
-            (latestFailureLabel, latestDiagnostics.failure, "log.latest_failure"),
+            (latestFailureLabel, latestDiagnostics.failure,
+             retainedFileFailure ? "log.unsuccessful_file" : "log.latest_failure"),
             (latestWarningLabel, latestDiagnostics.warning, "log.latest_warning"),
         ] {
             label.isHidden = value == nil
@@ -7072,9 +7113,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             label.toolTip = label.stringValue
             label.setAccessibilityLabel(label.stringValue)
         }
-        latestFailureLabel.textColor = latestDiagnostics.failure.map {
-            processDiagnosticColor($0, confirmedFileFailure: hasConfirmedFileFailures)
-        } ?? .systemOrange
+        latestFailureLabel.textColor = retainedFileFailure ? .labelColor : .systemRed
+        latestFailureLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize,
+                                              weight: retainedFileFailure ? .regular : .medium)
         latestDiagnosticsRow.isHidden = !logDetailsExpanded || (latestDiagnostics.failure == nil && latestDiagnostics.warning == nil)
     }
 
@@ -7163,8 +7204,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                 applyResumeDecision(fresh: false, to: &retry)
                 lastRequest = retry
             }
-            setLocalizedStatus("status.stopped")
-            appendLog(localized("status.stopped") + countSummary)
+            setLocalizedStatus(batchResults.mandatoryEvidenceConflict ? "result.unconfirmed" : "status.stopped")
+            appendLog(statusLabel.stringValue + countSummary)
             if closeWhenFinished { NSApp.terminate(nil) }
             return
         }
@@ -7266,7 +7307,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
         let title: String
-        if host.controlState == "cancelled" { title = localized("status.stopped") }
+        if batchResults.mandatoryEvidenceConflict { title = localized("result.unconfirmed") }
+        else if host.controlState == "cancelled" { title = localized("status.stopped") }
         else if uncertain { title = localized("result.unconfirmed") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
         else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
@@ -7274,7 +7316,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if batchResults.hasFailure { title = localized("result.stopped_with_error") }
         else { title = localized("status.completed") }
         batchOverviewTitle.stringValue = title
-        batchOverviewTitle.textColor = host.controlState == "cancelled" ? .secondaryLabelColor
+        batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
+            : host.controlState == "cancelled" ? .secondaryLabelColor
             : uncertain ? .systemRed : verifiedPartialFailure ? .secondaryLabelColor
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
@@ -7318,7 +7361,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverview.isHidden = false
         updateLogPresentation()
         fileProgressRow.isHidden = true
-        if uncertain { setLocalizedStatus("result.unconfirmed") }
+        if batchResults.mandatoryEvidenceConflict { setLocalizedStatus("result.unconfirmed") }
+        else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
     }
 
@@ -7644,11 +7689,35 @@ private final class AppController: NSObject, NSWindowDelegate {
                     throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
                 }
             }
-            processorStatus = .failed(diagnostic: "synthetic original failure", omitted: true)
+            processorStatus = .failed(diagnostic: "synthetic original failure", truncated: true)
             changeLanguage(language)
             guard statusLabel.stringValue == localized("status.processor_failed") + ": synthetic original failure\n"
-                + localized("log.omitted", UInt64(1)), processorStatus != .ready else {
+                + localized("status.processor_diagnostic_truncated"), processorStatus != .ready else {
                 throw HostError(message: "Language change lost the core failure evidence or relabeled it ready")
+            }
+            guard ProcessorReadiness.failed(diagnostic: "synthetic original failure", truncated: false).message
+                    == localized("status.processor_failed") + ": synthetic original failure" else {
+                throw HostError(message: "Untruncated startup output claimed missing diagnostics")
+            }
+            for key in ["log.omitted", "log.critical_overflow", "log.visible_tail", "status.processor_diagnostic_truncated"] {
+                guard localized(key) != key else { throw HostError(message: "Missing log visibility explanation: \(key)") }
+            }
+            let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0)
+            _ = queue.enqueue((1...11).map { "ordinary \($0)" }.joined(separator: "\n"))
+            _ = queue.enqueue("[FAIL] synthetic diagnostic\nMFB_BATCH_RESULT={}")
+            let lostCritical = localized("log.critical_overflow", UInt64(2))
+            let omittedOrdinary = localized("log.omitted", UInt64(11))
+            guard queue.takeDelivery() == omittedOrdinary + "\nMFB_BATCH_RESULT={}\n[WARN] " + lostCritical,
+                  omittedOrdinary.contains("11"), lostCritical.contains("2"),
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Log visibility mixed ordinary and critical line counts")
+            }
+            _ = queue.enqueue("[FAIL] another diagnostic")
+            guard queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+                  !queue.enqueue("MFB_LOG_PHASE={}"), queue.finishDelivery(), !queue.isIdle,
+                  queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Critical-only overflow lost pending controls or inherited old counts")
             }
             setStatus("synthetic original diagnostic")
             changeLanguage(language)
@@ -7755,6 +7824,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         _ = diagnostics.ingest("[FAIL] h_1727272547459.jpeg: end-of-image marker is missing; source remains unmodified")
         _ = diagnostics.ingest("Error: fast-img exited with code 1")
         _ = diagnostics.ingest("Error: fast-img batch recorded 1 failed source(s); failed sources retained")
+        _ = diagnostics.ingest("Failed: 1")
         _ = diagnostics.ingest("WARNING: Always keep a backup of your original media before optimization.")
         guard diagnostics.failure?.contains("h_1727272547459.jpeg") == true, diagnostics.warning == nil else {
             throw HostError(message: "Generic exit or backup advice displaced an actionable media error")
@@ -7767,6 +7837,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             OutputCleanupReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
         }
         appendLog(try cleanupLine(cleanup))
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"metadata","completed":4,"total":6,"state":"file_failures"}"#)
+        appendLog("[GATE 1  ] metadata:❌ → FILE_FAILURES")
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"orient","completed":4,"total":6,"state":"running"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-rejection","gate":"local","check":"decode","completed":6,"total":6,"state":"file_failures","file_progress":{"processed":2,"total":2}}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"remaining-verified","gate":"local","check":"decode","completed":6,"total":6,"state":"passed"}"#)
+        appendLog("[FAIL] sample.jpeg: decoder failed")
         appendLog(try line(receipt))
         appendLog(batch)
         processingCompleted(.failure(HostError(message: "synthetic exit=1")))
@@ -7800,8 +7876,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.contentView?.layoutSubtreeIfNeeded()
         guard !logScroll.isHidden, logScroll.frame.height >= 260,
               !batchOverviewCleanup.isHidden, batchOverviewDelivery.stringValue.contains("1163"),
+              latestFailureLabel.stringValue == localized("log.unsuccessful_file", "[FAIL] sample.jpeg: decoder failed"),
+              latestFailureLabel.textColor == .labelColor,
               logDetailsButton.accessibilityLabel() == localized("log.details.hide") else {
             throw HostError(message: "Expanding details lost original diagnostics or disclosure accessibility")
+        }
+        let fileDiagnostic = styledLog("[FAIL] sample.jpeg: decoder failed")
+        let paddedDiagnostic = styledLog("[FAIL    ] sample.jpeg: decoder failed")
+        let seriousDiagnostic = styledLog("[GATE 3] verification FAIL")
+        guard fileDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemOrange,
+              fileDiagnostic.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor == .labelColor,
+              fileDiagnostic.attribute(.font, at: 7, effectiveRange: nil) as? NSFont == LogTone.normal.font,
+              paddedDiagnostic.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor == .systemOrange,
+              paddedDiagnostic.attribute(.foregroundColor, at: 11, effectiveRange: nil) as? NSColor == .labelColor,
+              seriousDiagnostic.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemRed else {
+            throw HostError(message: "Confirmed file diagnostics were overemphasized or serious failures were muted")
         }
         logDetailsExpanded = false
         refreshBatchOverview(processExit: 1, exitedNormally: true)
@@ -7831,6 +7920,25 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
             throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
         }
+        clearBatchLog()
+        appendLog(batch)
+        try host.setControlState("cancelled")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("status.stopped"),
+              batchOverviewTitle.textColor == .secondaryLabelColor,
+              statusLabel.stringValue == localized("status.stopped") else {
+            throw HostError(message: "Ordinary cancellation became an integrity failure")
+        }
+        appendLog("Integrity Issues: 1")
+        appendLog("Count status: MATCH")
+        refreshBatchOverview(processExit: 130, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed,
+              statusLabel.stringValue == localized("result.unconfirmed"),
+              batchResults.totals["img"]?[0] == 1829 else {
+            throw HostError(message: "Cancellation or later matching counts concealed an integrity failure")
+        }
+        try host.setControlState("running")
         clearBatchLog()
         guard batchOverview.isHidden, !batchResults.hasFastDelivery else {
             throw HostError(message: "Delivery overview leaked into the next batch")
@@ -7903,6 +8011,12 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         clearBatchLog()
         appendLog((0..<3_001).map { "detail \($0)" }.joined(separator: "\n"))
+        let visibleTail = logView.string.components(separatedBy: "\n")
+        guard visibleTail.count == 3_000, visibleTail.first == localized("log.visible_tail"),
+              visibleTail.dropFirst().first == "detail 2", visibleTail.last == "detail 3000",
+              latestDiagnostics.warning == nil, !batchResults.hasFailure else {
+            throw HostError(message: "Visible log trimming lost the current tail or fabricated a failure")
+        }
         let error = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
         appendLog(error + "\n" + error)
         let repeatedTwo = error + " · " + localized("log.repeated_occurrences", "2")
@@ -7947,7 +8061,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         clearBatchLog()
         appendLog(error)
-        guard !logView.string.contains(localized("log.repeated_occurrences", "2")) else {
+        guard !logView.string.contains(localized("log.repeated_occurrences", "2")),
+              !logView.string.contains(localized("log.visible_tail")) else {
             throw HostError(message: "A new batch retained the previous batch's repeat count")
         }
         clearBatchLog()
@@ -8597,7 +8712,7 @@ private func runSelfTest() -> Int32 {
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
                                             .imgJxlDistance: "0.25", .imgJxlEffort: "8", .imgQualitySearch: "fixed", .imgJxlSearch: "adaptive",
-                                           .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
+                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false", .fastErrorMode: "fail-fast",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast", .vidForceMsSsimLong: "false"]
@@ -8607,7 +8722,8 @@ private func runSelfTest() -> Int32 {
               configuredArguments.contains("--photos-native-batch-size"),
               configuredArguments.contains("--preserve-folder-structure=false"),
               configuredArguments.contains("--img-allow-database=false"),
-              !configuredArguments.contains("--img-error-mode"),
+              configuredArguments.contains("--img-error-mode"), configuredArguments.contains("fail-fast"),
+              !configuredArguments.contains("log-and-continue"),
               !configuredArguments.contains("--img-allow-size-tolerance=true"),
                !configuredArguments.contains("--img-size-tolerance-bytes"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
@@ -8619,6 +8735,8 @@ private func runSelfTest() -> Int32 {
         let effective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
         guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
+              effective["execution.error_mode"] == "fail-fast",
+              effective.sourceChain["execution.error_mode"]?.last == "CLI",
               effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
               effective["photos.preserve_folder_structure"] == "false",
               effective.sourceChain["img.jpeg_effort"]?.first == "default",
@@ -8652,8 +8770,9 @@ private func runSelfTest() -> Int32 {
               (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
               !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),
               !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
-              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
-            throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
+              configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode"),
+              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: true).contains("--error-mode") else {
+            throw HostError(message: "Failure query arguments lost per-mode overrides or invented inherited policies")
         }
         var explorationSettings = configured.mediaSettings
         explorationSettings.values[.imgQualitySearch] = "adaptive"
