@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Development Overview
+
+The dated entries below contain the development record for 0.12.0. Its main
+areas of change are:
+
+- **Settings and algorithms:** shared typed configuration, independent IMG/Fast
+  IMG/VID preferences, effective-value inspection, and complete E1–E11 reversible
+  JPEG search with verified winner reuse.
+- **Reliable results:** distinct success/failure/skip/ignore counts, isolated
+  recoverable file failures, conservative partial-result receipts, and explicit
+  verification and cleanup failures.
+- **Native macOS experience:** in-app processing guidance, searchable Settings,
+  tool inspection, scoped progress, calmer partial summaries and processing history.
+- **Durable evidence:** SQLite history, captured worker configuration and process
+  observations, checkpoint ownership, and independently inspectable cleanup records.
+- **Performance and compatibility:** bounded verification/probe reuse and media/tool
+  regressions with scoped evidence. These do not establish a general throughput
+  improvement or complete cross-run recovery.
+
+### Reader-Focused Documentation (2026-10-18)
+
+- Replace the English and Simplified Chinese READMEs' accumulated update streams
+  with aligned introductions, workflow choices, safe first-run steps and short CLI examples.
+- Keep dated feature/fix records here instead of duplicating them in both READMEs;
+  link parameter, algorithm, counting and logging details to their maintained guides.
+- Correct stale entry-point guidance: current release workflows publish Apple
+  Silicon CLI archives, the native GUI has its own builder, and Fast IMG's verified
+  source cleanup is not controlled by the standard pipeline's `--delete-source` switch.
+- Retain the distinction between partial completion, proven delivery, source cleanup
+  and iCloud synchronization. This is documentation reorganization, not a media-policy change.
+- Consolidate the published `nightly` history into version/phase snapshots with
+  owner approval. Preserve its complete original history and old tags; verify every
+  mapped snapshot's identical tree and document the algorithm reference mapping,
+  archive and existing-clone precautions in [Development History](dev/HISTORY.md).
+
 ### Honest Log Visibility (2026-10-18)
 
 - Separate ordinary UI-omitted entry counts from lost important processing records. Critical

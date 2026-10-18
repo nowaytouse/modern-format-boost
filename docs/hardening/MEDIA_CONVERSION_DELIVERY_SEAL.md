@@ -10,7 +10,7 @@ registry test `media_conversion_contract_m1_m206_design_complete`) and is distin
 [`training_tier_audit.rs`](../../crates/foundation/src/train/training_tier_audit.rs) (static training
 tiers).
 
-**See also:** [Discipline layer seal (Rust+Py+sh 100%)](MEDIA_CONVERSION_DISCIPLINE_SEAL.md) · [README layer contracts](../../README.md#-layer-contracts--training) · [CHANGELOG](../CHANGELOG.md)
+**See also:** [Discipline layer seal (Rust+Py+sh 100%)](MEDIA_CONVERSION_DISCIPLINE_SEAL.md) · [Current IMG policy](../dev/config/IMG_PRIVATE_POLICY.md) · [CHANGELOG](../CHANGELOG.md)
 
 ## Completion note (honest scope)
 

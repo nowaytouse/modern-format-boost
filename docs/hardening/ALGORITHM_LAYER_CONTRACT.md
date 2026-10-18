@@ -6,7 +6,7 @@ This document is the **single source of truth** for whether the algorithm layer 
 It does **not** require zero operational fallbacks; it requires **honest telemetry**, **default-on gates**
 with `MODERN_FORMAT_DISABLE_*` kill-switches, and **CI-enforced** invariants.
 
-**See also:** [README layer contracts](../../README.md#-layer-contracts--training) · [CHANGELOG](../CHANGELOG.md)
+**See also:** [Canonical training commands](../PYTHON_RUST_MIGRATION.md#canonical-commands) · [Current IMG search policy](../dev/config/IMG_PRIVATE_POLICY.md#search-semantics) · [CHANGELOG](../CHANGELOG.md)
 
 ## Core invariants
 
