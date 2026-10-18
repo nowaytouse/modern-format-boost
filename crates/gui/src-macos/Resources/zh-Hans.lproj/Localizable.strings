@@ -158,8 +158,10 @@
 "log.backend_start" = "正在启动后端处理器：%@";
 "log.task_start" = "开始处理";
 "log.photos_preflight" = "“照片”导入预检已停止：%@";
-"log.omitted" = "[MFB 界面] 为保持响应，未显示 %llu 条日志；请到处理记录核查完整日志。";
-"log.critical_overflow" = "界面未能接收完整的结果或错误记录，无法确认任务是否完整完成。请查看后端日志。";
+"log.omitted" = "[MFB 界面] 为保持响应，未显示 %llu 条普通日志。这不代表日志已完整保存；可到处理记录核查已保存内容。";
+"log.critical_overflow" = "界面未能接收 %llu 条重要处理记录，无法确认任务是否完整完成。请到处理记录核查已保存内容。";
+"log.visible_tail" = "[MFB 界面] 较早内容已移出此视图；可到处理记录核查已保存内容。";
+"status.processor_diagnostic_truncated" = "启动检查输出过长，仅显示开头；后续诊断未保留。这不是批次处理日志。";
 "alert.resume.title" = "发现未完成的任务";
 "alert.resume.info" = "继续已验证的进度，还是在独立目录中重新开始？";
 "alert.resume.resume" = "继续";

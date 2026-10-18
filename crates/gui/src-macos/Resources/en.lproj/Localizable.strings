@@ -158,8 +158,10 @@
 "log.backend_start" = "Starting processor backend at: %@";
 "log.task_start" = "Starting task";
 "log.photos_preflight" = "Photos import preflight stopped: %@";
-"log.omitted" = "[MFB UI] %llu log entries were not displayed to keep the interface responsive; review full logs in processing history.";
-"log.critical_overflow" = "Some result or error records could not reach the interface. Task completion cannot be confirmed; review the backend logs.";
+"log.omitted" = "[MFB UI] %llu ordinary log entries were not displayed to keep the interface responsive. This does not confirm complete storage; check saved content in processing history.";
+"log.critical_overflow" = "%llu important processing records could not reach the interface. Task completion cannot be confirmed; check saved content in processing history.";
+"log.visible_tail" = "[MFB UI] Earlier content is no longer shown here; check saved content in processing history.";
+"status.processor_diagnostic_truncated" = "Startup check output was too long. Only the beginning is shown; later diagnostics were not retained. This is not a batch log.";
 "alert.resume.title" = "Unfinished task found";
 "alert.resume.info" = "Resume its verified progress or start a separate fresh run?";
 "alert.resume.resume" = "Resume";

@@ -5177,7 +5177,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     private var pendingEntries = 0
     private var criticalBytes = 0
     private var criticalEntries = 0
-    private var criticalOverflow = false
+    private var omittedCriticalEntries: UInt64 = 0
     private var pendingProgress: String?
     private var omittedEntries: UInt64 = 0
     private var deliveryInFlight = false
@@ -5214,8 +5214,9 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
             let entryBytes = text.utf8.count
             if entries >= entryLimit || separatorBytes > limit - used
                 || entryBytes > limit - used - separatorBytes {
-                if critical { criticalOverflow = true }
-                if omittedEntries < UInt64.max { omittedEntries += 1 }
+                if critical {
+                    if omittedCriticalEntries < UInt64.max { omittedCriticalEntries += 1 }
+                } else if omittedEntries < UInt64.max { omittedEntries += 1 }
                 continue
             }
             if separatorBytes > 0 { pending.append("\n") }
@@ -5246,17 +5247,17 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
             if !payload.isEmpty { payload.append("\n") }
             payload.append(localized("log.omitted", omittedEntries))
         }
-        if criticalOverflow {
+        if omittedCriticalEntries > 0 {
             // Missing control records must invalidate completion, even if a later record is valid.
             if !payload.isEmpty { payload.append("\n") }
-            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow"))")
+            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow", omittedCriticalEntries))")
         }
         pending.removeAll(keepingCapacity: true)
         pendingBytes = 0
         pendingEntries = 0
         criticalBytes = 0
         criticalEntries = 0
-        criticalOverflow = false
+        omittedCriticalEntries = 0
         omittedEntries = 0
         return payload
     }
@@ -5264,7 +5265,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     func finishDelivery() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0 || pendingProgress != nil
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0
+            || omittedCriticalEntries > 0 || pendingProgress != nil
         if !hasPending { deliveryInFlight = false }
         return hasPending
     }
@@ -5272,7 +5274,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     var isIdle: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0 && omittedEntries == 0 && pendingProgress == nil
+        return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0
+            && omittedEntries == 0 && omittedCriticalEntries == 0 && pendingProgress == nil
     }
 }
 
@@ -5426,15 +5429,15 @@ private func queryPhotosAuditContainers(binary: URL, library: String) throws -> 
 
 private enum ProcessorReadiness: Equatable, Sendable {
     case checking, ready, unavailable
-    case failed(diagnostic: String, omitted: Bool)
+    case failed(diagnostic: String, truncated: Bool)
 
     var message: String {
         switch self {
         case .checking: return localized("status.checking_processor")
         case .ready: return localized("status.processor_ready")
         case .unavailable: return localized("status.processor_unavailable")
-        case let .failed(diagnostic, omitted):
-            let detail = [diagnostic, omitted ? localized("log.omitted", UInt64(1)) : ""]
+        case let .failed(diagnostic, truncated):
+            let detail = [diagnostic, truncated ? localized("status.processor_diagnostic_truncated") : ""]
                 .filter { !$0.isEmpty }.joined(separator: "\n")
             return localized("status.processor_failed") + (detail.isEmpty ? "" : ": " + detail)
         }
@@ -5538,9 +5541,9 @@ private final class NativeHost {
             }
             let diagnostic = String(decoding: capture.data, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failed(diagnostic: diagnostic, omitted: capture.exceeded)
+            return .failed(diagnostic: diagnostic, truncated: capture.exceeded)
         } catch {
-            return .failed(diagnostic: error.localizedDescription, omitted: false)
+            return .failed(diagnostic: error.localizedDescription, truncated: false)
         }
     }
 
@@ -7060,8 +7063,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             storage.append(styledLog(displayText))
             let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
             if lines.count > 3_000 {
-                let retained = lines.suffix(3_000).joined(separator: "\n")
-                storage.setAttributedString(styledLog(retained))
+                let retained = lines.suffix(2_999).joined(separator: "\n")
+                storage.setAttributedString(styledLog(localized("log.visible_tail") + "\n" + retained))
             }
         }
         logView.scrollToEndOfDocument(nil)
@@ -7686,11 +7689,35 @@ private final class AppController: NSObject, NSWindowDelegate {
                     throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
                 }
             }
-            processorStatus = .failed(diagnostic: "synthetic original failure", omitted: true)
+            processorStatus = .failed(diagnostic: "synthetic original failure", truncated: true)
             changeLanguage(language)
             guard statusLabel.stringValue == localized("status.processor_failed") + ": synthetic original failure\n"
-                + localized("log.omitted", UInt64(1)), processorStatus != .ready else {
+                + localized("status.processor_diagnostic_truncated"), processorStatus != .ready else {
                 throw HostError(message: "Language change lost the core failure evidence or relabeled it ready")
+            }
+            guard ProcessorReadiness.failed(diagnostic: "synthetic original failure", truncated: false).message
+                    == localized("status.processor_failed") + ": synthetic original failure" else {
+                throw HostError(message: "Untruncated startup output claimed missing diagnostics")
+            }
+            for key in ["log.omitted", "log.critical_overflow", "log.visible_tail", "status.processor_diagnostic_truncated"] {
+                guard localized(key) != key else { throw HostError(message: "Missing log visibility explanation: \(key)") }
+            }
+            let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0)
+            _ = queue.enqueue((1...11).map { "ordinary \($0)" }.joined(separator: "\n"))
+            _ = queue.enqueue("[FAIL] synthetic diagnostic\nMFB_BATCH_RESULT={}")
+            let lostCritical = localized("log.critical_overflow", UInt64(2))
+            let omittedOrdinary = localized("log.omitted", UInt64(11))
+            guard queue.takeDelivery() == omittedOrdinary + "\nMFB_BATCH_RESULT={}\n[WARN] " + lostCritical,
+                  omittedOrdinary.contains("11"), lostCritical.contains("2"),
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Log visibility mixed ordinary and critical line counts")
+            }
+            _ = queue.enqueue("[FAIL] another diagnostic")
+            guard queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+                  !queue.enqueue("MFB_LOG_PHASE={}"), queue.finishDelivery(), !queue.isIdle,
+                  queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+                  !queue.finishDelivery(), queue.isIdle else {
+                throw HostError(message: "Critical-only overflow lost pending controls or inherited old counts")
             }
             setStatus("synthetic original diagnostic")
             changeLanguage(language)
@@ -7984,6 +8011,12 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         clearBatchLog()
         appendLog((0..<3_001).map { "detail \($0)" }.joined(separator: "\n"))
+        let visibleTail = logView.string.components(separatedBy: "\n")
+        guard visibleTail.count == 3_000, visibleTail.first == localized("log.visible_tail"),
+              visibleTail.dropFirst().first == "detail 2", visibleTail.last == "detail 3000",
+              latestDiagnostics.warning == nil, !batchResults.hasFailure else {
+            throw HostError(message: "Visible log trimming lost the current tail or fabricated a failure")
+        }
         let error = "[ERROR] 🚀 /tmp/映像-7.mov frame=71"
         appendLog(error + "\n" + error)
         let repeatedTwo = error + " · " + localized("log.repeated_occurrences", "2")
@@ -8028,7 +8061,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         clearBatchLog()
         appendLog(error)
-        guard !logView.string.contains(localized("log.repeated_occurrences", "2")) else {
+        guard !logView.string.contains(localized("log.repeated_occurrences", "2")),
+              !logView.string.contains(localized("log.visible_tail")) else {
             throw HostError(message: "A new batch retained the previous batch's repeat count")
         }
         clearBatchLog()

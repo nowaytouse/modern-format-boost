@@ -319,6 +319,23 @@ This is the typed runtime snapshot, not a complete run manifest: command-specifi
 flags, all losing overrides, tool versions, build IDs and the backend actually
 chosen after runtime fallback are not yet part of this record.
 
+### Native Log Visibility
+
+The native live log is a bounded view, not a durable audit receipt. Queue pressure
+reports ordinary omitted display entries separately from lost important processing
+records (including stage/control records, results and diagnostics).
+Missing critical records still invalidate completion evidence, including when a
+later summary arrives; these are display-record counts, not source-log line or
+failed-media counts. Oversized source lines may span multiple bounded display
+records. The 3,000-line view includes a notice when older content has been removed and retains the newest
+2,999 lines. Clearing or trimming this view does not delete backend records.
+
+These notices direct users to inspect **saved content** in Processing History;
+they do not promise complete persistence. Backend write failures remain explicit,
+and no successful-write receipt is inferred from UI activity. Startup diagnostics
+truncated by the bounded readiness check have a separate notice: only the prefix
+was retained, with no invented omitted-line count or batch-history claim.
+
 ### Runtime JSON
 
 | Field | Default | Meaning |

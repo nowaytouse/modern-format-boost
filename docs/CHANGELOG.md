@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Honest Log Visibility (2026-10-18)
+
+- Separate ordinary UI-omitted entry counts from lost important processing records. Critical
+  overflow still invalidates completion evidence, without counting log lines as
+  failed media or claiming that omitted content was successfully saved.
+- Explain live-log tail trimming and distinguish startup diagnostic byte truncation
+  from a busy batch log. Remove the fictitious single omitted entry and the promise
+  of a complete batch log for a startup check that has no such record.
+- Keep English, Simplified Chinese and Japanese wording consistent; cover separated
+  counts, consecutive deliveries, startup truncation and bounded native log tails
+  in the existing self-test. No encoding strategy or delivery gate changes.
+- Pass the isolated five-source native build and full native self-test, including
+  the new three-language queue and truncation regressions. Do not rebuild or replace
+  the running production app; durable-write receipts remain a separate task.
+
 ### Reliable Orientation And Cancellation Evidence (2026-10-18)
 
 - Correct reversible-JPEG geometry verification for mirrored and square images:
