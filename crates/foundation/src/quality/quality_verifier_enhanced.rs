@@ -337,7 +337,7 @@ pub fn verify_avif_health(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Verify AVIF pixel equivalence with tolerance for lossy compression.
+/// Verify exact decoded AVIF samples; a lossy quality score is not equivalence.
 ///
 /// # Errors
 /// Returns error if pixel validation fails.

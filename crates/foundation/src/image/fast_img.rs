@@ -7274,7 +7274,7 @@ mod tests {
                 assert_eq!(source, out.as_path());
                 assert_eq!(library, photos_asset.as_path());
                 assert_eq!(fmt, crate::image::format_detect::FormatKind::WebP);
-                assert_eq!(tolerance, crate::image::orientation::DiffTolerance::LsbAvif);
+                assert_eq!(tolerance, crate::image::orientation::DiffTolerance::Exact);
                 Ok(crate::image::orientation::PixelDiffResult::Match)
             },
         )?;

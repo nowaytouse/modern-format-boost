@@ -2535,10 +2535,15 @@ fn audit_orientation_pixel_verification_for_delivery(
             ));
         }
         Ok(crate::image::orientation::PixelDiffResult::Mismatch { max_delta, channel }) => {
+            let contract = if format == crate::image::format_detect::FormatKind::Jxl {
+                " Strict JXL delivery requires exact decoded samples; changed samples need a separately validated lossy acceptance contract."
+            } else {
+                ""
+            };
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "Delivery orientation pixel verification mismatch for {}: max delta {max_delta}, channel {channel}; source retained",
+                    "Delivery orientation pixel verification mismatch for {}: max delta {max_delta}, channel {channel}; source retained.{contract}",
                     output.display()
                 ),
             ));
@@ -4507,21 +4512,36 @@ mod tests {
         let source_bytes = std::fs::read(&source).expect("read source");
         let sidecar_bytes = std::fs::read(&sidecar).expect("read sidecar");
 
-        for (label, pixels, expected_error, in_place) in [
-            ("wrong", &wrong, Some("pixel verification mismatch"), false),
+        for (label, pixels, expected_error, in_place, distance) in [
+            (
+                "wrong",
+                &wrong,
+                Some("pixel verification mismatch"),
+                false,
+                "0",
+            ),
             (
                 "dimensions",
                 &wrong_dimensions,
                 Some("dimension mismatch"),
                 false,
+                "0",
             ),
             (
                 "in-place",
                 &wrong,
                 Some("pixel verification mismatch"),
                 true,
+                "0",
             ),
-            ("matching", &source, None, false),
+            ("matching", &source, None, false, "0"),
+            (
+                "lossy-distance",
+                &source,
+                Some("separately validated lossy acceptance contract"),
+                false,
+                "8",
+            ),
         ] {
             let temp = root.path().join(format!("{label}.search.jxl"));
             let output = if in_place {
@@ -4533,7 +4553,7 @@ mod tests {
                 Command::new(crate::constants::TOOL_CJXL)
                     .arg(pixels)
                     .arg(&temp)
-                    .arg("--distance=0")
+                    .arg(format!("--distance={distance}"))
                     .arg("--container=1")
                     .arg("--effort=1"),
                 "encode pixel custody fixture",
@@ -4571,10 +4591,9 @@ mod tests {
         std::fs::write(&avif_output, b"\x00\x00\x00\x10ftypavif\0\0\0\0")
             .unwrap_or_else(|e| panic!("write avif magic: {e:?}"));
 
-        assert!(
-            delivery_orientation_diff_tolerance_for_output(&jxl_output)
-                .unwrap()
-                .is_some()
+        assert_eq!(
+            delivery_orientation_diff_tolerance_for_output(&jxl_output).unwrap(),
+            Some(crate::image::orientation::DiffTolerance::Exact)
         );
         assert!(
             delivery_orientation_diff_tolerance_for_output(&avif_output)

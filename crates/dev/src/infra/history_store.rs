@@ -433,6 +433,8 @@ pub struct HistoryOutputWriter {
     session_id: String,
     pending: Vec<OutputLine>,
     pending_bytes: usize,
+    committed_records: u64,
+    committed_bytes: u64,
 }
 
 impl HistoryOutputWriter {
@@ -455,7 +457,15 @@ impl HistoryOutputWriter {
             session_id: session_id.to_owned(),
             pending: Vec::new(),
             pending_bytes: 0,
+            committed_records: 0,
+            committed_bytes: 0,
         })
+    }
+
+    /// Return records and UTF-8 line bytes committed by this writer, excluding row metadata.
+    #[must_use]
+    pub fn committed_totals(&self) -> (u64, u64) {
+        (self.committed_records, self.committed_bytes)
     }
 
     /// Buffer a captured PTY line, flushing at 128 lines or the 64 KiB threshold.
@@ -483,6 +493,18 @@ impl HistoryOutputWriter {
         if self.pending.is_empty() {
             return Ok(());
         }
+        let committed_records = self
+            .committed_records
+            .checked_add(u64::try_from(self.pending.len())?)
+            .context("committed processing output record count overflow")?;
+        let committed_bytes =
+            self.pending
+                .iter()
+                .try_fold(self.committed_bytes, |bytes, row| {
+                    bytes
+                        .checked_add(u64::try_from(row.line.len())?)
+                        .context("committed processing output byte count overflow")
+                })?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -507,6 +529,8 @@ impl HistoryOutputWriter {
         transaction
             .commit()
             .context("commit processing output batch")?;
+        self.committed_records = committed_records;
+        self.committed_bytes = committed_bytes;
         self.pending.clear();
         self.pending_bytes = 0;
         Ok(())
@@ -527,6 +551,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_INVOCATION"
                 | "MFB_HISTORY_WORKER_EXECUTION"
+                | "MFB_HISTORY_OUTPUT_STORAGE"
                 | "MFB_HISTORY_SUMMARY"
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_OUTPUT_CLEANUP"
@@ -1270,6 +1295,36 @@ mod tests {
     }
 
     #[test]
+    fn output_storage_history_marker_uses_current_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let event = "MFB_HISTORY_OUTPUT_STORAGE={\"schema_version\":1,\"pipeline\":\"img\"}";
+        append_history_event(directory.path(), "session", event).unwrap();
+        let connection = Connection::open(directory.path().join(HISTORY_DATABASE)).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT event FROM history_events", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+            event
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        assert!(
+            append_history_event(
+                directory.path(),
+                "session",
+                "MFB_HISTORY_OUTPUT_STORAGE={\"schema_version\":2}"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn history_is_ordered_transactional_and_rejects_unknown_databases() {
         let directory = tempfile::tempdir().unwrap();
         for session in ["first", "second", "first"] {
@@ -1472,6 +1527,7 @@ mod tests {
             first.push_line("img", &format!("line {index}")).unwrap();
         }
         assert!(first.pending.is_empty(), "line threshold flushes the batch");
+        assert_eq!(first.committed_totals().0, OUTPUT_BATCH_LINES as u64);
         let phase_output = concat!(
             "你好\n",
             "MFB_LOG_PHASE={\"schema_version\":1,\"phase\":\"processing\"}\n",
@@ -1507,30 +1563,99 @@ mod tests {
     }
 
     #[test]
+    fn output_writer_counts_only_its_committed_records_and_utf8_line_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = HistoryOutputWriter::open(directory.path(), "session").unwrap();
+        assert_eq!(writer.committed_totals(), (0, 0));
+        writer.flush().unwrap();
+        writer.push_line("img", "你好").unwrap();
+        writer.push_line("vid", "").unwrap();
+        assert_eq!(writer.committed_totals(), (0, 0));
+        writer.flush().unwrap();
+        assert_eq!(writer.committed_totals(), (2, 6));
+        writer.flush().unwrap();
+        assert_eq!(writer.committed_totals(), (2, 6));
+        writer.push_line("img", "tail\n").unwrap();
+        assert_eq!(writer.committed_totals(), (2, 6));
+        writer.flush().unwrap();
+        assert_eq!(writer.committed_totals(), (3, 11));
+
+        let mut next = HistoryOutputWriter::open(directory.path(), "session").unwrap();
+        assert_eq!(next.committed_totals(), (0, 0));
+        next.push_line("img", "é").unwrap();
+        next.flush().unwrap();
+        assert_eq!(next.committed_totals(), (1, 2));
+        assert_eq!(writer.committed_totals(), (3, 11));
+        assert_eq!(
+            next.connection
+                .query_row(
+                    "SELECT COUNT(*), SUM(length(CAST(line AS BLOB))) FROM history_output",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap(),
+            (4, 13)
+        );
+    }
+
+    #[test]
+    fn output_writer_rejects_counter_overflow_before_committing_rows() {
+        for totals in [(u64::MAX, 0), (0, u64::MAX)] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut writer = HistoryOutputWriter::open(directory.path(), "session").unwrap();
+            (writer.committed_records, writer.committed_bytes) = totals;
+            writer.push_line("img", "x").unwrap();
+            assert!(writer.flush().is_err());
+            assert_eq!(writer.committed_totals(), totals);
+            assert_eq!(writer.pending.len(), 1);
+            assert_eq!(
+                session_output_cursor(directory.path(), "session").unwrap(),
+                0
+            );
+            (writer.committed_records, writer.committed_bytes) = (0, 0);
+            writer.flush().unwrap();
+            assert_eq!(writer.committed_totals(), (1, 1));
+            assert_eq!(
+                session_output_cursor(directory.path(), "session").unwrap(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn output_flush_rolls_back_and_keeps_buffer_on_failure() {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = HistoryOutputWriter::open(directory.path(), "session").unwrap();
+        writer.push_line("img", "already committed").unwrap();
+        writer.flush().unwrap();
+        let committed = writer.committed_totals();
+        writer.push_line("img", "staged before failure").unwrap();
         writer.push_line("img", "kept for retry").unwrap();
         let connection = Connection::open(directory.path().join(HISTORY_DATABASE)).unwrap();
         connection.execute_batch(
-            "CREATE TRIGGER reject_output BEFORE INSERT ON history_output BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+            "CREATE TRIGGER reject_output BEFORE INSERT ON history_output WHEN NEW.line = 'kept for retry' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
         ).unwrap();
         assert!(writer.flush().is_err());
-        assert_eq!(writer.pending.len(), 1);
+        assert_eq!(writer.pending.len(), 2);
+        assert_eq!(writer.committed_totals(), committed);
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM history_output", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            0
+            1
         );
         connection
             .execute_batch("DROP TRIGGER reject_output;")
             .unwrap();
         writer.flush().unwrap();
+        assert_eq!(writer.committed_totals(), (3, 52));
+        let retried = writer.committed_totals();
+        writer.flush().unwrap();
+        assert_eq!(writer.committed_totals(), retried);
         assert_eq!(
             read_session_output_since(directory.path(), "session", 0).unwrap(),
-            "kept for retry\n"
+            "already committed\nstaged before failure\nkept for retry\n"
         );
     }
 

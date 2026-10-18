@@ -336,6 +336,24 @@ and no successful-write receipt is inferred from UI activity. Startup diagnostic
 truncated by the bounded readiness check have a separate notice: only the prefix
 was retained, with no invented omitted-line count or batch-history claim.
 
+After draining a launcher-managed invocation and flushing its output writer,
+`MFB_HISTORY_OUTPUT_STORAGE` records that invocation's observed records,
+transaction-committed records and committed UTF-8 text bytes. Bytes exclude row
+metadata, database overhead and implicit line delimiters; these are captured
+text records, not original process bytes or media counts. Structured config
+markers are stored separately and are not included in these totals. A rollback
+does not advance the totals; retrying a buffered transaction cannot double-count.
+
+The receipt distinguishes storage failure from incomplete output collection.
+Even committed received text is not evidence that collection completed or the
+worker succeeded. History shows both states, counters and the original storage
+diagnostic for the bound run/invocation. Missing old receipts remain unknown;
+invalid, unbound or conflicting receipts are not reconstructed from current UI
+activity. A child-printed receipt is ordinary text, never a parent audit event.
+Neither receipt state changes independently established media counts or delivery
+proof. Storage or receipt-write failure remains an explicit launcher error after
+the child is drained, without discarding the child's reported counts or exit.
+
 ### Runtime JSON
 
 | Field | Default | Meaning |

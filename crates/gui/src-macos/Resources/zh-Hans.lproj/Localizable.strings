@@ -586,6 +586,17 @@
 "settings.vidForceMsSsimLong.help" = "仅用于标准 VID。长视频也执行融合质量检查，可能增加耗时；不改变编码格式，也不绕过核验。未修改时继承处理程序的配置。";
 "history.worker.not_recorded" = "未记录工作进程启动证据。";
 "history.worker.invalid" = "工作进程启动证据不完整或无效。";
+"history.output_storage.title" = "处理程序输出的保存情况";
+"history.output_storage.attention" = "日志保存需关注";
+"history.output_storage.note" = "回执仅涵盖接收到的处理程序输出，不包含全部内部日志或历史事件。记录条数不是文件数量；UTF-8 字节数不含数据库开销。保存记录不代表媒体交付成功。";
+"history.output_storage.committed" = "接收到的输出已写入历史记录。";
+"history.output_storage.failed" = "输出保存时发生过错误；部分记录可能已保存。";
+"history.output_storage.capture_complete" = "已接收至输出结束，并完成进程等待；不代表进程处理成功。";
+"history.output_storage.capture_incomplete" = "输出采集未完成，可能还有未接收到的内容。";
+"history.output_storage.counts" = "已接收 %@ 条 · 已确认保存 %@ 条 · 已确认 UTF-8 字节 %@";
+"history.output_storage.not_recorded" = "未记录输出保存回执，无法确认保存是否完整。";
+"history.output_storage.invalid" = "本次调用的输出保存回执存在冲突或无效，无法确认保存是否完整。";
+"history.output_storage.unbound" = "有一条输出保存回执无法关联到本批的处理程序调用。";
 "history.detail.invocation_id" = "调用标识";
 "history.detail.worker_program" = "请求的程序";
 "history.detail.worker_path" = "观察到的可执行程序路径";

@@ -45,6 +45,12 @@ The [private IMG policy](docs/dev/config/IMG_PRIVATE_POLICY.md) explains the
 routes and searches. The application's **?** button opens an in-app processing
 guide with examples.
 
+**Current limitation:** image delivery does not accept statistical similarity as
+exact evidence. Changed-sample lossy JXL/AVIF outputs can be rejected, with their
+sources retained, pending a separately validated lossy acceptance contract.
+JPEG byte reconstruction and independent rendering-direction evidence remain
+separate requirements. See the policy above before using lossy workflows.
+
 ## Start Safely
 
 **Keep an independent backup and try a small disposable copy first.** MFB can

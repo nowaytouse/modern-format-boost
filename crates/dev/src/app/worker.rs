@@ -167,6 +167,49 @@ impl<'a> WorkerExecution<'a> {
     }
 }
 
+#[derive(Serialize)]
+struct WorkerOutputStorage<'a> {
+    schema_version: u8,
+    scope: &'static str,
+    invocation_id: &'a str,
+    run_id: Option<&'a str>,
+    pipeline: &'static str,
+    state: &'static str,
+    observed_records: Option<u64>,
+    committed_records: u64,
+    committed_utf8_bytes: u64,
+    capture_complete: bool,
+    diagnostic: Option<String>,
+}
+
+impl<'a> WorkerOutputStorage<'a> {
+    fn observed(
+        invocation: &'a LaunchInvocation<'_>,
+        observed_records: Option<u64>,
+        committed: (u64, u64),
+        capture_complete: bool,
+        error: Option<&anyhow::Error>,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            scope: "captured_worker_output",
+            invocation_id: &invocation.invocation_id,
+            run_id: invocation.run_id.as_deref(),
+            pipeline: invocation.pipeline,
+            state: if error.is_some() {
+                "failed"
+            } else {
+                "committed"
+            },
+            observed_records,
+            committed_records: committed.0,
+            committed_utf8_bytes: committed.1,
+            capture_complete,
+            diagnostic: error.map(|error| format!("{error:#}").chars().take(4096).collect()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CollectedChildError {
     pub stats: ProcessorStats,
@@ -519,6 +562,7 @@ impl LaunchCommand {
             self.verify_sources_unchanged(invocation_error.as_ref())?;
             set_child_active(true);
             let mut session_log_error = None;
+            let mut observed_records = Some(0_u64);
             let mut config_marker_error = None;
             let mut execution_marker_error = None;
             let mut seen_config_marker = false;
@@ -551,6 +595,12 @@ impl LaunchCommand {
                             }
                         }
                         return;
+                    }
+                    observed_records = observed_records.and_then(|count| count.checked_add(1));
+                    if observed_records.is_none() && session_log_error.is_none() {
+                        session_log_error = Some(anyhow::anyhow!(
+                            "captured worker output record count overflow"
+                        ));
                     }
                     if !line.starts_with("MFB_CONVERTED_BYTES=") {
                         println!("{line}");
@@ -597,6 +647,27 @@ impl LaunchCommand {
             {
                 session_log_error = Some(error);
             }
+            let committed = output.committed_totals();
+            if session_log_error.is_none() && observed_records != Some(committed.0) {
+                session_log_error = Some(anyhow::anyhow!(
+                    "captured worker output records were not all committed"
+                ));
+            }
+            let storage_receipt_error = invocation.as_ref().and_then(|invocation| {
+                serde_json::to_value(WorkerOutputStorage::observed(
+                    invocation,
+                    observed_records,
+                    committed,
+                    result.is_ok(),
+                    session_log_error.as_ref(),
+                ))
+                .context("serialize worker output storage receipt")
+                .and_then(|payload| {
+                    session.append_history_event("MFB_HISTORY_OUTPUT_STORAGE", payload)
+                })
+                .context("worker output storage receipt write failed")
+                .err()
+            });
             let stats = match result {
                 Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
                     collected_error = match (session_log_error, config_marker_error) {
@@ -627,6 +698,9 @@ impl LaunchCommand {
                     if let Some(execution_error) = execution_marker_error {
                         eprintln!("[LOG] {execution_error:#}");
                     }
+                    if let Some(receipt_error) = storage_receipt_error {
+                        eprintln!("[LOG] {receipt_error:#}");
+                    }
                     if let Err(log_error) = session.append_session_line(&event) {
                         eprintln!("[LOG] session stream error write failed: {log_error:#}");
                     }
@@ -634,6 +708,12 @@ impl LaunchCommand {
                 }
             };
             if let Some(error) = execution_marker_error {
+                collected_error = Some(match collected_error {
+                    Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
+                    None => error,
+                });
+            }
+            if let Some(error) = storage_receipt_error {
                 collected_error = Some(match collected_error {
                     Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
                     None => error,
@@ -745,6 +825,7 @@ mod tests {
         lines: PathBuf,
         events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
         fail_execution: bool,
+        fail_output_receipt: bool,
     }
 
     impl WorkerSession for TestSession {
@@ -767,6 +848,9 @@ mod tests {
         fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
             if self.fail_execution && name == "MFB_HISTORY_WORKER_EXECUTION" {
                 bail!("synthetic execution observation storage failure");
+            }
+            if self.fail_output_receipt && name == "MFB_HISTORY_OUTPUT_STORAGE" {
+                bail!("synthetic output receipt storage failure");
             }
             self.events
                 .lock()
@@ -801,6 +885,7 @@ mod tests {
             lines: directory.join("session.log"),
             events: std::sync::Mutex::new(Vec::new()),
             fail_execution: false,
+            fail_output_receipt: false,
         }
     }
 
@@ -848,6 +933,37 @@ mod tests {
             observations[0]["invocation_id"],
             events[0].1["invocation_id"]
         );
+        let storage = events
+            .iter()
+            .filter(|(name, _)| name == "MFB_HISTORY_OUTPUT_STORAGE")
+            .map(|(_, payload)| payload)
+            .collect::<Vec<_>>();
+        assert_eq!(storage.len(), 1);
+        let storage = storage[0];
+        assert_eq!(storage["scope"], "captured_worker_output");
+        assert_eq!(storage["run_id"], "run-execution");
+        assert_eq!(storage["invocation_id"], events[0].1["invocation_id"]);
+        assert_eq!(storage["pipeline"], "cmd");
+        assert_eq!(storage["state"], "committed");
+        assert_eq!(storage["capture_complete"], true);
+        assert!(storage["diagnostic"].is_null());
+        let database = rusqlite::Connection::open(
+            directory
+                .path()
+                .join(crate::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        let (rows, bytes): (i64, i64) = database
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(length(CAST(line AS BLOB))), 0) FROM history_output",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(rows >= 4);
+        assert_eq!(storage["observed_records"], rows);
+        assert_eq!(storage["committed_records"], rows);
+        assert_eq!(storage["committed_utf8_bytes"], bytes);
         drop(events);
         let mut failing = test_session(directory.path(), None);
         failing.fail_execution = true;
@@ -863,9 +979,78 @@ mod tests {
                 .to_string()
                 .contains("worker execution history write failed")
         );
+        let mut receipt_failure = test_session(directory.path(), None);
+        receipt_failure.fail_output_receipt = true;
+        let error = command
+            .run_collecting(false, Some(&receipt_failure), false)
+            .unwrap_err();
+        let observed = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(observed.stats.exit_code, 7);
+        assert_eq!((observed.stats.succeeded, observed.stats.failed), (2, 1));
+        assert!(
+            format!("{:#}", observed.cause).contains("worker output storage receipt write failed")
+        );
         let dry = test_session(directory.path(), None);
         command.run_collecting(true, Some(&dry), false).unwrap();
         assert!(dry.events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn worker_output_storage_failure_records_only_committed_text_and_drains_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = test_session(directory.path(), Some("run-storage-failure"));
+        drop(HistoryOutputWriter::open(directory.path(), session.stamp()).unwrap());
+        let database = rusqlite::Connection::open(
+            directory
+                .path()
+                .join(crate::infra::history_store::HISTORY_DATABASE),
+        )
+        .unwrap();
+        database
+            .execute_batch(
+                "CREATE TRIGGER reject_output BEFORE INSERT ON history_output BEGIN SELECT RAISE(ABORT, 'synthetic output failure'); END;",
+            )
+            .unwrap();
+        let finished = directory.path().join("finished");
+        let command = LaunchCommand::from_argv(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf 'MFB_HISTORY_OUTPUT_STORAGE={}\\n'; i=0; while [ $i -lt 140 ]; do printf 'synthetic text\\n'; i=$((i+1)); done; printf 'Succeeded: 2\\nFailed: 1\\n'; printf done > \"$1\"; exit 7".into(),
+            "test".into(),
+            finished.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let error = command
+            .run_collecting(false, Some(&session), false)
+            .unwrap_err();
+        let observed = error.downcast_ref::<CollectedChildError>().unwrap();
+        assert_eq!(observed.stats.exit_code, 7);
+        assert_eq!((observed.stats.succeeded, observed.stats.failed), (2, 1));
+        assert_eq!(fs::read_to_string(finished).unwrap(), "done");
+        let events = session.events.lock().unwrap();
+        let receipts = events
+            .iter()
+            .filter(|(name, _)| name == "MFB_HISTORY_OUTPUT_STORAGE")
+            .map(|(_, payload)| payload)
+            .collect::<Vec<_>>();
+        assert_eq!(receipts.len(), 1);
+        let receipt = receipts[0];
+        assert_eq!(receipt["state"], "failed");
+        assert_eq!(receipt["capture_complete"], true);
+        assert!(receipt["observed_records"].as_u64().unwrap() >= 143);
+        assert_eq!(receipt["committed_records"], 0);
+        assert_eq!(receipt["committed_utf8_bytes"], 0);
+        assert!(
+            receipt["diagnostic"]
+                .as_str()
+                .unwrap()
+                .contains("synthetic output failure")
+        );
+        let rows: i64 = database
+            .query_row("SELECT COUNT(*) FROM history_output", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[test]

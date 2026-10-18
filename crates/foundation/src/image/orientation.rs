@@ -4,14 +4,14 @@ use crate::image::format_detect::FormatKind;
 use crate::unified_error::{ImgQualityError, Result};
 use std::path::Path;
 
-/// Outcome of a pixel-diff check.
+/// Outcome of the selected decoded-image evidence contract.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PixelDiffResult {
-    /// Diff is within the selected pixel-diff allowance.
+    /// The selected contract passed; JPEG geometry still requires separate byte proof.
     Match,
     /// Diff exceeds the selected tolerance.
     Mismatch { max_delta: u8, channel: u8 },
-    /// Decode tool absent — diff skipped (non-fatal). \[D11\]
+    /// Proof unavailable because its decoder is absent; callers must not accept it.
     SkippedToolAbsent { tool: &'static str },
 }
 
@@ -21,14 +21,12 @@ pub enum PixelDiffResult {
 pub enum DiffTolerance {
     /// Exact rendered-pixel match.
     Exact,
-    /// JXL geometry/structure proof against the source's EXIF display domain.
-    /// Deliberately ignores decoder/color-management channel drift.
+    /// An orientation-only request cannot prove a pixel or lossy quality contract.
     JxlOrientation,
-    /// Geometry proof after exact JPEG reconstruction has passed. The JXL
-    /// codestream, not its retained EXIF, defines djxl's rendered orientation.
+    /// JPEG reconstruction orientation/geometry proof; the caller must first
+    /// prove byte-identical JPEG reconstruction from the same final output.
     JxlReconstructionOrientation,
-    /// JXL proof used for final custody/source deletion. Unlike the
-    /// orientation-only check, this requires channel-level pixel equivalence.
+    /// Exact rendered sample equivalence; not a source-deletion authorization.
     JxlPixelEquivalent,
     /// Lossless HEIC/HEIF/WebP — one LSB per channel is allowed.
     LsbAvif,
@@ -39,11 +37,13 @@ pub enum DiffTolerance {
 impl DiffTolerance {
     const fn max_delta(self) -> u8 {
         match self {
-            // Exact and LossyAvif both require bit-identical comparison
-            // results; only their correlation preconditions differ.
-            Self::Exact | Self::LossyAvif => 0,
-            Self::JxlOrientation | Self::JxlReconstructionOrientation => u8::MAX,
-            Self::JxlPixelEquivalent | Self::LsbAvif => 1,
+            // Lossy AVIF is handled by its separate quality contract below.
+            Self::Exact
+            | Self::LossyAvif
+            | Self::JxlOrientation
+            | Self::JxlReconstructionOrientation
+            | Self::JxlPixelEquivalent => 0,
+            Self::LsbAvif => 1,
         }
     }
 }
@@ -56,11 +56,7 @@ pub const fn pixel_equivalence_diff_tolerance_for_format(fmt: FormatKind) -> Opt
     }
 }
 
-const JXL_ORIENTATION_MIN_STRUCTURE_CORRELATION: f64 = 0.82;
 const JXL_ORIENTATION_LOW_VARIANCE_EPSILON: f64 = 1.0e-6;
-const JXL_PIXEL_EQUIVALENT_MIN_STRUCTURE_CORRELATION: f64 = 0.995;
-const JXL_PIXEL_EQUIVALENT_MAX_MEAN_RGB_DELTA: f64 = 2.0;
-const JXL_PIXEL_EQUIVALENT_MAX_SINGLE_CHANNEL_DELTA: u8 = 16;
 const LOSSY_AVIF_MIN_STRUCTURE_CORRELATION: f64 = 0.75;
 const LOSSY_AVIF_FLAT_MAX_DELTA: u8 = 32;
 const LOSSY_AVIF_MAX_MEAN_RGB_DELTA: f64 = 24.0;
@@ -69,9 +65,11 @@ const LOSSY_AVIF_MAX_SINGLE_CHANNEL_DELTA: u8 = 160;
 #[must_use]
 pub const fn orientation_diff_tolerance_for_format(fmt: FormatKind) -> Option<DiffTolerance> {
     match fmt {
-        FormatKind::Jxl => Some(DiffTolerance::JxlOrientation),
-        FormatKind::Avif => Some(DiffTolerance::LossyAvif),
-        FormatKind::Heic | FormatKind::Heif | FormatKind::WebP => Some(DiffTolerance::LsbAvif),
+        FormatKind::Jxl
+        | FormatKind::Avif
+        | FormatKind::Heic
+        | FormatKind::Heif
+        | FormatKind::WebP => Some(DiffTolerance::Exact),
         FormatKind::Jpeg
         | FormatKind::Png
         | FormatKind::Gif
@@ -151,16 +149,10 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
     builder.overwrite_original().input(path).build()
 }
 
-/// Verify that the encoded `output` already has orientation-1 pixels before tag
-/// strip.
-///
-/// Algorithm:
-/// 1. Read `src_orient` from source EXIF.
-/// 2. Decode output to PNG via format-specific tool.
-/// 3. Decode source samples and apply its EXIF orientation. After exact JPEG
-///    reconstruction, use the JXL codestream's orientation for djxl PNG pixels;
-///    its JPEG reconstruction fallback instead returns raw scan samples.
-/// 4. Pixel-diff reference vs decoded output.
+/// Decode the output independently and verify the requested evidence contract.
+/// Pixel paths compare samples in the source's explicit display domain. JPEG
+/// reconstruction separately requires source and codestream orientation/raw
+/// geometry agreement; byte reconstruction alone is not a rendering proof.
 ///
 /// Decode tool absent → `PixelDiffResult::SkippedToolAbsent`. \[D11\]
 ///
@@ -214,7 +206,11 @@ pub fn verify_orientation_pixel_diff(
         );
         return Ok(PixelDiffResult::SkippedToolAbsent { tool: decoder_tool });
     };
-    let float_source = if diff_tolerance == DiffTolerance::Exact && fmt == FormatKind::Jxl {
+    let float_source = if matches!(
+        diff_tolerance,
+        DiffTolerance::Exact | DiffTolerance::JxlOrientation | DiffTolerance::JxlPixelEquivalent
+    ) && fmt == FormatKind::Jxl
+    {
         match crate::image_detection::open_image_with_limits(source_image) {
             Ok(image) => matches!(
                 image.color(),
@@ -249,47 +245,23 @@ pub fn verify_orientation_pixel_diff(
             "pixel-diff: unsupported decoded temp format for {fmt:?}"
         ))
     })?;
-    let mut tmp_decoded = orientation_decode_tempfile(if float_source {
+    let tmp_decoded = orientation_decode_tempfile(if float_source {
         ".pfm"
     } else {
         primary_temp_suffix
     })?;
 
-    let mut decode_output = decode_cmd(output, tmp_decoded.path()).map_err(|e| {
+    let decode_output = decode_cmd(output, tmp_decoded.path()).map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-diff: {decoder_tool} spawn failed: {e}"))
     })?;
     if !decode_output.status.success() {
-        if should_retry_jxl_decode_as_jpeg(fmt, &decode_output.stderr) {
-            let png_stderr =
-                first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
-            tracing::warn!(
-                target: "orientation_pixel_diff",
-                output = %output.display(),
-                png_stderr,
-                "pixel-diff: djxl PNG decode failed on embedded ICC; retrying JPEG reconstruction"
-            );
-            tmp_decoded = orientation_decode_tempfile(".jpg")?;
-            decode_output = decode_cmd(output, tmp_decoded.path()).map_err(|e| {
-                ImgQualityError::AnalysisError(format!(
-                    "pixel-diff: {decoder_tool} JPEG retry spawn failed: {e}"
-                ))
-            })?;
-            if !decode_output.status.success() {
-                let stderr =
-                    first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "pixel-diff: {decoder_tool} JPEG retry exited non-zero decoding {}: {stderr}",
-                    output.display()
-                )));
-            }
-        } else {
-            let stderr =
-                first_nonempty_tool_line(&decode_output.stderr).unwrap_or("<empty stderr>");
-            return Err(ImgQualityError::AnalysisError(format!(
-                "pixel-diff: {decoder_tool} exited non-zero decoding {}: {stderr}",
-                output.display()
-            )));
-        }
+        let stderr = String::from_utf8_lossy(&decode_output.stderr);
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: {decoder_tool} exited non-zero decoding {} ({}): {}",
+            output.display(),
+            decode_output.status,
+            stderr.trim(),
+        )));
     }
     log_suppressed_tool_output(
         decoder_tool,
@@ -298,31 +270,64 @@ pub fn verify_orientation_pixel_diff(
         &decode_output.stderr,
     );
 
-    let reconstruction_orientation =
-        if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
-            Some(
-                if tmp_decoded
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "jpg")
-                {
-                    1
-                } else {
-                    read_jxl_codestream_orientation(output)?
-                },
-            )
-        } else {
-            None
-        };
-    verify_pixel_diff_against_decoded_image(
-        source_image,
-        tmp_decoded.path(),
-        diff_tolerance,
-        reconstruction_orientation,
-    )
+    if diff_tolerance == DiffTolerance::JxlReconstructionOrientation {
+        let source_orientation = read_exif_orientation(source_image)?;
+        let source_dimensions = image::image_dimensions(source_image).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "pixel-diff: cannot read source JPEG geometry: {error}"
+            ))
+        })?;
+        let decoded_dimensions = image::image_dimensions(tmp_decoded.path()).map_err(|error| {
+            ImgQualityError::AnalysisError(format!(
+                "pixel-diff: cannot read independently decoded JXL geometry: {error}"
+            ))
+        })?;
+        verify_reconstruction_geometry(
+            source_orientation,
+            source_dimensions,
+            read_jxl_codestream_info(output)?,
+            decoded_dimensions,
+        )?;
+        return Ok(PixelDiffResult::Match);
+    }
+    verify_pixel_diff_against_decoded_image(source_image, tmp_decoded.path(), diff_tolerance)
 }
 
-fn read_jxl_codestream_orientation(path: &Path) -> Result<u8> {
+#[derive(Debug, Clone, Copy)]
+struct JxlCodestreamInfo {
+    orientation: u8,
+    dimensions: (u32, u32),
+}
+
+fn verify_reconstruction_geometry(
+    source_orientation: u8,
+    source_dimensions: (u32, u32),
+    codestream: JxlCodestreamInfo,
+    decoded_dimensions: (u32, u32),
+) -> Result<()> {
+    let display_dimensions = if orientation_swaps_dimensions(source_orientation) {
+        (source_dimensions.1, source_dimensions.0)
+    } else {
+        source_dimensions
+    };
+    if source_dimensions.0 == 0
+        || source_dimensions.1 == 0
+        || !(1..=8).contains(&source_orientation)
+        || source_orientation != codestream.orientation
+        || source_dimensions != codestream.dimensions
+        || display_dimensions != decoded_dimensions
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: JPEG/JXL orientation or geometry mismatch: source_orientation={source_orientation} \
+             codestream_orientation={} source_raw={source_dimensions:?} codestream_raw={:?} \
+             expected_display={display_dimensions:?} decoded_display={decoded_dimensions:?}",
+            codestream.orientation, codestream.dimensions
+        )));
+    }
+    Ok(())
+}
+
+fn read_jxl_codestream_info(path: &Path) -> Result<JxlCodestreamInfo> {
     use crate::builder_base::ToolBuilder;
 
     if !crate::tool_builders::JxlinfoBuilder::check_available() {
@@ -346,7 +351,33 @@ fn read_jxl_codestream_orientation(path: &Path) -> Result<u8> {
             output.stderr.trim()
         )));
     }
-    parse_jxlinfo_orientation(&output.stdout)
+    parse_jxlinfo_info(&output.stdout)
+}
+
+fn parse_jxlinfo_info(stdout: &str) -> Result<JxlCodestreamInfo> {
+    let invalid = || {
+        ImgQualityError::AnalysisError(
+            "pixel-diff: missing, duplicate or invalid JXL raw codestream dimensions".into(),
+        )
+    };
+    let mut headers = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("JPEG XL image, "));
+    let dimensions = headers.next().ok_or_else(invalid)?;
+    if headers.next().is_some() {
+        return Err(invalid());
+    }
+    let dimensions = dimensions.split_once(", ").ok_or_else(invalid)?.0;
+    let (width, height) = dimensions.split_once('x').ok_or_else(invalid)?;
+    let width = width.parse::<u32>().map_err(|_| invalid())?;
+    let height = height.parse::<u32>().map_err(|_| invalid())?;
+    if width == 0 || height == 0 {
+        return Err(invalid());
+    }
+    Ok(JxlCodestreamInfo {
+        orientation: parse_jxlinfo_orientation(stdout)?,
+        dimensions: (width, height),
+    })
 }
 
 fn parse_jxlinfo_orientation(stdout: &str) -> Result<u8> {
@@ -470,10 +501,10 @@ fn decode_source_with_official_tool(
         "pixel-diff: decoding unsupported source with official format decoder"
     );
 
-    let mut decoded_file = orientation_decode_tempfile(".png")?;
+    let decoded_file = orientation_decode_tempfile(".png")?;
     let mut command =
         official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
-    let mut output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
+    let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
         .and_then(|process| {
             process.wait_liveness_timeout(
                 std::time::Duration::from_secs(120),
@@ -486,28 +517,6 @@ fn decode_source_with_official_tool(
                 "pixel-diff: official {tool} source decode failed to run: {e}"
             ))
         })?;
-
-    if !output.status.success()
-        && decoder == OfficialSourceDecoder::Jxl
-        && should_retry_jxl_decode_as_jpeg(format, output.stderr.as_bytes())
-    {
-        decoded_file = orientation_decode_tempfile(".jpg")?;
-        let mut retry =
-            official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
-        output = crate::process_runner::ManagedProcess::spawn_captured(&mut retry)
-            .and_then(|process| {
-                process.wait_liveness_timeout(
-                    std::time::Duration::from_secs(120),
-                    crate::process_runner::image_process_hard_timeout(),
-                    "pixel-diff official djxl JPEG source retry",
-                )
-            })
-            .map_err(|e| {
-                ImgQualityError::AnalysisError(format!(
-                    "pixel-diff: official djxl JPEG source retry failed to run: {e}"
-                ))
-            })?;
-    }
 
     if !output.status.success() {
         let stderr = output
@@ -564,17 +573,8 @@ fn verify_pixel_diff_against_decoded_image(
     source_image: &Path,
     decoded_output: &Path,
     tol: DiffTolerance,
-    reconstruction_orientation: Option<u8>,
 ) -> Result<PixelDiffResult> {
-    let reference_orientation = match (tol, reconstruction_orientation) {
-        (DiffTolerance::JxlReconstructionOrientation, Some(orientation @ 1..=8)) => orientation,
-        (DiffTolerance::JxlReconstructionOrientation, _) | (_, Some(_)) => {
-            return Err(ImgQualityError::AnalysisError(
-                "pixel-diff: missing or invalid reconstruction orientation domain".to_string(),
-            ));
-        }
-        (_, None) => read_exif_orientation(source_image)?,
-    };
+    let reference_orientation = read_exif_orientation(source_image)?;
     let out_img = if decoded_output
         .extension()
         .is_some_and(|extension| extension == "pfm")
@@ -666,13 +666,6 @@ fn read_float_pfm(path: &Path) -> Result<image::DynamicImage> {
     Ok(image::DynamicImage::ImageRgb32F(buffer).flipv())
 }
 
-fn should_retry_jxl_decode_as_jpeg(fmt: FormatKind, stderr: &[u8]) -> bool {
-    if fmt != FormatKind::Jxl {
-        return false;
-    }
-    crate::image::jxl_utils::is_jxl_png_icc_decode_error(&String::from_utf8_lossy(stderr))
-}
-
 fn first_nonempty_tool_line(bytes: &[u8]) -> Option<&str> {
     match std::str::from_utf8(bytes) {
         Ok(text) => text.lines().map(str::trim).find(|line| !line.is_empty()),
@@ -737,28 +730,6 @@ fn diff_orientation_images(
     output: &Path,
 ) -> Result<PixelDiffResult> {
     let ref_img = apply_orientation_transform(raw_source.clone(), src_orient);
-    let oriented_dims = (ref_img.width(), ref_img.height());
-    let output_dims = (out_img.width(), out_img.height());
-    let raw_dims = (raw_source.width(), raw_source.height());
-
-    if tol == DiffTolerance::JxlPixelEquivalent
-        && orientation_swaps_dimensions(src_orient)
-        && oriented_dims != output_dims
-        && raw_dims == output_dims
-    {
-        tracing::info!(
-            target: "orientation_pixel_diff",
-            orientation = src_orient,
-            raw_width = raw_dims.0,
-            raw_height = raw_dims.1,
-            oriented_width = oriented_dims.0,
-            oriented_height = oriented_dims.1,
-            output = %output.display(),
-            "pixel-diff: JXL lossless output decodes to raw JPEG dimensions; verifying raw source structure"
-        );
-        return diff_dynamic_images(raw_source, out_img, tol, output);
-    }
-
     diff_dynamic_images(&ref_img, out_img, tol, output)
 }
 
@@ -785,15 +756,17 @@ fn diff_dynamic_images(
         tol,
         DiffTolerance::JxlOrientation | DiffTolerance::JxlReconstructionOrientation
     ) {
-        return diff_jxl_orientation_structure(ref_img, out_img);
-    }
-    if tol == DiffTolerance::JxlPixelEquivalent {
-        return diff_jxl_pixel_equivalence(ref_img, out_img);
+        return Err(ImgQualityError::AnalysisError(
+            "pixel-diff: orientation-only comparison is not an explicit sample or lossy quality proof".into(),
+        ));
     }
     if tol == DiffTolerance::LossyAvif {
         return diff_lossy_avif_structure(ref_img, out_img);
     }
-    if tol == DiffTolerance::Exact {
+    if matches!(
+        tol,
+        DiffTolerance::Exact | DiffTolerance::JxlPixelEquivalent
+    ) {
         return diff_exact_samples(ref_img, out_img);
     }
 
@@ -876,28 +849,6 @@ fn diff_exact_samples(
     Ok(PixelDiffResult::Match)
 }
 
-fn diff_jxl_pixel_equivalence(
-    ref_img: &image::DynamicImage,
-    out_img: &image::DynamicImage,
-) -> Result<PixelDiffResult> {
-    let max_delta = max_rgb_delta(ref_img, out_img)?;
-    let mean_delta = mean_rgb_delta(ref_img, out_img)?;
-    let correlation = pearson_correlation(&luma_samples(ref_img), &luma_samples(out_img));
-    let structure_matches =
-        correlation.is_none_or(|score| score >= JXL_PIXEL_EQUIVALENT_MIN_STRUCTURE_CORRELATION);
-    if structure_matches
-        && mean_delta <= JXL_PIXEL_EQUIVALENT_MAX_MEAN_RGB_DELTA
-        && max_delta <= JXL_PIXEL_EQUIVALENT_MAX_SINGLE_CHANNEL_DELTA
-    {
-        Ok(PixelDiffResult::Match)
-    } else {
-        Ok(PixelDiffResult::Mismatch {
-            max_delta,
-            channel: 0,
-        })
-    }
-}
-
 fn diff_lossy_avif_structure(
     ref_img: &image::DynamicImage,
     out_img: &image::DynamicImage,
@@ -967,44 +918,6 @@ fn composite_on_black(img: &image::DynamicImage) -> image::DynamicImage {
             ])
         },
     ))
-}
-
-fn diff_jxl_orientation_structure(
-    ref_img: &image::DynamicImage,
-    out_img: &image::DynamicImage,
-) -> Result<PixelDiffResult> {
-    let ref_luma = luma_samples(ref_img);
-    let out_luma = luma_samples(out_img);
-    let max_delta = max_rgb_delta(ref_img, out_img)?;
-    let Some(correlation) = pearson_correlation(&ref_luma, &out_luma) else {
-        // If both images are flat, orientation is visually unobservable. Dimension
-        // equality above is the only meaningful geometry proof for flat content.
-        return Ok(PixelDiffResult::Match);
-    };
-
-    if correlation < JXL_ORIENTATION_MIN_STRUCTURE_CORRELATION {
-        if correlation < 0.1 {
-            return Ok(PixelDiffResult::Mismatch {
-                max_delta,
-                channel: 0,
-            });
-        }
-        // Low correlation indicates a tonally unusual source (CMYK, heavy
-        // saturation, extreme exposure). The BLAKE3 lossless proof that ran
-        // before this check already guarantees bit-exact roundtrip; a low
-        // Pearson score is not evidence of a geometry error — it is evidence
-        // that the source has unusual channel distribution.
-        tracing::warn!(
-            target: "orientation_pixel_diff",
-            correlation,
-            max_delta,
-            "JXL structure correlation below threshold; BLAKE3 lossless proof \
-             already passed — treating as orientation-correct (tonally unusual source)"
-        );
-        return Ok(PixelDiffResult::Match);
-    }
-
-    Ok(PixelDiffResult::Match)
 }
 
 fn luma_samples(img: &image::DynamicImage) -> Vec<f64> {
@@ -1081,7 +994,8 @@ fn read_exif_orientation(path: &Path) -> Result<u8> {
     let out = ExiftoolBuilder::new()
         .arg("-n")
         .arg("-s3")
-        .arg("-Orientation")
+        .arg("-a")
+        .arg("-IFD0:Orientation")
         .input(path)
         .build()
         .output()
@@ -1091,42 +1005,48 @@ fn read_exif_orientation(path: &Path) -> Result<u8> {
                 path.display()
             ))
         })?;
-    parse_exif_orientation_stdout(path, &out.stdout)
+    parse_exif_orientation_evidence(path, out.status.success(), &out.stdout, &out.stderr)
+}
+
+fn parse_exif_orientation_evidence(
+    path: &Path,
+    succeeded: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<u8> {
+    if !succeeded {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: exiftool exited non-zero reading source orientation for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(stderr).trim()
+        )));
+    }
+    if stdout.iter().all(u8::is_ascii_whitespace)
+        && stderr.iter().any(|byte| !byte.is_ascii_whitespace())
+    {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "pixel-diff: source orientation absent from incomplete metadata read for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(stderr).trim()
+        )));
+    }
+    parse_exif_orientation_stdout(path, stdout)
 }
 
 fn parse_exif_orientation_stdout(path: &Path, stdout: &[u8]) -> Result<u8> {
-    let raw = String::from_utf8_lossy(stdout);
+    let raw = std::str::from_utf8(stdout).map_err(|error| {
+        ImgQualityError::AnalysisError(format!("pixel-diff: invalid orientation text: {error}"))
+    })?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(1);
     }
-    let orientation = trimmed
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| {
-            ImgQualityError::AnalysisError(format!(
-                "pixel-diff: empty orientation token for {}",
-                path.display()
-            ))
-        })?
-        .parse::<u8>()
-        .map_err(|e| {
-            ImgQualityError::AnalysisError(format!(
-                "pixel-diff: invalid numeric orientation for {}: {trimmed:?} ({e})",
-                path.display()
-            ))
-        })?;
-    if orientation == 0 {
-        // Orientation=0 is invalid per EXIF spec but is common in stripped or
-        // non-compliant JPEG files (e.g. iOS cache images). Treat as 1 (normal)
-        // without warning — this is a known-safe, handled edge case.
-        tracing::debug!(
-            target: "orientation_pixel_diff",
-            source = %path.display(),
-            "pixel-diff: EXIF Orientation=0 is invalid; treating as orientation=1 for visual proof"
-        );
-        return Ok(1);
-    }
+    let orientation = trimmed.parse::<u8>().map_err(|e| {
+        ImgQualityError::AnalysisError(format!(
+            "pixel-diff: invalid numeric orientation for {}: {trimmed:?} ({e})",
+            path.display()
+        ))
+    })?;
     if !(1..=8).contains(&orientation) {
         return Err(ImgQualityError::AnalysisError(format!(
             "pixel-diff: EXIF orientation out of range for {}: {orientation}",
@@ -1139,19 +1059,13 @@ fn parse_exif_orientation_stdout(path: &Path, stdout: &[u8]) -> Result<u8> {
 /// Apply EXIF orientation transform to produce orientation-1 pixels.
 fn apply_orientation_transform(img: image::DynamicImage, orient: u8) -> image::DynamicImage {
     match orient {
-        2 => image::DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&img.to_rgba8())),
-        3 => image::DynamicImage::ImageRgba8(image::imageops::rotate180(&img.to_rgba8())),
-        4 => image::DynamicImage::ImageRgba8(image::imageops::flip_vertical(&img.to_rgba8())),
-        5 => {
-            let r = image::imageops::rotate90(&img.to_rgba8());
-            image::DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&r))
-        }
-        6 => image::DynamicImage::ImageRgba8(image::imageops::rotate90(&img.to_rgba8())),
-        7 => {
-            let r = image::imageops::rotate270(&img.to_rgba8());
-            image::DynamicImage::ImageRgba8(image::imageops::flip_horizontal(&r))
-        }
-        8 => image::DynamicImage::ImageRgba8(image::imageops::rotate270(&img.to_rgba8())),
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
         _ => img,
     }
 }
@@ -1161,7 +1075,7 @@ mod tests {
     use super::{
         DiffTolerance, PixelDiffResult, decode_temp_extension_for_format, diff_dynamic_images,
         diff_orientation_images, official_source_decoder, orientation_diff_tolerance_for_format,
-        parse_exif_orientation_stdout, read_exif_orientation, should_retry_jxl_decode_as_jpeg,
+        parse_exif_orientation_stdout, read_exif_orientation,
         verify_pixel_diff_against_decoded_image,
     };
     use crate::image::format_detect::FormatKind;
@@ -1212,21 +1126,6 @@ mod tests {
     }
 
     #[test]
-    fn jxl_png_iccp_failure_uses_jpeg_reconstruction_fallback() {
-        let stderr =
-            b"JPEG XL decoder v0.11.2\nDecoded to pixels.\nlibpng error: Incorrect data in iCCP\n";
-
-        assert!(should_retry_jxl_decode_as_jpeg(FormatKind::Jxl, stderr));
-    }
-
-    #[test]
-    fn non_jxl_png_iccp_failure_stays_strict() {
-        let stderr = b"libpng error: Incorrect data in iCCP\n";
-
-        assert!(!should_retry_jxl_decode_as_jpeg(FormatKind::Avif, stderr));
-    }
-
-    #[test]
     fn unsupported_modern_sources_use_official_decoders() {
         assert_eq!(
             official_source_decoder(FormatKind::Avif).map(super::OfficialSourceDecoder::tool),
@@ -1248,24 +1147,127 @@ mod tests {
     }
 
     #[test]
-    fn jxl_reconstruction_orientation_accepts_the_explicit_raw_domain() {
-        let raw_source = patterned_image(2, 3);
-        let decoded_lossless_jxl = raw_source.clone();
+    fn reconstruction_requires_source_and_codestream_orientation_agreement() {
+        for dimensions in [(32, 32), (32, 48)] {
+            for orientation in 1..=8 {
+                let display = if super::orientation_swaps_dimensions(orientation) {
+                    (dimensions.1, dimensions.0)
+                } else {
+                    dimensions
+                };
+                for actual in 1..=8 {
+                    let result = super::verify_reconstruction_geometry(
+                        orientation,
+                        dimensions,
+                        super::JxlCodestreamInfo {
+                            orientation: actual,
+                            dimensions,
+                        },
+                        display,
+                    );
+                    assert_eq!(result.is_ok(), orientation == actual);
+                }
+                assert!(
+                    super::verify_reconstruction_geometry(
+                        orientation,
+                        dimensions,
+                        super::JxlCodestreamInfo {
+                            orientation,
+                            dimensions: (1, 1)
+                        },
+                        display,
+                    )
+                    .is_err()
+                );
+                assert!(
+                    super::verify_reconstruction_geometry(
+                        orientation,
+                        dimensions,
+                        super::JxlCodestreamInfo {
+                            orientation,
+                            dimensions
+                        },
+                        (1, 1),
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
 
-        for tolerance in [
-            DiffTolerance::JxlOrientation,
-            DiffTolerance::JxlReconstructionOrientation,
-        ] {
-            let result = diff_orientation_images(
-                &raw_source,
-                1,
-                &decoded_lossless_jxl,
-                tolerance,
-                std::path::Path::new("out.jxl"),
-            )
-            .expect("raw-orientation JXL proof should not fail dimension check");
+    #[test]
+    fn jpeg_reconstruction_does_not_hide_short_exif_orientation_loss() {
+        use crate::ToolBuilder;
 
-            assert_eq!(result, PixelDiffResult::Match);
+        const CONTRACT: &str = "JPEG reconstruction independent orientation evidence";
+        for tool in ["cjxl", "djxl", "jxlinfo", "exiftool"] {
+            if crate::common_utils::resolve_tool_path(tool).is_none() {
+                crate::test_ci_contract::require_tool_on_path(tool, CONTRACT);
+                eprintln!("{CONTRACT}: {tool} unavailable; local codec test not run");
+                return;
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let plain = root.path().join("plain.jpg");
+        patterned_image(32, 48)
+            .save_with_format(&plain, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = std::fs::read(&plain).unwrap();
+        assert_eq!(&jpeg[..2], &[0xff, 0xd8]);
+
+        for complete_ifd in [false, true] {
+            // The short IFD retains its readable Orientation entry, but lacks
+            // the next-IFD offset; no source repair is permitted by this test.
+            let mut exif =
+                b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0".to_vec();
+            if complete_ifd {
+                exif.extend([0; 4]);
+            }
+            let mut source_bytes = jpeg[..2].to_vec();
+            source_bytes.extend([0xff, 0xe1]);
+            source_bytes.extend(u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+            source_bytes.extend(exif);
+            source_bytes.extend_from_slice(&jpeg[2..]);
+            let source = root.path().join(format!("ifd-{complete_ifd}.jpg"));
+            let output = source.with_extension("jxl");
+            std::fs::write(&source, &source_bytes).unwrap();
+            assert_eq!(read_exif_orientation(&source).unwrap(), 6);
+            let encoded = crate::CjxlBuilder::new()
+                .input(&source)
+                .output(&output)
+                .effort(1)
+                .threads(1)
+                .lossless_jpeg(true)
+                .allow_jpeg_reconstruction(true)
+                .build()
+                .output()
+                .unwrap();
+            assert!(
+                encoded.status.success(),
+                "{}",
+                String::from_utf8_lossy(&encoded.stderr)
+            );
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(&source, &output).unwrap();
+            let actual = super::read_jxl_codestream_info(&output).unwrap();
+            let evidence = crate::image::fast_img::verify_final_delivery_integrity(
+                &source,
+                &output,
+                FormatKind::Jxl,
+            );
+            if complete_ifd || actual.orientation == 6 {
+                assert_eq!(actual.orientation, 6);
+                evidence.expect("matching explicit source and codestream orientation");
+            } else {
+                let error =
+                    evidence.expect_err("byte reconstruction cannot excuse lost orientation");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("JPEG/JXL orientation or geometry mismatch"),
+                    "{error}"
+                );
+            }
+            assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
         }
     }
 
@@ -1281,10 +1283,7 @@ mod tests {
         }));
         for orientation in 1..=8 {
             let rendered = super::apply_orientation_transform(raw_source.clone(), orientation);
-            for tolerance in [
-                DiffTolerance::JxlOrientation,
-                DiffTolerance::JxlReconstructionOrientation,
-            ] {
+            for tolerance in [DiffTolerance::Exact, DiffTolerance::JxlPixelEquivalent] {
                 let result = diff_orientation_images(
                     &raw_source,
                     orientation,
@@ -1312,20 +1311,37 @@ mod tests {
     }
 
     #[test]
-    fn jxl_reconstruction_orientation_rejects_missing_or_invalid_domain() {
-        let source = std::path::Path::new("source.jpg");
-        for orientation in [None, Some(0), Some(9)] {
-            let error = verify_pixel_diff_against_decoded_image(
-                source,
-                std::path::Path::new("decoded.png"),
-                DiffTolerance::JxlReconstructionOrientation,
-                orientation,
-            )
-            .expect_err("unproven orientation domain must fail before file access");
+    fn jxl_reconstruction_requires_valid_raw_dimensions() {
+        let valid =
+            "JPEG XL image, 32x48, (possibly) lossless, 8-bit RGB\nOrientation: 6 (Rotate 90 CW)\n";
+        let info = super::parse_jxlinfo_info(valid).unwrap();
+        assert_eq!(info.dimensions, (32, 48));
+        assert_eq!(info.orientation, 6);
+        for header in [
+            "",
+            "JPEG XL image, 0x48, lossless",
+            "JPEG XL image, 32xno, lossless",
+            "JPEG XL image, 32x48x3, lossless",
+            "JPEG XL animation, 32x48, lossless",
+            "JPEG XL image, 32x48, lossless\nJPEG XL image, 32x48, lossless",
+        ] {
             assert!(
-                error
-                    .to_string()
-                    .contains("reconstruction orientation domain")
+                super::parse_jxlinfo_info(&format!("{header}\nOrientation: 6 (Rotate 90 CW)\n"))
+                    .is_err()
+            );
+        }
+        for dimensions in [(0, 0), (0, 48), (32, 0)] {
+            assert!(
+                super::verify_reconstruction_geometry(
+                    1,
+                    dimensions,
+                    super::JxlCodestreamInfo {
+                        orientation: 1,
+                        dimensions
+                    },
+                    dimensions,
+                )
+                .is_err()
             );
         }
     }
@@ -1354,11 +1370,23 @@ mod tests {
     }
 
     #[test]
-    fn shared_orientation_policy_selects_jxl_tolerance() {
-        assert_eq!(
-            orientation_diff_tolerance_for_format(FormatKind::Jxl),
-            Some(DiffTolerance::JxlOrientation)
-        );
+    fn shared_orientation_policy_requires_exact_samples_by_default() {
+        for format in [
+            FormatKind::Jxl,
+            FormatKind::Avif,
+            FormatKind::Heic,
+            FormatKind::Heif,
+            FormatKind::WebP,
+        ] {
+            assert_eq!(
+                orientation_diff_tolerance_for_format(format),
+                Some(DiffTolerance::Exact)
+            );
+            assert!(matches!(
+                super::pixel_equivalence_diff_tolerance_for_format(format),
+                Some(DiffTolerance::Exact | DiffTolerance::JxlPixelEquivalent)
+            ));
+        }
     }
 
     #[test]
@@ -1463,6 +1491,56 @@ mod tests {
                 channel: 0
             }
         );
+    }
+
+    #[test]
+    fn orientation_transforms_preserve_integer_and_float_sample_bits() {
+        let integer = DynamicImage::ImageRgb16(ImageBuffer::from_fn(2, 3, |x, y| {
+            Rgb([0x1201 + u16::try_from(x + y).unwrap(), 0x3403, 0x5605])
+        }));
+        let float = DynamicImage::ImageRgb32F(ImageBuffer::from_fn(2, 3, |x, y| {
+            Rgb([
+                f32::from_bits(0x3e00_0001 + x + y),
+                -0.0,
+                f32::from_bits(0x7fc0_0001),
+            ])
+        }));
+        for orientation in 1..=8 {
+            for source in [&integer, &float] {
+                let mut rendered = super::apply_orientation_transform(source.clone(), orientation);
+                assert_eq!(source.color(), rendered.color());
+                assert_eq!(
+                    diff_orientation_images(
+                        source,
+                        orientation,
+                        &rendered,
+                        DiffTolerance::Exact,
+                        std::path::Path::new("rendered.png"),
+                    )
+                    .unwrap(),
+                    PixelDiffResult::Match
+                );
+                match &mut rendered {
+                    DynamicImage::ImageRgb16(pixels) => pixels.get_pixel_mut(0, 0).0[0] ^= 1,
+                    DynamicImage::ImageRgb32F(pixels) => {
+                        let sample = &mut pixels.get_pixel_mut(0, 0).0[0];
+                        *sample = f32::from_bits(sample.to_bits() ^ 1);
+                    }
+                    _ => panic!("orientation changed the source sample type"),
+                }
+                assert!(matches!(
+                    diff_orientation_images(
+                        source,
+                        orientation,
+                        &rendered,
+                        DiffTolerance::Exact,
+                        std::path::Path::new("mutated.png"),
+                    )
+                    .unwrap(),
+                    PixelDiffResult::Mismatch { .. }
+                ));
+            }
+        }
     }
 
     #[test]
@@ -1593,19 +1671,21 @@ mod tests {
     }
 
     #[test]
-    fn jxl_orientation_allows_bounded_decoder_drift() {
+    fn orientation_only_cannot_authorize_an_image_contract() {
         let ref_img = rgb_image([10, 20, 30]);
         let out_img = rgb_image([210, 40, 90]);
 
-        let result = diff_dynamic_images(
-            &ref_img,
-            &out_img,
-            DiffTolerance::JxlOrientation,
-            std::path::Path::new("out.jxl"),
-        )
-        .unwrap();
-
-        assert_eq!(result, PixelDiffResult::Match);
+        for candidate in [&ref_img, &out_img] {
+            assert!(
+                diff_dynamic_images(
+                    &ref_img,
+                    candidate,
+                    DiffTolerance::JxlOrientation,
+                    std::path::Path::new("out.jxl"),
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1624,14 +1704,14 @@ mod tests {
         assert_eq!(
             result,
             PixelDiffResult::Mismatch {
-                max_delta: 200,
+                max_delta: u8::MAX,
                 channel: 0
             }
         );
     }
 
     #[test]
-    fn jxl_pixel_equivalence_allows_one_lsb_decoder_drift() {
+    fn jxl_pixel_equivalence_rejects_one_lsb_decoder_drift() {
         let ref_img = rgb_image([10, 20, 30]);
         let out_img = rgb_image([11, 20, 30]);
 
@@ -1643,11 +1723,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result, PixelDiffResult::Match);
+        assert!(matches!(result, PixelDiffResult::Mismatch { .. }));
     }
 
     #[test]
-    fn jxl_orientation_allows_large_color_drift_when_structure_matches() {
+    fn jxl_pixel_equivalence_rejects_correlated_color_changes() {
         let ref_img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(3, 2, |x, y| {
             let base = crate::numeric_cast::u32_shifted_byte_to_u8(x * 70 + y * 20, 0);
             Rgb([base, base.saturating_add(10), base.saturating_add(20)])
@@ -1664,12 +1744,12 @@ mod tests {
         let result = diff_dynamic_images(
             &ref_img,
             &out_img,
-            DiffTolerance::JxlOrientation,
+            DiffTolerance::JxlPixelEquivalent,
             std::path::Path::new("out.jxl"),
         )
         .unwrap();
 
-        assert_eq!(result, PixelDiffResult::Match);
+        assert!(matches!(result, PixelDiffResult::Mismatch { .. }));
     }
 
     #[test]
@@ -1683,7 +1763,7 @@ mod tests {
         let result = diff_dynamic_images(
             &ref_img,
             &out_img,
-            DiffTolerance::JxlOrientation,
+            DiffTolerance::JxlPixelEquivalent,
             std::path::Path::new("out.jxl"),
         )
         .unwrap();
@@ -1691,7 +1771,7 @@ mod tests {
         assert_eq!(
             result,
             PixelDiffResult::Mismatch {
-                max_delta: 160,
+                max_delta: u8::MAX,
                 channel: 0
             }
         );
@@ -1835,13 +1915,38 @@ mod tests {
 
     #[test]
     fn no_orientation_tag_defaults_to_one() {
-        let tmp = NamedTempFile::new().unwrap();
+        assert_eq!(
+            parse_exif_orientation_stdout(std::path::Path::new("source.png"), b"\n").unwrap(),
+            1
+        );
+    }
 
-        if crate::common_utils::is_command_available("exiftool") {
-            assert_eq!(read_exif_orientation(tmp.path()).unwrap(), 1);
-        } else {
-            assert!(read_exif_orientation(tmp.path()).is_err());
+    #[test]
+    fn failed_source_orientation_read_cannot_default_to_one() {
+        let tmp = NamedTempFile::new().unwrap();
+        assert!(read_exif_orientation(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn source_orientation_defaults_require_a_successful_complete_read() {
+        let source = std::path::Path::new("source.jpg");
+        for (succeeded, stdout, stderr) in [
+            (false, b"".as_slice(), b"read failed".as_slice()),
+            (false, b"6\n", b"read failed"),
+            (true, b"\n", b"Warning: metadata truncated"),
+        ] {
+            assert!(
+                super::parse_exif_orientation_evidence(source, succeeded, stdout, stderr).is_err()
+            );
         }
+        assert_eq!(
+            super::parse_exif_orientation_evidence(source, true, b"\n", b"").unwrap(),
+            1
+        );
+        assert_eq!(
+            super::parse_exif_orientation_evidence(source, true, b"6\n", b"").unwrap(),
+            6
+        );
     }
 
     #[test]
@@ -1852,13 +1957,19 @@ mod tests {
     }
 
     #[test]
-    fn zero_orientation_stdout_defaults_to_one() {
+    fn invalid_or_conflicting_orientation_stdout_fails_closed() {
         let tmp = NamedTempFile::new().unwrap();
 
-        assert_eq!(
-            parse_exif_orientation_stdout(tmp.path(), b"0\n").unwrap(),
-            1
-        );
+        for text in [
+            b"0\n".as_slice(),
+            b"9\n",
+            b"6\n3\n",
+            b"6\n6\n",
+            b"6 extra\n",
+            b"\xff",
+        ] {
+            assert!(parse_exif_orientation_stdout(tmp.path(), text).is_err());
+        }
     }
 
     #[test]
@@ -1882,11 +1993,9 @@ mod tests {
             .save_with_format(decoded_stub.path(), image::ImageFormat::Png)
             .unwrap();
 
-        let result = verify_pixel_diff_against_decoded_image(
+        let result = super::decode_source_with_official_tool(
             heic_stub.path(),
-            decoded_stub.path(),
-            DiffTolerance::Exact,
-            None,
+            &ImgQualityError::AnalysisError("unsupported fixture source".into()),
         );
 
         match result {
@@ -1922,12 +2031,8 @@ mod tests {
         img2.save_with_format(f2.path(), image::ImageFormat::Png)
             .unwrap();
 
-        let result = verify_pixel_diff_against_decoded_image(
-            f1.path(),
-            f2.path(),
-            DiffTolerance::Exact,
-            None,
-        );
+        let result =
+            verify_pixel_diff_against_decoded_image(f1.path(), f2.path(), DiffTolerance::Exact);
 
         match result {
             Err(ImgQualityError::AnalysisError(msg)) => {

@@ -586,6 +586,17 @@
 "settings.vidForceMsSsimLong.help" = "標準 VID のみ。長い動画も融合品質検査を実行します。時間がかかる場合がありますが、コーデック選択を変えたり検証を省略したりしません。変更しなければ処理側の設定を継承します。";
 "history.worker.not_recorded" = "ワーカー起動の記録はありません。";
 "history.worker.invalid" = "ワーカー起動の記録が不完全または無効です。";
+"history.output_storage.title" = "処理プログラム出力の保存状況";
+"history.output_storage.attention" = "出力の保存を確認";
+"history.output_storage.note" = "受信したワーカー出力の記録であり、すべての内部ログや履歴イベントは含みません。記録件数はファイル数ではなく、UTF-8 バイト数はデータベースの付加領域を含みません。保存はメディアの引き渡し成功を証明しません。";
+"history.output_storage.committed" = "受信した出力を履歴に保存しました。";
+"history.output_storage.failed" = "出力の保存時にエラーが発生しました。一部は保存されている場合があります。";
+"history.output_storage.capture_complete" = "出力の末尾まで受信し、プロセス待機が終了しました。処理の成功を意味するものではありません。";
+"history.output_storage.capture_incomplete" = "出力の収集が完了していません。未受信の内容が残っている場合があります。";
+"history.output_storage.counts" = "受信した記録：%@ 件 · 保存確認済み：%@ 件 · 確認済み UTF-8 バイト数：%@";
+"history.output_storage.not_recorded" = "出力保存の記録がないため、保存の完全性は不明です。";
+"history.output_storage.invalid" = "この呼び出しの出力保存記録が矛盾しているか無効であり、保存の完全性を確認できません。";
+"history.output_storage.unbound" = "この実行のワーカー呼び出しに関連付けられない出力保存記録があります。";
 "history.detail.invocation_id" = "呼び出し ID";
 "history.detail.worker_program" = "起動要求のプログラム";
 "history.detail.worker_path" = "観測した実行ファイルのパス";

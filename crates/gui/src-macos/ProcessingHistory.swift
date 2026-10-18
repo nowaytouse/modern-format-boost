@@ -436,6 +436,41 @@ private struct HistoryWorkerExecution: Codable, Equatable {
     }
 }
 
+private struct HistoryOutputStorage: Codable, Equatable {
+    static let prefix = "MFB_HISTORY_OUTPUT_STORAGE="
+    let schema_version: Int
+    let scope: String
+    let run_id: String?
+    let invocation_id: String
+    let pipeline: String
+    let state: String
+    let observed_records: UInt64?
+    let committed_records: UInt64
+    let committed_utf8_bytes: UInt64
+    let capture_complete: Bool
+    let diagnostic: String?
+
+    var valid: Bool {
+        guard schema_version == 1, scope == "captured_worker_output",
+              validHistoryIdentity(invocation_id), run_id.map(validHistoryIdentity) ?? true,
+              ["img", "vid", "cmd"].contains(pipeline),
+              observed_records.map({ $0 >= committed_records }) ?? true else { return false }
+        if state == "committed" { return observed_records == committed_records && diagnostic == nil }
+        return state == "failed" && diagnostic.map {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 16 * 1024
+        } == true
+    }
+
+    var detailText: String {
+        var lines = [localized(state == "committed" ? "history.output_storage.committed" : "history.output_storage.failed"),
+                     localized(capture_complete ? "history.output_storage.capture_complete" : "history.output_storage.capture_incomplete"),
+                     localized("history.output_storage.counts", observed_records.map(String.init) ?? localized("result.unknown"),
+                               String(committed_records), String(committed_utf8_bytes))]
+        if let diagnostic { lines.append(diagnostic) }
+        return lines.joined(separator: "\n")
+    }
+}
+
 private struct HistoryRecord: Decodable {
     let ts: String
     let event: String
@@ -463,6 +498,9 @@ private struct HistoryEntry {
     var invocationEvidenceInvalid = false
     var workerExecutions: [String: [HistoryWorkerExecution]] = [:]
     var workerExecutionEvidenceInvalid = false
+    var outputStorage: [String: HistoryOutputStorage] = [:]
+    var invalidOutputStorageInvocations: Set<String> = []
+    var unboundOutputStorageInvalid = false
     var finished: HistoryFinished?
     var legacy = false
     var legacyEnded = false
@@ -475,6 +513,12 @@ private struct HistoryEntry {
     var outputEndSource: String {
         if finished?.output_sequence != nil { return "terminal_boundary" }
         return outputUpperSequence != nil ? "next_batch_boundary" : "snapshot_only"
+    }
+    func outputStorageText(for invocation: String) -> String {
+        if invocationEvidenceInvalid || invalidOutputStorageInvocations.contains(invocation) {
+            return localized("history.output_storage.invalid")
+        }
+        return outputStorage[invocation]?.detailText ?? localized("history.output_storage.not_recorded")
     }
     var isRestoreJpeg: Bool { context?.mode == "restore-jpeg" }
     var modeLabel: String? { isRestoreJpeg ? localized("operation.restore_jpeg") : context?.mode }
@@ -596,11 +640,21 @@ private struct HistoryEntry {
         return "history.status.completed"
     }
     var hasCleanupAttention: Bool { outputCleanupInvalid || outputCleanups.contains(where: \.needsAttention) }
+    var hasOutputStorageAttention: Bool {
+        unboundOutputStorageInvalid || !invalidOutputStorageInvocations.isEmpty
+            || outputStorage.values.contains { $0.state == "failed" || !$0.capture_complete }
+    }
+    var auxiliaryAttention: String {
+        [hasCleanupAttention ? localized("cleanup.attention.short") : nil,
+         hasOutputStorageAttention ? localized("history.output_storage.attention") : nil]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
     var statusLabel: String {
-        localized(statusKey) + (hasCleanupAttention ? " · " + localized("cleanup.attention.short") : "")
+        localized(statusKey) + (auxiliaryAttention.isEmpty ? "" : " · " + auxiliaryAttention)
     }
     var needsAttention: Bool {
-        !["history.status.completed", "history.status.preview"].contains(statusKey) || hasVerificationWarnings || hasCleanupAttention
+        !["history.status.completed", "history.status.preview"].contains(statusKey)
+            || hasVerificationWarnings || hasCleanupAttention || hasOutputStorageAttention
     }
     var statusColor: NSColor {
         if hasVerificationFailure { return .systemRed }
@@ -612,6 +666,7 @@ private struct HistoryEntry {
         ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", statusLabel] + (context?.inputs ?? [])
             + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""]
             + outputCleanups.flatMap { [$0.output_path, $0.outcome, $0.statusText, $0.error ?? ""] })
+            .joined(separator: " ") + " " + outputStorage.values.map(\.detailText)
             .joined(separator: " ")
     }
     var succeededLabel: String {
@@ -1025,6 +1080,22 @@ private enum HistoryStore {
                         }
                     }
                     current.workerExecutions[observation.invocation_id] = previous + [observation]
+                } else if event.hasPrefix(HistoryOutputStorage.prefix) {
+                    let data = Data(event.dropFirst(HistoryOutputStorage.prefix.count).utf8)
+                    guard data.count <= 32 * 1024,
+                          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          Set(object.keys).isSubset(of: ["schema_version", "scope", "run_id", "invocation_id", "pipeline", "state",
+                                                       "observed_records", "committed_records", "committed_utf8_bytes", "capture_complete", "diagnostic"]),
+                          ["run_id", "observed_records", "diagnostic"].allSatisfy({ object[$0] != nil })
+                    else { throw HistoryParseError.invalid }
+                    let receipt = try decoder.decode(HistoryOutputStorage.self, from: data)
+                    guard receipt.valid,
+                          let invocation = current.invocations.first(where: { $0.invocation_id == receipt.invocation_id }),
+                          receipt.run_id == invocation.run_id, receipt.pipeline == invocation.pipeline,
+                          !current.invalidOutputStorageInvocations.contains(receipt.invocation_id),
+                          current.outputStorage[receipt.invocation_id].map({ $0 == receipt }) ?? true
+                    else { throw HistoryParseError.invalid }
+                    current.outputStorage[receipt.invocation_id] = receipt
                 } else if event.hasPrefix("MFB_HISTORY_FINISHED=") {
                     let finished = try decode(HistoryFinished.self, from: event, prefix: "MFB_HISTORY_FINISHED=")
                     guard finished.schema_version == 1, ["completed", "failed", "cancelled"].contains(finished.outcome),
@@ -1050,6 +1121,14 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix(HistoryOutputStorage.prefix) {
+                    let object = try? JSONSerialization.jsonObject(with: Data(event.dropFirst(HistoryOutputStorage.prefix.count).utf8)) as? [String: Any]
+                    if let identity = object?["invocation_id"] as? String,
+                       current.invocations.contains(where: { $0.invocation_id == identity }) {
+                        current.invalidOutputStorageInvocations.insert(identity)
+                    } else { current.unboundOutputStorageInvalid = true }
+                    continue
+                }
                 if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
                     current.outputCleanups.removeAll()
                     current.outputCleanupInvalid = true
@@ -1575,6 +1654,17 @@ private enum HistoryStore {
             object["process_observations"] = try entry.workerExecutions[invocation.invocation_id].map {
                 try JSONSerialization.jsonObject(with: JSONEncoder().encode($0))
             } ?? NSNull()
+            let invalidStorage = entry.invocationEvidenceInvalid || entry.invalidOutputStorageInvocations.contains(invocation.invocation_id)
+            object["output_storage_state"] = invalidStorage ? "invalid" : entry.outputStorage[invocation.invocation_id]?.state ?? "not_recorded"
+            if let receipt = entry.outputStorage[invocation.invocation_id] {
+                guard var storage = try JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any] else {
+                    throw HostError(message: localized("history.export.invalid"))
+                }
+                storage["run_id"] = nullable(receipt.run_id)
+                storage["observed_records"] = nullable(receipt.observed_records)
+                storage["diagnostic"] = nullable(receipt.diagnostic)
+                object["output_storage"] = storage
+            } else { object["output_storage"] = NSNull() }
             return object
         }
         let plan: [String: Any]? = entry.inputPlan.map {
@@ -1605,6 +1695,7 @@ private enum HistoryStore {
             "context": contextObject, "summary": nullable(summaryObject), "finished": nullable(finishedObject),
             "configuration": ["marker_seen": entry.configMarkerSeen, "invocation_count": entry.configInvocationCount, "snapshots": configurations],
             "worker_launches": launches.isEmpty ? NSNull() : launches,
+            "output_storage_unbound_invalid": entry.unboundOutputStorageInvalid,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
             "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory,
             "output_cleanup": ["state": entry.outputCleanups.isEmpty ? "unavailable" : "recorded",
@@ -2508,7 +2599,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             } else { label.stringValue = localized("result.unknown") }
         case "status":
             label.stringValue = localized(entry.statusKey)
-                + (entry.hasCleanupAttention ? "\n" + localized("cleanup.attention.short") : "")
+                + (entry.auxiliaryAttention.isEmpty ? "" : "\n" + entry.auxiliaryAttention)
             label.toolTip = entry.statusLabel
             label.setAccessibilityLabel(entry.statusLabel)
             label.maximumNumberOfLines = 2
@@ -2709,10 +2800,13 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             }
         }
         lines += ["", localized("history.worker.title"), localized("history.worker.note")]
+        lines.append(localized("history.output_storage.note"))
+        if entry.unboundOutputStorageInvalid { lines.append(localized("history.output_storage.unbound")) }
         if entry.invocationEvidenceInvalid {
             lines.append(localized("history.worker.invalid"))
         } else if entry.invocations.isEmpty {
             lines.append(localized("history.worker.not_recorded"))
+            lines.append(localized("history.output_storage.not_recorded"))
         } else {
             for invocation in entry.invocations {
                 lines += ["", row("invocation_id", invocation.invocation_id), row("config_pipeline", invocation.pipeline),
@@ -2731,6 +2825,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     else if let signal = last.signal { lines.append(localized("history.worker.execution.signal", String(signal))) }
                     else { lines.append(localized("history.worker.execution.exited", last.exit_code.map(String.init) ?? unknown)) }
                 } else { lines.append(localized("history.worker.execution.unknown")) }
+                lines += [localized("history.output_storage.title"), entry.outputStorageText(for: invocation.invocation_id)]
             }
         }
         lines += ["", localized("history.processor_counts")]
@@ -4231,6 +4326,100 @@ func runProcessingHistorySelfTests() throws {
     try require(success.entries[0].invocations.isEmpty
                 && ProcessingHistoryPanel.render(success.entries[0]).contains(localized("history.worker.not_recorded")),
                 "Old history fabricated a worker launch receipt")
+    let storageValue: [String: Any] = ["schema_version": 1, "scope": "captured_worker_output", "run_id": NSNull(),
+        "invocation_id": "synthetic-call-1", "pipeline": "img", "state": "committed", "observed_records": 3,
+        "committed_records": 3, "committed_utf8_bytes": 27, "capture_complete": true, "diagnostic": NSNull()]
+    let storage = try payload("MFB_HISTORY_OUTPUT_STORAGE", storageValue)
+    let stored = try parsed([context, launch, storage, storage, summary, completed]).entries[0]
+    try require(stored.outputStorage.count == 1 && stored.invalidOutputStorageInvocations.isEmpty
+                && stored.outputStorageText(for: "synthetic-call-1").contains(localized("history.output_storage.committed"))
+                && stored.outputStorageText(for: "synthetic-call-1").contains(localized("history.output_storage.counts", "3", "3", "27"))
+                && stored.statusKey == "history.status.completed" && stored.succeededLabel == "2" && !stored.hasVerificationFailure,
+                "Output storage duplicated observations, changed media outcomes, or lost exact record/byte counts")
+    try require(launched.outputStorage.isEmpty && launched.outputStorageText(for: "synthetic-call-1") == localized("history.output_storage.not_recorded")
+                && ProcessingHistoryPanel.render(success.entries[0]).contains(localized("history.output_storage.not_recorded")),
+                "Old history invented a complete output storage receipt")
+    var failedStorageValue = storageValue
+    failedStorageValue["invocation_id"] = "synthetic-call-2"
+    failedStorageValue["pipeline"] = "vid"
+    failedStorageValue["state"] = "failed"
+    failedStorageValue["committed_records"] = 2
+    failedStorageValue["capture_complete"] = false
+    failedStorageValue["diagnostic"] = "synthetic SQLite write failure"
+    let failedStorage = try payload("MFB_HISTORY_OUTPUT_STORAGE", failedStorageValue)
+    let mixedStorage = try parsed([context, launch, secondLaunch, storage, failedStorage, summary, completed]).entries[0]
+    try require(mixedStorage.outputStorage.count == 2 && mixedStorage.issues.isEmpty
+                && mixedStorage.statusKey == "history.status.completed" && mixedStorage.succeededLabel == "2"
+                && mixedStorage.needsAttention && mixedStorage.statusLabel.contains(localized("history.output_storage.attention"))
+                && mixedStorage.searchable.contains("synthetic SQLite write failure")
+                && mixedStorage.outputStorageText(for: "synthetic-call-2").contains(localized("history.output_storage.failed"))
+                && mixedStorage.outputStorageText(for: "synthetic-call-2").contains(localized("history.output_storage.capture_incomplete"))
+                && ProcessingHistoryPanel.render(mixedStorage).contains("synthetic SQLite write failure"),
+                "Per-invocation storage failure hid another receipt, its original diagnostic, or changed media verification")
+    for observed in [NSNull() as Any, 2 as Any] {
+        var recoveredStorageValue = failedStorageValue
+        recoveredStorageValue["observed_records"] = observed
+        let entry = try parsed([context, secondLaunch, try payload("MFB_HISTORY_OUTPUT_STORAGE", recoveredStorageValue), summary, completed]).entries[0]
+        try require(entry.outputStorage["synthetic-call-2"]?.state == "failed" && entry.invalidOutputStorageInvocations.isEmpty,
+                    "Counter overflow or later successful writes erased an actual storage failure")
+    }
+    for diagnostic in ["", String(repeating: "界", count: 16 * 1024 / 3 + 1), NSNull()] as [Any] {
+        var invalidDiagnostic = failedStorageValue
+        invalidDiagnostic["diagnostic"] = diagnostic
+        let entry = try parsed([context, secondLaunch, try payload("MFB_HISTORY_OUTPUT_STORAGE", invalidDiagnostic), summary, completed]).entries[0]
+        try require(entry.invalidOutputStorageInvocations.contains("synthetic-call-2"), "Failed storage accepted missing, empty, or oversized diagnostic")
+    }
+    var incompleteStorageValue = storageValue
+    incompleteStorageValue["capture_complete"] = false
+    let incompleteStorage = try parsed([context, launch, try payload("MFB_HISTORY_OUTPUT_STORAGE", incompleteStorageValue), summary, completed]).entries[0]
+    try require(incompleteStorage.outputStorageText(for: "synthetic-call-1").contains(localized("history.output_storage.committed"))
+                && incompleteStorage.needsAttention
+                && incompleteStorage.outputStorageText(for: "synthetic-call-1").contains(localized("history.output_storage.capture_incomplete")),
+                "Saving received output was confused with collecting every worker output")
+    for (key, value) in [("schema_version", 2 as Any), ("scope", "all_runtime_logs"), ("run_id", "other-run"),
+                          ("pipeline", "vid"), ("state", "unknown"), ("observed_records", -1), ("observed_records", NSNull()),
+                          ("committed_records", 4), ("committed_records", true), ("committed_utf8_bytes", -1),
+                          ("capture_complete", 1), ("diagnostic", "unexpected error"), ("unknown_field", true)] {
+        var invalidStorage = storageValue
+        invalidStorage[key] = value
+        let entry = try parsed([context, launch, try payload("MFB_HISTORY_OUTPUT_STORAGE", invalidStorage), storage, summary, completed]).entries[0]
+        try require(entry.invalidOutputStorageInvocations.contains("synthetic-call-1")
+                    && entry.outputStorageText(for: "synthetic-call-1") == localized("history.output_storage.invalid")
+                    && entry.issues.isEmpty && entry.statusKey == "history.status.completed" && entry.succeededLabel == "2",
+                    "Invalid storage evidence recovered silently or changed independent media counts")
+    }
+    for key in ["run_id", "observed_records", "diagnostic"] {
+        var missingField = storageValue
+        missingField.removeValue(forKey: key)
+        let entry = try parsed([context, launch, try payload("MFB_HISTORY_OUTPUT_STORAGE", missingField), summary, completed]).entries[0]
+        try require(entry.invalidOutputStorageInvocations.contains("synthetic-call-1"), "Missing nullable receipt field was accepted as explicit evidence")
+    }
+    var conflictValue = storageValue
+    conflictValue["committed_utf8_bytes"] = 28
+    let conflictStorage = try parsed([context, launch, secondLaunch, storage,
+        try payload("MFB_HISTORY_OUTPUT_STORAGE", conflictValue), storage, failedStorage, summary, completed]).entries[0]
+    try require(conflictStorage.invalidOutputStorageInvocations == ["synthetic-call-1"]
+                && conflictStorage.outputStorageText(for: "synthetic-call-1") == localized("history.output_storage.invalid")
+                && conflictStorage.outputStorageText(for: "synthetic-call-2").contains("synthetic SQLite write failure"),
+                "Storage conflict was erased by a later receipt or invalidated an independent invocation")
+    let unboundStorage = try parsed([context, storage, launch, summary, completed]).entries[0]
+    try require(unboundStorage.unboundOutputStorageInvalid && unboundStorage.outputStorage.isEmpty
+                && unboundStorage.statusKey == "history.status.completed"
+                && ProcessingHistoryPanel.render(unboundStorage).contains(localized("history.output_storage.unbound")),
+                "Unbound storage receipt was attached to a later invocation or changed media status")
+    let storageBatches = try parsed([context, launch, storage, summary, completed, context, launch, summary, completed])
+    try require(storageBatches.entries[0].outputStorage.count == 1 && storageBatches.entries[1].outputStorage.isEmpty,
+                "Output storage receipts crossed run boundaries")
+    func withStorageRun(_ event: String) throws -> String {
+        let separator = event.firstIndex(of: "=")!
+        var object = try JSONSerialization.jsonObject(with: Data(event[event.index(after: separator)...].utf8)) as! [String: Any]
+        object["run_id"] = "synthetic-storage-run"
+        return try payload(String(event[..<separator]), object)
+    }
+    let identifiedStorage = try parsed([context, launch, storage, summary, completed].map { try withStorageRun($0) }).entries[0]
+    try require(identifiedStorage.outputStorage["synthetic-call-1"]?.run_id == "synthetic-storage-run"
+                && identifiedStorage.invalidOutputStorageInvocations.isEmpty && identifiedStorage.issues.isEmpty,
+                "An exact run/invocation/pipeline storage binding was rejected")
     var wrongBindingValue = boundVideoValue
     wrongBindingValue["invocation_id"] = "synthetic-call-1"
     for invalidSequence in [[launch, launch], [launch, boundImage, boundImage], [launch, imgConfig],
@@ -5170,7 +5359,7 @@ func runProcessingHistorySelfTests() throws {
     let unknownSummary = try payload("MFB_HISTORY_SUMMARY", unknownSummaryValue)
     let exportFinished = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "failed",
         "error": "synthetic terminal failure", "output_sequence": 6])
-    try writeDatabase([("export", [exportContext, launch, spawn, exportConfig, exited, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
+    try writeDatabase([("export", [exportContext, launch, spawn, exportConfig, exited, storage, unknownSummary, exportFinished, adjacentContext, secondLaunch])], schema: 2)
     var exportDB: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &exportDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let exportDB else {
         throw HostError(message: "Synthetic export database open failed")
@@ -5233,6 +5422,10 @@ func runProcessingHistorySelfTests() throws {
                 && workerLaunches[0]["arguments"] as? [String] == launchValue["arguments"] as? [String]
                 && (workerLaunches[0]["process_observations"] as? [[String: Any]])?.count == 2
                 && (workerLaunches[0]["process_observations"] as? [[String: Any]])?.last?["exit_code"] as? Int == 7
+                && workerLaunches[0]["output_storage_state"] as? String == "committed"
+                && (workerLaunches[0]["output_storage"] as? [String: Any])?["committed_records"] as? Int == 3
+                && (workerLaunches[0]["output_storage"] as? [String: Any])?["committed_utf8_bytes"] as? Int == 27
+                && document["output_storage_unbound_invalid"] as? Bool == false
                 && (workerLaunches[0]["configuration"] as? [String: Any])?["package_version"] as? String == "0.12.0"
                 && (snapshots[0]["sources"] as? [String: String])?["execution.error_mode"] == "CLI"
                 && exportedRows.map({ $0["sequence"] as? Int }) == [3, 4, 6]

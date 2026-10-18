@@ -4805,8 +4805,8 @@ private struct BatchResults {
         let summary = localized("result.counts", count(event.succeeded), count(event.skipped),
                                 count(event.failed), count(event.ignored))
             + " · " + localized("result.unprocessed", count(event.unprocessed))
-        let partial = (event.succeeded ?? 0) > 0 && (event.failed ?? 0) > 0 && event.unprocessed == 0
-        let tag = partial ? "WARN" : (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
+        // Counts do not prove delivery or source retention; confirmed receipts control softer styling.
+        let tag = (event.exitCode.map { $0 != 0 } ?? false) || (event.failed ?? 0) > 0 ? "FAIL"
             : (event.exitCode == nil || event.counts.contains { $0 == nil } || (event.unprocessed ?? 0) > 0 ? "WARN" : "SUMMARY")
         return "[\(tag)] \(event.media.uppercased()): \(summary) (exit=\(count(event.exitCode)))"
     }
@@ -8831,8 +8831,10 @@ private func runSelfTest() -> Int32 {
         var results = BatchResults()
         let mixedResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#
         var mixed = BatchResults()
-        _ = mixed.ingest(mixedResult)
+        let mixedLine = mixed.ingest(mixedResult)
         guard mixed.hasPartialSuccess, mixed.hasFailure, !mixed.isIncomplete,
+              mixedLine?.hasPrefix("[FAIL]") == true,
+              !mixed.fastDeliveryIsConfirmed(photos: true, processExit: 1),
               mixed.summary == localized("result.counts", "3", "2", "1", "0")
                 + " · " + localized("result.unprocessed", "0"),
               !hasPartialProcessingSuccess(succeeded: [nil], failed: [1], countsComplete: true),
@@ -8840,6 +8842,14 @@ private func runSelfTest() -> Int32 {
               !hasPartialProcessingSuccess(succeeded: [1], failed: [1], countsComplete: false),
               !hasPartialProcessingSuccess(succeeded: [], failed: [], countsComplete: true) else {
             throw HostError(message: "Partial success or checked final counts were incorrectly classified")
+        }
+        for code in [0, 9] {
+            var unconfirmed = BatchResults()
+            let line = unconfirmed.ingest(mixedResult.replacingOccurrences(of: "\"exit_code\":1", with: "\"exit_code\":\(code)"))
+            guard line?.hasPrefix("[FAIL]") == true,
+                  !unconfirmed.fastDeliveryIsConfirmed(photos: true, processExit: Int32(code)) else {
+                throw HostError(message: "Counts alone softened an unconfirmed failure or unexpected exit")
+            }
         }
         for event in [
             #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":2,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#,

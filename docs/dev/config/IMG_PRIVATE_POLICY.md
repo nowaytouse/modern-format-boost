@@ -45,19 +45,37 @@ JPEG reconstruction. This structural check does not replace codec validation.
 Shared analysis decodes raw sample geometry with the configured dimension and
 output-allocation limits. EXIF orientation is applied explicitly by geometry
 verification, not implicitly a second time by a high-level image reader.
-After exact JPEG reconstruction, a separate geometry proof uses the JXL
-codestream orientation reported by the official `jxlinfo -v` header probe for
-`djxl` pixel output. It never infers that domain from matching dimensions or
-accepts whichever of raw and oriented pixels happens to match. Missing, invalid,
-duplicate or failed orientation probes reject the proof. The bounded managed
-probe does not decode pixels a second time. JPEG reconstruction fallback uses
-raw scan samples; ordinary pixel-encoded JXL keeps the source display-domain
-contract instead. Existing pixel/structure thresholds are unchanged.
+After exact JPEG reconstruction, the independent geometry proof requires the
+source's IFD0 orientation and raw JPEG dimensions to match the actual JXL
+codestream fields reported by `jxlinfo -v`. The independently decoded display
+dimensions must also match that source orientation. Equal dimensions are only
+one required geometry fact, never an orientation oracle. Missing, conflicting,
+invalid or failed probes reject the proof; an incomplete source metadata read
+cannot silently become orientation 1. A failed PNG rendering decode cannot be
+replaced with JPEG reconstruction and called a successful rendering proof.
+
+Pixel-encoded JXL uses exact samples in the source display domain, preserving
+integer precision, alpha and floating-point bit patterns through orientation
+transforms. Pearson correlation, flat-field exemptions and choosing whichever
+raw/oriented reference looks closer cannot authorize JXL delivery or recovery.
+The existing D/E search algorithms are not changed, but a changed-sample D>0
+candidate currently lacks a separately validated strict lossy acceptance
+contract. Such candidates are retained as failures rather than delivered by the
+old statistical check. This is an explicit remaining limitation, not completion
+of the private IMG algorithm/acceptance loop. The format-only default for AVIF,
+HEIC/HEIF and WebP is also exact: choosing a codec does not opt into a statistical
+acceptance gate. Existing changed-sample lossy outputs can therefore be rejected
+until their separate strict acceptance contract is established; selecting a
+lossy codec or enabling source-quality inference is not a validation bypass.
 
 Exact JPEG reconstruction, filesystem metadata, embedded tags and usable color
 profiles are separate proofs. A malformed embedded ICC profile is not accepted
 merely because the original JPEG can be reconstructed. Current reversible
 encoding does not silently trim, replace or discard such a source profile.
+Similarly, a readable but truncated Exif block can be ignored by the encoder
+while still carrying a non-normal source orientation. An exact JPEG round trip
+does not resolve that conflict. Rewriting the source metadata is not an
+original-byte-preserving repair and is not performed implicitly.
 For example, complex TIFF/ICO/auxiliary-image inputs may require retaining their
 original container despite having a recognizable raster. Nothing here changes
 those checks, source identity, XMP relationships, ICC, gain maps or timestamps.

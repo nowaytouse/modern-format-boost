@@ -23,6 +23,27 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Strict JXL Evidence And Saved-Output Receipts (2026-10-19)
+
+- Require independently read source IFD0 orientation, raw JPEG geometry, actual
+  JXL codestream fields and decoded display geometry after exact JPEG
+  reconstruction. Remove raw-dimension guesses, output-defined source references,
+  correlation exemptions and JPEG reconstruction substituted for failed rendering.
+- Preserve integer precision and float sample bits in orientation transforms;
+  reject failed, conflicting or incomplete metadata reads. Pixel JXL delivery and
+  recovery require exact samples instead of approximate pixel equivalence.
+- Keep D/E search coverage unchanged. Changed-sample D>0 JXL candidates currently
+  lack a separately validated strict lossy acceptance contract and are rejected
+  with source retention; this limitation is explicit, not a completed algorithm loop.
+- Use exact samples as the format-only AVIF/HEIF/WebP default too; codec choice
+  does not authorize correlation-based acceptance. Changed-sample lossy delivery
+  remains restricted pending its independently validated acceptance contract.
+- Add per-invocation saved-output receipts with transaction-committed text counts
+  and bytes. History separates missing/invalid/storage-failed receipts, incomplete
+  collection and media results, with matching English, Chinese and Japanese copy.
+- Use restrained partial-result styling only after delivery and failed-source
+  protection evidence is confirmed, not merely from favorable file counts.
+
 ### Reader-Focused Documentation (2026-10-18)
 
 - Replace the English and Simplified Chinese READMEs' accumulated update streams

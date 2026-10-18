@@ -586,6 +586,17 @@
 "history.worker.note" = "Launch requests and pre-launch file observations are not proof of a running process or a complete build manifest.";
 "history.worker.not_recorded" = "Worker launch evidence was not recorded.";
 "history.worker.invalid" = "Worker launch evidence is incomplete or invalid.";
+"history.output_storage.title" = "Worker output storage";
+"history.output_storage.attention" = "Check logs";
+"history.output_storage.note" = "This receipt covers captured worker output, not every internal log or history event. Record counts are not file counts; UTF-8 bytes exclude database overhead. Storage does not prove media delivery.";
+"history.output_storage.committed" = "Received output was saved to history.";
+"history.output_storage.failed" = "Output storage encountered an error; some records may have been saved.";
+"history.output_storage.capture_complete" = "Output collection reached its end and process wait returned; this does not mean the process succeeded.";
+"history.output_storage.capture_incomplete" = "Output collection was not completed; more output may be missing.";
+"history.output_storage.counts" = "Observed records: %@ · Confirmed saved records: %@ · Confirmed UTF-8 bytes: %@";
+"history.output_storage.not_recorded" = "No output storage receipt was recorded; storage completeness is unknown.";
+"history.output_storage.invalid" = "This invocation's output storage receipt is conflicting or invalid; storage completeness cannot be confirmed.";
+"history.output_storage.unbound" = "An output storage receipt could not be linked to this run's worker invocation.";
 "history.detail.invocation_id" = "Invocation ID";
 "history.detail.worker_program" = "Requested program";
 "history.detail.worker_path" = "Observed executable path";
