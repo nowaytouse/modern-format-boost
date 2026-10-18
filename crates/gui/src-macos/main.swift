@@ -276,7 +276,7 @@ private struct ProcessorRequest {
 private enum MediaSetting: String, CaseIterable {
     case imgConfig, imgFallback, imgJxlDistance, imgQualitySearch, imgJxlEffort, imgJxlSearch, imgJpegEffort, imgJpegSearch, imgHeuristic, imgDatabase, imgSizeTolerance, imgSizeToleranceBytes, imgErrorMode, imgToolPolicy
     case vidCodec, vidErrorMode, vidConfig, vidForceMsSsimLong
-    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy
+    case fastConfig, fastFallback, fastJpegEffort, fastJpegSearch, fastJxlSearch, fastJxlEffort, fastQualitySearch, fastAvifQuality, fastAvifSpeed, fastHeuristic, fastDatabase, fastToolPolicy, fastErrorMode
     case photosBackend, photosNativeBatch, photosAppleScriptBatch, photosVerificationBatch
     case photosAdaptive, photosMinimumBatch, photosMaximumBatch, photosTargetSeconds
     case photosRoot, photosAlbum, photosPreserveTree
@@ -287,7 +287,7 @@ private enum MediaSetting: String, CaseIterable {
     var isVideo: Bool { rawValue.hasPrefix("vid") }
     var isFastImage: Bool { rawValue.hasPrefix("fast") }
     var isPhotos: Bool { rawValue.hasPrefix("photos") }
-    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode }
+    var isFailurePolicy: Bool { self == .imgErrorMode || self == .vidErrorMode || self == .fastErrorMode }
     var isPixelEffort: Bool { self == .imgJxlEffort || self == .fastJxlEffort }
     var isJpegSearch: Bool { self == .imgJpegSearch || self == .fastJpegSearch }
     var isEffort: Bool { isPixelEffort || self == .imgJpegEffort || self == .fastJpegEffort }
@@ -345,7 +345,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgSizeTolerance: "--img-allow-size-tolerance"
         case .imgSizeToleranceBytes: "--img-size-tolerance-bytes"
         case .imgToolPolicy, .fastToolPolicy: "--img-tool-policy"
-        case .imgErrorMode: "--img-error-mode"
+        case .imgErrorMode, .fastErrorMode: "--img-error-mode"
         case .vidCodec: "--vid-codec"
         case .vidErrorMode: "--vid-error-mode"
         case .vidConfig: "--vid-config"
@@ -369,7 +369,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgFallback, .fastFallback: ["strict", "same-semantics", "repair"]
         case .imgHeuristic, .imgDatabase, .imgSizeTolerance, .fastHeuristic, .fastDatabase,
              .photosAdaptive, .photosPreserveTree, .vidForceMsSsimLong: ["true", "false"]
-        case .imgErrorMode, .vidErrorMode: ["log-and-continue", "fail-fast"]
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: ["log-and-continue", "fail-fast"]
         case .imgJxlEffort, .fastJxlEffort, .imgJpegEffort, .fastJpegEffort: (1...11).map(String.init)
         case .imgJxlSearch, .fastJxlSearch: ["fixed", "adaptive"]
         case .imgJpegSearch, .fastJpegSearch: ["full", "adaptive", "fixed"]
@@ -411,7 +411,7 @@ private enum MediaSetting: String, CaseIterable {
         case .imgSizeTolerance: "img.allow_size_tolerance"
         case .imgSizeToleranceBytes: "img.size_tolerance_bytes"
         case .imgToolPolicy, .fastToolPolicy: "tools.policy"
-        case .imgErrorMode, .vidErrorMode: "execution.error_mode"
+        case .imgErrorMode, .vidErrorMode, .fastErrorMode: "execution.error_mode"
         case .vidCodec: "vid.codec"
         case .vidForceMsSsimLong: "vid.force_ms_ssim_long"
         case .photosBackend: "photos.backend"
@@ -503,6 +503,7 @@ private struct MediaSettings {
     var fastImage = ImageSettings()
     var photos = PhotosImportSettings()
     var imageFailure: FileFailurePolicy?
+    var fastImageFailure: FileFailurePolicy?
     var imageSizeTolerance: Bool?
     var imageSizeToleranceBytes: Int?
     var videoFailure: FileFailurePolicy?
@@ -541,6 +542,7 @@ private struct MediaSettings {
                 .fastQualitySearch: fastImage.qualitySearch?.rawValue,
                 .fastAvifQuality: fastImage.avifQuality.map(String.init), .fastAvifSpeed: fastImage.avifSpeed.map(String.init),
                 .fastDatabase: fastImage.allowDatabase.map(String.init), .fastToolPolicy: fastImage.toolPolicy?.rawValue,
+                .fastErrorMode: fastImageFailure?.rawValue,
                 .vidCodec: videoCodec?.rawValue, .vidConfig: videoConfigurationFile,
                 .vidErrorMode: videoFailure?.rawValue, .photosBackend: photos.backend?.rawValue,
                 .vidForceMsSsimLong: videoForceMsSsimLong.map(String.init),
@@ -600,6 +602,7 @@ private struct MediaSettings {
                 case .fastHeuristic: fastImage.qualityHeuristic = Bool(value)
                 case .fastDatabase: fastImage.allowDatabase = Bool(value)
                 case .fastToolPolicy: fastImage.toolPolicy = ToolSelectionPolicy(rawValue: value)
+                case .fastErrorMode: fastImageFailure = FileFailurePolicy(rawValue: value)
                 case .vidCodec: videoCodec = VideoCodec(rawValue: value)
                 case .vidConfig: videoConfigurationFile = value
                 case .vidErrorMode: videoFailure = FileFailurePolicy(rawValue: value)
@@ -1869,7 +1872,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 control.toolTip = localized("settings.\(field.labelKey).help")
                 control.setContentHuggingPriority(.defaultLow, for: .horizontal)
                 let fieldView: NSView
-                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy].contains(field) {
+                if [.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode].contains(field) {
                     let note = NSTextField(wrappingLabelWithString: localized("settings.\(field.labelKey).note"))
                     note.font = .systemFont(ofSize: 11)
                     note.textColor = .secondaryLabelColor
@@ -3062,7 +3065,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         validatingLayout = true
         defer { validatingLayout = false }
         try validateEncodingScopesForSelfTest()
-        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy] {
+        for field in [MediaSetting.imgFallback, .fastFallback, .imgToolPolicy, .fastToolPolicy, .fastErrorMode] {
             guard let row = rows[field] else { continue }
             guard let stack = row.cell(at: 1).contentView as? NSStackView,
                   let note = stack.arrangedSubviews.last as? NSTextField,
@@ -3572,13 +3575,26 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
 
     private func validateFailurePolicyForSelfTest() throws {
         let key = "execution.error_mode"
-        guard MediaSetting.imgErrorMode.runtimeKey == key, MediaSetting.vidErrorMode.runtimeKey == key else {
+        guard [MediaSetting.imgErrorMode, .vidErrorMode, .fastErrorMode].allSatisfy({ $0.runtimeKey == key }) else {
             throw HostError(message: "Failure policies are missing their effective configuration key")
         }
-        if !developer || fast {
-            guard popups[.imgErrorMode] == nil, popups[.vidErrorMode] == nil else {
-                throw HostError(message: "Standard failure controls escaped Developer mode or entered Fast mode")
+        var independent = MediaSettings()
+        independent.values = [.imgErrorMode: "fail-fast", .vidErrorMode: "fail-fast", .fastErrorMode: "log-and-continue"]
+        for operation in [OperationMode.fastImgJxl, .fastImgAvif] {
+            guard try independent.arguments(operation: operation, processing: .imagesOnly)
+                    == ["--img-error-mode", "log-and-continue"],
+                  independent.runtimeArguments(fast: true, inheritedOnly: false, avif: operation == .fastImgAvif)
+                    == ["--error-mode", "log-and-continue"] else {
+                throw HostError(message: "Fast IMG failure handling leaked another mode's setting")
             }
+        }
+        guard (popups[.fastErrorMode] != nil) == fast,
+              (!fast && developer) || (popups[.imgErrorMode] == nil && popups[.vidErrorMode] == nil) else {
+            throw HostError(message: "Failure controls leaked between standard and Fast settings")
+        }
+        let fields: [MediaSetting] = fast ? [.fastErrorMode]
+            : (developer ? (videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]) : [])
+        if fields.isEmpty {
             return
         }
         let previous = restored
@@ -3595,19 +3611,24 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                                              sourceChain: [key: ["default", "MFB_ERROR_MODE"]])
         let video = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "/synthetic/vid.json"],
                                              sourceChain: [key: ["default", "/synthetic/vid.json"]])
-        setInheritedValues(standard: image, fast: image, video: video)
+        let fastImage = EffectiveRuntimeSettings(values: [key: "log-and-continue"], sources: [key: "default"],
+                                                  sourceChain: [key: ["default"]])
+        setInheritedValues(standard: image, fast: fastImage, video: video)
         restore(MediaSettings())
         restore(MediaSettings())
-        let fields: [MediaSetting] = videos ? [.vidErrorMode] : [.imgErrorMode, .vidErrorMode]
         for field in fields {
+            let expectedValue = field == .imgErrorMode ? "fail-fast" : "log-and-continue"
+            let expectedSource = field == .fastErrorMode ? "default"
+                : (field == .imgErrorMode ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json")
             guard let popup = popups[field], popup.indexOfSelectedItem == 0,
-                  popup.numberOfItems == field.choices.count + 1, sourceButtons[field] != nil,
-                  inherited[field] == (field.isImage ? "fail-fast" : "log-and-continue"),
-                  inheritedSources[field] == (field.isImage ? "default → MFB_ERROR_MODE" : "default → /synthetic/vid.json"),
+                  popup.numberOfItems == field.choices.count + 1,
+                  (sourceButtons[field] != nil) == developer,
+                  fieldSections[field] == (fast ? "img" : "developer"),
+                  inherited[field] == expectedValue, inheritedSources[field] == expectedSource,
                   draft().values[field] == nil else {
                 throw HostError(message: "Failure inheritance fabricated an override or used the wrong pipeline")
             }
-            popup.selectItem(at: field.isImage ? 2 : 1)
+            popup.selectItem(at: expectedValue == "fail-fast" ? 2 : 1)
             guard draft().values[field] == inherited[field] else {
                 throw HostError(message: "Choosing the inherited failure value explicitly lost its override")
             }
@@ -3622,12 +3643,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             }
         }
         var explicit = MediaSettings()
-        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast"]
+        explicit.values = [.imgErrorMode: "log-and-continue", .vidErrorMode: "fail-fast", .fastErrorMode: "fail-fast"]
         restore(explicit)
-        tabs.selectTabViewItem(withIdentifier: "developer")
+        tabs.selectTabViewItem(withIdentifier: fast ? "img" : "developer")
         resetTab()
         guard fields.allSatisfy({ draft().values[$0] == nil && popups[$0]?.indexOfSelectedItem == 0 }) else {
-            throw HostError(message: "Developer reset forced a failure default instead of inheritance")
+            throw HostError(message: "Settings reset forced a failure default instead of inheritance")
         }
         inherited.removeAll()
         inheritedSources.removeAll()
@@ -8597,7 +8618,7 @@ private func runSelfTest() -> Int32 {
         var configured = request
         configured.mediaSettings.values = [.imgFallback: "same-semantics", .imgJpegEffort: "11",
                                             .imgJxlDistance: "0.25", .imgJxlEffort: "8", .imgQualitySearch: "fixed", .imgJxlSearch: "adaptive",
-                                           .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false",
+                                            .fastFallback: "strict", .fastJpegEffort: "9", .fastDatabase: "false", .fastErrorMode: "fail-fast",
                                            .photosBackend: "native", .photosNativeBatch: "200", .photosPreserveTree: "false",
                                            .imgDatabase: "false", .imgSizeTolerance: "true", .imgSizeToleranceBytes: "4096", .imgErrorMode: "log-and-continue",
                                            .vidCodec: "av1", .vidErrorMode: "fail-fast", .vidForceMsSsimLong: "false"]
@@ -8607,7 +8628,8 @@ private func runSelfTest() -> Int32 {
               configuredArguments.contains("--photos-native-batch-size"),
               configuredArguments.contains("--preserve-folder-structure=false"),
               configuredArguments.contains("--img-allow-database=false"),
-              !configuredArguments.contains("--img-error-mode"),
+              configuredArguments.contains("--img-error-mode"), configuredArguments.contains("fail-fast"),
+              !configuredArguments.contains("log-and-continue"),
               !configuredArguments.contains("--img-allow-size-tolerance=true"),
                !configuredArguments.contains("--img-size-tolerance-bytes"),
               !configuredArguments.contains("--vid-codec"), configuredArguments.last == request.targetPath,
@@ -8619,6 +8641,8 @@ private func runSelfTest() -> Int32 {
         let effective = try queryRuntimeSettings(arguments: ["--no-config"]
             + configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false))
         guard effective["img.jpeg_effort"] == "9", effective["img.allow_database"] == "false",
+              effective["execution.error_mode"] == "fail-fast",
+              effective.sourceChain["execution.error_mode"]?.last == "CLI",
               effective["photos.native_batch_size"] == "200", effective["photos.backend"] == "native",
               effective["photos.preserve_folder_structure"] == "false",
               effective.sourceChain["img.jpeg_effort"]?.first == "default",
@@ -8652,8 +8676,9 @@ private func runSelfTest() -> Int32 {
               (try imageEffective.originDescription(key: "execution.error_mode", guiOverride: true)).contains("CLI (GUI)"),
               !configured.mediaSettings.runtimeArguments(fast: false, inheritedOnly: true).contains("--error-mode"),
               !configured.mediaSettings.videoRuntimeArguments(inheritedOnly: true).contains("--error-mode"),
-              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode") else {
-            throw HostError(message: "Failure query arguments lost overrides or invented inherited and Fast policies")
+              configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: false).contains("--error-mode"),
+              !configured.mediaSettings.runtimeArguments(fast: true, inheritedOnly: true).contains("--error-mode") else {
+            throw HostError(message: "Failure query arguments lost per-mode overrides or invented inherited policies")
         }
         var explorationSettings = configured.mediaSettings
         explorationSettings.values[.imgQualitySearch] = "adaptive"

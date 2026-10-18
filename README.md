@@ -350,6 +350,9 @@ Direct CLI runs without run/invocation identity print one `[IGNORED]` line per i
 GUI runs capture one structured observation instead of duplicate plain/JSON lines.
 
 Fast IMG records **output folder cleanup separately from primary source cleanup**.
+Finalization reads only current-attempt receipts, size facts and retained-file
+summaries from captured history. Verbose logs larger than 64 MiB no longer hide
+the partial-delivery proof from the independent verifier and guarded output cleanup.
 The completion overview keeps leftovers and blocked cleanup visible, while History
 shows the recorded path, exact error and measured counts for removed files,
 already-absent marker targets and removed empty directories. A folder already absent

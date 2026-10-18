@@ -205,8 +205,9 @@ the current workflow's applicable controls; selecting a Photos advanced paramete
 reveals it without changing its value. Search and navigation preserve the draft.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
-and subfolder preservation. Configuration-file overrides and per-file failure
-policies appear only in Developer mode, enabled in About. Image tool selection
+and subfolder preservation. Configuration-file overrides and standard IMG/VID failure
+policies appear in Developer mode, enabled in About. Fast IMG has its own failure
+handling control in Image settings, independent of the standard-mode preference. Image tool selection
 is an ordinary Image/Fast IMG processing preference.
 Video exposes HEVC/AV1 in Settings, plus an independent developer configuration
 file and file-error mode. Long-video fusion quality checks are an ordinary Video
@@ -226,10 +227,11 @@ long-video quality overrides; explicit launcher overrides and direct long-video
 quality flags there are rejected. Direct Fast VID
 configuration files can set its shared performance policy, not its GIF/AVIF
 strategy. The GUI disables the settings button for that operation.
-The image file-error override also belongs to standard processing. FastImg
-retains its existing checkpointed per-file failure handling; the launcher rejects
-an explicit error-mode override there rather than pretending it controls the
-FastImg encoding waves. Its fallback, effort and other image preferences still apply.
+Fast IMG accepts the same typed `execution.error_mode` through its own GUI override
+and launcher `--img-error-mode`. The default is `log-and-continue` (record failures,
+preserve sources and continue independent work). Fail-fast drains and checkpoints
+the already-started encoding wave, then stops before scheduling the next wave.
+It does not discard completed encodes or turn retained failures into skips.
 
 Image, Video and Photos effective values are queried from the backend, not duplicated
 in Swift. Ordinary settings display resolved values without an extra inherited choice;
@@ -286,8 +288,9 @@ limited to environment parsing; invalid, empty or non-UTF-8 environment values s
 configuration loading rather than silently choosing a policy. Files and explicit CLI
 flags retain higher priority. `config show --effective` includes the policy's winning
 source and ordered source chain; new captured history snapshots include its winning
-source. This is not a failure-count threshold or a change to Fast IMG/Fast GIF encoding
-loops; shared Photos import error handling continues to use the resolved policy.
+source. This is not a failure-count threshold. Fast IMG encoding waves and local
+verification use this policy; Fast GIF retains its own encoding loop. Shared Photos
+import error handling continues to use the resolved policy.
 The launcher reads its local `local_env.json` or fallback `local_env.sh` once at
 startup, before temporary-root initialization, typed configuration installation
 and signal-handler threads. These values participate in the environment layer;
@@ -320,7 +323,7 @@ chosen after runtime fallback are not yet part of this record.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `execution.error_mode` | `log-and-continue` | Standard IMG/VID recoverable file-failure policy. `fail-fast` stops on the first recoverable failure; fatal errors always stop and intentional skips remain skips. `--error-mode` overrides files. Does not change Fast IMG/Fast GIF encoding loops. |
+| `execution.error_mode` | `log-and-continue` | IMG/VID recoverable failure policy, including Fast IMG encoding waves and independently isolatable local verification failures. `fail-fast` stops after draining current work; shared safety failures always block and intentional skips remain skips. `--error-mode` overrides files. Fast GIF keeps its own encoding loop. |
 | `img.allow_database` | `false` | Permits the optional image-quality database stack. Quality inference must also be enabled. Does not suppress Photos custody verification or explicit database maintenance commands. |
 | `img.quality_heuristic` | `false` | Enables existing optional quality inference. A heuristic does not replace delivery proof. |
 | `img.jpeg_effort` | `11` | JPEG bitstream transcode effort, 1 through 11; used by fixed/adaptive, inactive in full comparison. Independent of direct pixel encoding. |
@@ -451,9 +454,20 @@ assuming 4096 bytes. Admission workers share a sample for at most 250 ms,
 including failed samples; expired samples are re-probed. This corrects a 4x
 underestimate on 16 KiB systems without removing memory-pressure limits.
 
-Gate 1 performs cheap count/size checks before expensive proofs, records each
-executed check's duration, and stops after the first mandatory failure. Remaining
-checks are explicitly reported as not run; import and cleanup stay blocked.
+Gate 1 performs cheap count/size/hash checks before expensive proofs and records
+each executed check's duration. In record mode, explicitly file-local metadata,
+or orientation failures do not prevent the remaining required checks.
+The initial failed Gate never passes: exact, unique source/output mappings and
+unchanged hashes must authorize recording each rejected asset as failed and removing
+only its owned output. The remaining subset then runs all six checks again before
+delivery; no source is removed by isolation. Fail-fast and shared tool, protocol,
+inventory, identity, persistence or cancellation failures still block delivery.
+Missing or ambiguous scope is shared, never inferred from a nonempty path list.
+Gate 2/3 shared custody and asset-relationship failures remain blocking; record mode
+does not waive them or turn unchecked assets into successful deliveries.
+An external decoder's nonzero exit alone does not prove a file-local defect: resource,
+storage and tool failures can share that exit code, so unclassified decoder errors
+remain blocking until a reliable file-specific cause is available.
 Orientation tags are queried in batches of up to 128 files, with exact per-file
 response accounting. Missing, duplicate, unexpected or error responses fail
 closed. JPEG reconstruction and decoder checks remain separate and mandatory.

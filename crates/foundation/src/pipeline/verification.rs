@@ -75,12 +75,112 @@ pub struct CheckDetail {
     pub expected: String,
     pub actual: String,
     pub affected_files: Vec<PathBuf>,
+    pub failure_scope: CheckFailureScope,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckFailureScope {
+    #[default]
+    Shared,
+    Files,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct GateResult {
     pub passed: bool,
     pub checks: Vec<CheckDetail>,
+}
+
+impl GateResult {
+    /// Return exact source identities only after every local check completed and
+    /// every failed check explicitly established a file-local failure.
+    ///
+    /// # Errors
+    /// Rejects incomplete checks, shared failures, or ambiguous source/output proofs.
+    pub fn isolated_source_failures(
+        &self,
+        ctx: &PipelineCtx,
+    ) -> anyhow::Result<BTreeMap<String, String>> {
+        anyhow::ensure!(!self.passed, "a passing gate has no failures to isolate");
+        anyhow::ensure!(
+            self.checks.len() == LOCAL_REQUIRED_CHECKS.len()
+                && LOCAL_REQUIRED_CHECKS.iter().all(|(name, _)| {
+                    self.checks
+                        .iter()
+                        .filter(|check| check.name == *name)
+                        .count()
+                        == 1
+                }),
+            "local verification did not complete every required check"
+        );
+        anyhow::ensure!(
+            ctx.blake3_log.len() == ctx.expected_count && ctx.expected_count > 0,
+            "source/output proof inventory is incomplete"
+        );
+        for name in ["count", "size", "blake3"] {
+            anyhow::ensure!(
+                self.checks
+                    .iter()
+                    .any(|check| check.name == name && check.passed),
+                "structural check {name} did not pass"
+            );
+        }
+        let mut source_by_output = BTreeMap::new();
+        for (source_rel, entry) in &ctx.blake3_log {
+            validate_marker_relative_path("source path", source_rel).map_err(anyhow::Error::msg)?;
+            let output_rel = entry.out_rel.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("source {source_rel} has no explicit output mapping")
+            })?;
+            validate_marker_relative_path("output path", output_rel).map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                !entry.src.is_empty() && !entry.out.is_empty(),
+                "source {source_rel} has incomplete hash proof"
+            );
+            anyhow::ensure!(
+                source_by_output
+                    .insert(ctx.working_copy.join(output_rel), source_rel)
+                    .is_none(),
+                "multiple sources map to output {output_rel}"
+            );
+        }
+        let mut failures = BTreeMap::<String, String>::new();
+        for check in self.checks.iter().filter(|check| !check.passed) {
+            anyhow::ensure!(
+                check.failure_scope == CheckFailureScope::Files && !check.affected_files.is_empty(),
+                "{} failure is not independently isolatable: {}",
+                check.name,
+                check.actual
+            );
+            for output in &check.affected_files {
+                let source = source_by_output.get(output).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{} failure has an unmapped output: {}",
+                        check.name,
+                        output.display()
+                    )
+                })?;
+                let reason = format!(
+                    "Gate 1 {} failed for {}; check summary: {}",
+                    check.name,
+                    output.display(),
+                    check.actual
+                );
+                failures
+                    .entry((*source).clone())
+                    .and_modify(|existing| {
+                        existing.push_str("; ");
+                        existing.push_str(&reason);
+                    })
+                    .or_insert(reason);
+            }
+        }
+        anyhow::ensure!(
+            !failures.is_empty(),
+            "gate failure has no identified sources"
+        );
+        Ok(failures)
+    }
 }
 
 pub trait VerificationGate {
@@ -117,6 +217,17 @@ impl VerificationGate for Gate1Local {
     }
 
     fn run(&self, ctx: &PipelineCtx) -> GateResult {
+        self.run_with_error_mode(ctx, crate::BatchErrorMode::current())
+    }
+}
+
+impl Gate1Local {
+    #[must_use]
+    pub fn run_with_error_mode(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+    ) -> GateResult {
         crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
         let activity = LocalGateActivity::new();
         run_local_checks(
@@ -125,6 +236,7 @@ impl VerificationGate for Gate1Local {
             |check, completed, total, state, files| {
                 activity.emit(check, completed, total, state, files);
             },
+            error_mode,
         )
     }
 }
@@ -139,6 +251,7 @@ fn run_local_checks(
         GateActivityState,
         Option<crate::ui::progress::GateFileProgress>,
     ),
+    error_mode: crate::BatchErrorMode,
 ) -> GateResult {
     let total = LOCAL_REQUIRED_CHECKS.len();
     emit("inventory", 0, total, GateActivityState::Running, None);
@@ -156,7 +269,7 @@ fn run_local_checks(
         }
     };
     // Reject cheap structural failures before launching metadata/decoder tools.
-    run_required_checks(&LOCAL_REQUIRED_CHECKS, ctx, &jxl_files, emit)
+    run_required_checks(&LOCAL_REQUIRED_CHECKS, ctx, &jxl_files, emit, error_mode)
 }
 
 fn run_required_checks<F>(
@@ -170,6 +283,7 @@ fn run_required_checks<F>(
         GateActivityState,
         Option<crate::ui::progress::GateFileProgress>,
     ),
+    error_mode: crate::BatchErrorMode,
 ) -> GateResult
 where
     F: Fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail,
@@ -186,29 +300,45 @@ where
         let started = std::time::Instant::now();
         let mut file_progress = None;
         let mut last_emit = None;
-        let check = probe(ctx, files, &mut |processed, total| {
-            file_progress = Some(crate::ui::progress::GateFileProgress { processed, total });
-            let now = std::time::Instant::now();
-            if processed == 0
-                || processed == total
-                || last_emit.is_none_or(|previous: std::time::Instant| {
-                    now.duration_since(previous) >= std::time::Duration::from_millis(250)
-                })
-            {
-                emit(
-                    name,
-                    checks.len(),
-                    probes.len(),
-                    GateActivityState::Running,
-                    file_progress,
-                );
-                last_emit = Some(now);
-            }
-        });
+        let cancellation = crate::batch_control::is_cancelled();
+        let check = if !matches!(cancellation, Ok(false)) {
+            detail(
+                name,
+                false,
+                "verification may continue".into(),
+                cancellation.map_or_else(
+                    |err| format!("cancellation state unavailable: {err}"),
+                    |_| "verification cancelled".into(),
+                ),
+                Vec::new(),
+            )
+        } else {
+            probe(ctx, files, &mut |processed, total| {
+                file_progress = Some(crate::ui::progress::GateFileProgress { processed, total });
+                let now = std::time::Instant::now();
+                if processed == 0
+                    || processed == total
+                    || last_emit.is_none_or(|previous: std::time::Instant| {
+                        now.duration_since(previous) >= std::time::Duration::from_millis(250)
+                    })
+                {
+                    emit(
+                        name,
+                        checks.len(),
+                        probes.len(),
+                        GateActivityState::Running,
+                        file_progress,
+                    );
+                    last_emit = Some(now);
+                }
+            })
+        };
         tracing::info!(target: "verification_gate", gate = "local", check = check.name,
             duration_ms = started.elapsed().as_secs_f64() * 1000.0, passed = check.passed,
             "required check completed");
         let passed = check.passed;
+        let can_continue = error_mode == crate::BatchErrorMode::LogAndContinue
+            && check.failure_scope == CheckFailureScope::Files;
         checks.push(check);
         if !passed {
             emit(
@@ -218,16 +348,22 @@ where
                 GateActivityState::Failed,
                 file_progress,
             );
-            tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
-                "remaining checks not run after mandatory failure; import and cleanup blocked");
-            break;
+            if !can_continue {
+                tracing::info!(target: "verification_gate", deferred_checks = probes.len() - checks.len(),
+                    "remaining checks not run after shared or fail-fast failure; import and cleanup blocked");
+                break;
+            }
         }
-        if checks.len() == probes.len() {
+        if passed && checks.len() == probes.len() {
             emit(
                 name,
                 checks.len(),
                 probes.len(),
-                GateActivityState::Passed,
+                if checks.iter().all(|check| check.passed) {
+                    GateActivityState::Passed
+                } else {
+                    GateActivityState::Failed
+                },
                 file_progress,
             );
         }
@@ -500,7 +636,15 @@ const fn detail(
         expected,
         actual,
         affected_files,
+        failure_scope: CheckFailureScope::Shared,
     }
+}
+
+fn file_failures(mut check: CheckDetail, file_local: bool) -> CheckDetail {
+    if file_local && !check.passed && !check.affected_files.is_empty() {
+        check.failure_scope = CheckFailureScope::Files;
+    }
+    check
 }
 
 fn check_count(expected: usize, actual: usize, files: &[PathBuf]) -> CheckDetail {
@@ -594,6 +738,7 @@ fn check_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
 
 fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     let mut failures = Vec::new();
+    let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut cleared = 0usize;
     let mut first_mismatch = None;
     for (rel_path, entry) in &ctx.blake3_log {
@@ -610,6 +755,7 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
         ) {
             Ok(_) => cleared = cleared.saturating_add(1),
             Err(err) => {
+                file_local &= err.kind() == std::io::ErrorKind::InvalidData;
                 if first_mismatch.is_none() {
                     first_mismatch = Some(err.to_string());
                 }
@@ -639,17 +785,21 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
             )
         },
     );
-    detail(
-        "metadata",
-        passed,
-        format!("{} Meme Mode cleared-metadata outputs", ctx.expected_count),
-        actual,
-        failures,
+    file_failures(
+        detail(
+            "metadata",
+            passed,
+            format!("{} Meme Mode cleared-metadata outputs", ctx.expected_count),
+            actual,
+            failures,
+        ),
+        file_local,
     )
 }
 
 fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
     let mut failures = Vec::new();
+    let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut mismatch_count = 0usize;
     let mut first_mismatch = None;
     for (rel_path, entry) in &ctx.blake3_log {
@@ -679,6 +829,7 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
                 failures.push(out);
             }
             Err(err) => {
+                file_local &= err.kind() == std::io::ErrorKind::InvalidData;
                 mismatch_count = mismatch_count.saturating_add(1);
                 if first_mismatch.is_none() {
                     first_mismatch = Some(err.to_string());
@@ -698,15 +849,18 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
         |detail| format!("{verified} verified, {mismatch_count} failed; first {detail}"),
     );
 
-    detail(
-        "metadata",
-        failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
-        format!(
-            "{} exact filesystem and embedded source/output metadata copies",
-            ctx.expected_count
+    file_failures(
+        detail(
+            "metadata",
+            failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count,
+            format!(
+                "{} exact filesystem and embedded source/output metadata copies",
+                ctx.expected_count
+            ),
+            actual,
+            failures,
         ),
-        actual,
-        failures,
+        file_local,
     )
 }
 
@@ -859,6 +1013,7 @@ where
         })
         .collect::<BTreeMap<_, _>>();
     let mut failures = Vec::new();
+    let mut file_local = true;
     let mut tagged_count = 0usize;
     let mut reconstructible_count = 0usize;
     let mut probe_errors = Vec::new();
@@ -867,6 +1022,7 @@ where
             Ok(true) => {
                 tagged_count += 1;
                 let Some(source) = source_by_output.get(path) else {
+                    file_local = false;
                     failures.push(path.clone());
                     probe_errors.push(format!("{}: source mapping absent", path.display()));
                     continue;
@@ -875,6 +1031,7 @@ where
                     Ok(true) => reconstructible_count += 1,
                     Ok(false) => failures.push(path.clone()),
                     Err(err) => {
+                        file_local &= err.kind() == std::io::ErrorKind::InvalidData;
                         crate::media_conversion_gate::delivery_pipeline_path_audit(
                             "fast_img_gate1_orientation_reconstruction",
                             path,
@@ -887,6 +1044,7 @@ where
             }
             Ok(false) => {}
             Err(err) => {
+                file_local = false;
                 crate::media_conversion_gate::delivery_pipeline_path_audit(
                     "fast_img_gate1_orientation_probe",
                     path,
@@ -906,12 +1064,15 @@ where
     } else {
         format!("{tagged_count} tagged, {reconstructible_count} exact-reconstructible")
     };
-    detail(
-        "orient",
-        failures.is_empty(),
-        "Orientation absent unless required by exact JPEG reconstruction".to_string(),
-        actual,
-        failures,
+    file_failures(
+        detail(
+            "orient",
+            failures.is_empty(),
+            "Orientation absent unless required by exact JPEG reconstruction".to_string(),
+            actual,
+            failures,
+        ),
+        file_local,
     )
 }
 
@@ -973,7 +1134,10 @@ fn check_decode_probe_observed(
             let error = match format {
                 crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(&path),
                 crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(&path),
-                _ => Err(format!("unsupported delivery output format: {format:?}")),
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("unsupported delivery output format: {format:?}"),
+                )),
             };
             progress(index + 1, files.len());
             error.err().map(|err| (path, err))
@@ -983,6 +1147,9 @@ fn check_decode_probe_observed(
         .iter()
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
+    let file_local = failures
+        .iter()
+        .all(|(_, error)| error.kind() == std::io::ErrorKind::InvalidData);
     let actual = if let Some((path, err)) = failures.first() {
         format!(
             "{} decode failures; first {}: {err}",
@@ -992,12 +1159,15 @@ fn check_decode_probe_observed(
     } else {
         "0 decode failures".to_string()
     };
-    detail(
-        "decode",
-        failures.is_empty(),
-        format!("{} decode probes pass", files.len()),
-        actual,
-        failure_paths,
+    file_failures(
+        detail(
+            "decode",
+            failures.is_empty(),
+            format!("{} decode probes pass", files.len()),
+            actual,
+            failure_paths,
+        ),
+        file_local,
     )
 }
 
@@ -1102,15 +1272,20 @@ fn ensure_exiftool_success(path: &Path, status: ExitStatus, stderr: &[u8]) -> st
     )))
 }
 
-fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
+fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
     let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "fast_img_gate1_decode_probe",
         Some("mfb_gate1_decode"),
         Some(".png"),
     )
-    .map_err(|err| format!("avifdec decode probe scratch tempfile failed: {err}"))?;
-    let avifdec = resolve_tool_path("avifdec")
-        .ok_or_else(|| "avifdec was not found or failed its runtime health check".to_string())?;
+    .map_err(|err| {
+        std::io::Error::other(format!(
+            "avifdec decode probe scratch tempfile failed: {err}"
+        ))
+    })?;
+    let avifdec = resolve_tool_path("avifdec").ok_or_else(|| {
+        std::io::Error::other("avifdec was not found or failed its runtime health check")
+    })?;
     let mut command = std::process::Command::new(avifdec);
     command.arg(path).arg(temp.path());
     let output = crate::process_runner::run_command_with_liveness_timeout(
@@ -1119,30 +1294,40 @@ fn avifdec_decode_probe(path: &Path) -> Result<(), String> {
         crate::process_runner::image_process_hard_timeout(),
         "fast-img AVIF decode probe",
     )
-    .map_err(|err| format!("avifdec decode probe spawn failed: {err}"))?;
+    .map_err(|err| std::io::Error::other(format!("avifdec decode probe spawn failed: {err}")))?;
     if output.status.success() {
         let output_len = temp
             .as_file()
             .metadata()
-            .map_err(|err| format!("avifdec decode output metadata probe failed: {err}"))?
+            .map_err(|err| {
+                std::io::Error::other(format!(
+                    "avifdec decode output metadata probe failed: {err}"
+                ))
+            })?
             .len();
         if output_len > 0 {
             return Ok(());
         }
-        return Err("avifdec decode probe returned success but produced an empty output".into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "avifdec decode probe returned success but produced an empty output",
+        ));
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
         stderr.lines().rev().find(|line| !line.trim().is_empty()),
     );
-    Err(format!(
-        "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
-        path.display(),
-        output.status.code()
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+            "avifdec decode probe failed: avifdec {} -> exit {:?}; stderr tail: {stderr_tail}",
+            path.display(),
+            output.status.code()
+        ),
     ))
 }
 
-fn djxl_decode_probe(path: &Path) -> Result<(), String> {
+fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
     // Scratch must be .png, not .ppm: PPM is RGB-only, so grayscale (or CMYK) JXL
     // outputs make djxl fail with "SelectFormat failed" despite a valid bitstream.
     let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
@@ -1150,9 +1335,10 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
         Some("mfb_gate1_decode"),
         Some(".png"),
     )
-    .map_err(|err| format!("decode probe scratch tempfile failed: {err}"))?;
-    let djxl = resolve_tool_path("djxl")
-        .ok_or_else(|| "djxl was not found or failed its runtime health check".to_string())?;
+    .map_err(|err| std::io::Error::other(format!("decode probe scratch tempfile failed: {err}")))?;
+    let djxl = resolve_tool_path("djxl").ok_or_else(|| {
+        std::io::Error::other("djxl was not found or failed its runtime health check")
+    })?;
     let mut command = std::process::Command::new(&djxl);
     command.arg(path).arg(temp.path());
     let output = crate::process_runner::run_command_with_liveness_timeout(
@@ -1161,17 +1347,22 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
         crate::process_runner::image_process_hard_timeout(),
         "fast-img JXL decode probe",
     )
-    .map_err(|err| format!("djxl decode probe spawn failed: {err}"))?;
+    .map_err(|err| std::io::Error::other(format!("djxl decode probe spawn failed: {err}")))?;
     if output.status.success() {
         let output_len = temp
             .as_file()
             .metadata()
-            .map_err(|err| format!("djxl decode output metadata probe failed: {err}"))?
+            .map_err(|err| {
+                std::io::Error::other(format!("djxl decode output metadata probe failed: {err}"))
+            })?
             .len();
         if output_len > 0 {
             return Ok(());
         }
-        return Err("djxl decode probe returned success but produced an empty output".into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "djxl decode probe returned success but produced an empty output",
+        ));
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if crate::image::jxl_utils::is_jxl_png_icc_decode_error(&stderr) {
@@ -1180,7 +1371,9 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             Some("mfb_gate1_decode"),
             Some(".jpg"),
         )
-        .map_err(|err| format!("decode probe JPEG scratch tempfile failed: {err}"))?;
+        .map_err(|err| {
+            std::io::Error::other(format!("decode probe JPEG scratch tempfile failed: {err}"))
+        })?;
         let mut jpeg_command = std::process::Command::new(&djxl);
         jpeg_command.arg(path).arg(jpeg_temp.path());
         let jpeg_output = crate::process_runner::run_command_with_liveness_timeout(
@@ -1189,12 +1382,18 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             crate::process_runner::image_process_hard_timeout(),
             "fast-img JXL JPEG decode probe",
         )
-        .map_err(|err| format!("djxl JPEG decode probe spawn failed: {err}"))?;
+        .map_err(|err| {
+            std::io::Error::other(format!("djxl JPEG decode probe spawn failed: {err}"))
+        })?;
         if jpeg_output.status.success() {
             let output_len = jpeg_temp
                 .as_file()
                 .metadata()
-                .map_err(|err| format!("djxl JPEG decode output metadata probe failed: {err}"))?
+                .map_err(|err| {
+                    std::io::Error::other(format!(
+                        "djxl JPEG decode output metadata probe failed: {err}"
+                    ))
+                })?
                 .len();
             if output_len > 0 {
                 crate::log_detail!(format!(
@@ -1203,9 +1402,10 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
                 ));
                 return Ok(());
             }
-            return Err(
-                "djxl JPEG decode probe returned success but produced an empty output".into(),
-            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "djxl JPEG decode probe returned success but produced an empty output",
+            ));
         }
         let jpeg_stderr = String::from_utf8_lossy(&jpeg_output.stderr);
         let jpeg_stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
@@ -1221,9 +1421,12 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
             jpeg_temp.path().display(),
             jpeg_output.status.code()
         ));
-        return Err(format!(
-            "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
-            jpeg_output.status.code()
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "djxl JPEG decode probe exited {:?}; stderr tail: {jpeg_stderr_tail}",
+                jpeg_output.status.code()
+            ),
         ));
     }
     let stderr_tail = crate::media_conversion_gate::delivery_subprocess_log_tail_or_empty(
@@ -1235,9 +1438,12 @@ fn djxl_decode_probe(path: &Path) -> Result<(), String> {
         temp.path().display(),
         output.status.code()
     ));
-    Err(format!(
-        "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
-        output.status.code()
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+            "djxl decode probe exited {:?}; stderr tail: {stderr_tail}",
+            output.status.code()
+        ),
     ))
 }
 
@@ -1349,9 +1555,15 @@ mod tests {
         let probes: [TestProbe<'_>; 3] = [("count", &probe), ("size", &fail), ("blake3", &probe)];
         let ctx = ctx_with_library(1, vec![]);
         let mut events = vec![];
-        let result = super::run_required_checks(&probes, &ctx, &[], |name, n, total, state, _| {
-            events.push((name, n, total, state));
-        });
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |name, n, total, state, _| {
+                events.push((name, n, total, state));
+            },
+            crate::BatchErrorMode::LogAndContinue,
+        );
         assert!(!result.passed);
         assert_eq!(calls.get(), 1);
         assert_eq!(result.checks.len(), 2);
@@ -1370,6 +1582,7 @@ mod tests {
                 &ctx,
                 &[],
                 |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
             )
             .passed
         );
@@ -1389,10 +1602,144 @@ mod tests {
                 &ctx,
                 &[],
                 |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
             )
             .passed
         );
         assert_eq!(events, Vec::new());
+    }
+
+    #[test]
+    fn record_mode_completes_checks_after_local_failure_but_never_claims_gate_pass() {
+        let ctx = ctx_with_library(1, vec![]);
+        let mut probes: [(&str, super::LocalCheckProbe); 6] = [
+            ("count", |_, _, _| {
+                super::detail("count", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("size", |_, _, _| {
+                super::detail("size", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("blake3", |_, _, _| {
+                super::detail("blake3", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("metadata", |ctx, _, _| {
+                super::file_failures(
+                    super::detail(
+                        "metadata",
+                        false,
+                        "matching metadata".into(),
+                        "one mismatch".into(),
+                        vec![ctx.working_copy.join("bad.jxl")],
+                    ),
+                    true,
+                )
+            }),
+            ("orient", |_, _, _| {
+                super::detail("orient", true, "pass".into(), "pass".into(), vec![])
+            }),
+            ("decode", |_, _, _| {
+                super::detail("decode", true, "pass".into(), "pass".into(), vec![])
+            }),
+        ];
+        for (mode, expected_checks) in [
+            (crate::BatchErrorMode::LogAndContinue, 6),
+            (crate::BatchErrorMode::FailFast, 4),
+        ] {
+            let mut events = Vec::new();
+            let result = super::run_required_checks(
+                &probes,
+                &ctx,
+                &[],
+                |name, _, _, state, _| events.push((name, state)),
+                mode,
+            );
+            assert!(!result.passed);
+            assert_eq!(result.checks.len(), expected_checks);
+            assert_eq!(events.last().unwrap().1, super::GateActivityState::Failed);
+        }
+        probes[3].1 = |ctx, _, _| {
+            super::detail(
+                "metadata",
+                false,
+                "metadata tool available".into(),
+                "tool unavailable".into(),
+                vec![ctx.working_copy.join("bad.jxl")],
+            )
+        };
+        let result = super::run_required_checks(
+            &probes,
+            &ctx,
+            &[],
+            |_, _, _, _, _| {},
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!result.passed);
+        assert_eq!(
+            result.checks.len(),
+            4,
+            "shared failure still blocks later checks"
+        );
+    }
+
+    #[test]
+    fn local_failure_isolation_rejects_incomplete_or_ambiguous_evidence() {
+        let mut ctx = ctx_with_library(2, vec![]);
+        for stem in ["bad", "good"] {
+            ctx.blake3_log.insert(
+                format!("{stem}.jpg"),
+                Blake3Entry {
+                    out_rel: Some(format!("{stem}.jxl")),
+                    src: format!("{stem}-source-hash"),
+                    out: format!("{stem}-output-hash"),
+                    library_asset: None,
+                },
+            );
+        }
+        let mut checks = super::LOCAL_REQUIRED_CHECKS
+            .iter()
+            .map(|(name, _)| super::detail(name, true, "pass".into(), "pass".into(), vec![]))
+            .collect::<Vec<_>>();
+        checks[3] = super::file_failures(
+            super::detail(
+                "metadata",
+                false,
+                "matching metadata".into(),
+                "one mismatch".into(),
+                vec![ctx.working_copy.join("bad.jxl")],
+            ),
+            true,
+        );
+        let result = super::gate_result(checks);
+        let failures = result.isolated_source_failures(&ctx).unwrap();
+        assert_eq!(failures.keys().collect::<Vec<_>>(), vec!["bad.jpg"]);
+        assert!(failures["bad.jpg"].contains("Gate 1 metadata"));
+        assert!(!result.passed);
+        for index in 0..result.checks.len() {
+            let mut incomplete = result.clone();
+            incomplete.checks.remove(index);
+            assert!(incomplete.isolated_source_failures(&ctx).is_err());
+        }
+        for structural in [0, 1, 2] {
+            let mut invalid = result.clone();
+            invalid.checks[structural].passed = false;
+            invalid.checks[structural].failure_scope = super::CheckFailureScope::Files;
+            assert!(invalid.isolated_source_failures(&ctx).is_err());
+        }
+        let mut shared = result.clone();
+        shared.checks[3].failure_scope = super::CheckFailureScope::Shared;
+        assert!(shared.isolated_source_failures(&ctx).is_err());
+        let mut unknown = result.clone();
+        unknown.checks[3].affected_files = vec![ctx.working_copy.join("unmapped.jxl")];
+        assert!(unknown.isolated_source_failures(&ctx).is_err());
+        unknown.checks[3].affected_files.clear();
+        assert!(unknown.isolated_source_failures(&ctx).is_err());
+        for output in [Some("bad.jxl"), Some("../bad.jxl"), None] {
+            let mut ambiguous = ctx.clone();
+            ambiguous.blake3_log.get_mut("good.jpg").unwrap().out_rel = output.map(str::to_owned);
+            assert!(result.isolated_source_failures(&ambiguous).is_err());
+        }
+        ctx.blake3_log.get_mut("bad.jpg").unwrap().src.clear();
+        assert!(result.isolated_source_failures(&ctx).is_err());
     }
 
     #[test]
@@ -1418,6 +1765,7 @@ mod tests {
             |check, _, _, state, files| {
                 events.push((check, state, files));
             },
+            crate::BatchErrorMode::LogAndContinue,
         );
         assert!(!result.passed);
         let last = events.last().unwrap();
@@ -1456,6 +1804,7 @@ mod tests {
                 .into())
             },
             |name, n, total, state, _| events.push((name, n, total, state)),
+            crate::BatchErrorMode::LogAndContinue,
         );
         assert!(!result.passed);
         assert_eq!(result.checks.len(), 1);
@@ -1480,6 +1829,7 @@ mod tests {
                 &ctx,
                 || super::collect_delivery_output_files(&ctx.working_copy, None),
                 |name, n, total, state, _| events.push((name, n, total, state)),
+                crate::BatchErrorMode::LogAndContinue,
             );
             assert!(!result.passed);
             assert_eq!(result.checks.len(), 1);
@@ -1699,6 +2049,7 @@ mod tests {
 
         assert!(!check.passed);
         assert_eq!(check.affected_files, files);
+        assert_eq!(check.failure_scope, super::CheckFailureScope::Shared);
         assert!(
             check.actual.contains("synthetic exiftool failure"),
             "probe failure must be preserved in check detail: {}",
@@ -1751,6 +2102,7 @@ mod tests {
         );
         assert!(!rejected.passed);
         assert_eq!(rejected.affected_files, files);
+        assert_eq!(rejected.failure_scope, super::CheckFailureScope::Files);
     }
 
     #[test]
@@ -1861,6 +2213,7 @@ mod tests {
         assert!(!result.passed);
         assert_eq!(result.name, "metadata");
         assert_eq!(result.affected_files, vec![out]);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
         assert!(
             result.actual.contains("Exact metadata copy mismatch"),
             "metadata gate must expose exact-copy mismatch: {}",
@@ -3607,6 +3960,7 @@ mod fast_gate_policy_tests {
                 expected: "expected detail".to_string(),
                 actual: "actual detail".to_string(),
                 affected_files: Vec::new(),
+                failure_scope: super::CheckFailureScope::Shared,
             }],
         }
     }

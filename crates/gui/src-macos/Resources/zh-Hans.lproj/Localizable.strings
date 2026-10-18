@@ -320,9 +320,12 @@
 "settings.value.10" = "10";
 "settings.imgHeuristic" = "估算原始图像质量";
 "settings.imgDatabase" = "质量数据库";
-"settings.imgErrorMode" = "标准图像：单个文件失败时";
+"settings.imgErrorMode" = "标准图像：失败处理";
 "settings.vidCodec" = "视频输出格式";
-"settings.vidErrorMode" = "标准视频：单个文件失败时";
+"settings.vidErrorMode" = "标准视频：失败处理";
+"settings.fastErrorMode" = "失败时如何处理";
+"settings.fastErrorMode.help" = "默认记录失败并继续，可继承 Fast IMG 配置或明确指定。文件处理失败和可隔离的导入前核验失败会单独记录、保留原件；其他文件仍须通过全部必需核验才可交付。选择停止后不再启动下一组任务，已启动的并行任务会完成当前操作并保存检查点。来源身份、映射、导入或交付的共享安全条件无法确认时，两种设置都会阻止交付。";
+"settings.fastErrorMode.note" = "可隔离的文件与导入前核验失败会记录并保留原件，其他核验不放宽；共享安全问题仍会阻止交付。";
 "settings.failure.inherited" = "继承设置：%@";
 "settings.imgConfig.help" = "可选的图片运行时 JSON，包含工具和 Photos 配置。GUI 中明确指定的选项优先，配置文件本身不会被修改。";
 "settings.imgFallback.help" = "控制已支持的 JPEG 兼容重试、ICC 修补等恢复操作；不控制所有内部重试。它不决定能否换工具，也不决定失败后是否继续整批。所有操作仍受具体媒体和核验条件限制。";
@@ -334,8 +337,8 @@
 "settings.imgSizeTolerance.help" = "仅用于标准 IMG。允许媒体本体在设定的字节额度内增加，元数据不占额度。严格大小策略仍可禁止增加，完整性核验不会减少。默认关闭，不改变 Fast IMG 或 VID 的处理规则。";
 "settings.imgSizeToleranceBytes" = "增加上限（字节）";
 "settings.imgSizeToleranceBytes.help" = "仅用于标准 IMG。开启“允许体积增加”后，媒体本体最多可以增加的字节数，默认 524288 字节（512 KiB）。修改上限不会自动开启。开启时设为 0 表示允许等大但不允许增加；严格大小策略仍可要求结果更小。";
-"settings.imgErrorMode.help" = "继承图像的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
-"settings.vidErrorMode.help" = "继承视频的生效设置，或在此明确指定。可恢复的单文件失败会保留源文件，并单独计为失败，而不是跳过；系统级致命错误始终会停止处理。";
+"settings.imgErrorMode.help" = "默认记录失败并继续，可继承标准图像配置或明确指定。可恢复的文件失败会保留源文件，单独计为失败而非跳过；继续处理不代表免除核验。无法隔离的共享安全问题始终会停止交付，与兼容修复或更换编码工具的许可无关。";
+"settings.vidErrorMode.help" = "默认记录失败并继续，可继承标准视频配置或明确指定。可恢复的文件失败会保留源文件，单独计为失败而非跳过；继续处理不代表免除核验。无法隔离的共享安全问题始终会停止交付，与更换编码工具的许可无关。";
 "settings.vidCodec.help" = "AV1 编码会关闭视频的 Apple 兼容模式；HEVC 保留现有 Apple 兼容路径。";
 "settings.value.strict" = "不启用额外兼容重试或修复";
 "settings.value.same-semantics" = "允许保真兼容重试";
@@ -343,7 +346,7 @@
 "settings.value.true" = "启用";
 "settings.value.false" = "禁用";
 "settings.value.log-and-continue" = "记录失败并继续";
-"settings.value.fail-fast" = "遇到首个失败时立即停止";
+"settings.value.fail-fast" = "遇到首个失败后停止后续处理";
 "settings.value.hevc" = "HEVC（Apple 兼容）";
 "settings.value.av1" = "AV1（不兼容 Apple）";
 "settings.section.img" = "图片";
@@ -711,7 +714,7 @@
 "helpguide.tools.3.title" = "两个设置组合后，实际会怎样";
 "helpguide.tools.3.body" = "允许换工具，但不启用额外恢复：不会因此解锁被禁止的 JPEG 或 ICC 修复。允许受控修复，但仅主编码工具：符合条件的 ICC 修补仍可用同一个 cjxl 重试，但不会因此获准调用第二编码工具。JPEG 全部 11 档比较还有更严格的边界：不以换参数或修复输入来补齐失败档位，任一档无法完成就记录比较未完成、保留原件。具体是否适用及工具是否可用，要在执行时确认。";
 "helpguide.tools.4.title" = "单文件失败、整批继续和最终核验是另外的事";
-"helpguide.tools.4.body" = "普通 IMG/VID 可在开发者设置中选择单文件失败后记录并继续，或停止当前批次；Fast IMG 使用自身的断点与失败处理规则。不启用兼容重试不等于遇错即停。成功换工具或完成修复，也不等于归档成功。当前路径要求的像素、颜色、元数据、原 JPEG 字节重建及交付核验仍须通过；无法证明安全就保留原件，不改称成功或正常跳过。";
+"helpguide.tools.4.body" = "默认记录失败并继续。Fast IMG 可在图像设置中调整失败处理，普通 IMG/VID 可在开发者设置中分别调整。可隔离的文件失败与 Fast IMG 导入前核验失败会记录并保留原件，其他文件仍须通过全部必需核验才可交付。导入或交付的共享关系无法确认时，仍会阻止交付，并非所有 Gate 失败都可隔离。Fast IMG 遇错停止时不再启动下一组任务，已启动的并行任务会完成当前操作并保存检查点。不启用兼容重试不等于遇错即停，成功换工具或修复也不等于归档成功。像素、颜色、元数据、原 JPEG 字节重建及交付核验仍须通过；无法证明安全就保留原件，不改称成功或正常跳过。";
 "helpguide.context" = "选择一个主题，了解处理规则、搜索算法和安全检查。";
 "helpguide.topics" = "处理指南主题";
 "helpguide.content" = "处理指南内容";

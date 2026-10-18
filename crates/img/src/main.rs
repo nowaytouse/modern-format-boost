@@ -9805,6 +9805,7 @@ fn fast_img_apply_encode_results(
                     },
                 );
                 summary.session_failed += 1;
+                marker.encoded_count = marker.blake3_log.len();
                 write_marker_atomic(marker)?;
                 continue;
             }
@@ -9867,6 +9868,7 @@ fn fast_img_apply_encode_results(
                         reason: proof.reason,
                     },
                 );
+                marker.encoded_count = marker.blake3_log.len();
             }
         }
         write_marker_atomic(marker)?;
@@ -10011,6 +10013,19 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                 .context("output byte accumulation overflowed u64")?;
             summary.session_failed += wave_summary.session_failed;
             summary.session_skipped += wave_summary.session_skipped;
+            if wave_summary.session_failed > 0
+                && foundation::BatchErrorMode::current().is_fail_fast()
+            {
+                print_fast_img_session_size_summary(
+                    summary.session_converted,
+                    summary.session_source_bytes,
+                    summary.session_output_bytes,
+                    completed_from_resume as u64,
+                )?;
+                anyhow::bail!(
+                    "Fast IMG stopped after a failed encoding wave (fail-fast); completed outputs are checkpointed and sources retained"
+                );
+            }
         }
         foundation::batch_control::checkpoint()?;
         encode_progress.finish();
@@ -10223,6 +10238,82 @@ struct FastImgDeliveryContext<'a> {
     removed_files: &'a mut Vec<PathBuf>,
 }
 
+fn fast_img_record_local_gate_failures(
+    marker: &mut WorkingCopyMarker,
+    failures: std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<usize> {
+    let mut rejected = Vec::with_capacity(failures.len());
+    for (rel, reason) in failures {
+        let entry = marker
+            .blake3_log
+            .get(&rel)
+            .context("Gate 1 source lost its checkpoint identity")?;
+        let source_rel = fast_img_checked_rel_path(&rel)?;
+        let out_rel_key = entry
+            .out_rel
+            .clone()
+            .context("Gate 1 output lacks an explicit checkpoint path")?;
+        let output_rel = fast_img_checked_rel_path(&out_rel_key)?;
+        for (root, path) in [
+            (&marker.src_dir, &source_rel),
+            (&marker.working_copy, &output_rel),
+        ] {
+            let mut current = root.clone();
+            for part in std::iter::once(None).chain(path.components().map(Some)) {
+                if let Some(part) = part {
+                    current.push(part);
+                }
+                let metadata = std::fs::symlink_metadata(&current).with_context(|| {
+                    format!("inspect Gate 1 isolation path {}", current.display())
+                })?;
+                anyhow::ensure!(
+                    !metadata.file_type().is_symlink(),
+                    "Gate 1 isolation refused linked path {}",
+                    current.display()
+                );
+                anyhow::ensure!(
+                    metadata.is_dir() || metadata.is_file(),
+                    "Gate 1 isolation refused non-regular path {}",
+                    current.display()
+                );
+            }
+        }
+        let source = marker.src_dir.join(source_rel);
+        fast_img_verify_source_hash_unchanged(&source, &entry.src)?;
+        let output = marker.working_copy.join(output_rel);
+        anyhow::ensure!(
+            calculate_blake3_hash(&output)? == entry.out,
+            "Gate 1 isolation output changed after verification: {}",
+            output.display()
+        );
+        rejected.push(Err(FastImgTranscodeError {
+            rel_key: rel,
+            out_rel_key,
+            src_hash: entry.src.clone(),
+            reason: format!("Gate 1 rejected this asset; batch check details: {reason}"),
+            reason_code: Some("local_verification_failed".to_owned()),
+        }));
+    }
+    let count = rejected.len();
+    fast_img_apply_encode_results(
+        marker,
+        rejected,
+        marker.blake3_log.len(),
+        &marker.src_dir.clone(),
+        &marker.working_copy.clone(),
+    )?;
+    marker.encoded_count = marker.blake3_log.len();
+    fast_img_reset_delivery_gate_proofs(marker, FastImgStageName::TranscodeComplete);
+    write_marker_atomic(marker)?;
+    println!(
+        "MFB_CONVERTED_BYTES={{\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":null,\"output_bytes\":null}}"
+    );
+    println!(
+        "[SIZE    ] Conversion savings unavailable after Gate 1 rejected encoded outputs; pre-verification totals are not final savings"
+    );
+    Ok(count)
+}
+
 fn fast_img_run_verification_and_delivery_pipeline(
     context: FastImgDeliveryContext<'_>,
 ) -> anyhow::Result<()> {
@@ -10287,13 +10378,41 @@ fn fast_img_run_verification_and_delivery_pipeline(
     }
 
     let output_format = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy);
-    let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
     if !gate1_complete_or_later(&marker.stage) {
         println!("[GATE 1  ] verifying local outputs");
-        let gate1 = Gate1Local.run(&ctx);
+        let mode = foundation::BatchErrorMode::current();
+        let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
+        let mut gate1 = Gate1Local.run_with_error_mode(&ctx, mode);
         print_gate_result("GATE 1", &gate1);
         marker.apply_gate1(&gate1);
         write_marker_atomic(marker)?;
+        if !gate1.passed && !mode.is_fail_fast() {
+            let failures = gate1.isolated_source_failures(&ctx).context(
+                "Gate 1 cannot safely isolate this failure; outputs and sources retained",
+            )?;
+            let isolated = fast_img_record_local_gate_failures(marker, failures)?;
+            expected_count = fast_img_effective_expected_count(
+                marker,
+                source_jpegs.len(),
+                resume_local_delivery_for_shortest_path.0,
+            );
+            println!(
+                "[GATE 1  ] retained {isolated} failed source(s); fully verifying {expected_count} remaining output(s)"
+            );
+            if expected_count == 0
+                && modern_lossy_candidates.is_empty()
+                && !marker.tier2_in_progress
+            {
+                return Err(
+                    fast_img_result::FileFailures::primary(marker.failed_sources.len()).into(),
+                );
+            }
+            let remaining = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
+            gate1 = Gate1Local.run_with_error_mode(&remaining, mode);
+            print_gate_result("GATE 1", &gate1);
+            marker.apply_gate1(&gate1);
+            write_marker_atomic(marker)?;
+        }
         if !gate1.passed {
             // @ANCHOR:no-silent-gate-fail — every gate fail surfaces CheckDetail per check to UI/log
             anyhow::bail!(
@@ -14297,6 +14416,58 @@ mod fast_img_hardening_tests {
         )?;
 
         assert_eq!(resolved, wc.join("trip/day1/a.JXL"));
+        Ok(())
+    }
+
+    #[test]
+    fn local_gate_isolation_preserves_sources_and_only_removes_owned_failed_outputs()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let _home = fast_img_marker_state_test_env(root.path());
+        let src = root.path().join("source");
+        let output = root.path().join("output");
+        std::fs::create_dir(&src)?;
+        std::fs::create_dir(&output)?;
+        let mut marker = WorkingCopyMarker::new(src.clone(), output.clone(), 2);
+        for name in ["good", "bad"] {
+            std::fs::write(src.join(format!("{name}.jpg")), name)?;
+            std::fs::write(output.join(format!("{name}.JXL")), name)?;
+            marker.blake3_log.insert(
+                format!("{name}.jpg"),
+                Blake3Entry {
+                    src: foundation::common_utils::calculate_blake3_hash(
+                        &src.join(format!("{name}.jpg")),
+                    )?,
+                    out: foundation::common_utils::calculate_blake3_hash(
+                        &output.join(format!("{name}.JXL")),
+                    )?,
+                    out_rel: Some(format!("{name}.JXL")),
+                    library_asset: None,
+                },
+            );
+        }
+        let failures = std::collections::BTreeMap::from([(
+            "bad.jpg".to_owned(),
+            "metadata rejected".to_owned(),
+        )]);
+        std::fs::write(output.join("bad.JXL"), b"changed")?;
+        assert!(super::fast_img_record_local_gate_failures(&mut marker, failures.clone()).is_err());
+        assert_eq!(marker.blake3_log.len(), 2);
+        std::fs::write(output.join("bad.JXL"), b"bad")?;
+        assert_eq!(
+            super::fast_img_record_local_gate_failures(&mut marker, failures)?,
+            1
+        );
+        assert_eq!(std::fs::read(src.join("bad.jpg"))?, b"bad");
+        assert!(!output.join("bad.JXL").exists());
+        assert_eq!(std::fs::read(output.join("good.JXL"))?, b"good");
+        assert_eq!(marker.failed_sources.len(), 1);
+        assert_eq!(marker.blake3_log.len(), 1);
+        assert_eq!(marker.encoded_count, 1);
+        let saved = foundation::pipeline::verification::read_marker(&output)?;
+        assert_eq!(saved.failed_sources.len(), 1);
+        assert_eq!(saved.encoded_count, saved.blake3_log.len());
+        assert!(saved.blake3_log.contains_key("good.jpg"));
         Ok(())
     }
 

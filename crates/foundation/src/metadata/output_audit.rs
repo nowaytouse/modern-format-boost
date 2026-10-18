@@ -240,12 +240,15 @@ pub fn verify_output_embedded_metadata(
                 audit.mismatches.join("; ")
             ),
         );
-        Err(io::Error::other(format!(
-            "Output embedded metadata policy {policy:?} failed for {} -> {}: {}",
-            src.display(),
-            dst.display(),
-            audit.mismatches.join("; ")
-        )))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Output embedded metadata policy {policy:?} failed for {} -> {}: {}",
+                src.display(),
+                dst.display(),
+                audit.mismatches.join("; ")
+            ),
+        ))
     }
 }
 
@@ -870,20 +873,19 @@ fn metadata_tag_maps_with_exif_custody<const N: usize>(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
+    let requested_paths = requested.keys().cloned().collect();
     let objects = if let Some([src, dst]) = pair {
-        parse_metadata_records_with_exif_custody(
+        parse_metadata_records_for_requested_paths(
             &output.stdout,
             Some([
                 Path::new(exiftool_path_arg(src).as_ref()),
                 Path::new(exiftool_path_arg(dst).as_ref()),
             ]),
+            Some(&requested_paths),
         )?
     } else {
-        parse_metadata_records(&output.stdout)?
+        parse_metadata_records_for_requested_paths(&output.stdout, None, Some(&requested_paths))?
     };
-    if objects.len() != requested.len() {
-        return Err(io::Error::other("incomplete metadata response"));
-    }
     for (path, map) in objects {
         let indices = requested
             .get(&path)
@@ -989,15 +991,25 @@ pub(super) fn stripped_embedded_metadata_size(path: &Path) -> io::Result<u64> {
     Ok(stripped_bytes)
 }
 
+#[cfg(test)]
 fn parse_metadata_records(
     raw: &[u8],
 ) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
     parse_metadata_records_with_exif_custody(raw, None)
 }
 
+#[cfg(test)]
 fn parse_metadata_records_with_exif_custody(
     raw: &[u8],
     pair: Option<[&Path; 2]>,
+) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
+    parse_metadata_records_for_requested_paths(raw, pair, None)
+}
+
+fn parse_metadata_records_for_requested_paths(
+    raw: &[u8],
+    pair: Option<[&Path; 2]>,
+    requested_paths: Option<&BTreeSet<std::path::PathBuf>>,
 ) -> io::Result<BTreeMap<std::path::PathBuf, BTreeMap<String, String>>> {
     struct UniqueRecord(serde_json::Map<String, Value>);
     impl<'de> serde::Deserialize<'de> for UniqueRecord {
@@ -1029,7 +1041,25 @@ fn parse_metadata_records_with_exif_custody(
         }
     }
 
-    let records: Vec<UniqueRecord> = serde_json::from_slice(raw)?;
+    let records: Vec<UniqueRecord> = serde_json::from_slice(raw).map_err(io::Error::other)?;
+    let mut returned_paths = BTreeSet::new();
+    for UniqueRecord(object) in &records {
+        let path = object
+            .get("SourceFile")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| io::Error::other("metadata response has no SourceFile"))?;
+        if !returned_paths.insert(std::path::PathBuf::from(path)) {
+            return Err(io::Error::other("duplicate metadata response"));
+        }
+    }
+    if let Some(requested) = requested_paths
+        && returned_paths != *requested
+    {
+        return Err(io::Error::other(
+            "metadata response paths do not exactly match requested files",
+        ));
+    }
     let allowed_warnings = pair.and_then(|[src, dst]| {
         let record = |path: &Path| {
             records
@@ -1077,6 +1107,7 @@ fn parse_metadata_records_with_exif_custody(
         )
     });
     let mut maps = BTreeMap::new();
+    let mut file_failure = None;
     for UniqueRecord(object) in records {
         let path = object
             .get("SourceFile")
@@ -1119,9 +1150,22 @@ fn parse_metadata_records_with_exif_custody(
                 tracing::warn!(target: "mfb.metadata", source = path, "{diagnostic}");
                 continue;
             }
-            return Err(io::Error::other(format!(
-                "exiftool reported {key} for {path}: {diagnostic}"
-            )));
+            let message = format!("exiftool reported {key} for {path}: {diagnostic}");
+            if key.ends_with(":Warning")
+                && diagnostic.as_str().is_some_and(|message| {
+                    message
+                        .strip_prefix("Bad length ICC_Profile (length ")
+                        .and_then(|length| length.strip_suffix(')'))
+                        .is_some_and(|length| {
+                            !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                })
+            {
+                file_failure
+                    .get_or_insert_with(|| io::Error::new(io::ErrorKind::InvalidData, message));
+                continue;
+            }
+            return Err(io::Error::other(message));
         }
         if maps
             .insert(std::path::PathBuf::from(path), metadata_object_map(&object))
@@ -1130,7 +1174,10 @@ fn parse_metadata_records_with_exif_custody(
             return Err(io::Error::other("duplicate metadata response"));
         }
     }
-    Ok(maps)
+    match file_failure {
+        Some(error) => Err(error),
+        None => Ok(maps),
+    }
 }
 
 fn metadata_object_map(obj: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
@@ -1192,7 +1239,76 @@ mod tests {
     }
 
     #[test]
+    fn metadata_file_warning_requires_complete_exact_response_identity() {
+        let requested = ["source", "output"]
+            .map(std::path::PathBuf::from)
+            .into_iter()
+            .collect();
+        let parse =
+            |raw: &[u8]| parse_metadata_records_for_requested_paths(raw, None, Some(&requested));
+        assert_eq!(
+            parse(br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#)
+                .unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(parse(br#"[{"SourceFile":"output"},{"SourceFile":"source"}]"#).is_ok());
+        for invalid in [
+            br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"}]"#.as_slice(),
+            br#"[{"SourceFile":"unknown","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#,
+            br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"source"},{"SourceFile":"output"}]"#,
+            br#"[{"ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#,
+            br#"[{"SourceFile":"","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#,
+            br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"},{"SourceFile":"extra"}]"#,
+            br#"[{"SourceFile":"source","SourceFile":"unknown","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}]"#,
+            br#"[{"SourceFile":"source","ExifTool:Warning":"Bad length ICC_Profile (length 548)"},{"SourceFile":"output"}] trailing"#,
+        ] {
+            assert_eq!(parse(invalid).unwrap_err().kind(), io::ErrorKind::Other);
+        }
+        for warning in [
+            "Unknown extraction warning",
+            "Bad length ICC_Profile (length -1)",
+            "Bad length ICC_Profile (length )",
+            "Bad length ICC_Profile (length 548); resource unavailable",
+        ] {
+            let raw = serde_json::to_vec(&serde_json::json!([
+                {"SourceFile":"source", "ExifTool:Warning":warning},
+                {"SourceFile":"output"},
+            ]))
+            .unwrap();
+            assert_eq!(parse(&raw).unwrap_err().kind(), io::ErrorKind::Other);
+        }
+        for diagnostic in ["ExifTool:Warning", "ExifTool:Error"] {
+            let mut records = serde_json::json!([
+                {"SourceFile":"source", "ExifTool:Warning":"Bad length ICC_Profile (length 548)"},
+                {"SourceFile":"output"},
+            ]);
+            records[1][diagnostic] = Value::from("tool or resource failure");
+            for reversed in [false, true] {
+                if reversed {
+                    records.as_array_mut().unwrap().reverse();
+                }
+                let raw = serde_json::to_vec(&records).unwrap();
+                assert_eq!(parse(&raw).unwrap_err().kind(), io::ErrorKind::Other);
+            }
+        }
+    }
+
+    #[test]
     fn metadata_records_reject_empty_duplicate_and_tool_errors() {
+        assert_eq!(
+            parse_metadata_records(
+                br#"[{"SourceFile":"a","ExifTool:Warning":"Bad length ICC_Profile (length 548)"}]"#
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            parse_metadata_records(br#"[{"SourceFile":"a","ExifTool:Error":"read failed"}]"#)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Other
+        );
         for invalid in [
             b"".as_slice(),
             br#"[{"XMP:Title":"unbound"}]"#,

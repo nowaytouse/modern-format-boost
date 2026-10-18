@@ -583,6 +583,24 @@ pub fn read_session_output_since(
     session_id: &str,
     after_sequence: i64,
 ) -> Result<String> {
+    read_selected_session_output(log_dir, session_id, after_sequence, false)
+}
+
+/// Read finalization receipts, size facts and retained-file summaries, not verbose diagnostics.
+pub fn read_fast_img_finalization_since(
+    log_dir: &Path,
+    session_id: &str,
+    after_sequence: i64,
+) -> Result<String> {
+    read_selected_session_output(log_dir, session_id, after_sequence, true)
+}
+
+fn read_selected_session_output(
+    log_dir: &Path,
+    session_id: &str,
+    after_sequence: i64,
+    finalization_only: bool,
+) -> Result<String> {
     ensure!(!session_id.is_empty(), "history session identity is empty");
     ensure!(after_sequence >= 0, "history output cursor is negative");
     let Some(connection) = open_history_read(log_dir)? else {
@@ -595,9 +613,15 @@ pub fn read_session_output_since(
         return Ok(String::new());
     }
     let mut statement = transaction.prepare(
-        "SELECT line FROM history_output WHERE session_id=?1 AND sequence>?2 ORDER BY sequence",
+        "SELECT line FROM history_output WHERE session_id=?1 AND sequence>?2
+         AND (?3=0 OR instr(line,'MFB_FAST_IMG_RESULT=')>0
+              OR instr(line,'MFB_CONVERTED_BYTES=')>0
+              OR substr(ltrim(line),1,10)='[SIZE    ]'
+              OR substr(ltrim(line),1,13)='[FAIL    ]   '
+              OR substr(ltrim(line),1,13)='[SKIP    ]   ')
+         ORDER BY sequence",
     )?;
-    let mut rows = statement.query(params![session_id, after_sequence])?;
+    let mut rows = statement.query(params![session_id, after_sequence, finalization_only])?;
     let mut output = String::new();
     while let Some(row) = rows.next()? {
         let line = row.get_ref(0)?.as_str()?;
@@ -1383,6 +1407,60 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn fast_img_evidence_is_independent_of_verbose_log_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = HistoryOutputWriter::open(directory.path(), "batch").unwrap();
+        writer
+            .push_line("img", "MFB_FAST_IMG_RESULT=old-attempt")
+            .unwrap();
+        writer.flush().unwrap();
+        let cursor = session_output_cursor(directory.path(), "batch").unwrap();
+        let connection = Connection::open(directory.path().join(HISTORY_DATABASE)).unwrap();
+        connection.execute(
+            "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('batch','now','img',CAST(zeroblob(?1) AS TEXT))",
+            [OUTPUT_READ_LIMIT as i64],
+        ).unwrap();
+        let evidence = "MFB_FAST_IMG_RESULT=current-attempt\n[FAIL    ]   bad.jpeg: retained\n[SIZE    ] files_converted: 2\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":null,\"output_bytes\":null}";
+        for line in evidence.lines() {
+            writer.push_line("img", line).unwrap();
+        }
+        writer.flush().unwrap();
+        assert!(read_session_output_since(directory.path(), "batch", cursor).is_err());
+        assert_eq!(
+            read_fast_img_finalization_since(directory.path(), "batch", cursor).unwrap(),
+            format!("{evidence}\n")
+        );
+        assert!(
+            read_fast_img_finalization_since(directory.path(), "other", 0)
+                .unwrap()
+                .is_empty()
+        );
+        writer
+            .push_line("img", "MFB_FAST_IMG_RESULT=conflicting")
+            .unwrap();
+        writer.flush().unwrap();
+        assert_eq!(
+            read_fast_img_finalization_since(directory.path(), "batch", cursor)
+                .unwrap()
+                .matches("MFB_FAST_IMG_RESULT=")
+                .count(),
+            2
+        );
+        let decorated = [
+            "\tMFB_FAST_IMG_RESULT=indented-conflict",
+            "\x1B[31mMFB_CONVERTED_BYTES=invalid-json\x1B[0m",
+        ];
+        for line in decorated {
+            writer.push_line("img", line).unwrap();
+        }
+        writer.flush().unwrap();
+        let selected = read_fast_img_finalization_since(directory.path(), "batch", cursor).unwrap();
+        assert_eq!(selected.matches("MFB_FAST_IMG_RESULT=").count(), 3);
+        assert_eq!(selected.matches("MFB_CONVERTED_BYTES=").count(), 2);
+        assert!(selected.ends_with(&format!("{}\n{}\n", decorated[0], decorated[1])));
     }
 
     #[test]

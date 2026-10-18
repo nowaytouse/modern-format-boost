@@ -1019,12 +1019,15 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
                 mismatches.join("; ")
             ),
         );
-        Err(io::Error::other(format!(
-            "Exact metadata copy mismatch from {} to {}: {}",
-            src.display(),
-            dst.display(),
-            mismatches.join("; ")
-        )))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Exact metadata copy mismatch from {} to {}: {}",
+                src.display(),
+                dst.display(),
+                mismatches.join("; ")
+            ),
+        ))
     }
 }
 

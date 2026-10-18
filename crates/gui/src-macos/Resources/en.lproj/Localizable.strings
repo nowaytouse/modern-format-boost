@@ -320,9 +320,12 @@
 "settings.value.10" = "10";
 "settings.imgHeuristic" = "Estimate source quality";
 "settings.imgDatabase" = "Quality database";
-"settings.imgErrorMode" = "Standard images: file failure";
+"settings.imgErrorMode" = "Standard images: failure handling";
 "settings.vidCodec" = "Video format";
-"settings.vidErrorMode" = "Standard video: file failure";
+"settings.vidErrorMode" = "Standard video: failure handling";
+"settings.fastErrorMode" = "When a file fails";
+"settings.fastErrorMode.help" = "Defaults to record and continue. Inherit Fast IMG configuration or choose an override. Isolated file failures and pre-import verification failures are recorded and retain their sources. Other files still need all required checks before delivery. Stopping starts no further group of tasks; tasks already running finish their current work and save checkpoints. Untrusted source identity, mappings or shared import/delivery safety conditions block delivery in either mode.";
+"settings.fastErrorMode.note" = "Isolated file and pre-import verification failures retain their sources. No other checks are waived; shared safety problems still block delivery.";
 "settings.failure.inherited" = "Inherited: %@";
 "settings.imgConfig.help" = "Optional image runtime JSON, including tool and Photos settings. GUI overrides take precedence; the file is not modified.";
 "settings.imgFallback.help" = "Controls supported JPEG compatibility retries, ICC patching and related recovery, not every internal retry. Separate from permission to switch tools and from batch failure handling. Media-specific requirements and verification still apply.";
@@ -334,8 +337,8 @@
 "settings.imgSizeTolerance.help" = "Standard IMG only. Allow pure-media growth within the configured byte budget. Metadata is excluded; strict-size policies still forbid growth and integrity checks remain required. Disabled by default; Fast IMG and VID are unchanged.";
 "settings.imgSizeToleranceBytes" = "Growth limit (bytes)";
 "settings.imgSizeToleranceBytes.help" = "Standard IMG only. Maximum pure-media growth when Allow size growth is enabled; default 524288 bytes (512 KiB). Changing this limit does not enable growth. Zero permits equal size but no growth when enabled; strict-size policies can still require a smaller result.";
-"settings.imgErrorMode.help" = "Inherit the image configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
-"settings.vidErrorMode.help" = "Inherit the video configuration or choose an override. Recoverable failures retain the source and count as failed, not skipped. Fatal errors always stop processing.";
+"settings.imgErrorMode.help" = "Defaults to record and continue. Inherit standard image configuration or choose an override. Recoverable file failures retain the source and count as failed, not skipped. Continuing never waives verification. Shared safety problems that cannot be isolated always block delivery. Separate from permission to repair input or switch encoders.";
+"settings.vidErrorMode.help" = "Defaults to record and continue. Inherit standard video configuration or choose an override. Recoverable file failures retain the source and count as failed, not skipped. Continuing never waives verification. Shared safety problems that cannot be isolated always block delivery. Separate from permission to switch encoders.";
 "settings.vidCodec.help" = "AV1 disables Apple compatibility for video encoding; HEVC keeps the existing Apple-compatible route.";
 "settings.value.strict" = "No extra compatibility retries or repair";
 "settings.value.same-semantics" = "Allow fidelity-preserving compatibility retries";
@@ -343,7 +346,7 @@
 "settings.value.true" = "Enabled";
 "settings.value.false" = "Disabled";
 "settings.value.log-and-continue" = "Record failure and continue";
-"settings.value.fail-fast" = "Stop on first failure";
+"settings.value.fail-fast" = "Stop further work after first failure";
 "settings.value.hevc" = "HEVC (Apple compatible)";
 "settings.value.av1" = "AV1 (not Apple compatible)";
 "settings.section.img" = "Images";
@@ -711,7 +714,7 @@
 "helpguide.tools.3.title" = "How the two choices work together";
 "helpguide.tools.3.body" = "Alternatives allowed, extra recovery disabled: forbidden JPEG or ICC repairs remain forbidden. Guarded repair allowed, primary tool only: an eligible ICC patch may still retry the same cjxl, but does not authorize a second encoder. Full eleven-level JPEG comparison has a stricter boundary: it never changes candidate parameters or repairs input to fill a failed level. Any incomplete level leaves the comparison incomplete and retains the source. Applicability and tool availability must be confirmed at execution.";
 "helpguide.tools.4.title" = "Batch continuation and final verification are separate";
-"helpguide.tools.4.body" = "For standard IMG/VID, Developer settings select whether to record a file failure and continue or stop the batch; Fast IMG uses its own checkpointed failure handling. Disabling compatibility retries does not mean fail-fast. Switching tools or completing repair is not archival success. Pixel, color, metadata, exact original-JPEG reconstruction and delivery checks required by the current route remain mandatory. If safety cannot be proved, retain the source instead of relabeling failure as success or an intentional skip.";
+"helpguide.tools.4.body" = "Record and continue is the default. Fast IMG exposes failure handling in Images settings; standard IMG/VID have separate Developer settings. Isolated file failures and Fast IMG pre-import verification failures are recorded and retain their sources. Other files still need all required checks before delivery. Untrusted shared import or delivery relationships still block delivery; not every Gate failure can be isolated. When stopping after a failure, Fast IMG starts no further group of tasks; tasks already running finish their current work and save checkpoints. Disabling compatibility retries does not mean fail-fast; switching tools or completing repair is not archival success. Required pixel, color, metadata, exact original-JPEG reconstruction and delivery checks remain mandatory. If safety cannot be proved, retain the source rather than relabeling failure as success or a skip.";
 "helpguide.context" = "Choose a topic to see the processing rules, searches and safety checks.";
 "helpguide.topics" = "Processing guide topics";
 "helpguide.content" = "Processing guide content";

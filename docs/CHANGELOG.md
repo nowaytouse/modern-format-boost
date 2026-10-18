@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Scoped Fast IMG Failures And Reliable Finalization (2026-10-18)
+
+- Read only current-attempt finalization evidence instead of loading all verbose
+  output. Keep the existing evidence-size bound and duplicate-receipt rejection;
+  logs over 64 MiB no longer suppress independent partial-result verification.
+- Distinguish file-local Gate 1 failures from shared safety faults. Record mode
+  completes applicable checks, persists rejected sources, rechecks source/output
+  identity before excluding owned failed outputs, then fully verifies survivors.
+  Original sources remain untouched by isolation; no failed Gate is relabeled PASS.
+- Expose independent Fast IMG failure handling in Image settings and forward its
+  typed policy to the worker. Fail-fast preserves completed in-flight wave results
+  before stopping. Missing evidence and blocked cleanup receive explicit receipts.
+- Preserve the complete E1–E11 JPEG effort search and all fidelity requirements.
+  Existing workspace dependency refreshes are retained, not rolled back.
+- Classify malformed ICC data only after complete, exact metadata-response identity
+  validation. Unknown warnings, protocol failures and unclassified decoder exits
+  remain shared blockers. Invalidate pre-Gate byte savings after output rejection.
+- Verify mixed valid/invalid-ICC inputs using disposable copies and local-only
+  delivery; this does not certify Photos import or retroactively clear old residues.
+
 ### Inspectable History Cleanup Details (2026-10-16)
 
 - Add a dedicated Fast IMG History action for a selectable, read-only cleanup

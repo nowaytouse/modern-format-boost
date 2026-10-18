@@ -1134,10 +1134,6 @@ fn validate_media_options(args: &Args) -> Result<()> {
         args.vid_config.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Videos),
         "video config requires --mode auto or videos"
     );
-    anyhow::ensure!(
-        args.img_error_mode.is_none() || matches!(args.mode, LaunchMode::Auto | LaunchMode::Images),
-        "image file-error policy requires standard image processing; fast-img uses its checkpointed failure handling"
-    );
     Ok(())
 }
 
@@ -2792,7 +2788,7 @@ fn run_drag_drop_inner(
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
                     let mut failed_sources_verified = None;
-                    match dev::infra::history_store::read_session_output_since(
+                    match dev::infra::history_store::read_fast_img_finalization_since(
                         &session.expect("session").log_dir,
                         &session.expect("session").stamp,
                         output_cursor.context("fast-img run has no processing output boundary")?,
@@ -2815,10 +2811,12 @@ fn run_drag_drop_inner(
                                 }
                             }
                         }
-                        Err(err) => eprintln!(
-                            "{} fast-img size metrics log read failed: {err}",
-                            pick_symbol("⚠️", "[WARN]")
-                        ),
+                        Err(err) => {
+                            eprintln!(
+                                "[ERROR] fast-img finalization evidence read failed: {err:#}"
+                            );
+                            first_error = Some(err.context("read fast-img finalization evidence"));
+                        }
                     }
                     if stats.exit_code != 0 && first_error.is_none() {
                         first_error = Some(anyhow::anyhow!(
@@ -2836,6 +2834,15 @@ fn run_drag_drop_inner(
                             failed_sources_verified,
                         )
                     } else {
+                        let path = std::path::absolute(&output)
+                            .context("resolve blocked output cleanup path")?;
+                        session
+                            .expect("session")
+                            .record_output_cleanup(if args.shortest_path {
+                                OutputCleanupReceipt::verification_blocked(&path)
+                            } else {
+                                OutputCleanupReceipt::not_requested(&path)
+                            })?;
                         Ok(())
                     };
                     if verified.is_err() {
@@ -5665,6 +5672,32 @@ mod tests {
     }
 
     #[test]
+    fn fast_img_failure_policy_reaches_worker_invocation() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input");
+        fs::create_dir(&source).unwrap();
+        for mode in ["log-and-continue", "fail-fast"] {
+            let args = Args::try_parse_from([
+                "mfb",
+                "--mode",
+                "fast-img",
+                "--img-error-mode",
+                mode,
+                source.to_str().unwrap(),
+            ])
+            .unwrap();
+            validate_media_options(&args).unwrap();
+            let (command, _) = fast_img_launch_command(&args, root.path(), &source).unwrap();
+            assert!(
+                command
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--error-mode", mode])
+            );
+        }
+    }
+
+    #[test]
     fn video_av1_and_inapplicable_options_are_explicit() {
         let args = apply_mode_overrides(
             Args::try_parse_from([
@@ -5749,7 +5782,6 @@ mod tests {
                 "--img-config",
                 "/tmp/config.json",
             ],
-            vec!["mfb", "--mode", "fast-img", "--img-error-mode", "fail-fast"],
         ] {
             let args = apply_mode_overrides(Args::try_parse_from(argv).unwrap());
             assert!(validate_media_options(&args).is_err());
