@@ -48,13 +48,17 @@ that an exhaustive optimum was found, and E exploration is not a speed optimizer
 JPEG `adaptive` E comparison independently proves exact reconstruction for every
 bounded candidate. Default `full` comparison covers all eleven E values using
 complete JXL bytes after the same metadata enrichment, with lower E breaking
-ties. It verifies the first candidate and each smaller contender, retains only
+ties. E9 establishes the first size reference, followed by E1..E8, E10 and E11;
+this changes execution order, not coverage or the winner's priority. It verifies
+the first candidate and every contender with a better `(complete size, E)` pair, retains only
 the winner and challenger, and reuses the winning physical file. It neither
 changes JPEG quality nor uses pixel D. Fixed is an explicit manual alternative.
 Full comparison does not use compatibility/repair retries or unproven equivalent
 Effort groups: a failed/unsupported candidate makes the search incomplete and
 preserves the source. Input, associated XMP and encoder executable content must
 remain stable. Normal delivery verification and cleanup ownership still apply.
+Equal-size lower-E replacements also require reconstruction proof. Reordering can
+increase checks for some inputs; it is not a guaranteed speedup for every JPEG.
 
 The existing Distance Explorer starts from the encoded D0 baseline when the
 active size policy requires further work. That measurement is explicitly D0:
@@ -122,6 +126,31 @@ preservation; these settings do not silently unify them. Fixed Q is not lowered
 to manufacture success if its candidate fails verification or the size policy.
 
 ## Evidence And Remaining Work
+
+### Full JPEG Search Order Comparison (2026-10-18)
+
+Compared the ascending implementation from `6675cccd` with the reference-first
+order on Apple M4, cjxl `0.13.0 ef67fde2`, two encoder threads and one search at a
+time. Five inputs comprised three disposable media copies and two synthetic JPEGs;
+the synthetic texture included an XMP sidecar. Three alternating runs per order
+included candidate metadata enrichment, unchanged input/tool checks and exact
+JPEG reconstruction. All eleven complete candidate hashes and the final output
+bytes/effort matched across orders and repeats: 30 full searches, 330 encodes.
+
+| Input | Winning E | Ascending Median | Reference-First Median | Reconstruction Calls |
+|---|---:|---:|---:|---:|
+| Synthetic gradient | 9 | 1.840 s | 1.768 s | 3 -> 1 |
+| Media copy A | 9 | 3.681 s | 3.510 s | 5 -> 1 |
+| Media copy B | 9 | 3.523 s | 3.455 s | 4 -> 1 |
+| Media copy C | 3 | 6.837 s | 6.734 s | 2 -> 2 |
+| Synthetic texture + XMP | 8 | 2.057 s | 2.003 s | 3 -> 2 |
+
+The sum of per-input medians was 17.938 s versus 17.471 s, an observed 2.6%
+difference; reconstruction calls per five-input sweep fell from 17 to 7. This is
+a small experiment, not a statistical or representative batch-speed guarantee.
+It excludes input scanning, final delivery Gates and Photos. An all-equal-size
+curve requires two reconstruction checks instead of one because E1 replaces E9;
+the deterministic regression records that cost rather than hiding it.
 
 The correction is covered by Foundation JXL and IMG library/CLI regressions,
 launcher forwarding checks, source contracts and native self-test. Native dark

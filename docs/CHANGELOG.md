@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.12.0] - 2026-10-07
 
+### Complete JPEG Search With Fewer Reconstructions (2026-10-18)
+
+- Try E9 as a size reference, then complete E1..E8, E10 and E11. Keep all eleven
+  independent encodes, identical metadata handling and exact winner reconstruction.
+  Rank explicitly by complete file size and lower effort, not execution order.
+- Preserve original-file/alias guards, source and candidate mutation detection,
+  cancellation, incomplete-search rejection and direct winner reuse. Cover every
+  possible winning effort and lower-effort ties in focused regressions.
+- Explain the execution order in the English, Simplified Chinese and Japanese
+  native processing guide without adding another setting or changing search scope.
+- Compare 30 full searches on five inputs, including disposable media copies and
+  synthetic XMP. All complete candidate/output bytes matched the ascending baseline.
+  Reconstruction calls fell from 17 to 7 per five-input sweep; the sum of per-input
+  timing medians improved by 2.6% in this small experiment, not a general speed claim.
+  Measurement details and the equal-size extra-check tradeoff are in the private
+  IMG policy's evidence section.
+- Pass 14 focused policy regressions, local ordinary IMG/Fast IMG processing and
+  independent exact reconstruction checks. Native self-test, signing verification
+  and the Simplified Chinese guide window were checked; Photos and remote CI were not.
+
 ### Scoped Fast IMG Failures And Reliable Finalization (2026-10-18)
 
 - Read only current-attempt finalization evidence instead of loading all verbose
