@@ -5,6 +5,7 @@ private struct PreflightEntry: Decodable {
     let route: String
     let selected: Bool
     let bytes: UInt64
+    let content_blake3: String
     let action: String
     let reason: String
 }
@@ -103,7 +104,7 @@ private struct PreflightSnapshot: Decodable {
                 continue
             }
             for entry in entries {
-                try keys(entry, ["relative_path", "route", "selected", "bytes", "action", "reason"])
+                try keys(entry, ["relative_path", "route", "selected", "bytes", "content_blake3", "action", "reason"])
             }
             for relationship in relationships {
                 try keys(relationship, ["kind", "source_relative_path", "match_basis", "status",
@@ -114,7 +115,7 @@ private struct PreflightSnapshot: Decodable {
             try keys(worker, ["name", "path", "status", "bytes", "executable_check"])
         }
         let snapshot = try JSONDecoder().decode(Self.self, from: data)
-        try require(snapshot.schema_version == 2 && snapshot.scope == "launcher_routing_snapshot"
+        try require(snapshot.schema_version == 3 && snapshot.scope == "launcher_routing_snapshot"
             && snapshot.read_only && !snapshot.execution_started, "read-only schema")
         try require(snapshot.plans.count == 1, "one selected input is required")
         let plan = snapshot.plans[0]
@@ -147,6 +148,9 @@ private struct PreflightSnapshot: Decodable {
         for entry in plan.entries {
             let key = pathKey(entry.relative_path)
             try require(validRelativePath(entry.relative_path) && byPath[key] == nil, "relative path identity")
+            try require(entry.content_blake3.utf8.count == 64 && entry.content_blake3.utf8.allSatisfy {
+                (48...57).contains($0) || (97...102).contains($0)
+            }, "source content identity")
             byPath[key] = entry
             let action: String
             let reason: String
@@ -573,6 +577,11 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         let relationships = plan.relationships.filter { Data($0.source_relative_path.utf8) == key }
         var lines = [Self.displayPath(entry.relative_path), "\(routeText(entry.route))  · \(actionText(entry.action))  · \(entry.bytes) "
             + text("bytes", "字节", "バイト"), reasonText(entry.reason)]
+        lines.append(text("Scanned content fingerprint", "扫描时的内容指纹", "スキャン時の内容指紋") + " (BLAKE3):")
+        lines.append(entry.content_blake3)
+        lines.append(text("Records the bytes read during this scan; final media verification is still required.",
+            "标识本次扫描读到的文件内容；处理结果仍需完整验证。",
+            "今回のスキャンで読み取った内容を識別します。処理結果の検証は別途必要です。"))
         for relationship in relationships {
             let kind = relationship.kind == "xmp_filename" ? "XMP" : "Live Photo"
             let match = relationship.status == "unmatched" ? text("Unmatched", "没有候选", "候補なし")
@@ -598,9 +607,10 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         let media = "\u{56fe}\u{50cf}\n\""
         func entry(_ path: String, _ route: String, _ action: String, _ reason: String) -> [String: Any] {
             ["relative_path": path, "route": route, "selected": route != "sidecar", "bytes": 4,
+                "content_blake3": String(repeating: "a", count: 64),
                 "action": action, "reason": reason]
         }
-        return ["schema_version": 2, "scope": "launcher_routing_snapshot", "read_only": true,
+        return ["schema_version": 3, "scope": "launcher_routing_snapshot", "read_only": true,
             "execution_started": false, "plans": [["input": "/synthetic/preflight", "output_requested": NSNull(),
                 "in_place_requested": false, "files_discovered": 3, "selected_images": 1, "selected_videos": 1,
                 "filtered_media": 0, "sidecars": 1, "other_files": 0, "selected_media_bytes": 8,
@@ -643,6 +653,16 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
               let relationships = plan["relationships"] as? [[String: Any]] else {
             return failures + ["invalid preflight test fixture"]
         }
+        for fingerprint in [NSNull(), "", String(repeating: "a", count: 63),
+            String(repeating: "g", count: 64), String(repeating: "A", count: 64), 123, true] as [Any] {
+            var invalidEntries = entries
+            invalidEntries[0]["content_blake3"] = fingerprint
+            var invalidPlan = plan
+            invalidPlan["entries"] = invalidEntries
+            var invalidReport = original
+            invalidReport["plans"] = [invalidPlan]
+            check("invalid content fingerprint", invalidReport)
+        }
         var absentStorage = plan
         absentStorage.removeValue(forKey: "storage")
         var absentReport = original
@@ -673,7 +693,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         capacityPlan["storage"] = unknown
         capacityReport["plans"] = [capacityPlan]
         check("unknown capacity guessed zero", capacityReport)
-        for (name, value) in [("schema_version", 1), ("execution_started", true)] as [(String, Any)] {
+        for (name, value) in [("schema_version", 1), ("schema_version", 2), ("execution_started", true)] as [(String, Any)] {
             var object = original
             object[name] = value
             check(name, object)
@@ -714,7 +734,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         var canonicalEntries = entries
         for path in ["\u{00e9}.txt", "e\u{0301}.txt"] {
             canonicalEntries.append(["relative_path": path, "route": "copy_only", "selected": false,
-                "bytes": 1, "action": "copy_after_success",
+                "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "action": "copy_after_success",
                 "reason": "non_media_copy_is_conditional_on_successful_adjacent_processing"])
         }
         var canonicalPlan = plan
@@ -727,7 +747,7 @@ final class PreflightInspectorPanel: NSWindowController, NSTableViewDataSource, 
         var boundaryEntries = entries
         for index in 0..<1_997 {
             boundaryEntries.append(["relative_path": "other\(index).txt", "route": "copy_only",
-                "selected": false, "bytes": 1, "action": "copy_after_success",
+                "selected": false, "bytes": 1, "content_blake3": String(repeating: "a", count: 64), "action": "copy_after_success",
                 "reason": "non_media_copy_is_conditional_on_successful_adjacent_processing"])
         }
         plan["entries"] = boundaryEntries

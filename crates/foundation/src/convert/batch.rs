@@ -52,22 +52,60 @@ impl CachedFileIdentity {
     }
 }
 
-/// Launcher discovery evidence, not a content hash or a delivery receipt.
-/// The logical path and its resolved target are both retained until launch.
+/// Content observed during launcher discovery, not a delivery receipt or a file lock.
+/// The logical path, resolved target and bytes are checked again before launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredSource {
     path: PathBuf,
     resolved: PathBuf,
     identity: CachedFileIdentity,
+    content_blake3: blake3::Hash,
 }
 
 impl DiscoveredSource {
     pub fn from_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<Self> {
+        let resolved = fs::canonicalize(path)?;
+        let identity = CachedFileIdentity::from_metadata(metadata)?;
+        let content_blake3 = Self::read_content_hash(path, &resolved, &identity)?;
         Ok(Self {
             path: path.to_path_buf(),
-            resolved: fs::canonicalize(path)?,
-            identity: CachedFileIdentity::from_metadata(metadata)?,
+            resolved,
+            identity,
+            content_blake3,
         })
+    }
+
+    fn read_content_hash(
+        path: &Path,
+        resolved: &Path,
+        identity: &CachedFileIdentity,
+    ) -> io::Result<blake3::Hash> {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // A regular file replaced by a FIFO must not block discovery indefinitely.
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let mut file = options.open(path)?;
+        if CachedFileIdentity::from_metadata(&file.metadata()?)? != *identity {
+            return Err(io::Error::other(
+                "Source changed before content observation",
+            ));
+        }
+        let mut hasher = blake3::Hasher::new();
+        let bytes = io::copy(&mut file, &mut hasher)?;
+        if bytes != identity.size
+            || CachedFileIdentity::from_metadata(&file.metadata()?)? != *identity
+            || fs::canonicalize(path)? != resolved
+            || CachedFileIdentity::from_metadata(&fs::metadata(path)?)? != *identity
+        {
+            return Err(io::Error::other(
+                "Source changed during content observation",
+            ));
+        }
+        Ok(hasher.finalize())
     }
 
     #[must_use]
@@ -80,14 +118,33 @@ impl DiscoveredSource {
         self.identity.size
     }
 
-    /// Refuse a changed, replaced, retargeted, missing, or unreadable input.
-    /// Non-Unix evidence is limited to the target path, length, and mtime.
-    pub fn verify_unchanged(&self) -> io::Result<()> {
+    #[must_use]
+    pub fn content_blake3(&self) -> String {
+        self.content_blake3.to_hex().to_string()
+    }
+
+    /// Cheap scan/publication freshness check; this does not authorize worker launch.
+    pub fn verify_discovery_metadata(&self) -> io::Result<()> {
         if fs::canonicalize(&self.path)? != self.resolved
             || CachedFileIdentity::from_metadata(&fs::metadata(&self.path)?)? != self.identity
         {
             return Err(io::Error::other(format!(
                 "Source changed after preflight: {}; launch refused and source retained",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Re-read the complete source and reject stale content before worker launch.
+    /// Workers must still validate the actual input and final artifact they consume.
+    pub fn verify_unchanged(&self) -> io::Result<()> {
+        self.verify_discovery_metadata()?;
+        if Self::read_content_hash(&self.path, &self.resolved, &self.identity)?
+            != self.content_blake3
+        {
+            return Err(io::Error::other(format!(
+                "Source content changed after preflight: {}; launch refused and source retained",
                 self.path.display()
             )));
         }
@@ -2057,6 +2114,10 @@ mod tests {
         let source = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
         assert_eq!(source.path(), path);
         assert_eq!(source.bytes(), 16);
+        assert_eq!(
+            source.content_blake3(),
+            blake3::hash(b"synthetic source").to_hex().as_str()
+        );
         source.verify_unchanged()?;
         fs::write(&path, b"changed synthetic source")?;
         assert!(source.verify_unchanged().is_err());
@@ -2066,6 +2127,35 @@ mod tests {
             io::ErrorKind::NotFound
         );
         assert!(DiscoveredSource::from_metadata(root.path(), &fs::metadata(root.path())?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn discovered_source_checks_bytes_even_when_metadata_matches() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let path = root.path().join("synthetic.dat");
+        fs::write(&path, b"before")?;
+        let metadata = fs::metadata(&path)?;
+        let mut source = DiscoveredSource::from_metadata(&path, &metadata)?;
+        fs::write(&path, b"after!")?;
+        filetime::set_file_mtime(&path, FileTime::from_last_modification_time(&metadata))?;
+        // Model a filesystem whose metadata cannot distinguish these two observations.
+        source.identity = CachedFileIdentity::from_metadata(&fs::metadata(&path)?)?;
+        source.verify_discovery_metadata()?;
+        let error = source.verify_unchanged().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Source content changed after preflight")
+        );
+        assert_eq!(fs::read(&path)?, b"after!");
+
+        fs::write(&path, b"different length")?;
+        assert!(DiscoveredSource::from_metadata(&path, &metadata).is_err());
+        fs::write(&path, b"")?;
+        let empty = DiscoveredSource::from_metadata(&path, &fs::metadata(&path)?)?;
+        assert_eq!(empty.content_blake3(), blake3::hash(b"").to_hex().as_str());
+        empty.verify_unchanged()?;
         Ok(())
     }
 
@@ -2095,6 +2185,11 @@ mod tests {
         fs::write(&path, b"new! bytes")?;
         filetime::set_file_mtime(&path, mtime)?;
         assert!(rewritten.verify_unchanged().is_err());
+        let stale_metadata = fs::metadata(&path)?;
+        fs::remove_file(&path)?;
+        let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(DiscoveredSource::from_metadata(&path, &stale_metadata).is_err());
         Ok(())
     }
 

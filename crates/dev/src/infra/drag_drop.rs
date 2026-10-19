@@ -431,7 +431,7 @@ fn scan_content_with_options(
                 path.display()
             )
         })?;
-        observed.verify_unchanged().with_context(|| {
+        observed.verify_discovery_metadata().with_context(|| {
             format!(
                 "source changed during content scan {}; inventory is incomplete",
                 path.display()

@@ -564,6 +564,29 @@ unprocessed entries and unknown retention have explicit fields. Primary cleanup
 completion is persisted before the independent original import begins. Retained
 primary failures remain eligible for `--retry` even with pending original imports.
 
+## Launcher Preflight Content Identity
+
+The read-only routing report uses schema 3. Every visible inventory entry,
+including sidecars and retained non-media files, carries `content_blake3`: the
+lowercase BLAKE3 digest of the complete bytes observed during that scan.
+The native preflight inspector validates the field and displays it in file
+details. Older or incomplete reports are rejected rather than assigned a guessed
+identity.
+
+Discovery checks the opened file's metadata before and after the read, the byte
+count, and the logical path's resolved target. Routing/publication reuse that
+observation with inexpensive metadata freshness checks. Standard routed IMG/VID
+worker launches re-read their selected sources and compare the complete digest
+before spawning; a changed, missing or unreadable source refuses that invocation.
+Inspection does not write source media or create output directories.
+
+This adds one full input read during discovery and one before each selected
+source is launched. It is not a file lock, an immutable snapshot or a cross-process
+execution manifest: a later change still requires worker-side admission and
+final-artifact checks. Fast IMG's internal scan/resume and verified sidecar
+relationships remain separate contracts. A matching source digest never
+authorizes conversion, import or deletion on its own.
+
 ## Validation Status (2026-09-28)
 
 This configuration increment is implemented. The wider

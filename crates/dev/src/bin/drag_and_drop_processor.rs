@@ -4174,7 +4174,7 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--plan-json", "--mode", "auto"]).unwrap();
         args.inputs = vec![first.clone(), second.clone()];
         let plan = inspect_routing_plan(&args).unwrap();
-        assert_eq!(plan.schema_version, 2);
+        assert_eq!(plan.schema_version, 3);
         assert_eq!(plan.workers.len(), 1);
         assert_eq!(plan.workers[0].name, "img");
         assert_eq!(plan.plans.len(), 2);

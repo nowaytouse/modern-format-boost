@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Preflight Content Identity (2026-10-19)
+
+- Bind launcher inventory entries to complete BLAKE3 content observations, checking
+  the open file, byte count and resolved path around the read. Standard routed
+  workers compare source content again before launch, including when metadata
+  alone cannot distinguish changed bytes.
+- Expose each observation in schema 3 routing reports and native English, Chinese
+  and Japanese file details; reject missing, malformed or old-schema evidence.
+- Reuse the scan observation for routing and display instead of hashing again at
+  every layer. This remains launch-time evidence, not an immutable cross-process
+  plan, a Fast IMG resume change or a delivery/deletion authorization.
+
 ### Strict JXL Evidence And Saved-Output Receipts (2026-10-19)
 
 - Require independently read source IFD0 orientation, raw JPEG geometry, actual

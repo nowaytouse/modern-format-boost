@@ -85,6 +85,7 @@ pub struct PlannedEntry {
     pub route: ScanRoute,
     pub selected: bool,
     pub bytes: u64,
+    pub content_blake3: String,
     pub action: &'static str,
     pub reason: &'static str,
 }
@@ -216,7 +217,7 @@ impl RoutingPlan {
         let scan = inspect_content(input, filter)?;
         let mut entries = Vec::with_capacity(scan.entries.len());
         for entry in scan.entries {
-            entry.source.verify_unchanged().with_context(|| {
+            entry.source.verify_discovery_metadata().with_context(|| {
                 format!(
                     "preflight source changed before plan publication: {}",
                     entry.source.path().display()
@@ -245,6 +246,7 @@ impl RoutingPlan {
                 route: entry.route,
                 selected: entry.selected,
                 bytes: entry.source.bytes(),
+                content_blake3: entry.source.content_blake3(),
                 action,
                 reason,
             });
@@ -380,7 +382,7 @@ impl PreflightReport {
     #[must_use]
     pub const fn new(plans: Vec<RoutingPlan>, workers: Vec<WorkerObservation>) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             scope: "launcher_routing_snapshot",
             read_only: true,
             execution_started: false,
@@ -469,6 +471,7 @@ mod tests {
             route,
             selected: false,
             bytes: 1,
+            content_blake3: blake3::hash(b"x").to_hex().to_string(),
             action: "retain",
             reason: "synthetic_inventory",
         }
@@ -666,7 +669,14 @@ mod tests {
         assert_eq!(plan.relationships.len(), plan.sidecars);
         assert_eq!(plan.relationships[0].status, "unmatched");
         let document = serde_json::to_value(PreflightReport::new(vec![plan], Vec::new()))?;
-        assert_eq!(document["schema_version"], 2);
+        assert_eq!(document["schema_version"], 3);
+        for entry in document["plans"][0]["entries"].as_array().unwrap() {
+            let path = input.join(entry["relative_path"].as_str().unwrap());
+            assert_eq!(
+                entry["content_blake3"],
+                blake3::hash(&fs::read(path)?).to_hex().to_string()
+            );
+        }
         assert_eq!(document["read_only"], true);
         assert_eq!(document["execution_started"], false);
         assert_eq!(document["plans"][0]["storage"]["status"], "unknown");
