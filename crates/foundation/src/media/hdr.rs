@@ -1196,7 +1196,7 @@ fn parse_ultrahdr_gainmap_params(base_jpeg: &[u8], gainmap_jpeg: &[u8]) -> Resul
 
 /// # Errors
 /// Returns an error if the input does not require a high-precision integer
-/// intermediate or if `FFmpeg` processing fails.
+/// intermediate or if the full-precision decoder or intermediate writer fails.
 pub fn decode_image_to_png16_preserving_precision(
     input: &Path,
     color_info: &ColorInfo,
@@ -1219,6 +1219,66 @@ pub fn decode_image_to_png16_preserving_precision(
         color_info_to_jxl_color_encoding(color_info),
         Some("Rec2100PQ" | "Rec2100HLG")
     );
+    if crate::image::format_detect::detect_true_format(input)?
+        == crate::image::format_detect::FormatKind::Avif
+    {
+        // FFmpeg exposes only the primary 12-bit layer of a 16-bit sample-transform AVIF.
+        let decoded_png = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "hdr_avif_png16_decode",
+            None,
+            Some(".png"),
+        )?;
+        let mut command = crate::image_builders::avif_decode_preserving_samples_command(
+            input,
+            decoded_png.path(),
+        )?;
+        let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)?
+            .wait_liveness_timeout(
+                std::time::Duration::from_secs(120),
+                crate::process_runner::image_process_hard_timeout(),
+                "AVIF full-sample high-precision decode",
+            )?;
+        anyhow::ensure!(
+            output.status.success(),
+            "avifdec full-sample decode failed: {}",
+            output.stderr.trim()
+        );
+        let decoded = crate::image_detection::open_image_with_limits(decoded_png.path())?;
+        anyhow::ensure!(
+            matches!(
+                decoded.color(),
+                image::ColorType::L16
+                    | image::ColorType::La16
+                    | image::ColorType::Rgb16
+                    | image::ColorType::Rgba16
+            ),
+            "avifdec did not preserve 16-bit output precision"
+        );
+        if !raw_hdr_intermediate {
+            strip_transcoded_exif_side_data(decoded_png.path())?;
+            return Ok((decoded_png.path().to_path_buf(), decoded_png));
+        }
+        let has_alpha = decoded.color().has_alpha();
+        let decoded = if has_alpha {
+            DynamicImage::ImageRgba16(decoded.into_rgba16())
+        } else {
+            DynamicImage::ImageRgb16(decoded.into_rgb16())
+        };
+        let mut raw = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
+            "hdr_avif_raw16_decode",
+            None,
+            Some(".pam"),
+        )?;
+        image::codecs::pnm::PnmEncoder::new(raw.as_file_mut())
+            .with_subtype(image::codecs::pnm::PnmSubtype::ArbitraryMap)
+            .encode(
+                decoded.as_bytes(),
+                decoded.width(),
+                decoded.height(),
+                decoded.color().into(),
+            )?;
+        return Ok((raw.path().to_path_buf(), raw));
+    }
     let has_alpha = color_info.has_alpha_channel();
     let suffix = match (raw_hdr_intermediate, has_alpha) {
         (true, true) => ".pam",

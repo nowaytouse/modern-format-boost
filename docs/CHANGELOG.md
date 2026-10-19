@@ -23,6 +23,22 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Full-Sample AVIF And Format-Aware Evidence (2026-10-19)
+
+- Decode AVIF sample-transform residuals in conversion and independent
+  verification, preserving the original 16-bit RGB/RGBA samples. Keep HDR
+  PAM intermediates and explicit source color signaling; do not accept
+  bit-depth expansion of a lower-precision primary layer as preservation.
+- Strengthen the HDR regression against the original generated samples,
+  including low alpha bits and transparent pixels. Validate PNM/PAM rasters
+  without requiring an unsupported ExifTool metadata read.
+- Verify both a real true-lossless AVIF probe and rejection of a changed-sample
+  q85 probe. Statistical acceptance remains disabled for these delivery paths.
+- Make the float32 P3 fixture deterministic, with exact-success proof and
+  source-preserving rejection when the encoder cannot handle negative samples.
+- Fix the shared Clippy documentation failure reported by IMG, VID and the
+  workspace/deep-audit jobs.
+
 ### Preflight Content Identity (2026-10-19)
 
 - Bind launcher inventory entries to complete BLAKE3 content observations, checking

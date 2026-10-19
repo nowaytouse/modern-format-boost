@@ -167,7 +167,7 @@ fn decode_image_with_limits(path: &Path) -> Result<(DynamicImage, Option<image::
         _ => None, // Fall back to extension-based detection
     };
 
-    let mut reader = ImageReaderOptions::open(path)?;
+    let mut reader = ImageReaderOptions::open(path)?.with_guessed_format()?;
     reader.limits(limits.clone());
     if let Some(detected_format) = format {
         reader.set_format(detected_format);

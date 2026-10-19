@@ -150,6 +150,7 @@ fn strip_residual_orientation_command(path: &Path) -> std::process::Command {
 }
 
 /// Decode the output independently and verify the requested evidence contract.
+///
 /// Pixel paths compare samples in the source's explicit display domain. JPEG
 /// reconstruction separately requires source and codestream orientation/raw
 /// geometry agreement; byte reconstruction alone is not a rendering proof.
@@ -251,7 +252,13 @@ pub fn verify_orientation_pixel_diff(
         primary_temp_suffix
     })?;
 
-    let decode_output = decode_cmd(output, tmp_decoded.path()).map_err(|e| {
+    let decode_output = if fmt == FormatKind::Avif {
+        crate::image_builders::avif_decode_preserving_samples_command(output, tmp_decoded.path())?
+            .output()
+    } else {
+        decode_cmd(output, tmp_decoded.path())
+    }
+    .map_err(|e| {
         ImgQualityError::AnalysisError(format!("pixel-diff: {decoder_tool} spawn failed: {e}"))
     })?;
     if !decode_output.status.success() {
@@ -450,18 +457,11 @@ fn official_source_decode_command(
     executable: &Path,
     source: &Path,
     output: &Path,
-) -> std::process::Command {
+) -> Result<std::process::Command> {
     let mut command = std::process::Command::new(executable);
     match decoder {
         OfficialSourceDecoder::Avif => {
-            command
-                .arg("--jobs")
-                .arg("all")
-                .arg("--depth")
-                .arg("16")
-                .arg("--")
-                .arg(source)
-                .arg(output);
+            return crate::image_builders::avif_decode_preserving_samples_command(source, output);
         }
         OfficialSourceDecoder::Heif | OfficialSourceDecoder::Jxl => {
             command.arg(source).arg(output);
@@ -473,17 +473,16 @@ fn official_source_decode_command(
             command.arg(source).args(["-depth", "16"]).arg(output);
         }
     }
-    command
+    Ok(command)
 }
 
 fn decode_source_with_official_tool(
     source_image: &Path,
-    open_error: &ImgQualityError,
+    format: FormatKind,
 ) -> Result<image::DynamicImage> {
-    let format = crate::image::format_detect::detect_true_format(source_image)?;
     let Some(decoder) = official_source_decoder(format) else {
         return Err(ImgQualityError::AnalysisError(format!(
-            "pixel-diff: cannot open source image: {open_error}"
+            "pixel-diff: no official source decoder for {format:?}"
         )));
     };
     let tool = decoder.tool();
@@ -503,7 +502,7 @@ fn decode_source_with_official_tool(
 
     let decoded_file = orientation_decode_tempfile(".png")?;
     let mut command =
-        official_source_decode_command(decoder, &executable, source_image, decoded_file.path());
+        official_source_decode_command(decoder, &executable, source_image, decoded_file.path())?;
     let output = crate::process_runner::ManagedProcess::spawn_captured(&mut command)
         .and_then(|process| {
             process.wait_liveness_timeout(
@@ -574,7 +573,6 @@ fn verify_pixel_diff_against_decoded_image(
     decoded_output: &Path,
     tol: DiffTolerance,
 ) -> Result<PixelDiffResult> {
-    let reference_orientation = read_exif_orientation(source_image)?;
     let out_img = if decoded_output
         .extension()
         .is_some_and(|extension| extension == "pfm")
@@ -587,9 +585,26 @@ fn verify_pixel_diff_against_decoded_image(
         ImgQualityError::AnalysisError(format!("pixel-diff: cannot open decoded output: {e}"))
     })?;
 
-    let src_img_raw = match crate::image_detection::open_image_with_limits(source_image) {
-        Ok(img) => img,
-        Err(open_error) => decode_source_with_official_tool(source_image, &open_error)?,
+    let source_format = crate::image::format_detect::detect_true_format(source_image)?;
+    let src_img_raw = if source_format == FormatKind::Avif {
+        // Native AV1 decoders may expose only the primary sample-transform layer.
+        decode_source_with_official_tool(source_image, source_format)?
+    } else {
+        match crate::image_detection::open_image_with_limits(source_image) {
+            Ok(img) => img,
+            Err(open_error) => decode_source_with_official_tool(source_image, source_format)
+                .map_err(|decode_error| {
+                    ImgQualityError::AnalysisError(format!(
+                        "pixel-diff: source decode failed: native={open_error}; official={decode_error}"
+                    ))
+                })?,
+        }
+    };
+    let reference_orientation = if source_format == FormatKind::Pnm {
+        // A fully decoded PNM/PAM raster has no embedded orientation transform.
+        1
+    } else {
+        read_exif_orientation(source_image)?
     };
 
     diff_orientation_images(
@@ -1928,6 +1943,38 @@ mod tests {
     }
 
     #[test]
+    fn pnm_reference_requires_full_raster_decode_and_exact_samples() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("misleading.jpg");
+        let output = root.path().join("decoded.png");
+        let header = b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n";
+        let pixels = [255, 0, 0, 0, 255, 0];
+        let mut bytes = header.to_vec();
+        bytes.extend_from_slice(&pixels);
+        std::fs::write(&source, &bytes).unwrap();
+        let image = ImageBuffer::<Rgb<u8>, _>::from_raw(2, 1, pixels.to_vec()).unwrap();
+        image.save(&output).unwrap();
+        assert_eq!(
+            verify_pixel_diff_against_decoded_image(&source, &output, DiffTolerance::Exact)
+                .unwrap(),
+            PixelDiffResult::Match
+        );
+        let mut changed = image;
+        changed.get_pixel_mut(1, 0).0[0] = 1;
+        changed.save(&output).unwrap();
+        assert!(matches!(
+            verify_pixel_diff_against_decoded_image(&source, &output, DiffTolerance::Exact)
+                .unwrap(),
+            PixelDiffResult::Mismatch { .. }
+        ));
+        std::fs::write(&source, header).unwrap();
+        assert!(
+            verify_pixel_diff_against_decoded_image(&source, &output, DiffTolerance::Exact)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn source_orientation_defaults_require_a_successful_complete_read() {
         let source = std::path::Path::new("source.jpg");
         for (succeeded, stdout, stderr) in [
@@ -1995,7 +2042,7 @@ mod tests {
 
         let result = super::decode_source_with_official_tool(
             heic_stub.path(),
-            &ImgQualityError::AnalysisError("unsupported fixture source".into()),
+            crate::image::format_detect::detect_true_format(heic_stub.path()).unwrap(),
         );
 
         match result {

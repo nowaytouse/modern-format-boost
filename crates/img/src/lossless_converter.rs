@@ -5360,7 +5360,7 @@ fn try_high_precision_decode(
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     let decode_label = if color_assessment.has_hdr_signaling() {
         format!(
-            "Forensic {} Decode Cycle: Initiating FFmpeg high bit-depth preservation",
+            "Forensic {} Decode Cycle: Initiating high bit-depth preservation",
             foundation::media_conversion_gate::optional_nonempty_label(
                 "hdr_signal_label",
                 color_assessment.hdr_signal_label(),
@@ -5369,7 +5369,7 @@ fn try_high_precision_decode(
             )
         )
     } else {
-        "Forensic High-Precision Decode Cycle: Initiating FFmpeg 16-bit preservation".to_string()
+        "Forensic High-Precision Decode Cycle: Initiating 16-bit preservation".to_string()
     };
     log_detail!(&format!(
         "{} {decode_label}",
@@ -5380,7 +5380,7 @@ fn try_high_precision_decode(
         Ok((png16_path, temp_file)) => {
             let success_label = if color_assessment.has_hdr_signaling() {
                 format!(
-                    "{} decode successful: 16-bit PNG bitstream finalized",
+                    "{} decode successful: 16-bit samples finalized",
                     foundation::media_conversion_gate::optional_nonempty_label(
                         "hdr_signal_label",
                         color_assessment.hdr_signal_label(),
@@ -5562,19 +5562,14 @@ fn ensure_avif_jxl_metadata_preservable(input: &Path) -> Result<()> {
 fn decode_avif_for_cjxl(
     input: &Path,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    let avifdec = foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_AVIFDEC)
-        .ok_or_else(|| ImgQualityError::tool_not_found(foundation::constants::TOOL_AVIFDEC))?;
-
     let temp_file = foundation::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "img_lossless_avif_png",
         None,
         Some(".png"),
     )?;
     let temp_path = temp_file.path().to_path_buf();
-    let mut command = Command::new(avifdec);
-    command
-        .arg(foundation::safe_path_arg(input).as_ref())
-        .arg(foundation::safe_path_arg(&temp_path).as_ref());
+    let command =
+        foundation::image_builders::avif_decode_preserving_samples_command(input, &temp_path)?;
     let output = run_image_process(command).map_err(ImgQualityError::IoError)?;
     if output.status.success() && temp_path.is_file() && fs::metadata(&temp_path)?.len() > 0 {
         foundation::progress_mode::preprocessing_success();
@@ -6511,16 +6506,17 @@ mod tests {
     }
 
     #[test]
-    fn test_real_avif_encoding_with_synthetic_png_temp_copy() -> anyhow::Result<()> {
+    fn real_avif_probe_accepts_lossless_and_rejects_q85_drift() -> anyhow::Result<()> {
+        for tool in ["avifenc", "avifdec", "exiftool"] {
+            if !test_tool_available(tool) {
+                eprintln!("SKIP real AVIF probe regression: required tool {tool} unavailable");
+                return Ok(());
+            }
+        }
         let temp_dir = tempfile::tempdir()?;
         let png_input = temp_dir.path().join("synthetic_input.png");
-        let status = std::process::Command::new("magick")
-            .args(["-size", "64x64", "xc:blue", png_input.to_str().unwrap()])
-            .status();
-        if status.is_err() || !status.unwrap().success() {
-            // Fallback if magick is unavailable: skip test gracefully
-            return Ok(());
-        }
+        image::RgbImage::from_pixel(64, 64, image::Rgb([0, 0, 255])).save(&png_input)?;
+        let source_bytes = fs::read(&png_input)?;
 
         let options = ConvertOptions {
             output_dir: Some(temp_dir.path().to_path_buf()),
@@ -6528,10 +6524,56 @@ mod tests {
             ..Default::default()
         };
 
-        let (temp_avif, output_size) = convert_to_avif_probe(&png_input, 85, &options)?;
+        let output = get_output_path(&png_input, EXT_AVIF, &options)?;
+        let mut metadata_retry = AvifencMetadataRetryState::strip_all();
+        let (temp_avif, output_size, content_blake3) =
+            convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
+                &png_input,
+                &png_input,
+                0,
+                &mut metadata_retry,
+                &options,
+            )?;
         assert!(temp_avif.exists(), "AVIF probe output file must exist");
         assert!(output_size > 0, "AVIF probe output size must be non-zero");
-        let _ = std::fs::remove_file(&temp_avif);
+        assert_eq!(fs::metadata(&temp_avif)?.len(), output_size);
+        assert_eq!(
+            foundation::common_utils::calculate_blake3_hash(&temp_avif)?,
+            content_blake3
+        );
+        let decoded = temp_dir.path().join("decoded_lossless.png");
+        let decode = Command::new(foundation::common_utils::resolve_tool_path_or_audit(
+            "avifdec",
+        ))
+        .args(["--sato", "--depth", "16"])
+        .arg(&temp_avif)
+        .arg(&decoded)
+        .output()?;
+        anyhow::ensure!(
+            decode.status.success(),
+            "independent AVIF decode failed: {}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
+        assert_eq!(
+            image::open(&decoded)?.to_rgba16(),
+            image::open(&png_input)?.to_rgba16(),
+            "true-lossless AVIF must preserve every decoded source sample"
+        );
+        assert!(!output.exists(), "a probe must not publish an output");
+        fs::remove_file(&temp_avif)?;
+
+        let error = convert_to_avif_probe(&png_input, 85, &options)
+            .expect_err("q85 sample drift must not inherit exact pixel proof");
+        assert!(
+            error
+                .to_string()
+                .contains("AVIF pixel equivalence failed at q=85")
+        );
+        assert!(
+            !output.exists(),
+            "a rejected probe must not publish an output"
+        );
+        assert_eq!(fs::read(&png_input)?, source_bytes, "source bytes changed");
         Ok(())
     }
 

@@ -956,122 +956,154 @@ fn float32_display_p3_tiff_to_jxl_preserves_samples_icc_and_xmp() -> Result<()> 
     };
 
     let root = tempfile::tempdir()?;
-    let source = root.path().join("float32-display-p3.tiff");
-    let sidecar = source.with_extension("xmp");
-    let output_root = root.path().join("output");
-    fs::create_dir_all(&output_root)?;
+    for (stem, negative) in [
+        ("float32-display-p3", false),
+        ("float32-negative-display-p3", true),
+    ] {
+        let source = root.path().join(format!("{stem}.tiff"));
+        let sidecar = source.with_extension("xmp");
+        let output_root = root.path().join(format!("{stem}-output"));
+        fs::create_dir_all(&output_root)?;
 
-    let mut command = Command::new(tool_path("magick")?);
-    command
-        .args([
-            "-size",
-            "96x64",
-            "plasma:fractal",
-            "-colorspace",
-            "RGB",
-            "-evaluate",
-            "multiply",
-            "0.123456789",
-            "-define",
-            "quantum:format=floating-point",
-            "-depth",
-            "32",
-            "-profile",
-        ])
-        .arg(&profile)
-        .arg(&source);
-    run_status(command, "create float32 Display P3 TIFF fixture")?;
-    fs::write(&sidecar, MATRIX_XMP)?;
-    let source_before = fs::read(&source)?;
+        let fixture = image::ImageBuffer::<image::Rgb<f32>, Vec<f32>>::from_fn(96, 64, |x, y| {
+            let red = f32::from(low_u16((x * 37 + y * 19) % 997 + 1)) / 1000.0;
+            let green = f32::from(low_u16((x * 29 + y * 43) % 991 + 1)) / 1000.0;
+            let blue = f32::from(low_u16((x * 53 + y * 11) % 983 + 1)) / 1000.0;
+            image::Rgb([if negative { -red } else { red }, green, blue])
+        });
+        fixture.save(&source)?;
+        let mut command = Command::new(tool_path("exiftool")?);
+        command
+            .arg("-overwrite_original")
+            .arg(format!("-ICC_Profile<={}", profile.display()))
+            .arg(&source);
+        run_status(
+            command,
+            "attach Display P3 ICC without transforming float samples",
+        )?;
+        fs::write(&sidecar, MATRIX_XMP)?;
+        let source_before = fs::read(&source)?;
 
-    let probe = Command::new(tool_path("ffprobe")?)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=pix_fmt",
-            "-of",
-            "default=nw=1:nk=1",
-        ])
-        .arg(&source)
-        .output()?;
-    ensure!(
-        probe.status.success() && String::from_utf8_lossy(&probe.stdout).contains("f32"),
-        "fixture is not a proven 32-bit float image"
-    );
+        let probe = Command::new(tool_path("ffprobe")?)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt",
+                "-of",
+                "default=nw=1:nk=1",
+            ])
+            .arg(&source)
+            .output()?;
+        ensure!(
+            probe.status.success() && String::from_utf8_lossy(&probe.stdout).contains("f32"),
+            "fixture is not a proven 32-bit float image"
+        );
 
-    let mut options = ConvertOptions {
-        output_dir: Some(output_root.clone()),
-        child_threads: 1,
-        ..ConvertOptions::default()
-    };
-    options.flags.set(ConvertFlags::FORCE, true);
-    options.flags.set(ConvertFlags::ULTIMATE, true);
-    let result = convert_to_jxl(&source, &options, 0.0, None)?;
-    ensure!(
-        result.success && !result.skipped,
-        "float32 Display P3 conversion failed: {}",
-        result.message
-    );
-    let output = PathBuf::from(
-        result
-            .output_path
-            .ok_or_else(|| anyhow!("float32 conversion omitted output path"))?,
-    );
+        let mut options = ConvertOptions {
+            output_dir: Some(output_root.clone()),
+            child_threads: 1,
+            ..ConvertOptions::default()
+        };
+        options.flags.set(ConvertFlags::FORCE, true);
+        options.flags.set(ConvertFlags::ULTIMATE, true);
+        let conversion = convert_to_jxl(&source, &options, 0.0, None);
+        let result = match conversion {
+            // Some libjxl versions reject valid negative float32 samples. Preserve
+            // them unchanged on failure; a supporting encoder must pass exact proof.
+            Err(error) if negative => {
+                ensure!(
+                    error.to_string().contains("cjxl failed:"),
+                    "negative float failure did not identify the encoder boundary: {error}"
+                );
+                ensure!(
+                    fs::read(&source)? == source_before && fs::read(&sidecar)? == MATRIX_XMP,
+                    "negative float rejection changed its source or XMP sidecar"
+                );
+                ensure!(
+                    fs::read_dir(&output_root)?.next().is_none(),
+                    "negative float rejection published an unverified output"
+                );
+                continue;
+            }
+            result => result?,
+        };
+        ensure!(
+            result.success && !result.skipped,
+            "float32 Display P3 conversion failed: {}",
+            result.message
+        );
+        let output = PathBuf::from(
+            result
+                .output_path
+                .ok_or_else(|| anyhow!("float32 conversion omitted output path"))?,
+        );
 
-    let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
-    ensure!(
-        output_info.status.success()
-            && String::from_utf8_lossy(&output_info.stdout).contains("32-bit float"),
-        "float32 TIFF→JXL did not retain its float sample domain"
-    );
+        let output_info = Command::new(tool_path("jxlinfo")?).arg(&output).output()?;
+        ensure!(
+            output_info.status.success()
+                && String::from_utf8_lossy(&output_info.stdout).contains("32-bit float"),
+            "float32 TIFF→JXL did not retain its float sample domain"
+        );
 
-    let source_pfm = root.path().join("source.pfm");
-    let decoded_pfm = root.path().join("decoded.pfm");
-    let decoded_icc = root.path().join("decoded.icc");
-    let mut command = Command::new(tool_path("magick")?);
-    command
-        .arg(&source)
-        .args(["-format", "pfm"])
-        .arg(&source_pfm);
-    run_status(command, "create float32 source PFM proof")?;
-    let mut command = Command::new(tool_path("djxl")?);
-    command
-        .arg(&output)
-        .arg(&decoded_pfm)
-        .arg(format!("--orig_icc_out={}", decoded_icc.display()));
-    run_status(command, "decode float32 JXL proof")?;
+        let source_pfm = root.path().join("source.pfm");
+        let decoded_pfm = root.path().join("decoded.pfm");
+        let decoded_icc = root.path().join("decoded.icc");
+        let mut command = Command::new(tool_path("magick")?);
+        command
+            .arg(&source)
+            .args(["-format", "pfm"])
+            .arg(&source_pfm);
+        run_status(command, "create float32 source PFM proof")?;
+        let mut command = Command::new(tool_path("djxl")?);
+        command
+            .arg(&output)
+            .arg(&decoded_pfm)
+            .arg(format!("--orig_icc_out={}", decoded_icc.display()));
+        run_status(command, "decode float32 JXL proof")?;
 
-    let source_samples = pfm_sample_bits(&source_pfm)?;
-    let decoded_samples = pfm_sample_bits(&decoded_pfm)?;
-    ensure!(
-        source_samples == decoded_samples,
-        "float32 TIFF→JXL changed one or more floating-point samples"
-    );
-    ensure!(
-        source_samples.2.iter().any(|bits| {
-            let sample = f32::from_bits(*bits);
-            sample.is_finite() && (sample * 65_535.0).fract().abs() > 0.000_1
-        }),
-        "float32 fixture was accidentally representable as 16-bit integer samples"
-    );
-    ensure!(
-        fs::read(&decoded_icc)? == extract_embedded_icc(&source)?,
-        "float32 Display P3 JXL did not preserve the source ICC profile byte-for-byte"
-    );
-    let extracted_xmp = extract_jxl_xmp(&output, &output_root.join("float32.xmp"))?;
-    ensure!(
-        extracted_xmp
-            .windows(b"production-matrix".len())
-            .any(|window| window == b"production-matrix"),
-        "float32 Display P3 JXL did not preserve its XMP overlay"
-    );
-    ensure!(
-        fs::read(&source)? == source_before && fs::read(&sidecar)? == MATRIX_XMP,
-        "float32 conversion changed its source or XMP sidecar"
-    );
+        let source_samples = pfm_sample_bits(&source_pfm)?;
+        let decoded_samples = pfm_sample_bits(&decoded_pfm)?;
+        let mut original_bits = Vec::new();
+        // PFM stores rows bottom-up, unlike the generated image buffer.
+        for y in (0..fixture.height()).rev() {
+            for x in 0..fixture.width() {
+                original_bits.extend(fixture.get_pixel(x, y).0.map(f32::to_bits));
+            }
+        }
+        ensure!(
+            source_samples.2 == original_bits,
+            "float32 reference decode changed the original generated sample bits"
+        );
+        ensure!(
+            source_samples == decoded_samples,
+            "float32 TIFF→JXL changed one or more floating-point samples"
+        );
+        ensure!(
+            source_samples.2.iter().any(|bits| {
+                let sample = f32::from_bits(*bits);
+                sample.is_finite() && (sample * 65_535.0).fract().abs() > 0.000_1
+            }),
+            "float32 fixture was accidentally representable as 16-bit integer samples"
+        );
+        ensure!(
+            fs::read(&decoded_icc)? == extract_embedded_icc(&source)?,
+            "float32 Display P3 JXL did not preserve the source ICC profile byte-for-byte"
+        );
+        let extracted_xmp = extract_jxl_xmp(&output, &output_root.join("float32.xmp"))?;
+        ensure!(
+            extracted_xmp
+                .windows(b"production-matrix".len())
+                .any(|window| window == b"production-matrix"),
+            "float32 Display P3 JXL did not preserve its XMP overlay"
+        );
+        ensure!(
+            fs::read(&source)? == source_before && fs::read(&sidecar)? == MATRIX_XMP,
+            "float32 conversion changed its source or XMP sidecar"
+        );
+    }
     Ok(())
 }
 
@@ -1117,29 +1149,19 @@ fn decode_static_fixture_to_png(input: &Path, format: FormatKind, root: &Path) -
     Ok(output)
 }
 
-/// Decode an HDR AVIF through the same `FFmpeg` high-precision path used by the
-/// production JXL encoder.  `avifdec` and `FFmpeg` are both valid decoders, but
-/// their RGB16 rounding can differ by one 8-bit step after a 12-bit YUV round
-/// trip; comparing across decoders would turn a decoder disagreement into a
-/// false loss report.
-fn decode_hdr_avif_with_encoder_path(input: &Path, root: &Path) -> Result<PathBuf> {
-    if !tool_available("ffmpeg") {
-        eprintln!(
-            "HDR AVIF reference uses avifdec because FFmpeg is unavailable; this matches the production decoder fallback"
-        );
-        return decode_static_fixture_to_png(input, FormatKind::Avif, root);
-    }
+/// Independently decode every AVIF sample-transform layer, including the extra
+/// four bits carried by a 16-bit AVIF with a 12-bit primary image.
+fn decode_hdr_avif_full_samples(input: &Path, root: &Path) -> Result<PathBuf> {
     let output = root.join("hdr-reference-decoded.png");
-    let mut command = Command::new(tool_path("ffmpeg")?);
+    let mut command = Command::new(tool_path("avifdec")?);
     command
-        .args(["-y", "-i"])
+        .args(["--sato", "--depth", "16", "--"])
         .arg(input)
-        .args(["-pix_fmt", "rgb48le", "-frames:v", "1"])
         .arg(&output);
-    run_status(command, "FFmpeg HDR AVIF reference decode")?;
+    run_status(command, "full-sample HDR AVIF reference decode")?;
     ensure!(
         output.is_file(),
-        "FFmpeg did not create HDR reference {}",
+        "avifdec did not create HDR reference {}",
         output.display()
     );
     Ok(output)
@@ -1359,15 +1381,29 @@ const fn low_u16(value: u32) -> u16 {
     u16::from_le_bytes([bytes[0], bytes[1]])
 }
 
-fn write_hdr_avif_fixture(fixture_root: &Path, stem: &str, clli: Option<&str>) -> Result<PathBuf> {
+fn write_hdr_avif_fixture(
+    fixture_root: &Path,
+    stem: &str,
+    clli: Option<&str>,
+    alpha: bool,
+) -> Result<PathBuf> {
     let hdr_png = fixture_root.join(format!("{stem}.png"));
-    image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(96, 64, |x, y| {
+    let image = image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(96, 64, |x, y| {
         let red = (x * 521 + y * 257) % 65_536;
         let green = (x * 313 + y * 733 + 17) % 65_536;
         let blue = (x * 911 + y * 419 + 31) % 65_536;
         image::Rgb([low_u16(red), low_u16(green), low_u16(blue)])
-    })
-    .save(&hdr_png)?;
+    }));
+    let image = if alpha {
+        let mut rgba = image.to_rgba16();
+        for (x, y, pixel) in rgba.enumerate_pixels_mut() {
+            pixel.0[3] = low_u16((x * 3113 + y * 4327) % 65_536);
+        }
+        image::DynamicImage::ImageRgba16(rgba)
+    } else {
+        image
+    };
+    image.save(&hdr_png)?;
 
     let source = fixture_root.join(format!("{stem}.avif"));
     let mut command = Command::new(tool_path("avifenc")?);
@@ -1536,7 +1572,7 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
         .and_then(|value| value.to_str())
         .is_some_and(|stem| stem.ends_with("-16"));
     let source_decoded = if is_hdr {
-        decode_hdr_avif_with_encoder_path(source, &source_decoded_root)?
+        decode_hdr_avif_full_samples(source, &source_decoded_root)?
     } else {
         decode_static_fixture_to_png(source, format, &source_decoded_root)?
     };
@@ -1549,6 +1585,13 @@ fn verify_lossless_raster_jxl_case(root: &Path, source: &Path, format: FormatKin
     if is_hdr {
         let source_image = foundation::image_detection::open_image_with_limits(&source_decoded)?;
         let output_image = foundation::image_detection::open_image_with_limits(&output_decoded)?;
+        let original_pixels =
+            foundation::image_detection::open_image_with_limits(&source.with_extension("png"))?
+                .to_rgba16();
+        ensure!(
+            original_pixels == source_pixels,
+            "HDR AVIF reference lost original 16-bit sample-transform precision"
+        );
         ensure!(
             source_image.color().bits_per_pixel() >= 48
                 && output_image.color().bits_per_pixel() >= 48,
@@ -1716,9 +1759,12 @@ fn hdr_avif_without_clli_to_jxl_preserves_pq() -> Result<()> {
     }
 
     let root = tempfile::tempdir()?;
-    let source = write_hdr_avif_fixture(root.path(), "pattern-hdr", None)?;
-    fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
-    verify_lossless_raster_jxl_case(root.path(), &source, FormatKind::Avif)
+    for (stem, alpha) in [("pattern-rgb-hdr", false), ("pattern-rgba-hdr", true)] {
+        let source = write_hdr_avif_fixture(root.path(), stem, None, alpha)?;
+        fs::write(source.with_extension("xmp"), MATRIX_XMP)?;
+        verify_lossless_raster_jxl_case(root.path(), &source, FormatKind::Avif)?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -1735,7 +1781,7 @@ fn avif_clli_to_jxl_fails_closed_without_source_or_sidecar_mutation() -> Result<
     let input = root.path().join("input");
     let output = root.path().join("output");
     fs::create_dir_all(&input)?;
-    let source = write_hdr_avif_fixture(&input, "pattern-hdr-clli", Some("1000,400"))?;
+    let source = write_hdr_avif_fixture(&input, "pattern-hdr-clli", Some("1000,400"), false)?;
     let sidecar = source.with_extension("xmp");
     fs::write(&sidecar, MATRIX_XMP)?;
     let source_before = fs::read(&source)?;

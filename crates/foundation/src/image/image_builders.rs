@@ -6,6 +6,23 @@ use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Decode all AVIF sample-transform layers without reducing integer precision.
+pub fn avif_decode_preserving_samples_command(
+    input: &Path,
+    output: &Path,
+) -> crate::unified_error::Result<Command> {
+    let executable =
+        crate::common_utils::resolve_tool_path(constants::TOOL_AVIFDEC).ok_or_else(|| {
+            crate::unified_error::ImgQualityError::tool_not_found(constants::TOOL_AVIFDEC)
+        })?;
+    let mut command = Command::new(executable);
+    command
+        .args(["--sato", "--depth", "16", "--"])
+        .arg(input)
+        .arg(output);
+    Ok(command)
+}
+
 /// Builder for constructing `magick` (`ImageMagick`) commands.
 #[derive(Debug, Default)]
 pub struct MagickBuilder {

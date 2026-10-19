@@ -68,6 +68,29 @@ acceptance gate. Existing changed-sample lossy outputs can therefore be rejected
 until their separate strict acceptance contract is established; selecting a
 lossy codec or enabling source-quality inference is not a validation bypass.
 
+AVIF preprocessing and independent sample verification use the official decoder
+with sample-transform layers enabled (`avifdec --sato --depth 16`). A 16-bit AVIF
+can carry a 12-bit primary image plus residual sample data: expanding only the
+primary image into a 16-bit buffer does not preserve those original samples.
+HDR AVIF RGB/RGBA intermediates retain all integer samples in metadata-free PAM,
+with explicit source-derived PQ/HLG signaling. The synthetic regression requires
+the original generated PNG, decoded AVIF and decoded JXL to agree sample by
+sample, including transparent pixels and low alpha bits. Decoder failure or
+unsupported sample-transform options reject the path and retain the source.
+
+PNM/PAM reference images are identified from their actual content and must fully
+decode before their format's absence of an orientation transform is used. An
+unrecognized or truncated file does not inherit a normal orientation merely
+because its metadata tool cannot read it.
+
+The float32 Display P3 regression uses deterministic source samples and assigns
+ICC bytes without a color transform. Successful conversion must retain every
+float32 bit pattern, ICC bytes and XMP. Some encoder builds reject valid negative
+samples; rejection must identify the encoder failure, leave source and sidecar
+unchanged and publish no output. This is an encoder limitation, not permission
+to clamp samples or a policy forbidding negative values. A supporting encoder
+must satisfy the same exact-success proof.
+
 Exact JPEG reconstruction, filesystem metadata, embedded tags and usable color
 profiles are separate proofs. A malformed embedded ICC profile is not accepted
 merely because the original JPEG can be reconstructed. Current reversible
