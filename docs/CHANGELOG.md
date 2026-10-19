@@ -25,6 +25,9 @@ areas of change are:
 
 ### Full-Sample AVIF And Format-Aware Evidence (2026-10-19)
 
+- Share the checksum-pinned libavif 1.4.2 setup across IMG, shared checks and
+  deep audit. Reject missing full-sample decoder options during setup rather
+  than running verification with an incompatible distro CLI.
 - Decode AVIF sample-transform residuals in conversion and independent
   verification, preserving the original 16-bit RGB/RGBA samples. Keep HDR
   PAM intermediates and explicit source color signaling; do not accept

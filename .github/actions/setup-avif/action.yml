@@ -1,0 +1,36 @@
+name: Install Pinned AVIF Tools
+description: Install the checksum-pinned Linux AVIF CLI with full-sample decoding.
+runs:
+  using: composite
+  steps:
+    - name: Install and verify AVIF tools
+      shell: bash
+      env:
+        LIBAVIF_VERSION: 1.4.2
+        LIBAVIF_ARCHIVE_SHA256: faf58a670ffbfdc0e3559e6d37592cff277c447dd39453f1cd1d7d7f5a20b8ef
+      run: |
+        set -euo pipefail
+        test "$RUNNER_OS" = Linux
+        test "$RUNNER_ARCH" = X64
+        sudo apt-get install -y unzip
+        tools_root="$RUNNER_TEMP/mfb-avif-tools"
+        mkdir -p "$tools_root/bin"
+        archive="$tools_root/libavif-linux.zip"
+        curl -fsSL --retry 5 --retry-all-errors \
+          "https://github.com/AOMediaCodec/libavif/releases/download/v${LIBAVIF_VERSION}/linux-artifacts.zip" \
+          -o "$archive"
+        printf '%s  %s\n' "$LIBAVIF_ARCHIVE_SHA256" "$archive" | sha256sum --check -
+        unzip -q "$archive" -d "$tools_root/release"
+        for tool in avifenc avifdec; do
+          test -x "$tools_root/release/$tool"
+          install -m 0755 "$tools_root/release/$tool" "$tools_root/bin/$tool"
+        done
+        echo "$tools_root/bin" >> "$GITHUB_PATH"
+        export PATH="$tools_root/bin:$PATH"
+        for tool in avifenc avifdec; do
+          test "$(command -v "$tool")" = "$tools_root/bin/$tool"
+          "$tool" --version 2>&1 | grep -F "Version: ${LIBAVIF_VERSION} ("
+        done
+        decoder_help="$(avifdec --help 2>&1)"
+        grep -q -- '--sato' <<< "$decoder_help"
+        grep -q -- '--depth' <<< "$decoder_help"

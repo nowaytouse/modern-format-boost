@@ -73,7 +73,7 @@ jobs:
         continue-on-error: true
         run: |
           YAMLLINT_CONFIG='{extends: relaxed, rules: {document-start: disable, truthy: disable, comments: disable, line-length: disable}}'
-          find .github/workflows \( -name "*.yml" -o -name "*.yaml" \) -print0 | \
+          find .github/workflows .github/actions \( -name "*.yml" -o -name "*.yaml" \) -print0 | \
             xargs -0 -n1 yamllint -d "$YAMLLINT_CONFIG"
 
       - name: Check validation outcomes
@@ -255,9 +255,6 @@ jobs:
       - name: Install pinned stable IMG media toolchain
         if: matrix.package == 'img'
         env:
-          LIBAVIF_TAG: v1.4.2
-          LIBAVIF_VERSION: 1.4.2
-          LIBAVIF_ARCHIVE_SHA256: faf58a670ffbfdc0e3559e6d37592cff277c447dd39453f1cd1d7d7f5a20b8ef
           IMAGEMAGICK_VERSION: 7.1.2-32
           IMAGEMAGICK_ARCHIVE_SHA256: d456cab221b5fc1c396768a026d0a33ee8665f7119c7fea7151b960c69058b21
           EXIFTOOL_VERSION: "13.59"
@@ -268,19 +265,6 @@ jobs:
           set -euo pipefail
           tools_root="$RUNNER_TEMP/mfb-img-tools"
           mkdir -p "$tools_root"
-
-          # Official libavif release artifact (statically linked avifenc/avifdec).
-          libavif_archive="$tools_root/libavif-linux.zip"
-          curl -fsSL --retry 5 --retry-all-errors \
-            "https://github.com/AOMediaCodec/libavif/releases/download/${LIBAVIF_TAG}/linux-artifacts.zip" \
-            -o "$libavif_archive"
-          printf '%s  %s\n' "$LIBAVIF_ARCHIVE_SHA256" "$libavif_archive" | sha256sum --check -
-          mkdir -p "$tools_root/libavif"
-          unzip -q "$libavif_archive" -d "$tools_root/libavif"
-          for tool in avifenc avifdec; do
-            test -x "$tools_root/libavif/$tool"
-            sudo install -m 0755 "$tools_root/libavif/$tool" "/usr/local/bin/$tool"
-          done
 
           # Official ImageMagick AppImage avoids Ubuntu's legacy IM6 command
           # surface while keeping a stable, reproducible IM7 binary in CI.
@@ -346,7 +330,7 @@ jobs:
           ffmpeg -hide_banner -h encoder=libx265 >/dev/null
           ffprobe -version >/dev/null
 
-          for tool in avifenc avifdec magick exiftool jpegtran ffmpeg ffprobe; do
+          for tool in magick exiftool jpegtran ffmpeg ffprobe; do
             printf '[IMG tool] %s -> ' "$tool"
             case "$tool" in
               exiftool) version_output="$(exiftool -ver)" ;;
@@ -358,11 +342,13 @@ jobs:
             # reports EPIPE after head closes its multi-line version output.
             printf '%s\n' "${version_output%%$'\n'*}"
           done
-          avifenc --version 2>&1 | grep -F "$LIBAVIF_VERSION"
-          avifdec --version 2>&1 | grep -F "$LIBAVIF_VERSION"
           magick -version 2>&1 | grep -F "ImageMagick ${IMAGEMAGICK_VERSION}"
           exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
           jpegtran -version 2>&1 | grep -F "libjpeg-turbo version ${LIBJPEG_TURBO_VERSION}"
+
+      - name: Install pinned AVIF tools for IMG
+        if: matrix.package == 'img'
+        uses: ./.github/actions/setup-avif
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -560,6 +546,9 @@ jobs:
           echo "/usr/local/bin" >> "$GITHUB_PATH"
           test "$(command -v exiftool)" = "/usr/local/bin/exiftool"
           exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+
+      - name: Install pinned AVIF tools for health checks
+        uses: ./.github/actions/setup-avif
 
       - name: Download GNU MPC with mirror failover
         run: |
@@ -772,6 +761,9 @@ jobs:
           echo "/usr/local/bin" >> "$GITHUB_PATH"
           test "$(command -v exiftool)" = "/usr/local/bin/exiftool"
           exiftool -ver | grep -Fx "$EXIFTOOL_VERSION"
+
+      - name: Install pinned AVIF tools for deep audit
+        uses: ./.github/actions/setup-avif
 
       - name: Install Audit Tools
         run: |
