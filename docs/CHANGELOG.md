@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Checkpointed Original-Media Import Progress (2026-10-20)
+
+- Extend pending-only Photos progress to Fast IMG's tier-2 AppleScript imports.
+  Share the original-media plan with the native backend and exclude already
+  proven candidates after custody re-verification.
+- Persist each newly verified original before submitting the next item. Keep
+  XMP source/delivery/sidecar evidence distinct, preserve earlier receipts after
+  a later failure, and publish in-memory receipts only after successful writes.
+- Add synthetic persistence, partial-failure and resume regressions. Generic
+  uncheckpointed imports do not claim saved progress; live-library acceptance
+  remains separate.
+
 ### AppleScript Checkpoint Import Progress (2026-10-20)
 
 - Extend the existing pending-only Photos progress protocol to Fast IMG's

@@ -1221,6 +1221,24 @@ pub fn apply_tier2_library_assets_to_marker(
     Ok(())
 }
 
+fn checkpoint_tier2_library_assets(
+    marker: &mut WorkingCopyMarker,
+    library: &LibraryHandle,
+    enriched: &BTreeMap<String, (String, String, String)>,
+) -> Result<()> {
+    let mut library = library.clone();
+    apply_tier2_enriched_delivery_proofs(&mut library, enriched)?;
+    let mut updated = marker.clone();
+    apply_tier2_library_assets_to_marker(&mut updated, &library)?;
+    write_marker_atomic(&updated).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "write tier-2 Photos import checkpoint failed: {error}; in-memory receipts not advanced"
+        ))
+    })?;
+    *marker = updated;
+    Ok(())
+}
+
 /// Rebuild tier-2 import proof from a persisted marker.
 #[must_use]
 pub fn library_handle_from_marker_tier2_proof(
@@ -2032,7 +2050,7 @@ pub fn import_modern_lossy_static_tier_in_library(
         import_modern_lossy_static_tier_checkpointed(&mut marker, candidates)
     }
     #[cfg(not(target_os = "macos"))]
-    import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library)
+    import_modern_lossy_static_tier_with_checkpoint(src_dir, candidates, bound_library, None)
 }
 
 /// Import originals using the same durable native receipts as converted outputs.
@@ -2046,7 +2064,6 @@ pub fn import_modern_lossy_static_tier_checkpointed(
         &source,
         candidates,
         library.as_deref(),
-        #[cfg(target_os = "macos")]
         Some(marker),
     )
 }
@@ -2055,7 +2072,7 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     src_dir: &Path,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
     bound_library: Option<&Path>,
-    #[cfg(target_os = "macos")] checkpoint: Option<&mut WorkingCopyMarker>,
+    checkpoint: Option<&mut WorkingCopyMarker>,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
     let selected = selected_photos_library(bound_library)?;
@@ -2296,21 +2313,27 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     }
 
     #[cfg(target_os = "macos")]
-    if let Some(marker) = checkpoint
-        && let Some(mut handle) = native_checkpoint::try_import_originals(
-            marker,
-            &import_candidates,
-            &enriched_proofs,
-            selected.as_deref(),
-        )?
-    {
-        apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
-        handle.import_error_count = metadata_failures;
-        return Ok(handle);
-    }
+    let checkpoint = {
+        let mut checkpoint = checkpoint;
+        if let Some(marker) = checkpoint.as_deref_mut()
+            && let Some(mut handle) = native_checkpoint::try_import_originals(
+                marker,
+                &import_candidates,
+                &enriched_proofs,
+                selected.as_deref(),
+            )?
+        {
+            apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
+            handle.import_error_count = metadata_failures;
+            return Ok(handle);
+        }
+        checkpoint
+    };
     let mut handle = import_or_reconcile_modern_lossy_static_candidates(
         &import_candidates,
         selected.as_deref(),
+        checkpoint,
+        &enriched_proofs,
     )?;
     apply_tier2_enriched_delivery_proofs(&mut handle, &enriched_proofs)?;
     handle.import_error_count = handle
@@ -2373,20 +2396,156 @@ pub fn import_or_reconcile_verified_media_candidates(
     {
         return Ok(handle);
     }
-    import_or_reconcile_modern_lossy_static_candidates(candidates, selected.as_deref())
+    import_or_reconcile_modern_lossy_static_candidates(
+        candidates,
+        selected.as_deref(),
+        None,
+        &BTreeMap::new(),
+    )
+}
+
+fn original_photos_checkpoint_plan(
+    marker: &WorkingCopyMarker,
+    candidates: &[PhotosImportCandidate],
+) -> Result<PhotosImportCheckpointPlan> {
+    validate_photos_import_candidates(candidates)?;
+    let mut proven_assets = marker.tier2_imported_assets.clone();
+    for asset in &mut proven_assets {
+        if let Some(delivery_hash) = asset.library_blake3.take() {
+            asset.blake3 = delivery_hash;
+        }
+    }
+    let mut pending_entries = Vec::new();
+    for candidate in candidates {
+        if let Some(proof) = proven_assets
+            .iter()
+            .find(|a| a.rel_path == candidate.rel_path)
+        {
+            if proof.blake3 != candidate.blake3 || proof.photos_uuid.is_none() {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 Photos checkpoint identity changed for {}; source retained",
+                    candidate.rel_path
+                )));
+            }
+            continue;
+        }
+        pending_entries.push(PhotosImportPendingEntry {
+            source_rel: candidate.rel_path.clone(),
+            rel_path: candidate.rel_path.clone(),
+            path: candidate.path.clone(),
+            album_name: candidate.album_name.clone(),
+            blake3_entry: Blake3Entry {
+                out_rel: Some(candidate.rel_path.clone()),
+                src: candidate.blake3.clone(),
+                out: candidate.blake3.clone(),
+                library_asset: None,
+            },
+        });
+    }
+    Ok(PhotosImportCheckpointPlan {
+        pending_entries,
+        proven_assets,
+    })
 }
 
 fn import_or_reconcile_modern_lossy_static_candidates(
     candidates: &[PhotosImportCandidate],
     selected_library: Option<&Path>,
+    checkpoint: Option<&mut WorkingCopyMarker>,
+    enriched: &BTreeMap<String, (String, String, String)>,
 ) -> Result<LibraryHandle> {
     require_applescript_only_import_backend()?;
-    validate_photos_import_candidates(candidates)?;
-    let mut imported_assets = Vec::new();
+    // On macOS the native attempt reverified these receipts before backend handoff.
+    #[cfg(not(target_os = "macos"))]
+    if let Some(proof) = checkpoint
+        .as_deref()
+        .and_then(library_handle_from_marker_tier2_proof)
+    {
+        reverify_modern_lossy_static_photos_custody(&proof)?;
+    }
+    import_or_reconcile_original_candidates_with(
+        candidates,
+        selected_library,
+        checkpoint,
+        enriched,
+        &mut |candidate, progress| {
+            import_or_reconcile_single_modern_lossy_candidate(candidate, selected_library, progress)
+        },
+    )
+}
+
+fn import_or_reconcile_original_candidates_with(
+    candidates: &[PhotosImportCandidate],
+    selected_library: Option<&Path>,
+    mut checkpoint: Option<&mut WorkingCopyMarker>,
+    enriched: &BTreeMap<String, (String, String, String)>,
+    run_candidate: &mut impl FnMut(
+        &PhotosImportCandidate,
+        Option<&mut crate::progress::PhotosImportProgress>,
+    ) -> Result<LibraryHandle>,
+) -> Result<LibraryHandle> {
+    let (pending, mut imported_assets) = if let Some(marker) = checkpoint.as_deref() {
+        let plan = original_photos_checkpoint_plan(marker, candidates)?;
+        let pending_paths = plan
+            .pending_entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str())
+            .collect::<BTreeSet<_>>();
+        (
+            candidates
+                .iter()
+                .filter(|candidate| pending_paths.contains(candidate.rel_path.as_str()))
+                .collect::<Vec<_>>(),
+            plan.proven_assets
+                .into_iter()
+                .filter(|asset| candidates.iter().any(|c| c.rel_path == asset.rel_path))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        validate_photos_import_candidates(candidates)?;
+        (candidates.iter().collect(), Vec::new())
+    };
+    let mut progress = checkpoint
+        .as_ref()
+        .map(|_| {
+            crate::progress::PhotosImportProgress::new(
+                pending.iter().map(|candidate| candidate.rel_path.as_str()),
+            )
+        })
+        .transpose()?;
     let mut failed_count = 0usize;
-    for candidate in candidates {
-        let handle =
-            import_or_reconcile_single_modern_lossy_candidate(candidate, selected_library)?;
+    for candidate in pending {
+        let handle = run_candidate(candidate, progress.as_mut())?;
+        if handle
+            .imported_assets
+            .len()
+            .checked_add(handle.import_error_count)
+            != Some(1)
+        {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 Photos single-item result count mismatch for {}; source retained",
+                candidate.rel_path
+            )));
+        }
+        if handle.imported_assets.iter().any(|asset| {
+            asset.rel_path != candidate.rel_path
+                || asset.blake3 != candidate.blake3
+                || asset.photos_uuid.as_deref().is_none_or(str::is_empty)
+        }) {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "tier-2 Photos single-item proof identity mismatch for {}; source retained",
+                candidate.rel_path
+            )));
+        }
+        if !handle.imported_assets.is_empty()
+            && let Some(marker) = checkpoint.as_deref_mut()
+        {
+            checkpoint_tier2_library_assets(marker, &handle, enriched)?;
+            if let Some(progress) = &mut progress {
+                progress
+                    .checkpointed(handle.imported_assets.iter().map(|a| a.rel_path.as_str()))?;
+            }
+        }
         imported_assets.extend(handle.imported_assets);
         failed_count = failed_count
             .checked_add(handle.import_error_count)
@@ -2395,6 +2554,16 @@ fn import_or_reconcile_modern_lossy_static_candidates(
                     "tier-2 Photos import failure count overflowed".to_string(),
                 )
             })?;
+    }
+    if imported_assets.len().checked_add(failed_count) != Some(candidates.len()) {
+        return Err(ImgQualityError::AnalysisError(
+            "tier-2 Photos result count mismatch; sources retained".into(),
+        ));
+    }
+    if failed_count == 0
+        && let Some(progress) = &mut progress
+    {
+        progress.complete()?;
     }
     imported_assets.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
     Ok(LibraryHandle {
@@ -2487,10 +2656,17 @@ fn photos_reconciliation_content_mismatch(detail: &str) -> bool {
 fn import_or_reconcile_single_modern_lossy_candidate(
     candidate: &PhotosImportCandidate,
     selected_library: Option<&Path>,
+    mut progress: Option<&mut crate::progress::PhotosImportProgress>,
 ) -> Result<LibraryHandle> {
+    if let Some(progress) = &mut progress {
+        progress.phase(crate::progress::PhotosImportPhase::Reconciling)?;
+    }
     if let Some(asset) =
         reconcile_single_modern_lossy_candidate_with_recovery(candidate, selected_library)?
     {
+        if let Some(progress) = &mut progress {
+            progress.phase(crate::progress::PhotosImportPhase::Verifying)?;
+        }
         return Ok(LibraryHandle {
             imported_assets: vec![asset],
             import_error_count: 0,
@@ -2501,6 +2677,9 @@ fn import_or_reconcile_single_modern_lossy_candidate(
     let candidates = std::slice::from_ref(candidate);
     let mut attempt = 0usize;
     loop {
+        if let Some(progress) = &mut progress {
+            progress.phase(crate::progress::PhotosImportPhase::Importing)?;
+        }
         let mut run_import_batch = |manifest_entries: &[(PathBuf, String)]| {
             run_photos_import_applescript_session_mode_in_library(
                 "media",
@@ -2515,6 +2694,9 @@ fn import_or_reconcile_single_modern_lossy_candidate(
             &mut run_import_batch,
         ) {
             Ok(report) => {
+                if let Some(progress) = &mut progress {
+                    progress.phase(crate::progress::PhotosImportPhase::Verifying)?;
+                }
                 #[cfg(target_os = "macos")]
                 let quarantine_probe = path_has_quarantine_xattr;
                 #[cfg(not(target_os = "macos"))]
@@ -2531,10 +2713,16 @@ fn import_or_reconcile_single_modern_lossy_candidate(
             Err(err) => {
                 // A timed-out AppleEvent may have committed. Reconcile content
                 // before every retry so an ambiguous result cannot duplicate it.
+                if let Some(progress) = &mut progress {
+                    progress.phase(crate::progress::PhotosImportPhase::Reconciling)?;
+                }
                 if let Some(asset) = reconcile_single_modern_lossy_candidate_with_recovery(
                     candidate,
                     selected_library,
                 )? {
+                    if let Some(progress) = &mut progress {
+                        progress.phase(crate::progress::PhotosImportPhase::Verifying)?;
+                    }
                     return Ok(LibraryHandle {
                         imported_assets: vec![asset],
                         import_error_count: 0,
@@ -7285,6 +7473,252 @@ mod tests {
             handle.imported_assets[0].photos_uuid.as_deref(),
             Some("UUID-A")
         );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn tier2_applescript_checkpoints_partial_results_before_later_failure() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        for controlled in [false, true] {
+            let root = tempfile::tempdir()?;
+            let _home = crate::common_utils::EnvGuard::set(
+                crate::constants::ENV_MFB_HOME_ROOT,
+                root.path().to_str().unwrap(),
+            );
+            let mut candidates = Vec::new();
+            for name in ["a.webp", "b.webp", "c.webp"] {
+                let path = root.path().join(name);
+                std::fs::write(&path, name)?;
+                candidates.push(PhotosImportCandidate {
+                    rel_path: name.into(),
+                    blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+                    path,
+                    album_name: "Test".into(),
+                });
+            }
+            let proof = |candidate: &PhotosImportCandidate| LibraryHandle {
+                imported_assets: vec![LibraryAssetRecord {
+                    rel_path: candidate.rel_path.clone(),
+                    blake3: candidate.blake3.clone(),
+                    photos_uuid: Some(format!("UUID-{}", candidate.rel_path)),
+                    sync_status: "photos_local".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut marker =
+                WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+            apply_tier2_library_assets_to_marker(&mut marker, &proof(&candidates[0]))?;
+            marker.tier2_imported_assets.push(LibraryAssetRecord {
+                rel_path: "previous-run.webp".into(),
+                photos_uuid: Some("UUID-previous".into()),
+                ..Default::default()
+            });
+            write_marker_atomic(&marker)?;
+            let enriched = BTreeMap::from([(
+                "b.webp".into(),
+                (
+                    "original-source-hash".into(),
+                    candidates[1].blake3.clone(),
+                    "sidecar-hash".into(),
+                ),
+            )]);
+            let mut calls = Vec::new();
+            let result = import_or_reconcile_original_candidates_with(
+                &candidates,
+                None,
+                Some(&mut marker),
+                &enriched,
+                &mut |candidate, progress| {
+                    let progress = progress.unwrap();
+                    assert_eq!(
+                        progress.verified_count()?,
+                        u64::try_from(calls.len()).unwrap()
+                    );
+                    assert!(progress.checkpointed(["a.webp"]).is_err());
+                    assert!(progress.complete().is_err());
+                    calls.push(candidate.rel_path.clone());
+                    if candidate.rel_path == "c.webp" {
+                        let saved = crate::pipeline::verification::read_marker(
+                            &root.path().join("output"),
+                        )?;
+                        let persisted = saved
+                            .tier2_imported_assets
+                            .iter()
+                            .find(|a| a.rel_path == "b.webp")
+                            .unwrap();
+                        assert_eq!(persisted.blake3, "original-source-hash");
+                        assert_eq!(
+                            persisted.library_blake3.as_deref(),
+                            Some(candidates[1].blake3.as_str())
+                        );
+                        assert_eq!(
+                            persisted.xmp_sidecar_blake3.as_deref(),
+                            Some("sidecar-hash")
+                        );
+                        if controlled {
+                            return Ok(LibraryHandle {
+                                import_error_count: 1,
+                                ..Default::default()
+                            });
+                        }
+                        return Err(ImgQualityError::AnalysisError(
+                            "synthetic later failure".into(),
+                        ));
+                    }
+                    Ok(proof(candidate))
+                },
+            );
+            assert_eq!(calls, ["b.webp", "c.webp"]);
+            if controlled {
+                let handle = result?;
+                assert_eq!(handle.import_error_count, 1);
+                assert_eq!(handle.imported_assets.len(), 2);
+                assert_eq!(handle.imported_assets[1].blake3, candidates[1].blake3);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("synthetic later failure")
+                );
+            }
+            let mut resumed = crate::pipeline::verification::read_marker(&marker.working_copy)?;
+            let resumed_handle = import_or_reconcile_original_candidates_with(
+                &candidates,
+                None,
+                Some(&mut resumed),
+                &enriched,
+                &mut |candidate, progress| {
+                    assert_eq!(candidate.rel_path, "c.webp");
+                    let progress = progress.unwrap();
+                    assert_eq!(progress.verified_count()?, 0);
+                    assert!(progress.checkpointed(["b.webp"]).is_err());
+                    Ok(proof(candidate))
+                },
+            )?;
+            assert_eq!(resumed_handle.imported_assets.len(), 3);
+            assert_eq!(resumed_handle.import_error_count, 0);
+            assert_eq!(resumed.tier2_imported_assets.len(), 4);
+            for candidate in &candidates {
+                assert_eq!(
+                    crate::common_utils::calculate_blake3_hash(&candidate.path)?,
+                    candidate.blake3
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn tier2_applescript_checkpoint_write_failure_preserves_memory_and_stops_imports()
+    -> anyhow::Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let blocked = root.path().join("blocked-state");
+        std::fs::write(&blocked, b"not a directory")?;
+        let _home = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            blocked.to_str().unwrap(),
+        );
+        let mut candidates = Vec::new();
+        for name in ["a.webp", "b.webp"] {
+            let path = root.path().join(name);
+            std::fs::write(&path, name)?;
+            candidates.push(PhotosImportCandidate {
+                rel_path: name.into(),
+                blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+                path,
+                album_name: "Test".into(),
+            });
+        }
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        let before = serde_json::to_value(&marker)?;
+        let mut calls = 0;
+        let error = import_or_reconcile_original_candidates_with(
+            &candidates,
+            None,
+            Some(&mut marker),
+            &BTreeMap::new(),
+            &mut |candidate, progress| {
+                assert_eq!(progress.unwrap().verified_count()?, 0);
+                calls += 1;
+                Ok(LibraryHandle {
+                    imported_assets: vec![LibraryAssetRecord {
+                        rel_path: candidate.rel_path.clone(),
+                        blake3: candidate.blake3.clone(),
+                        photos_uuid: Some("UUID-A".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("checkpoint"), "{error}");
+        assert_eq!(calls, 1);
+        assert_eq!(serde_json::to_value(&marker)?, before);
+        for candidate in &candidates {
+            assert_eq!(
+                crate::common_utils::calculate_blake3_hash(&candidate.path)?,
+                candidate.blake3
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tier2_applescript_uncheckpointed_calls_do_not_claim_persisted_progress() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("a.webp");
+        std::fs::write(&path, b"synthetic source")?;
+        let candidates = [PhotosImportCandidate {
+            rel_path: "a.webp".into(),
+            blake3: crate::common_utils::calculate_blake3_hash(&path)?,
+            path,
+            album_name: "Test".into(),
+        }];
+        for malformed in [false, true] {
+            let result = import_or_reconcile_original_candidates_with(
+                &candidates,
+                None,
+                None,
+                &BTreeMap::new(),
+                &mut |candidate, progress| {
+                    assert!(progress.is_none());
+                    Ok(LibraryHandle {
+                        imported_assets: vec![LibraryAssetRecord {
+                            rel_path: if malformed {
+                                "unknown.webp".into()
+                            } else {
+                                candidate.rel_path.clone()
+                            },
+                            blake3: candidate.blake3.clone(),
+                            photos_uuid: Some("UUID-A".into()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                },
+            );
+            if malformed {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("proof identity mismatch")
+                );
+            } else {
+                assert_eq!(result?.imported_assets.len(), 1);
+            }
+        }
         Ok(())
     }
 

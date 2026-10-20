@@ -592,11 +592,11 @@ that all pending outputs are reusable.
 
 ### Photos Operation Progress
 
-Fast IMG emits `MFB_PHOTOS_PROGRESS` for native imports and the primary-output
-AppleScript checkpoint import path, using the existing serialized terminal-marker
-channel. Schema 1 records a local `operation_id`, increasing `sequence`, the
-`current_pending_import` scope, phase,
-fixed `pending_total` and `verified` count. The phases distinguish target
+Fast IMG emits `MFB_PHOTOS_PROGRESS` for native imports and checkpointed
+AppleScript imports of primary outputs and tier-2 originals, using the existing
+serialized terminal-marker channel. Schema 1 records a local `operation_id`,
+increasing `sequence`, the `current_pending_import` scope, phase, fixed
+`pending_total` and `verified` count. The phases distinguish target
 preparation, old-intent reconciliation, import submission and local verification.
 
 The inventory contains only this operation's pending source identities. Already
@@ -614,15 +614,27 @@ advance only after checkpoint persistence, including successful items preceding
 a later failure. Same-run recovered assets are already checkpointed before they
 advance progress.
 
+Checkpointed original-media imports share the native original-media plan. Prior
+receipts must pass the existing live custody recheck and match the candidate's
+delivery hash before they are excluded from pending work. Each newly verified
+AppleScript original is saved separately, before the next item is submitted.
+XMP-enriched deliveries retain distinct source, delivery and sidecar hashes in
+the saved receipt. Both backends publish an updated in-memory tier-2 marker only
+after its atomic write succeeds. A later item failure therefore does not erase
+earlier durable receipts; the next attempt plans only the remaining candidates.
+The progress scope starts after metadata staging: preparation failures remain
+separate batch failures, not verified imports or part of its denominator.
+
 `completed` requires the pending inventory to be fully checkpointed and the
 existing asset-count checks to pass; the AppleScript path also requires zero
 deferred item failures. An unfinished operation emits `stopped` when its scope
 exits; that includes cancellation, failure and a permitted
 pre-import handoff to the AppleScript backend. The latter opens a separate
 operation without inheriting the native operation's counts. Neither terminal
-event determines the whole run's outcome. The native GUI releases a closed operation's progress
-row to subsequent activity. Without a positive denominator it shows activity,
-not a percentage; an active operation is never rounded up to 100 percent.
+event determines the whole run's outcome. The native GUI releases a closed
+operation's progress row to subsequent activity. Without a positive denominator
+it shows activity, not a percentage; an active operation is never rounded up to
+100 percent.
 
 Malformed, replayed, out-of-order or conflicting progress becomes unavailable,
 not a fabricated completion or a change to authoritative batch results. Per-process
@@ -632,9 +644,10 @@ conservatively; a new batch resets this local presentation state. These operatio
 IDs are presentation scope, not persistent file-task identities. The
 events travel through the existing captured worker-output path; they do not
 create a second state store, authorize deletion, prove later Gates or iCloud
-completion. Other paths, including tier-2/original-media AppleScript delivery and
-the remaining Gate progress, are not covered. Synthetic regression and GUI
-fixtures do not replace authorized live-library delivery acceptance.
+completion. Generic candidate imports without a checkpoint do not emit this
+durable progress. The remaining Gate progress is not covered. Synthetic
+regression and GUI fixtures do not replace authorized live-library delivery
+acceptance.
 
 ## Launcher Preflight Content Identity
 

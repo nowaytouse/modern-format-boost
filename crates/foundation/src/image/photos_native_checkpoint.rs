@@ -206,50 +206,6 @@ fn import_task(marker: &WorkingCopyMarker, library: Option<&Path>) -> anyhow::Re
     })
 }
 
-fn original_plan(
-    marker: &WorkingCopyMarker,
-    candidates: &[super::PhotosImportCandidate],
-) -> Result<PhotosImportCheckpointPlan> {
-    super::validate_photos_import_candidates(candidates)?;
-    let mut proven_assets = marker.tier2_imported_assets.clone();
-    for asset in &mut proven_assets {
-        if let Some(delivery_hash) = asset.library_blake3.take() {
-            asset.blake3 = delivery_hash;
-        }
-    }
-    let mut pending_entries = Vec::new();
-    for candidate in candidates {
-        if let Some(proof) = proven_assets
-            .iter()
-            .find(|a| a.rel_path == candidate.rel_path)
-        {
-            if proof.blake3 != candidate.blake3 || proof.photos_uuid.is_none() {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "tier-2 native checkpoint identity changed for {}; source retained",
-                    candidate.rel_path
-                )));
-            }
-            continue;
-        }
-        pending_entries.push(PhotosImportPendingEntry {
-            source_rel: candidate.rel_path.clone(),
-            rel_path: candidate.rel_path.clone(),
-            path: candidate.path.clone(),
-            album_name: candidate.album_name.clone(),
-            blake3_entry: super::Blake3Entry {
-                out_rel: Some(candidate.rel_path.clone()),
-                src: candidate.blake3.clone(),
-                out: candidate.blake3.clone(),
-                library_asset: None,
-            },
-        });
-    }
-    Ok(PhotosImportCheckpointPlan {
-        pending_entries,
-        proven_assets,
-    })
-}
-
 pub(super) fn try_import_originals(
     marker: &mut WorkingCopyMarker,
     candidates: &[super::PhotosImportCandidate],
@@ -258,7 +214,7 @@ pub(super) fn try_import_originals(
 ) -> Result<Option<LibraryHandle>> {
     let profile = photos_import_metrics::Profile::start("native");
     let result = (|| -> anyhow::Result<Option<LibraryHandle>> {
-        let plan = original_plan(marker, candidates)?;
+        let plan = super::original_photos_checkpoint_plan(marker, candidates)?;
         if let Some(proof) = super::library_handle_from_marker_tier2_proof(marker) {
             super::reverify_modern_lossy_static_photos_custody(&proof)?;
         }
@@ -273,14 +229,12 @@ pub(super) fn try_import_originals(
             &mut super::path_has_quarantine_xattr,
             library,
             &mut |_entries, assets| {
-                let mut handle = LibraryHandle {
+                let handle = LibraryHandle {
                     imported_assets: assets.to_vec(),
                     import_error_count: 0,
                     photos_library_path: library.map(Path::to_path_buf),
                 };
-                super::apply_tier2_enriched_delivery_proofs(&mut handle, enriched)?;
-                super::apply_tier2_library_assets_to_marker(marker, &handle)?;
-                super::write_marker_atomic(marker)?;
+                super::checkpoint_tier2_library_assets(marker, &handle, enriched)?;
                 photos_import_metrics::verified(assets.len());
                 Ok(())
             },
@@ -1108,9 +1062,12 @@ mod tests {
         let mut marker =
             WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
         assert_eq!(
-            original_plan(&marker, std::slice::from_ref(&candidate))?
-                .pending_entries
-                .len(),
+            super::super::original_photos_checkpoint_plan(
+                &marker,
+                std::slice::from_ref(&candidate)
+            )?
+            .pending_entries
+            .len(),
             1
         );
         marker
@@ -1122,11 +1079,14 @@ mod tests {
                 photos_uuid: Some("verified-uuid".into()),
                 ..Default::default()
             });
-        let plan = original_plan(&marker, std::slice::from_ref(&candidate))?;
+        let plan = super::super::original_photos_checkpoint_plan(
+            &marker,
+            std::slice::from_ref(&candidate),
+        )?;
         assert!(plan.pending_entries.is_empty());
         assert_eq!(plan.proven_assets[0].blake3, hash);
         marker.tier2_imported_assets[0].library_blake3 = Some("changed".into());
-        assert!(original_plan(&marker, &[candidate]).is_err());
+        assert!(super::super::original_photos_checkpoint_plan(&marker, &[candidate]).is_err());
         Ok(())
     }
 
