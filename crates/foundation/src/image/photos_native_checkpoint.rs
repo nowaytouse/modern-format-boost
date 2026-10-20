@@ -9,6 +9,7 @@ use super::{
 use crate::image::photos_import_metrics;
 use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
+use crate::progress::{PhotosImportPhase, PhotosImportProgress};
 use crate::unified_error::PhotosDeliveryDeferred;
 use std::os::unix::fs::PermissionsExt;
 
@@ -57,6 +58,19 @@ fn startup_error(error: anyhow::Error, unresolved_journals: bool) -> anyhow::Err
     } else {
         error
     }
+}
+
+fn checkpoint_with_progress<C>(
+    entries: &[PhotosImportPendingEntry],
+    assets: &[super::LibraryAssetRecord],
+    checkpoint: &mut C,
+    progress: &mut PhotosImportProgress,
+) -> anyhow::Result<()>
+where
+    C: FnMut(&[PhotosImportPendingEntry], &[super::LibraryAssetRecord]) -> Result<()>,
+{
+    checkpoint(entries, assets)?;
+    progress.checkpointed(entries.iter().map(|entry| entry.rel_path.as_str()))
 }
 
 fn selected_library_witness_with_recovery(
@@ -568,6 +582,11 @@ where
         );
         return Ok(None);
     };
+    let mut progress = PhotosImportProgress::new(
+        plan.pending_entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str()),
+    )?;
     require_active_photos_library(library)?;
     let startup = (|| -> anyhow::Result<(Client, Vec<String>)> {
         let witnesses = vec![selected_library_witness(library)?];
@@ -601,6 +620,7 @@ where
         .map(|entry| (entry.rel_path.clone(), entry.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut imported = plan.proven_assets.clone();
+    progress.phase(PhotosImportPhase::Reconciling)?;
     // Reconcile ALL old intents before submitting anything new, including when
     // the batch size changed between runs. Filename/content dedup is never used.
     for file in &journal_files {
@@ -651,7 +671,7 @@ where
                 query,
                 quarantined,
             )?;
-            checkpoint(&recovered_entries, &proofs)?;
+            checkpoint_with_progress(&recovered_entries, &proofs, checkpoint, &mut progress)?;
             for entry in recovered_entries {
                 pending.remove(&entry.rel_path);
             }
@@ -665,12 +685,14 @@ where
             "native verified asset count mismatch"
         );
         imported.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+        progress.complete()?;
         return Ok(Some(LibraryHandle {
             imported_assets: imported,
             import_error_count: 0,
             photos_library_path: library.map(Path::to_path_buf),
         }));
     }
+    progress.phase(PhotosImportPhase::TargetPreparation)?;
     let albums = pending
         .iter()
         .map(|entry| (entry.album_name.clone(), entry.path.clone()))
@@ -714,6 +736,7 @@ where
         match current {
             Step::Verify(range) => {
                 let entries = &pending[range];
+                progress.phase(PhotosImportPhase::Verifying)?;
                 // A single helper write can run while this window is verified and checkpointed.
                 let next = schedule.next();
                 let prefetch = if let Some(Step::Import(import_range)) = &next {
@@ -746,7 +769,7 @@ where
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     let mut proofs =
                         library_records_from_pending_import(entries, &pairs, query, quarantined)?;
-                    checkpoint(entries, &proofs)?;
+                    checkpoint_with_progress(entries, &proofs, checkpoint, &mut progress)?;
                     for entry in entries {
                         identifiers.remove(&entry.rel_path);
                     }
@@ -790,6 +813,7 @@ where
                 };
             }
             Step::Import(range) => {
+                progress.phase(PhotosImportPhase::Importing)?;
                 let request =
                     import_request(&pending[range], batch_index, &albums, &witnesses, &journals)?;
                 client.begin_request(&request)?;
@@ -808,6 +832,7 @@ where
         "native verified asset count mismatch"
     );
     imported.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    progress.complete()?;
     Ok(Some(LibraryHandle {
         imported_assets: imported,
         import_error_count: 0,
@@ -820,6 +845,35 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt as _;
 
+    #[test]
+    fn photos_progress_advances_only_after_checkpoint_persistence() -> anyhow::Result<()> {
+        let entries = [PhotosImportPendingEntry {
+            source_rel: "image.jpg".into(),
+            rel_path: "image.jxl".into(),
+            path: PathBuf::from("/synthetic/image.jxl"),
+            album_name: "Synthetic".into(),
+            blake3_entry: super::super::Blake3Entry::default(),
+        }];
+        let mut progress =
+            PhotosImportProgress::new(entries.iter().map(|entry| entry.rel_path.as_str()))?;
+        assert!(
+            checkpoint_with_progress(
+                &entries,
+                &[],
+                &mut |_, _| {
+                    Err(ImgQualityError::AnalysisError(
+                        "synthetic checkpoint write failure".into(),
+                    ))
+                },
+                &mut progress
+            )
+            .is_err()
+        );
+        assert!(progress.complete().is_err());
+        checkpoint_with_progress(&entries, &[], &mut |_, _| Ok(()), &mut progress)?;
+        progress.complete()?;
+        Ok(())
+    }
     fn witness_reply(code: i32, text: &str) -> std::process::Output {
         std::process::Output {
             status: std::process::ExitStatus::from_raw(code << 8),

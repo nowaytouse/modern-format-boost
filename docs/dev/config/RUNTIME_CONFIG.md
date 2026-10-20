@@ -590,6 +590,37 @@ permission to delete it. Resuming still requires ordinary checkpoint, content an
 Photos reconciliation; this status adds neither an automatic retry nor a claim
 that all pending outputs are reusable.
 
+### Native Photos Operation Progress
+
+Fast IMG emits `MFB_PHOTOS_PROGRESS` for the current native import operation,
+using the existing serialized terminal-marker channel. Schema 1 records a local
+`operation_id`, increasing `sequence`, the `current_pending_import` scope, phase,
+fixed `pending_total` and `verified` count. The phases distinguish target
+preparation, old-intent reconciliation, import submission and local verification.
+
+The inventory contains only this operation's pending source identities. Already
+proven checkpoint assets are excluded. Reconciled old intents count only when
+they belong to that pending inventory and their newly verified checkpoint has
+been saved. A repeated or unknown identity cannot increase progress, and a
+checkpoint write failure does not advance the verified count. Prefetched import
+may overlap verification; the visible phase describes the current verification
+work, not an assertion that no other request is in flight.
+
+`completed` requires the pending inventory to be fully checkpointed and the
+existing native asset-count checks to pass. An unfinished operation emits
+`stopped` when its scope exits; that includes cancellation, failure and a permitted
+pre-import handoff to the AppleScript backend. Neither terminal event determines
+the whole run's outcome. The native GUI releases a closed operation's progress
+row to subsequent activity. Without a positive denominator it shows activity,
+not a percentage; an active operation is never rounded up to 100 percent.
+
+Malformed, replayed, out-of-order or conflicting progress becomes unavailable,
+not a fabricated completion or a change to authoritative batch results. These
+operation IDs are presentation scope, not persistent file-task identities. The
+events travel through the existing captured worker-output path; they do not
+create a second state store, authorize deletion, prove later Gates or iCloud
+completion, or cover AppleScript and all other Gate progress.
+
 ## Launcher Preflight Content Identity
 
 The read-only routing report uses schema 3. Every visible inventory entry,

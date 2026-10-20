@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Native Photos Operation Progress (2026-10-20)
+
+- Show target preparation, prior-intent reconciliation, import submission and
+  local verification as distinct native Photos activities in Fast IMG.
+- Bind the progress denominator to the current pending inventory, excluding
+  previously proven assets. Advance unique verified identities only after a
+  successful checkpoint write, including recovered intents in that inventory.
+- Reuse the native progress row with English, Chinese and Japanese labels;
+  reject conflicting or replayed observations and release closed operations to
+  later phases. Operation completion is not whole-run success, deletion
+  authorization or proof of iCloud synchronization.
+
 ### Deferred Photos Delivery In Results And History (2026-10-20)
 
 - Distinguish temporary native target-preparation failure from media verification

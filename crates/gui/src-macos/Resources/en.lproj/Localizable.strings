@@ -566,6 +566,14 @@
 "progress.stage_finished" = "%@ stage ended · %@ / %@ files";
 "progress.empty" = "%@ · No files in this stage";
 "progress.unavailable" = "File progress unavailable";
+"photos.progress.invalid" = "Photos import progress is unavailable; review retained diagnostics.";
+"photos.progress.counts" = "%@ · This pending import: locally verified %@ / %@";
+"photos.progress.phase.target_preparation" = "Preparing Photos import";
+"photos.progress.phase.reconciling" = "Checking the pending Photos import";
+"photos.progress.phase.importing" = "Importing pending items into Photos";
+"photos.progress.phase.verifying" = "Verifying this Photos import locally";
+"photos.progress.phase.completed" = "This Photos import was verified locally; batch finalization continues";
+"photos.progress.phase.stopped" = "This native Photos import operation stopped; see the final batch result";
 "gate.activity.running" = "Latest Gate 1 activity: %@ · Checks run %@ / %@";
 "gate.activity.passed" = "Gate 1 checks passed · %@ / %@ checks run";
 "gate.activity.file_failures" = "File issues found · %@ / %@ checks run; final result pending";

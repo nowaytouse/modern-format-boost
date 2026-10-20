@@ -4392,6 +4392,133 @@ private struct FileStageProgress {
     }
 }
 
+private struct PhotosImportProgress {
+    static let prefix = "MFB_PHOTOS_PROGRESS="
+    struct Event: Decodable {
+        let schema_version: Int
+        let scope: String
+        let operation_id: String
+        let sequence: UInt64
+        let phase: String
+        let pending_total: UInt64
+        let verified: UInt64
+
+        var closed: Bool { phase == "completed" || phase == "stopped" }
+        var valid: Bool {
+            schema_version == 1 && scope == "current_pending_import" && sequence > 0
+                && operation_id.utf8.count <= 64
+                && operation_id.range(of: #"\A[0-9]+-[0-9]+\z"#, options: .regularExpression) != nil
+                && ["target_preparation", "reconciling", "importing", "verifying", "completed", "stopped"].contains(phase)
+                && pending_total <= UInt64(Int64.max) && verified <= pending_total
+                && (phase != "completed" || verified == pending_total)
+        }
+        var percentage: Double? {
+            guard pending_total > 0, phase == "verifying" || phase == "completed" else { return nil }
+            let measured = Double(verified) / Double(pending_total) * 100
+            return phase == "completed" ? measured : min(99.99, measured)
+        }
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+    private var seen: Set<String> = []
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        let data = Data(raw.dropFirst(Self.prefix.count).utf8)
+        guard !invalid, data.count <= 1_024,
+              let fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(fields.keys) == Set(["schema_version", "scope", "operation_id", "sequence", "phase", "pending_total", "verified"]),
+              let next = try? JSONDecoder().decode(Event.self, from: data), next.valid else {
+            invalid = true
+            return true
+        }
+        if let previous = event, previous.operation_id == next.operation_id {
+            guard !previous.closed, next.sequence > previous.sequence,
+                  next.pending_total == previous.pending_total, next.verified >= previous.verified else {
+                invalid = true
+                return true
+            }
+        } else {
+            guard event?.closed ?? true, !seen.contains(next.operation_id), seen.count < 64,
+                  next.sequence == 1, next.phase == "target_preparation", next.verified == 0 else {
+                invalid = true
+                return true
+            }
+            seen.insert(next.operation_id)
+        }
+        event = next
+        return true
+    }
+    var label: String {
+        guard !invalid, let event else { return localized("photos.progress.invalid") }
+        let phase = localized("photos.progress.phase.\(event.phase)")
+        guard event.pending_total > 0 else { return phase }
+        return localized("photos.progress.counts", phase, String(event.verified), String(event.pending_total))
+    }
+
+    static func selfTest() throws {
+        func line(_ sequence: UInt64 = 1, _ phase: String = "target_preparation", _ verified: UInt64 = 0,
+                  total: UInt64 = 3, operation: String = "100-1") throws -> String {
+            prefix + String(decoding: try JSONSerialization.data(withJSONObject: ["schema_version": 1,
+                "scope": "current_pending_import", "operation_id": operation, "sequence": sequence,
+                "phase": phase, "pending_total": total, "verified": verified]), as: UTF8.self)
+        }
+        func require(_ value: Bool, _ message: String) throws {
+            if !value { throw HostError(message: message) }
+        }
+        var progress = Self()
+        for (sequence, phase, verified) in [(1, "target_preparation", 0), (2, "reconciling", 1),
+            (3, "importing", 1), (4, "verifying", 2), (5, "importing", 2), (6, "verifying", 3)] {
+            _ = progress.ingest(try line(UInt64(sequence), phase, UInt64(verified)))
+            try require(!progress.invalid, "Valid pending Photos progress was rejected")
+        }
+        try require(progress.event?.percentage == 99.99, "Unclosed Photos progress reached 100 percent")
+        _ = progress.ingest(try line(7, "completed", 3))
+        try require(progress.event?.percentage == 100 && progress.event?.closed == true,
+                    "Completed pending Photos import lost local verification progress")
+        _ = progress.ingest(try line(operation: "100-2"))
+        try require(!progress.invalid && progress.event?.verified == 0, "A new Photos operation inherited previous counts")
+        _ = progress.ingest(try line(operation: "100-1"))
+        try require(progress.invalid, "A delayed old Photos operation replaced the current operation")
+        for bad in [try line(1, "completed", 3), try line(1, "importing"), try line(0),
+                    try line(total: UInt64.max), try line(operation: "not-an-id"), try line(operation: "100-1\n"),
+                    try line().replacingOccurrences(of: "current_pending_import", with: "all_assets"),
+                    try line().replacingOccurrences(of: "target_preparation", with: "unknown"),
+                    prefix + "{\"schema_version\":1}"] {
+            var invalid = Self()
+            _ = invalid.ingest(bad)
+            try require(invalid.invalid, "Invalid first Photos progress event was accepted")
+        }
+        for bad in [try line(1), try line(2, "verifying", 4), try line(2, "completed", 2),
+                    try line(2, "verifying", 1, total: 4), try line(operation: "100-2")] {
+            var invalid = Self()
+            _ = invalid.ingest(try line())
+            _ = invalid.ingest(bad)
+            _ = invalid.ingest(try line(3, "verifying", 2))
+            try require(invalid.invalid, "A later Photos event erased invalid operation evidence")
+        }
+        var decreasing = Self()
+        _ = decreasing.ingest(try line())
+        _ = decreasing.ingest(try line(2, "verifying", 2))
+        _ = decreasing.ingest(try line(3, "verifying", 1))
+        try require(decreasing.invalid, "Photos verified counts moved backwards")
+        var zero = Self()
+        _ = zero.ingest(try line(total: 0))
+        _ = zero.ingest(try line(2, "completed", total: 0))
+        try require(!zero.invalid && zero.event?.percentage == nil
+            && zero.label == localized("photos.progress.phase.completed"), "An empty Photos operation invented a percentage")
+        var closed = Self()
+        _ = closed.ingest(try line())
+        _ = closed.ingest(try line(2, "stopped", 1))
+        _ = closed.ingest(try line(3, "verifying", 2))
+        try require(closed.invalid, "A stopped Photos operation reopened")
+        var malformed = Self()
+        _ = malformed.ingest(prefix + "{}")
+        try require(malformed.invalid, "Missing Photos progress fields were accepted")
+    }
+}
+
 struct GateCheckActivity {
     struct Event: Decodable, Equatable {
         struct Files: Decodable, Equatable {
@@ -5905,6 +6032,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var photosImportProgress = PhotosImportProgress()
+    private var photosProgressFixture = false
     private var gateActivity = GateCheckActivity()
     private var logPhase = PhaseLogPresentation()
     private var diagnosticLogFolder = ConsecutiveDiagnosticLogFolder()
@@ -6042,7 +6171,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        if deliveryFixture, notification.object as? NSWindow === window { NSApp.terminate(nil) }
+        if deliveryFixture || photosProgressFixture, notification.object as? NSWindow === window { NSApp.terminate(nil) }
     }
 
     func requestClose() -> Bool {
@@ -6600,6 +6729,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
+        photosImportProgress = PhotosImportProgress()
         gateActivity = GateCheckActivity()
         refreshFileProgress()
         photosDiagnostics.reset()
@@ -6933,6 +7063,22 @@ private final class AppController: NSObject, NSWindowDelegate {
                 }
                 continue
             }
+            if photosImportProgress.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                if !photosImportProgress.invalid, photosImportProgress.event?.sequence == 1 {
+                    fileProgress = FileStageProgress()
+                    gateActivity = GateCheckActivity()
+                }
+                refreshFileProgress(now: now)
+                if developerMode { displayLines.append(line) }
+                if photosImportProgress.invalid {
+                    let warning = "[WARN] " + localized("photos.progress.invalid")
+                    displayLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                }
+                continue
+            }
             if gateActivity.ingest(line, now: now) {
                 if gateActivity.invalid || gateActivity.event?.state == "failed" { batchResults.markMandatoryEvidenceConflict() }
                 diagnosticLogFolder.reset()
@@ -7138,6 +7284,24 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        if (!configurationControlsEnabled || photosProgressFixture),
+           photosImportProgress.invalid || photosImportProgress.event.map({ !$0.closed }) == true {
+            fileProgressRow.isHidden = false
+            fileProgressLabel.stringValue = photosImportProgress.label
+            fileProgressLabel.toolTip = photosImportProgress.label
+            fileProgressLabel.setAccessibilityLabel(photosImportProgress.label)
+            fileProgressLabel.textColor = photosImportProgress.invalid ? .systemOrange : .secondaryLabelColor
+            let percentage = photosImportProgress.invalid ? nil : photosImportProgress.event?.percentage
+            let active = !photosImportProgress.invalid && photosImportProgress.event?.closed == false
+                && photosImportProgress.event?.pending_total != 0
+            fileProgressIndicator.isHidden = percentage == nil && !active
+            fileProgressIndicator.isIndeterminate = percentage == nil && active
+            if fileProgressIndicator.isIndeterminate { fileProgressIndicator.startAnimation(nil) }
+            else { fileProgressIndicator.stopAnimation(nil) }
+            fileProgressIndicator.doubleValue = percentage ?? 0
+            fileProgressIndicator.setAccessibilityLabel(photosImportProgress.label)
+            return
+        }
         if logPhase.phase == .verification, gateActivity.event != nil || gateActivity.invalid {
             fileProgressRow.isHidden = false
             fileProgressIndicator.isHidden = true
@@ -7264,6 +7428,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 latestDiagnostics = LatestDiagnostics()
                 refreshLatestDiagnostics()
                 fileProgress = FileStageProgress()
+                photosImportProgress = PhotosImportProgress()
                 gateActivity = GateCheckActivity()
                 refreshFileProgress()
                 photosDiagnostics.reset()
@@ -8054,6 +8219,86 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func configurePhotosProgressFixture() throws {
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/photos-pending-import"
+        lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        refreshFileProgress()
+    }
+
+    func showPhotosProgressFixture() throws {
+        photosProgressFixture = true
+        try configurePhotosProgressFixture()
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validatePhotosProgressForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousTarget = targetField.stringValue
+        let previousFixture = photosProgressFixture
+        let previousDeveloper = developerCheck.state
+        defer {
+            photosProgressFixture = previousFixture
+            lastRequest = previousRequest
+            targetField.stringValue = previousTarget
+            developerCheck.state = previousDeveloper
+            clearBatchLog()
+        }
+        photosProgressFixture = true
+        developerCheck.state = .off
+        try configurePhotosProgressFixture()
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
+              !fileProgressIndicator.isIndeterminate,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001,
+              fileProgressLabel.stringValue == photosImportProgress.label,
+              fileProgressLabel.accessibilityLabel() == photosImportProgress.label,
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict,
+              !logView.string.contains(PhotosImportProgress.prefix) else {
+            throw HostError(message: "Native Photos progress lost its pending-only scope or affected final outcomes")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":3,"phase":"stopped","pending_total":3,"verified":2}"#)
+        guard fileProgressRow.isHidden, photosImportProgress.event?.phase == "stopped",
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Stopped Photos progress claimed completion or changed the final verdict")
+        }
+        appendLog(#"[PHOTOS PROGRESS] backend=applescript verified=1"#)
+        guard fileProgressRow.isHidden else {
+            throw HostError(message: "A stopped native import masked AppleScript fallback progress")
+        }
+        clearBatchLog()
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        let gateStart = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"local-photos-fixture","gate":"local","check":"inventory","completed":0,"total":6,"state":"running"}"#
+        appendLog(gateStart)
+        guard !fileProgressRow.isHidden, gateActivity.event != nil else {
+            throw HostError(message: "The Gate fixture did not expose its active stage")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":1,"verified":0}"#)
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"completed","pending_total":1,"verified":1}"#)
+        guard fileProgressRow.isHidden, gateActivity.event == nil else {
+            throw HostError(message: "Completed Photos progress revived a previous Gate stage")
+        }
+        appendLog(gateStart)
+        guard !fileProgressRow.isHidden, fileProgressLabel.stringValue == gateActivity.label(now: ProcessInfo.processInfo.systemUptime),
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Completed Photos progress masked a new Gate or changed final outcomes")
+        }
+        gateActivity = GateCheckActivity()
+        photosProgressFixture = false
+        refreshFileProgress()
+        guard fileProgressRow.isHidden else { throw HostError(message: "Ended Photos progress remained a running stage") }
+        clearBatchLog()
+        guard photosImportProgress.event == nil, !photosImportProgress.invalid else {
+            throw HostError(message: "Photos operation progress leaked into the next batch")
+        }
+    }
+
     private func validateDiagnosticFoldingForSelfTest() throws {
         var folder = ConsecutiveDiagnosticLogFolder()
         let first = "[WARN] /tmp/clip-1.mov frame=17"
@@ -8417,6 +8662,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         try validateFastDeliveryForSelfTest()
         try validateDeferredDeliveryForSelfTest()
+        try validatePhotosProgressForSelfTest()
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
         guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
@@ -8718,6 +8964,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 private func runSelfTest() -> Int32 {
     do {
+        try PhotosImportProgress.selfTest()
         try ProcessingGuideController.selfTest()
         try ToolInspectionPanel.selfTest()
         let menuDelegate = AppDelegate()
@@ -9435,7 +9682,7 @@ if CommandLine.arguments.contains("--self-test") {
     exit(MainActor.assumeIsolated { runSelfTest() })
 }
 
-if CommandLine.arguments.contains("--delivery-ui-fixture") {
+if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -9443,8 +9690,11 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") {
         let preferences = UserDefaults(suiteName: suite)!
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
-        do { try controller.showDeferredDeliveryFixture() }
-        catch { fputs("Delivery fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
+        do {
+            if CommandLine.arguments.contains("--photos-progress-ui-fixture") { try controller.showPhotosProgressFixture() }
+            else { try controller.showDeferredDeliveryFixture() }
+        }
+        catch { fputs("Native fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
         application.activate(ignoringOtherApps: true)
         withExtendedLifetime(controller) { application.run() }
     }

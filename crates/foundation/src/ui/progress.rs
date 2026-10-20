@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
 static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static GATE_ACTIVITY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(any(target_os = "macos", test))]
+static PHOTOS_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,6 +147,169 @@ impl LocalGateActivity {
         if let Err(error) = result {
             tracing::error!(%error, %stage_id, check, completed, total, ?state,
                 "failed to write local gate activity event");
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PhotosImportPhase {
+    TargetPreparation,
+    Reconciling,
+    Importing,
+    Verifying,
+    Completed,
+    Stopped,
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(serde::Serialize)]
+struct PhotosImportEvent<'a> {
+    schema_version: u8,
+    scope: &'static str,
+    operation_id: &'a str,
+    sequence: u64,
+    phase: PhotosImportPhase,
+    pending_total: u64,
+    verified: u64,
+}
+
+/// Operation-local pending assets only; never a delivery or deletion receipt.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) struct PhotosImportProgress {
+    operation_id: String,
+    sequence: u64,
+    pending_total: u64,
+    remaining: std::collections::BTreeSet<String>,
+    phase: PhotosImportPhase,
+    closed: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl PhotosImportProgress {
+    pub(crate) fn new<'a>(sources: impl IntoIterator<Item = &'a str>) -> anyhow::Result<Self> {
+        let mut remaining = std::collections::BTreeSet::new();
+        for source in sources {
+            anyhow::ensure!(
+                !source.is_empty() && remaining.insert(source.to_owned()),
+                "Photos progress requires unique pending source identities"
+            );
+        }
+        let pending_total = u64::try_from(remaining.len())?;
+        anyhow::ensure!(
+            i64::try_from(pending_total).is_ok(),
+            "Photos progress inventory too large"
+        );
+        let id = PHOTOS_OPERATION_SEQUENCE
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("Photos progress operation identity exhausted"))?;
+        let progress = Self {
+            operation_id: format!("{}-{id}", std::process::id()),
+            sequence: 1,
+            pending_total,
+            remaining,
+            phase: PhotosImportPhase::TargetPreparation,
+            closed: false,
+        };
+        progress.emit();
+        Ok(progress)
+    }
+
+    fn event(&self) -> anyhow::Result<PhotosImportEvent<'_>> {
+        let remaining = u64::try_from(self.remaining.len())?;
+        let verified = self
+            .pending_total
+            .checked_sub(remaining)
+            .ok_or_else(|| anyhow::anyhow!("Photos progress inventory changed"))?;
+        Ok(PhotosImportEvent {
+            schema_version: 1,
+            scope: "current_pending_import",
+            operation_id: &self.operation_id,
+            sequence: self.sequence,
+            phase: self.phase,
+            pending_total: self.pending_total,
+            verified,
+        })
+    }
+
+    fn emit(&self) {
+        if std::env::var_os("MFB_SESSION_ID").is_none_or(|id| id.is_empty()) {
+            return;
+        }
+        let result = self.event().and_then(|event| {
+            let json = serde_json::to_vec(&event)?;
+            Ok(write_terminal_marker(
+                "MFB_PHOTOS_PROGRESS",
+                &json,
+                "photos_progress_emit",
+            )?)
+        });
+        if let Err(error) = result {
+            tracing::error!(%error, "failed to write Photos operation progress");
+        }
+    }
+
+    pub(crate) fn phase(&mut self, phase: PhotosImportPhase) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.closed, "Photos progress operation already closed");
+        anyhow::ensure!(
+            !matches!(
+                phase,
+                PhotosImportPhase::Completed | PhotosImportPhase::Stopped
+            ),
+            "Photos progress terminal state requires explicit closure"
+        );
+        self.advance(phase)
+    }
+
+    fn advance(&mut self, phase: PhotosImportPhase) -> anyhow::Result<()> {
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Photos progress sequence exhausted"))?;
+        self.phase = phase;
+        self.emit();
+        Ok(())
+    }
+
+    pub(crate) fn checkpointed<'a>(
+        &mut self,
+        sources: impl IntoIterator<Item = &'a str>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.closed, "Photos progress operation already closed");
+        let mut completed = std::collections::BTreeSet::new();
+        for source in sources {
+            anyhow::ensure!(
+                self.remaining.contains(source) && completed.insert(source),
+                "Photos checkpoint progress has an unknown or repeated source"
+            );
+        }
+        for source in completed {
+            self.remaining.remove(source);
+        }
+        self.advance(self.phase)
+    }
+
+    pub(crate) fn complete(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.closed && self.remaining.is_empty(),
+            "Photos progress still has pending assets"
+        );
+        self.advance(PhotosImportPhase::Completed)?;
+        self.closed = true;
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl Drop for PhotosImportProgress {
+    fn drop(&mut self) {
+        if !self.closed
+            && let Err(error) = self.advance(PhotosImportPhase::Stopped)
+        {
+            tracing::error!(%error, "failed to close Photos operation progress");
         }
     }
 }
@@ -2128,6 +2293,55 @@ impl Default for GlobalProgressManager {
 mod tests {
     use super::*;
     use console::measure_text_width;
+
+    #[test]
+    fn photos_operation_progress_counts_unique_checkpointed_pending_assets() -> anyhow::Result<()> {
+        let mut progress = PhotosImportProgress::new(["first", "second"])?;
+        let initial = serde_json::to_value(progress.event()?)?;
+        assert_eq!(initial["scope"], "current_pending_import");
+        assert_eq!(initial["phase"], "target_preparation");
+        assert_eq!(initial["sequence"], 1);
+        assert_eq!(initial["pending_total"], 2);
+        assert_eq!(initial["verified"], 0);
+        progress.phase(PhotosImportPhase::Reconciling)?;
+        progress.checkpointed(["first"])?;
+        assert_eq!(progress.event()?.verified, 1);
+        for invalid in [
+            vec!["first"],
+            vec!["second", "second"],
+            vec!["second", "unknown"],
+        ] {
+            assert!(progress.checkpointed(invalid).is_err());
+            assert_eq!(progress.event()?.verified, 1);
+        }
+        assert!(progress.complete().is_err());
+        progress.phase(PhotosImportPhase::Importing)?;
+        progress.phase(PhotosImportPhase::Verifying)?;
+        progress.checkpointed(["second"])?;
+        progress.complete()?;
+        let final_event = serde_json::to_value(progress.event()?)?;
+        assert_eq!(final_event["phase"], "completed");
+        assert_eq!(final_event["verified"], 2);
+        assert_eq!(final_event["pending_total"], 2);
+        assert!(final_event["sequence"].as_u64().unwrap() > 1);
+        assert!(progress.phase(PhotosImportPhase::Importing).is_err());
+        assert!(progress.checkpointed(["first"]).is_err());
+        assert!(PhotosImportProgress::new(["same", "same"]).is_err());
+        let mut empty = PhotosImportProgress::new([])?;
+        empty.complete()?;
+        assert_eq!(empty.event()?.verified, 0);
+        assert_eq!(empty.event()?.pending_total, 0);
+        assert_ne!(empty.operation_id, progress.operation_id);
+        let mut output = Vec::new();
+        write_marker(
+            &mut output,
+            "MFB_PHOTOS_PROGRESS",
+            &serde_json::to_vec(&empty.event()?)?,
+        )?;
+        assert!(output.starts_with(b"\nMFB_PHOTOS_PROGRESS="));
+        assert!(output.ends_with(b"\n"));
+        Ok(())
+    }
 
     #[test]
     fn log_phase_marker_has_versioned_snake_case_schema_and_shared_framing() {
