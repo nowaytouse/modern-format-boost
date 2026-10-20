@@ -580,6 +580,11 @@
 "gate.activity.failed" = "Gate 1 在%@时停止 · 已执行 %@ / %@ 项检查；%@ 项未执行";
 "gate.activity.updated" = "%@ 秒前收到更新";
 "gate.activity.invalid" = "核验活动记录无效，请查看保留的处理输出。";
+"gate.custody.preparing" = "正在定位待复核的照片原件";
+"gate.custody.running" = "正在复核照片原件";
+"gate.custody.passed" = "本次照片原件复核通过";
+"gate.custody.failed" = "照片原件复核已停止";
+"gate.custody.files" = "已通过字节核验 %@ / %@";
 "gate.check.inventory" = "建立输出清单";
 "gate.check.count" = "数量核对";
 "gate.check.size" = "文件大小核对";

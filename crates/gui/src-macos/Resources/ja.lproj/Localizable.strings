@@ -580,6 +580,11 @@
 "gate.activity.failed" = "Gate 1 は%@で停止 · 実行済み %@ / %@ 項目、未実行 %@ 項目";
 "gate.activity.updated" = "%@ 秒前に受信";
 "gate.activity.invalid" = "検証の活動記録が無効です。保持した処理出力を確認してください。";
+"gate.custody.preparing" = "再検証する写真のオリジナルを確認中";
+"gate.custody.running" = "写真のオリジナルを再検証中";
+"gate.custody.passed" = "今回の写真オリジナルの再検証に合格";
+"gate.custody.failed" = "写真オリジナルの再検証は停止しました";
+"gate.custody.files" = "バイト検証済み %@ / %@";
 "gate.check.inventory" = "出力一覧の作成";
 "gate.check.count" = "件数の確認";
 "gate.check.size" = "ファイルサイズの確認";

@@ -1,7 +1,7 @@
 //! Shared verification gate model for fast/full media pipelines.
 
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
-use crate::ui::progress::{GateActivityState, LocalGateActivity};
+use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -255,7 +255,7 @@ impl Gate1Local {
         error_mode: crate::BatchErrorMode,
     ) -> GateResult {
         crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
-        let activity = LocalGateActivity::new();
+        let activity = GateActivity::new(GateActivityKind::Local);
         run_local_checks(
             ctx,
             || collect_delivery_output_files(&ctx.working_copy, None),

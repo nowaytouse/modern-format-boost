@@ -580,6 +580,11 @@
 "gate.activity.failed" = "Gate 1 stopped at %@ · %@ / %@ checks run; %@ not run";
 "gate.activity.updated" = "Received %@ s ago";
 "gate.activity.invalid" = "Verification activity is invalid; check the retained processing output.";
+"gate.custody.preparing" = "Locating Photos originals for re-verification";
+"gate.custody.running" = "Re-verifying Photos originals";
+"gate.custody.passed" = "This Photos-original re-verification passed";
+"gate.custody.failed" = "Photos-original re-verification stopped";
+"gate.custody.files" = "Original bytes verified %@ / %@";
 "gate.check.inventory" = "output inventory";
 "gate.check.count" = "item count";
 "gate.check.size" = "file size";

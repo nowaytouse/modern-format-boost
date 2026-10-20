@@ -649,6 +649,33 @@ durable progress. The remaining Gate progress is not covered. Synthetic
 regression and GUI fixtures do not replace authorized live-library delivery
 acceptance.
 
+### Photos Original Custody Reverification Activity
+
+The existing `MFB_GATE_ACTIVITY` schema 1 also accepts `gate=photos_custody`.
+It reports the real tier-2 Photos-original custody recheck used before cleanup
+and while validating existing receipts for resume or library binding. This is
+not Gate 2's sampled receipt comparison or Gate 3's record consistency checks.
+
+`inventory` has no file denominator. Once nonempty relative paths and Photos
+UUIDs are present and unique, `original_bytes` uses that fixed receipt inventory.
+The existing query resolves those UUIDs; each current original is read in full
+and BLAKE3-compared with its recorded library-delivery hash, or source hash when
+no separate delivery hash exists. The numerator advances only after a match.
+Intermediate updates are coalesced at 250 ms; terminal events retain the exact
+matched count, including the matches preceding a later failure.
+
+An ambiguous inventory fails without a denominator. Query, missing-original,
+read or hash errors remain failures; they do not count as matched files. Empty
+inventories do not query Photos or display a percentage. Within one stage, the
+GUI rejects changes to gate scope, check count or an established file denominator,
+decreasing matched counts and a partial `passed` event. An active row cannot
+round up to 100 percent, and later activity cannot erase a recorded safety risk.
+
+This progress is a current local byte-custody observation, not a persisted
+checkpoint, whole-batch completion, deletion authorization, iCloud proof or a
+replacement for source, metadata and sidecar deletion gates. It reuses the
+captured worker-output channel and adds no state store or extra media query.
+
 ## Launcher Preflight Content Identity
 
 The read-only routing report uses schema 3. Every visible inventory entry,

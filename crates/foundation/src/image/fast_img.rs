@@ -969,87 +969,173 @@ fn safe_delete_modern_lossy_static_source_after_reverify_recorded(
 pub fn reverify_modern_lossy_static_photos_custody(
     library_handle: &crate::pipeline::verification::LibraryHandle,
 ) -> Result<()> {
-    let selected = selected_photos_library(library_handle.photos_library_path.as_deref())?;
-    if library_handle.imported_assets.is_empty() {
-        return Ok(());
-    }
-
-    let mut uuids = Vec::with_capacity(library_handle.imported_assets.len());
-    for asset in &library_handle.imported_assets {
-        let Some(uuid) = asset
-            .photos_uuid
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        else {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate missing Photos UUID for {}",
-                asset.rel_path
-            )));
-        };
-        uuids.push(uuid.to_string());
-    }
-
-    println!(
-        "[VERIFY  ] final tier-2 Photos delete proofs pending {} · osxphotos custody re-check (UUID-keyed)",
-        uuids.len()
-    );
-    tracing::info!(
-        target: "fast_img_delete",
-        pending = uuids.len(),
-        "tier-2 final Photos custody verification start"
-    );
-
-    let probes = query_selected_photos_asset_probes(&uuids, selected.as_deref())?;
-    let probe_by_uuid = index_photos_probes_by_uuid(&uuids, probes)?;
-
-    for asset in &library_handle.imported_assets {
-        let Some(uuid) = asset.photos_uuid.as_deref() else {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate missing Photos UUID for {}",
-                asset.rel_path
-            )));
-        };
-        let Some(probe) = probe_by_uuid.get(uuid) else {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate missing Photos probe for {} (uuid={uuid})",
-                asset.rel_path
-            )));
-        };
-        if probe.uuid != uuid {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate Photos UUID mismatch for {}: expected={uuid} query={}",
-                asset.rel_path, probe.uuid
-            )));
+    use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState, LogPhase};
+    crate::ui::progress::emit_log_phase(LogPhase::Verification);
+    let activity = GateActivity::new(GateActivityKind::PhotosCustody);
+    activity.emit("inventory", 0, 1, GateActivityState::Running, None);
+    let selected = match selected_photos_library(library_handle.photos_library_path.as_deref()) {
+        Ok(selected) => selected,
+        Err(error) => {
+            activity.emit("inventory", 0, 1, GateActivityState::Failed, None);
+            return Err(error);
         }
-        if probe.ismissing {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate Photos asset missing for {} (uuid={uuid})",
-                asset.rel_path
-            )));
+    };
+    reverify_modern_lossy_static_photos_custody_with(
+        library_handle,
+        &mut |uuids| query_selected_photos_asset_probes(uuids, selected.as_deref()),
+        &mut |check, completed, state, files| activity.emit(check, completed, 1, state, files),
+    )
+}
+
+fn reverify_modern_lossy_static_photos_custody_with(
+    library_handle: &LibraryHandle,
+    query_assets: &mut impl FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
+    emit: &mut impl FnMut(
+        &'static str,
+        usize,
+        crate::ui::progress::GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
+) -> Result<()> {
+    use crate::ui::progress::{GateActivityState, GateFileProgress};
+    let mut verified = 0;
+    let mut inventory_ready = false;
+    let total = library_handle.imported_assets.len();
+    let result = (|| {
+        let mut paths = BTreeSet::new();
+        let mut identifiers = BTreeSet::new();
+        let mut uuids = Vec::with_capacity(total);
+        for asset in &library_handle.imported_assets {
+            let Some(uuid) = asset
+                .photos_uuid
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            else {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate missing Photos UUID for {}",
+                    asset.rel_path
+                )));
+            };
+            if asset.rel_path.is_empty()
+                || !paths.insert(asset.rel_path.as_str())
+                || !identifiers.insert(uuid)
+            {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 Photos custody inventory has missing or duplicate identity for {}; sources retained",
+                    asset.rel_path
+                )));
+            }
+            uuids.push(uuid.to_string());
         }
-        if !probe.path.exists() {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate Photos asset path missing for {}: {}",
-                asset.rel_path,
-                probe.path.display()
-            )));
+        inventory_ready = true;
+        emit(
+            "original_bytes",
+            0,
+            GateActivityState::Running,
+            (total > 0).then_some(GateFileProgress {
+                processed: 0,
+                total,
+            }),
+        );
+        if library_handle.imported_assets.is_empty() {
+            return Ok(());
         }
-        let library_blake3 =
-            crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
-                ImgQualityError::AnalysisError(format!(
-                    "tier-2 delete gate Photos BLAKE3 failed for {}: {err}",
+
+        println!(
+            "[VERIFY  ] final tier-2 Photos delete proofs pending {} · osxphotos custody re-check (UUID-keyed)",
+            uuids.len()
+        );
+        tracing::info!(
+            target: "fast_img_delete",
+            pending = uuids.len(),
+            "tier-2 final Photos custody verification start"
+        );
+
+        let probes = query_assets(&uuids)?;
+        let probe_by_uuid = index_photos_probes_by_uuid(&uuids, probes)?;
+
+        let mut last_emit = std::time::Instant::now();
+        for (index, asset) in library_handle.imported_assets.iter().enumerate() {
+            let Some(uuid) = asset.photos_uuid.as_deref() else {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate missing Photos UUID for {}",
+                    asset.rel_path
+                )));
+            };
+            let Some(probe) = probe_by_uuid.get(uuid) else {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate missing Photos probe for {} (uuid={uuid})",
+                    asset.rel_path
+                )));
+            };
+            if probe.uuid != uuid {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate Photos UUID mismatch for {}: expected={uuid} query={}",
+                    asset.rel_path, probe.uuid
+                )));
+            }
+            if probe.ismissing {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate Photos asset missing for {} (uuid={uuid})",
+                    asset.rel_path
+                )));
+            }
+            if !probe.path.exists() {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate Photos asset path missing for {}: {}",
+                    asset.rel_path,
                     probe.path.display()
-                ))
-            })?;
-        let expected_library_blake3 = asset.library_blake3.as_deref().unwrap_or(&asset.blake3);
-        if library_blake3 != expected_library_blake3 {
-            return Err(ImgQualityError::AnalysisError(format!(
-                "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
-                asset.rel_path
-            )));
+                )));
+            }
+            let library_blake3 =
+                crate::common_utils::calculate_blake3_hash(&probe.path).map_err(|err| {
+                    ImgQualityError::AnalysisError(format!(
+                        "tier-2 delete gate Photos BLAKE3 failed for {}: {err}",
+                        probe.path.display()
+                    ))
+                })?;
+            let expected_library_blake3 = asset.library_blake3.as_deref().unwrap_or(&asset.blake3);
+            if library_blake3 != expected_library_blake3 {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "tier-2 delete gate Photos BLAKE3 drift for {} (uuid={uuid}): expected={expected_library_blake3} library={library_blake3}",
+                    asset.rel_path
+                )));
+            }
+            verified = index + 1;
+            let now = std::time::Instant::now();
+            if verified == total || now.duration_since(last_emit) >= Duration::from_millis(250) {
+                emit(
+                    "original_bytes",
+                    0,
+                    GateActivityState::Running,
+                    Some(GateFileProgress {
+                        processed: verified,
+                        total,
+                    }),
+                );
+                last_emit = now;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    emit(
+        if inventory_ready {
+            "original_bytes"
+        } else {
+            "inventory"
+        },
+        usize::from(inventory_ready),
+        if result.is_ok() {
+            GateActivityState::Passed
+        } else {
+            GateActivityState::Failed
+        },
+        (inventory_ready && total > 0).then_some(GateFileProgress {
+            processed: verified,
+            total,
+        }),
+    );
+    result
 }
 
 /// Delete one tier-2 lossy modern static source after a fresh Photos query.
@@ -8106,6 +8192,188 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn photos_custody_progress_counts_only_matching_original_bytes() -> Result<()> {
+        use crate::ui::progress::{GateActivityState, GateFileProgress};
+        for drift in [false, true] {
+            let root = tempfile::tempdir()?;
+            let mut assets = Vec::new();
+            let mut probes = Vec::new();
+            for name in ["a", "b"] {
+                let path = root.path().join(name);
+                std::fs::write(&path, name)?;
+                let hash = crate::common_utils::calculate_blake3_hash(&path)?;
+                assets.push(LibraryAssetRecord {
+                    rel_path: format!("{name}.webp"),
+                    blake3: "source-before-XMP".into(),
+                    library_blake3: Some(hash),
+                    photos_uuid: Some(format!("UUID-{name}")),
+                    ..Default::default()
+                });
+                probes.push(FastImgLibraryAssetProbe {
+                    uuid: format!("UUID-{name}"),
+                    path,
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                });
+            }
+            if drift {
+                std::fs::write(&probes[1].path, b"changed")?;
+            }
+            let mut events = Vec::new();
+            let result = reverify_modern_lossy_static_photos_custody_with(
+                &LibraryHandle {
+                    imported_assets: assets,
+                    ..Default::default()
+                },
+                &mut |ids| {
+                    assert_eq!(ids, ["UUID-a", "UUID-b"]);
+                    Ok(probes.clone())
+                },
+                &mut |check, completed, state, files| events.push((check, completed, state, files)),
+            );
+            let expected = if drift { 1 } else { 2 };
+            let state = if drift {
+                GateActivityState::Failed
+            } else {
+                GateActivityState::Passed
+            };
+            assert_eq!(
+                events.first(),
+                Some(&(
+                    "original_bytes",
+                    0,
+                    GateActivityState::Running,
+                    Some(GateFileProgress {
+                        processed: 0,
+                        total: 2
+                    })
+                ))
+            );
+            assert_eq!(
+                events.last(),
+                Some(&(
+                    "original_bytes",
+                    1,
+                    state,
+                    Some(GateFileProgress {
+                        processed: expected,
+                        total: 2
+                    })
+                ))
+            );
+            assert!(events.iter().all(|event| {
+                event
+                    .3
+                    .is_some_and(|files| files.total == 2 && files.processed <= expected)
+            }));
+            if drift {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Photos BLAKE3 drift for b.webp")
+                );
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.2 != GateActivityState::Passed)
+                );
+            } else {
+                result?;
+            }
+            assert_eq!(std::fs::read(&probes[0].path)?, b"a");
+            assert_eq!(
+                std::fs::read(&probes[1].path)?,
+                if drift {
+                    b"changed".as_slice()
+                } else {
+                    b"b".as_slice()
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn photos_custody_progress_rejects_ambiguous_inventory_and_missing_queries() -> Result<()> {
+        use crate::ui::progress::{GateActivityState, GateFileProgress};
+        for failure in [
+            "duplicate-path",
+            "duplicate-uuid",
+            "missing-uuid",
+            "query-error",
+            "incomplete",
+        ] {
+            let mut assets = ["a", "b"].map(|name| LibraryAssetRecord {
+                rel_path: format!("{name}.webp"),
+                photos_uuid: Some(format!("UUID-{name}")),
+                ..Default::default()
+            });
+            match failure {
+                "duplicate-path" => assets[1].rel_path = assets[0].rel_path.clone(),
+                "duplicate-uuid" => assets[1].photos_uuid = assets[0].photos_uuid.clone(),
+                "missing-uuid" => assets[1].photos_uuid = None,
+                _ => (),
+            }
+            let inventory_failure = failure.starts_with("duplicate-") || failure == "missing-uuid";
+            let mut calls = 0;
+            let mut events = Vec::new();
+            let result = reverify_modern_lossy_static_photos_custody_with(
+                &LibraryHandle {
+                    imported_assets: assets.to_vec(),
+                    ..Default::default()
+                },
+                &mut |_| {
+                    calls += 1;
+                    if failure == "query-error" {
+                        return Err(ImgQualityError::AnalysisError(
+                            "synthetic query unavailable".into(),
+                        ));
+                    }
+                    Ok(Vec::new())
+                },
+                &mut |check, completed, state, files| events.push((check, completed, state, files)),
+            );
+            assert!(result.is_err());
+            assert_eq!(calls, usize::from(!inventory_failure));
+            assert_eq!(
+                events.last(),
+                Some(&(
+                    if inventory_failure {
+                        "inventory"
+                    } else {
+                        "original_bytes"
+                    },
+                    usize::from(!inventory_failure),
+                    GateActivityState::Failed,
+                    (!inventory_failure).then_some(GateFileProgress {
+                        processed: 0,
+                        total: 2
+                    }),
+                ))
+            );
+            assert!(
+                events
+                    .iter()
+                    .all(|event| event.2 != GateActivityState::Passed)
+            );
+        }
+        let mut events = Vec::new();
+        reverify_modern_lossy_static_photos_custody_with(
+            &LibraryHandle::default(),
+            &mut |_| panic!("empty inventory must not query Photos"),
+            &mut |check, completed, state, files| events.push((check, completed, state, files)),
+        )?;
+        assert_eq!(
+            events.last(),
+            Some(&("original_bytes", 1, GateActivityState::Passed, None))
+        );
+        assert!(events.iter().all(|event| event.3.is_none()));
+        Ok(())
     }
 
     #[test]

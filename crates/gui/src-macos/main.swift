@@ -4558,8 +4558,21 @@ struct GateCheckActivity {
         let file_progress: Files?
 
         var valid: Bool {
-            guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64,
-                  gate == "local", total == 6 else { return false }
+            guard schema_version == 1, !stage_id.isEmpty, stage_id.utf8.count <= 64 else { return false }
+            if gate == "photos_custody" {
+                guard total == 1 else { return false }
+                if check == "inventory" {
+                    return completed == 0 && file_progress == nil && ["running", "failed"].contains(state)
+                }
+                guard check == "original_bytes" else { return false }
+                if let files = file_progress {
+                    guard files.total > 0, files.total <= UInt64(Int64.max), files.processed <= files.total,
+                          state != "passed" || files.processed == files.total else { return false }
+                }
+                return state == "running" ? completed == 0
+                    : ["passed", "failed"].contains(state) && completed == 1
+            }
+            guard gate == "local", total == 6 else { return false }
             if let files = file_progress {
                 guard check == "decode", files.total > 0, files.total <= UInt64(Int64.max),
                       files.processed <= files.total,
@@ -4592,6 +4605,7 @@ struct GateCheckActivity {
             return true
         }
         if let previous = event, previous.stage_id == next.stage_id {
+            guard previous.gate == next.gate, previous.total == next.total else { invalidate(); return true }
             if let files = previous.file_progress {
                 guard let nextFiles = next.file_progress, nextFiles.total == files.total,
                       nextFiles.processed >= files.processed else { invalidate(); return true }
@@ -4603,6 +4617,9 @@ struct GateCheckActivity {
                     || (previous.check == "inventory" && next.check == "count" && next.state == "running")
                     || (previous.check == "inventory" && next.check == "inventory" && next.state == "failed")
                     || (previous.state == "file_failures" && next.state == "running")
+                    || (next.gate == "photos_custody" && next.state == "running"
+                        && (previous.check == "inventory" || previous.check == "original_bytes")
+                        && next.check == "original_bytes")
                     || (previous.check == "decode" && next.check == "decode" && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
@@ -4623,16 +4640,24 @@ struct GateCheckActivity {
     func label(now: TimeInterval) -> String {
         guard let event else { return invalid ? localized("gate.activity.invalid") : "" }
         var text: String
-        switch event.state {
-        case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
-        case "file_failures": text = localized("gate.activity.file_failures", String(event.completed), String(event.total))
-        case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
-                                        String(event.completed), String(event.total), String(event.total - event.completed))
-        default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
-                                  String(event.completed), String(event.total))
-        }
-        if let files = event.file_progress {
-            text += " · " + localized("gate.activity.files", String(files.processed), String(files.total))
+        if event.gate == "photos_custody" {
+            let state = event.state == "running" && event.check == "inventory" ? "preparing" : event.state
+            text = localized("gate.custody.\(state)")
+            if let files = event.file_progress {
+                text += " · " + localized("gate.custody.files", String(files.processed), String(files.total))
+            }
+        } else {
+            switch event.state {
+            case "passed": text = localized("gate.activity.passed", String(event.completed), String(event.total))
+            case "file_failures": text = localized("gate.activity.file_failures", String(event.completed), String(event.total))
+            case "failed": text = localized("gate.activity.failed", localized("gate.check.\(event.check)"),
+                                            String(event.completed), String(event.total), String(event.total - event.completed))
+            default: text = localized("gate.activity.running", localized("gate.check.\(event.check)"),
+                                      String(event.completed), String(event.total))
+            }
+            if let files = event.file_progress {
+                text += " · " + localized("gate.activity.files", String(files.processed), String(files.total))
+            }
         }
         guard event.state == "running", let updatedAt, now.isFinite else { return text }
         let age = UInt64(min(Double(Int64.max), max(0, now - updatedAt)))
@@ -8242,6 +8267,111 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func configurePhotosCustodyFixture() {
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/photos-originals"
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"inventory","completed":0,"total":1,"state":"running"}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":0,"total":3}}"#)
+        appendLog(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":2,"total":3}}"#)
+    }
+
+    func showPhotosCustodyFixture() {
+        photosProgressFixture = true
+        configurePhotosCustodyFixture()
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validatePhotosCustodyForSelfTest() throws {
+        let previousBatch = batchResults
+        let previousTarget = targetField.stringValue
+        let previousFixture = photosProgressFixture
+        let previousDeveloper = developerCheck.state
+        defer {
+            photosProgressFixture = previousFixture
+            targetField.stringValue = previousTarget
+            developerCheck.state = previousDeveloper
+            clearBatchLog()
+            batchResults = previousBatch
+        }
+        photosProgressFixture = true
+        developerCheck.state = .off
+        configurePhotosCustodyFixture()
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard !gateActivity.invalid, !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001,
+              fileProgressLabel.stringValue.contains(localized("gate.custody.running")),
+              fileProgressLabel.stringValue.contains(localized("gate.custody.files", "2", "3")),
+              fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict,
+              !logView.string.contains("MFB_GATE_ACTIVITY=") else {
+            throw HostError(message: "Photos-original progress lost its byte-verified scope or affected final outcomes")
+        }
+        let running = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running","file_progress":{"processed":2,"total":3}}"#
+        let all = running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":3")
+        appendLog(all)
+        guard fileProgressIndicator.doubleValue < 100 else {
+            throw HostError(message: "Unclosed Photos-original verification reached terminal completion")
+        }
+        appendLog(all.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""))
+        guard !gateActivity.invalid, fileProgressIndicator.doubleValue == 100,
+              fileProgressLabel.stringValue.contains(localized("gate.custody.passed")),
+              batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Successful Photos-original verification became a batch completion")
+        }
+        gateActivity = GateCheckActivity()
+        let one = running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":1")
+        appendLog(one)
+        appendLog(one.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"failed\""))
+        guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1,
+              abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+              fileProgressLabel.textColor == .systemRed, batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Failed Photos-original verification discarded its matched-byte count or independent risk")
+        }
+        gateActivity = GateCheckActivity()
+        let zero = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-empty","gate":"photos_custody","check":"original_bytes","completed":0,"total":1,"state":"running"}"#
+        appendLog(zero)
+        appendLog(zero.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+            .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""))
+        guard !gateActivity.invalid, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("gate.custody.passed"), batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Empty Photos-original verification fabricated a percentage or erased an earlier failure")
+        }
+        for bad in [running.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2"),
+                    running.replacingOccurrences(of: "original_bytes", with: "decode"),
+                    running.replacingOccurrences(of: "original_bytes", with: "inventory"),
+                    running.replacingOccurrences(of: "\"total\":1", with: "\"total\":2"),
+                    running.replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"finished\""),
+                    running.replacingOccurrences(of: "\"completed\":0", with: "\"completed\":1")
+                        .replacingOccurrences(of: "\"state\":\"running\"", with: "\"state\":\"passed\""),
+                    running.replacingOccurrences(of: "\"processed\":2", with: "\"processed\":4")] {
+            var invalid = GateCheckActivity()
+            _ = invalid.ingest(bad, now: 1)
+            guard invalid.invalid else { throw HostError(message: "Invalid Photos-original activity was accepted") }
+        }
+        var inventoryFailure = GateCheckActivity()
+        let inventory = #"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-inventory","gate":"photos_custody","check":"inventory","completed":0,"total":1,"state":"running"}"#
+        _ = inventoryFailure.ingest(inventory, now: 1)
+        _ = inventoryFailure.ingest(inventory.replacingOccurrences(of: "running", with: "failed"), now: 2)
+        guard !inventoryFailure.invalid, inventoryFailure.event?.file_progress == nil,
+              inventoryFailure.label(now: 2) == localized("gate.custody.failed") else {
+            throw HostError(message: "A failed Photos inventory invented matched-file progress")
+        }
+        var decreasing = GateCheckActivity()
+        _ = decreasing.ingest(running, now: 1)
+        _ = decreasing.ingest(one, now: 2)
+        guard decreasing.invalid else { throw HostError(message: "Photos-original matched count moved backwards") }
+        var changedGate = GateCheckActivity()
+        _ = changedGate.ingest(running, now: 1)
+        _ = changedGate.ingest(#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"custody-fixture","gate":"local","check":"metadata","completed":3,"total":6,"state":"running"}"#, now: 2)
+        guard changedGate.invalid else { throw HostError(message: "One stage identity changed its Gate scope") }
+    }
+
     private func configurePhotosProgressFixture(handoff: Bool = false) throws {
         clearBatchLog()
         targetField.stringValue = "/synthetic/photos-pending-import"
@@ -8704,6 +8834,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         try validateFastDeliveryForSelfTest()
         try validateDeferredDeliveryForSelfTest()
         try validatePhotosProgressForSelfTest()
+        try validatePhotosCustodyForSelfTest()
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
         guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
@@ -9724,7 +9855,7 @@ if CommandLine.arguments.contains("--self-test") {
 }
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
-    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
+    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -9733,7 +9864,8 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--photos-progress-ui-fixture")
+            if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }
+            else if CommandLine.arguments.contains("--photos-progress-ui-fixture")
                 || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
                 try controller.showPhotosProgressFixture(handoff: CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture"))
             }

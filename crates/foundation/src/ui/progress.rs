@@ -83,7 +83,7 @@ pub(crate) enum GateActivityState {
 struct GateActivityEvent<'a> {
     schema_version: u8,
     stage_id: &'a str,
-    gate: &'static str,
+    gate: GateActivityKind,
     check: &'static str,
     completed: usize,
     total: usize,
@@ -98,13 +98,22 @@ pub(crate) struct GateFileProgress {
     pub(crate) total: usize,
 }
 
-pub(crate) struct LocalGateActivity {
-    stage_id: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum GateActivityKind {
+    Local,
+    PhotosCustody,
 }
 
-impl LocalGateActivity {
-    pub(crate) fn new() -> Self {
+pub(crate) struct GateActivity {
+    stage_id: Option<String>,
+    gate: GateActivityKind,
+}
+
+impl GateActivity {
+    pub(crate) fn new(gate: GateActivityKind) -> Self {
         Self {
+            gate,
             stage_id: std::env::var_os("MFB_SESSION_ID")
                 .filter(|id| !id.is_empty())
                 .map(|_| {
@@ -131,7 +140,7 @@ impl LocalGateActivity {
         let event = GateActivityEvent {
             schema_version: 1,
             stage_id,
-            gate: "local",
+            gate: self.gate,
             check,
             completed,
             total,
@@ -145,7 +154,7 @@ impl LocalGateActivity {
             });
         if let Err(error) = result {
             tracing::error!(%error, %stage_id, check, completed, total, ?state,
-                "failed to write local gate activity event");
+                "failed to write gate activity event");
         }
     }
 }
@@ -2387,7 +2396,7 @@ mod tests {
             let json = serde_json::to_vec(&GateActivityEvent {
                 schema_version: 1,
                 stage_id: "123-4",
-                gate: "local",
+                gate: GateActivityKind::Local,
                 check,
                 completed,
                 total: 6,
@@ -2414,13 +2423,13 @@ mod tests {
             return;
         }
         let _disabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "");
-        let disabled = LocalGateActivity::new();
+        let disabled = GateActivity::new(GateActivityKind::Local);
         assert!(disabled.stage_id.is_none());
         disabled.emit("inventory", 0, 6, GateActivityState::Running, None);
 
         let _enabled = crate::common_utils::EnvGuard::set("MFB_SESSION_ID", "synthetic-gate");
         let reporters: [_; 16] = std::array::from_fn(|_| {
-            std::thread::spawn(|| LocalGateActivity::new().stage_id.unwrap())
+            std::thread::spawn(|| GateActivity::new(GateActivityKind::Local).stage_id.unwrap())
         });
         let ids: std::collections::BTreeSet<_> = reporters
             .into_iter()
@@ -2429,6 +2438,25 @@ mod tests {
         assert_eq!(ids.len(), 16);
         let prefix = format!("{}-", std::process::id());
         assert!(ids.iter().all(|id| id.starts_with(&prefix)));
+        let custody = GateActivity::new(GateActivityKind::PhotosCustody);
+        assert!(!ids.contains(custody.stage_id.as_ref().unwrap()));
+        let event = serde_json::to_value(GateActivityEvent {
+            schema_version: 1,
+            stage_id: custody.stage_id.as_ref().unwrap(),
+            gate: custody.gate,
+            check: "original_bytes",
+            completed: 1,
+            total: 1,
+            state: GateActivityState::Failed,
+            file_progress: Some(GateFileProgress {
+                processed: 1,
+                total: 3,
+            }),
+        })
+        .unwrap();
+        assert_eq!(event["gate"], "photos_custody");
+        assert_eq!(event["state"], "failed");
+        assert_eq!(event["file_progress"]["processed"], 1);
     }
 
     #[test]

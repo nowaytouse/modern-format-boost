@@ -23,6 +23,19 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Photos Original Custody Reverification Progress (2026-10-20)
+
+- Show the real tier-2 Photos-original custody recheck in the native progress
+  row, including receipt preparation and the exact number of current originals
+  whose full bytes match their recorded hashes. Failed or incomplete reads do
+  not increase the matched count; later failures retain earlier matches.
+- Reject ambiguous receipt identities before reporting a denominator. Reuse the
+  existing UUID query and hash checks, without adding a query or changing source
+  deletion requirements.
+- Add scoped activity validation, restrained English/Chinese/Japanese labels,
+  synthetic byte-drift regressions and an isolated native UI fixture. These are
+  local observations, not persistent delivery or iCloud completion claims.
+
 ### Checkpointed Original-Media Import Progress (2026-10-20)
 
 - Extend pending-only Photos progress to Fast IMG's tier-2 AppleScript imports.
