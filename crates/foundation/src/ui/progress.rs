@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
 static FILE_STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static GATE_ACTIVITY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-#[cfg(any(target_os = "macos", test))]
 static PHOTOS_OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -151,7 +150,6 @@ impl LocalGateActivity {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PhotosImportPhase {
@@ -163,7 +161,6 @@ pub(crate) enum PhotosImportPhase {
     Stopped,
 }
 
-#[cfg(any(target_os = "macos", test))]
 #[derive(serde::Serialize)]
 struct PhotosImportEvent<'a> {
     schema_version: u8,
@@ -176,7 +173,6 @@ struct PhotosImportEvent<'a> {
 }
 
 /// Operation-local pending assets only; never a delivery or deletion receipt.
-#[cfg(any(target_os = "macos", test))]
 pub(crate) struct PhotosImportProgress {
     operation_id: String,
     sequence: u64,
@@ -186,7 +182,6 @@ pub(crate) struct PhotosImportProgress {
     closed: bool,
 }
 
-#[cfg(any(target_os = "macos", test))]
 impl PhotosImportProgress {
     pub(crate) fn new<'a>(sources: impl IntoIterator<Item = &'a str>) -> anyhow::Result<Self> {
         let mut remaining = std::collections::BTreeSet::new();
@@ -218,12 +213,14 @@ impl PhotosImportProgress {
         Ok(progress)
     }
 
-    fn event(&self) -> anyhow::Result<PhotosImportEvent<'_>> {
+    pub(crate) fn verified_count(&self) -> anyhow::Result<u64> {
         let remaining = u64::try_from(self.remaining.len())?;
-        let verified = self
-            .pending_total
+        self.pending_total
             .checked_sub(remaining)
-            .ok_or_else(|| anyhow::anyhow!("Photos progress inventory changed"))?;
+            .ok_or_else(|| anyhow::anyhow!("Photos progress inventory changed"))
+    }
+
+    fn event(&self) -> anyhow::Result<PhotosImportEvent<'_>> {
         Ok(PhotosImportEvent {
             schema_version: 1,
             scope: "current_pending_import",
@@ -231,7 +228,7 @@ impl PhotosImportProgress {
             sequence: self.sequence,
             phase: self.phase,
             pending_total: self.pending_total,
-            verified,
+            verified: self.verified_count()?,
         })
     }
 
@@ -303,7 +300,6 @@ impl PhotosImportProgress {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 impl Drop for PhotosImportProgress {
     fn drop(&mut self) {
         if !self.closed

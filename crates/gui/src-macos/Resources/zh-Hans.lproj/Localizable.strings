@@ -572,8 +572,8 @@
 "photos.progress.phase.reconciling" = "正在核对已有导入记录";
 "photos.progress.phase.importing" = "正在向照片提交媒体";
 "photos.progress.phase.verifying" = "正在核验照片并保存进度";
-"photos.progress.phase.completed" = "本次照片导入已通过本地核验，整批收尾仍在继续";
-"photos.progress.phase.stopped" = "当前原生照片导入操作已停止，请查看整批最终结果";
+"photos.progress.phase.completed" = "当前照片导入操作已通过本地核验，整批收尾仍在继续";
+"photos.progress.phase.stopped" = "当前照片导入操作已停止，请查看整批最终结果";
 "gate.activity.running" = "最近的 Gate 1 核验：%@ · 已执行 %@ / %@ 项检查";
 "gate.activity.passed" = "Gate 1 检查通过 · 已执行 %@ / %@ 项检查";
 "gate.activity.file_failures" = "发现个别文件异常 · 已执行 %@ / %@ 项检查，最终结果待确认";

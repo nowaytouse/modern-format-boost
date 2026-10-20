@@ -4404,10 +4404,16 @@ private struct PhotosImportProgress {
         let verified: UInt64
 
         var closed: Bool { phase == "completed" || phase == "stopped" }
+        var identity: (pid: UInt32, counter: UInt64)? {
+            let parts = operation_id.split(separator: "-", omittingEmptySubsequences: false)
+            guard operation_id.utf8.count <= 64, parts.count == 2,
+                  let pid = UInt32(parts[0]), pid > 0, let counter = UInt64(parts[1]),
+                  String(pid) == parts[0], String(counter) == parts[1] else { return nil }
+            return (pid, counter)
+        }
         var valid: Bool {
             schema_version == 1 && scope == "current_pending_import" && sequence > 0
-                && operation_id.utf8.count <= 64
-                && operation_id.range(of: #"\A[0-9]+-[0-9]+\z"#, options: .regularExpression) != nil
+                && identity != nil
                 && ["target_preparation", "reconciling", "importing", "verifying", "completed", "stopped"].contains(phase)
                 && pending_total <= UInt64(Int64.max) && verified <= pending_total
                 && (phase != "completed" || verified == pending_total)
@@ -4420,7 +4426,7 @@ private struct PhotosImportProgress {
     }
     private(set) var event: Event?
     private(set) var invalid = false
-    private var seen: Set<String> = []
+    private var highestCounter: [UInt32: UInt64] = [:]
 
     mutating func ingest(_ line: String) -> Bool {
         let raw = LogTone.message(line)
@@ -4440,12 +4446,14 @@ private struct PhotosImportProgress {
                 return true
             }
         } else {
-            guard event?.closed ?? true, !seen.contains(next.operation_id), seen.count < 64,
+            // shortcut: local display IDs reject same-batch PID reuse with a reset counter; revisit if these become persistent task identities.
+            guard event?.closed ?? true, let identity = next.identity,
+                  highestCounter[identity.pid].map({ identity.counter > $0 }) ?? true,
                   next.sequence == 1, next.phase == "target_preparation", next.verified == 0 else {
                 invalid = true
                 return true
             }
-            seen.insert(next.operation_id)
+            highestCounter[identity.pid] = identity.counter
         }
         event = next
         return true
@@ -4479,10 +4487,15 @@ private struct PhotosImportProgress {
                     "Completed pending Photos import lost local verification progress")
         _ = progress.ingest(try line(operation: "100-2"))
         try require(!progress.invalid && progress.event?.verified == 0, "A new Photos operation inherited previous counts")
+        _ = progress.ingest(try line(2, "verifying", 2, operation: "100-2"))
+        try require(!progress.invalid && progress.event?.verified == 2 && progress.event?.pending_total == 3,
+                    "A handed-off import inherited the completed operation's counts")
         _ = progress.ingest(try line(operation: "100-1"))
         try require(progress.invalid, "A delayed old Photos operation replaced the current operation")
         for bad in [try line(1, "completed", 3), try line(1, "importing"), try line(0),
                     try line(total: UInt64.max), try line(operation: "not-an-id"), try line(operation: "100-1\n"),
+                    try line(operation: "0100-1"), try line(operation: "100-01"), try line(operation: "0-1"),
+                    try line(operation: "4294967296-1"), try line(operation: "100-18446744073709551616"),
                     try line().replacingOccurrences(of: "current_pending_import", with: "all_assets"),
                     try line().replacingOccurrences(of: "target_preparation", with: "unknown"),
                     prefix + "{\"schema_version\":1}"] {
@@ -4513,6 +4526,16 @@ private struct PhotosImportProgress {
         _ = closed.ingest(try line(2, "stopped", 1))
         _ = closed.ingest(try line(3, "verifying", 2))
         try require(closed.invalid, "A stopped Photos operation reopened")
+        var many = Self()
+        for counter in 0..<130 {
+            let operation = "100-\(counter)"
+            _ = many.ingest(try line(operation: operation))
+            _ = many.ingest(try line(2, counter.isMultiple(of: 2) ? "completed" : "stopped",
+                counter.isMultiple(of: 2) ? 3 : 0, operation: operation))
+            try require(!many.invalid, "A valid Photos operation exceeded the old 64-operation display limit")
+        }
+        _ = many.ingest(try line(operation: "100-64"))
+        try require(many.invalid, "A delayed closed operation bypassed the per-process counter")
         var malformed = Self()
         _ = malformed.ingest(prefix + "{}")
         try require(malformed.invalid, "Missing Photos progress fields were accepted")
@@ -8219,19 +8242,25 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func configurePhotosProgressFixture() throws {
+    private func configurePhotosProgressFixture(handoff: Bool = false) throws {
         clearBatchLog()
         targetField.stringValue = "/synthetic/photos-pending-import"
         lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
                                        operationMode: .fastImgJxl, shortestPath: true)
         appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
-        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        if handoff {
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"stopped","pending_total":3,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        } else {
+            appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-1","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        }
         refreshFileProgress()
     }
 
-    func showPhotosProgressFixture() throws {
+    func showPhotosProgressFixture(handoff: Bool = false) throws {
         photosProgressFixture = true
-        try configurePhotosProgressFixture()
+        try configurePhotosProgressFixture(handoff: handoff)
         runButton.isEnabled = false
         openButton.isEnabled = false
         window.center()
@@ -8284,6 +8313,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard fileProgressRow.isHidden, gateActivity.event == nil else {
             throw HostError(message: "Completed Photos progress revived a previous Gate stage")
         }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":1,"phase":"target_preparation","pending_total":3,"verified":0}"#)
+        guard !fileProgressRow.isHidden, photosImportProgress.event?.verified == 0,
+              fileProgressIndicator.isIndeterminate else {
+            throw HostError(message: "A handed-off Photos operation inherited prior completed counts")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":2,"phase":"verifying","pending_total":3,"verified":2}"#)
+        guard !fileProgressRow.isHidden, photosImportProgress.event?.operation_id == "100-2",
+              photosImportProgress.event?.verified == 2, photosImportProgress.event?.pending_total == 3,
+              abs(fileProgressIndicator.doubleValue - 200.0 / 3) < 0.001 else {
+            throw HostError(message: "The handed-off Photos operation lost its independent pending scope")
+        }
+        appendLog(#"MFB_PHOTOS_PROGRESS={"schema_version":1,"scope":"current_pending_import","operation_id":"100-2","sequence":3,"phase":"completed","pending_total":3,"verified":3}"#)
         appendLog(gateStart)
         guard !fileProgressRow.isHidden, fileProgressLabel.stringValue == gateActivity.label(now: ProcessInfo.processInfo.systemUptime),
               batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
@@ -9682,7 +9723,8 @@ if CommandLine.arguments.contains("--self-test") {
     exit(MainActor.assumeIsolated { runSelfTest() })
 }
 
-if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture") {
+if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
+    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -9691,7 +9733,10 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--photos-progress-ui-fixture") { try controller.showPhotosProgressFixture() }
+            if CommandLine.arguments.contains("--photos-progress-ui-fixture")
+                || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
+                try controller.showPhotosProgressFixture(handoff: CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture"))
+            }
             else { try controller.showDeferredDeliveryFixture() }
         }
         catch { fputs("Native fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }

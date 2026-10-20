@@ -2911,7 +2911,13 @@ where
     )? {
         return Ok(handle);
     }
+    let mut progress = crate::progress::PhotosImportProgress::new(
+        plan.pending_entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str()),
+    )?;
     if reconcile_existing {
+        progress.phase(crate::progress::PhotosImportPhase::Reconciling)?;
         let mut reconcile_imports = |entries: &[(PathBuf, String)]| {
             run_photos_import_applescript_session_mode_in_library(
                 "media reconciliation",
@@ -2927,7 +2933,20 @@ where
             &mut is_quarantined,
             &mut reconcile_imports,
         )?;
-        plan = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
+        let refreshed = photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?;
+        let previous_pending = plan
+            .pending_entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str())
+            .collect::<BTreeSet<_>>();
+        progress.checkpointed(
+            refreshed
+                .proven_assets
+                .iter()
+                .filter(|asset| previous_pending.contains(asset.rel_path.as_str()))
+                .map(|asset| asset.rel_path.as_str()),
+        )?;
+        plan = refreshed;
     }
     let expected_output_count = marker.expected_output_count();
     let PhotosImportCheckpointPlan {
@@ -2957,6 +2976,7 @@ where
         &mut is_quarantined,
         &mut prepare_import_session,
         &mut run_import_batch,
+        &mut progress,
     );
     profile.report(pending_result.is_ok());
     let mut pending_report = pending_result?;
@@ -2976,6 +2996,9 @@ where
             output_paths.len(),
             expected_output_count
         )));
+    }
+    if pending_report.failed_count == 0 {
+        progress.complete()?;
     }
     tracing::info!(
         target: "fast_img",
@@ -3464,6 +3487,7 @@ fn flush_photos_verification_group<Q, P>(
     is_quarantined: &mut P,
     imported_assets: &mut Vec<LibraryAssetRecord>,
     deferred_item_failures: &mut Vec<(String, String)>,
+    progress: &mut crate::progress::PhotosImportProgress,
 ) -> Result<()>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
@@ -3476,6 +3500,10 @@ where
             report_pairs.len()
         )));
     }
+    if entries.is_empty() {
+        return Ok(());
+    }
+    progress.phase(crate::progress::PhotosImportPhase::Verifying)?;
     match checkpoint_verified_photos_group(
         marker,
         entries,
@@ -3483,7 +3511,10 @@ where
         query_assets,
         is_quarantined,
     ) {
-        Ok(mut assets) => imported_assets.append(&mut assets),
+        Ok(mut assets) => {
+            progress.checkpointed(assets.iter().map(|asset| asset.rel_path.as_str()))?;
+            imported_assets.append(&mut assets);
+        }
         Err(err) if !fail_fast && photos_import_controllable_item_failure(&err.to_string()) => {
             // One missing upload proof must not strand the other verified imports.
             for (entry, pair) in entries.iter().zip(report_pairs) {
@@ -3494,7 +3525,11 @@ where
                     query_assets,
                     is_quarantined,
                 ) {
-                    Ok(mut assets) => imported_assets.append(&mut assets),
+                    Ok(mut assets) => {
+                        progress
+                            .checkpointed(assets.iter().map(|asset| asset.rel_path.as_str()))?;
+                        imported_assets.append(&mut assets);
+                    }
                     Err(err) if photos_import_controllable_item_failure(&err.to_string()) => {
                         deferred_item_failures.push((entry.source_rel.clone(), err.to_string()));
                     }
@@ -3515,6 +3550,7 @@ fn import_pending_media_entries_with_checkpoint<Q, P, R>(
     is_quarantined: &mut P,
     prepare_import_session: &mut impl FnMut(&str) -> Result<()>,
     run_import_batch: &mut R,
+    progress: &mut crate::progress::PhotosImportProgress,
 ) -> Result<PhotosCheckpointImportReport>
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
@@ -3524,6 +3560,7 @@ where
     if pending_entries.is_empty() {
         return Ok(PhotosCheckpointImportReport::default());
     }
+    progress.phase(crate::progress::PhotosImportPhase::TargetPreparation)?;
     let strategy = photos_import_strategy(pending_entries.len());
     tracing::info!(
         target: "photos_import",
@@ -3599,23 +3636,30 @@ where
             let mut unverified_entries = Vec::with_capacity(batch_entries.len());
             let mut unverified_pairs = Vec::with_capacity(batch_entries.len());
             for (entry_index, entry) in batch_entries.iter().enumerate() {
-                let result = import_photos_batch_with_recovery(
-                    marker,
-                    std::slice::from_ref(entry),
-                    fail_fast,
-                    window.start,
-                    batch_number,
-                    batch_count,
-                    query_assets,
-                    is_quarantined,
-                    run_import_batch,
-                );
+                let result = progress
+                    .phase(crate::progress::PhotosImportPhase::Importing)
+                    .map_err(ImgQualityError::from)
+                    .and_then(|()| {
+                        import_photos_batch_with_recovery(
+                            marker,
+                            std::slice::from_ref(entry),
+                            fail_fast,
+                            window.start,
+                            batch_number,
+                            batch_count,
+                            query_assets,
+                            is_quarantined,
+                            run_import_batch,
+                        )
+                    });
                 match result {
                     Ok(PhotosImportBatchOutcome::Imported(mut pair)) => {
                         unverified_entries.push(entry.clone());
                         unverified_pairs.append(&mut pair);
                     }
                     Ok(PhotosImportBatchOutcome::Recovered(mut assets)) => {
+                        let recovered_progress = progress
+                            .checkpointed(assets.iter().map(|asset| asset.rel_path.as_str()));
                         flush_photos_verification_group(
                             marker,
                             &unverified_entries,
@@ -3625,7 +3669,9 @@ where
                             is_quarantined,
                             &mut imported_assets,
                             &mut deferred_item_failures,
+                            progress,
                         )?;
+                        recovered_progress?;
                         unverified_entries.clear();
                         unverified_pairs.clear();
                         imported_assets.append(&mut assets);
@@ -3640,6 +3686,7 @@ where
                             is_quarantined,
                             &mut imported_assets,
                             &mut deferred_item_failures,
+                            progress,
                         )?;
                         unverified_entries.clear();
                         unverified_pairs.clear();
@@ -3657,6 +3704,7 @@ where
                             is_quarantined,
                             &mut imported_assets,
                             &mut deferred_item_failures,
+                            progress,
                         )?;
                         return Err(err);
                     }
@@ -3680,6 +3728,7 @@ where
                 is_quarantined,
                 &mut imported_assets,
                 &mut deferred_item_failures,
+                progress,
             )?;
             offset = end;
         }
@@ -7813,6 +7862,14 @@ mod tests {
         assert_eq!(plan.pending_entries[0].rel_path, "b.JXL");
         assert_eq!(plan.pending_entries[0].path, pending);
         assert_eq!(plan.pending_entries[0].album_name, "✨/✨Batch");
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            plan.pending_entries
+                .iter()
+                .map(|entry| entry.rel_path.as_str()),
+        )?;
+        assert_eq!(progress.verified_count()?, 0);
+        assert!(progress.checkpointed(["a.JXL"]).is_err());
+        assert!(progress.complete().is_err());
         Ok(())
     }
 
@@ -7857,6 +7914,10 @@ mod tests {
         );
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
+        progress.phase(crate::progress::PhotosImportPhase::Reconciling)?;
         let mut import_called = false;
         let recovered = reconcile_uncheckpointed_photos_assets(
             &mut marker,
@@ -7890,6 +7951,15 @@ mod tests {
 
         assert!(import_called);
         assert_eq!(recovered, 2);
+        let refreshed = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?;
+        progress.checkpointed(
+            refreshed
+                .proven_assets
+                .iter()
+                .map(|asset| asset.rel_path.as_str()),
+        )?;
+        assert_eq!(progress.verified_count()?, 2);
+        progress.complete()?;
         assert!(
             photos_import_checkpoint_plan(&marker, &mut is_quarantined)?
                 .pending_entries
@@ -8061,6 +8131,9 @@ mod tests {
         let mut checkpoint_marker = marker.clone();
         let pending =
             photos_import_checkpoint_plan(&checkpoint_marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
         let err = import_pending_media_entries_with_checkpoint(
             &mut checkpoint_marker,
             &pending,
@@ -8069,8 +8142,12 @@ mod tests {
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
             &mut run_import_batch,
+            &mut progress,
         )
         .unwrap_err();
+
+        assert_eq!(progress.verified_count()?, 1);
+        assert!(progress.complete().is_err());
 
         assert!(
             err.to_string()
@@ -8164,6 +8241,9 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
         let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
@@ -8172,7 +8252,11 @@ mod tests {
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
             &mut run_import_batch,
+            &mut progress,
         )?;
+
+        assert_eq!(progress.verified_count()?, 2);
+        assert!(progress.complete().is_err());
 
         assert_eq!(import_calls, ["a", "b", "c"]);
         assert_eq!(query_calls[0], ["UUID-a", "UUID-b", "UUID-c"]);
@@ -8199,6 +8283,76 @@ mod tests {
                 .and_then(|entry| entry.library_asset.as_ref())
                 .is_some()
         );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn photos_import_checkpoint_write_failure_does_not_advance_progress() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let temp = tempfile::TempDir::new().unwrap();
+        let blocked = temp.path().join("blocked-state");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let _home = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            blocked.to_str().unwrap(),
+        );
+        let wc = temp.path().join("output");
+        std::fs::create_dir(&wc).unwrap();
+        let path = wc.join("a.JXL");
+        std::fs::write(&path, b"synthetic bytes").unwrap();
+        let hash = crate::common_utils::calculate_blake3_hash(&path)?;
+        let mut marker = WorkingCopyMarker::new(temp.path().join("src"), wc, 1);
+        marker.blake3_log.insert(
+            "a.jpg".into(),
+            Blake3Entry {
+                out_rel: Some("a.JXL".into()),
+                src: "source".into(),
+                out: hash.clone(),
+                library_asset: None,
+            },
+        );
+        let pending = photos_import_checkpoint_plan(&marker, |_| Ok(false))?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(["a.JXL"])?;
+        let mut queries = 0;
+        let mut imported = Vec::new();
+        let mut deferred = Vec::new();
+        let error = flush_photos_verification_group(
+            &mut marker,
+            &pending,
+            &[("a.JXL".into(), "UUID-A".into())],
+            false,
+            &mut |ids: &[String]| {
+                queries += 1;
+                assert_eq!(ids, ["UUID-A"]);
+                Ok(vec![FastImgLibraryAssetProbe {
+                    uuid: "UUID-A".into(),
+                    path: path.clone(),
+                    iscloudasset: false,
+                    incloud: Some(false),
+                    ismissing: false,
+                }])
+            },
+            &mut |_| Ok(false),
+            &mut imported,
+            &mut deferred,
+            &mut progress,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("write Photos import checkpoint marker failed"),
+            "{error}"
+        );
+        assert_eq!(queries, 1);
+        assert_eq!(progress.verified_count()?, 0);
+        assert!(progress.complete().is_err());
+        assert_eq!(imported.len(), 0);
+        assert_eq!(deferred.len(), 0);
+        assert_eq!(crate::common_utils::calculate_blake3_hash(&path)?, hash);
         Ok(())
     }
 
@@ -8247,6 +8401,9 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
         let err = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
@@ -8255,8 +8412,12 @@ mod tests {
             &mut is_quarantined,
             &mut |_reason: &str| Ok(()),
             &mut |_batch_entries: &[(PathBuf, String)]| Ok("UUID-A\n".to_string()),
+            &mut progress,
         )
         .unwrap_err();
+
+        assert_eq!(progress.verified_count()?, 0);
+        assert!(progress.complete().is_err());
 
         assert!(
             err.to_string()
@@ -8347,6 +8508,9 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
         let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
@@ -8367,7 +8531,10 @@ mod tests {
                     })?;
                 Ok(format!("UUID-{}\n", stem.to_ascii_uppercase()))
             },
+            &mut progress,
         )?;
+        assert_eq!(progress.verified_count()?, 2);
+        progress.complete()?;
         let records = &report.imported_assets;
 
         assert_eq!(records.len(), 2);
@@ -8468,6 +8635,9 @@ mod tests {
         };
         let mut is_quarantined = |_path: &Path| Ok(false);
         let pending = photos_import_checkpoint_plan(&marker, &mut is_quarantined)?.pending_entries;
+        let mut progress = crate::progress::PhotosImportProgress::new(
+            pending.iter().map(|entry| entry.rel_path.as_str()),
+        )?;
         let report = import_pending_media_entries_with_checkpoint(
             &mut marker,
             &pending,
@@ -8476,7 +8646,11 @@ mod tests {
             &mut is_quarantined,
             &mut prepare_import_session,
             &mut run_import_batch,
+            &mut progress,
         )?;
+
+        assert_eq!(progress.verified_count()?, u64::try_from(total).unwrap());
+        progress.complete()?;
 
         assert!(
             prepare_calls.is_empty(),

@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### AppleScript Checkpoint Import Progress (2026-10-20)
+
+- Extend the existing pending-only Photos progress protocol to Fast IMG's
+  primary-output AppleScript checkpoint importer. Count resumed and newly
+  verified assets only after their checkpoints are saved; retain real partial
+  progress without reporting deferred failures as a completed operation.
+- Give native-to-AppleScript handoff its own operation scope and remove the
+  native GUI's 64-operation display limit while retaining replay rejection.
+- Cover checkpoint write failure, partial verification and backend handoff with
+  synthetic regressions. Other AppleScript delivery paths and authorized
+  live-library acceptance remain separate work.
+
 ### Native Photos Operation Progress (2026-10-20)
 
 - Show target preparation, prior-intent reconciliation, import submission and

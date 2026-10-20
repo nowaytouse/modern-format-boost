@@ -572,8 +572,8 @@
 "photos.progress.phase.reconciling" = "今回の読み込み待ち写真を照合中";
 "photos.progress.phase.importing" = "今回の対象を写真に読み込み中";
 "photos.progress.phase.verifying" = "今回の読み込みをローカルで検証中";
-"photos.progress.phase.completed" = "今回の読み込みはローカル検証済み、バッチの最終処理は継続中";
-"photos.progress.phase.stopped" = "現在のネイティブ写真読み込み操作は停止しました。バッチの最終結果を確認してください";
+"photos.progress.phase.completed" = "現在の写真読み込み操作はローカル検証済み、バッチの最終処理は継続中";
+"photos.progress.phase.stopped" = "現在の写真読み込み操作は停止しました。バッチの最終結果を確認してください";
 "gate.activity.running" = "Gate 1 の最新の検証：%@ · 実行済み %@ / %@ 項目";
 "gate.activity.passed" = "Gate 1 の検証に合格 · 実行済み %@ / %@ 項目";
 "gate.activity.file_failures" = "一部のファイルに問題 · 実行済み %@ / %@ 項目、最終結果は確認中";

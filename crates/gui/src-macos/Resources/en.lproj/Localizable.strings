@@ -572,8 +572,8 @@
 "photos.progress.phase.reconciling" = "Checking the pending Photos import";
 "photos.progress.phase.importing" = "Importing pending items into Photos";
 "photos.progress.phase.verifying" = "Verifying this Photos import locally";
-"photos.progress.phase.completed" = "This Photos import was verified locally; batch finalization continues";
-"photos.progress.phase.stopped" = "This native Photos import operation stopped; see the final batch result";
+"photos.progress.phase.completed" = "Current Photos import operation verified locally; batch finalization continues";
+"photos.progress.phase.stopped" = "Current Photos import operation stopped; see the final batch result";
 "gate.activity.running" = "Latest Gate 1 activity: %@ · Checks run %@ / %@";
 "gate.activity.passed" = "Gate 1 checks passed · %@ / %@ checks run";
 "gate.activity.file_failures" = "File issues found · %@ / %@ checks run; final result pending";
