@@ -388,9 +388,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838"
+checksum = "877bf67ac8e52449eb2f9e98a344ea163beb70dd1f9eebe3cc5357dcfeaee4df"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -866,9 +866,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "flate2"
@@ -1219,7 +1219,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#6132d8d320f62d09d181ed9ae2b0a4dd2ee85cb9"
+source = "git+https://github.com/console-rs/indicatif#1eeeedfd4426ca967ff95513c80a634e8d5e9a31"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2888,9 +2888,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.3"
+version = "1.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
 dependencies = [
  "bytes",
  "libc",
@@ -3597,7 +3597,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#70fa3872c86f889267e35428a9f7a980dc4f186d"
+source = "git+https://github.com/google/zerocopy#20a6f6f49c9e56292ce86bc1fc2c09812d3f72c6"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3605,7 +3605,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#70fa3872c86f889267e35428a9f7a980dc4f186d"
+source = "git+https://github.com/google/zerocopy#20a6f6f49c9e56292ce86bc1fc2c09812d3f72c6"
 dependencies = [
  "proc-macro2",
  "quote",

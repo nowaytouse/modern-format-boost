@@ -190,6 +190,35 @@ metadata cleanup policy is distinct from ordinary JXL archival metadata
 preservation; these settings do not silently unify them. Fixed Q is not lowered
 to manufacture success if its candidate fails verification or the size policy.
 
+## Photos Query Recovery
+
+The native backend's selected-library witness is a read-only query performed
+before any new import request. Thirty seconds is a diagnostic threshold, not a
+delivery failure. AppleEvent timeout or unavailable-connection responses can
+trigger at most two non-destructive Photos activations and fresh queries, with
+per-attempt budgets of 120, 240 and 480 seconds. The AppleEvent itself gets the
+same budget; the subprocess gets five extra seconds to return its error.
+These are bounded cold-start recovery windows, not proof of actual progress.
+
+Every recovered query must return a valid identifier, and the existing PhotoKit
+witness and active-library checks still prove the target. Permission failures,
+invalid identifiers and a changed selected library do not become success through
+retry. Exhaustion defers the native attempt, preserving the encoded outputs and
+checkpoint; it never authorizes deletion or counts an import as delivered. Auto
+mode may still use the existing AppleScript fallback, but only before native
+intent and when no native journal exists; that path retains its own delivery
+verification.
+Cancellation is checked again after the query and native startup; it must not
+select the compatibility backend or continue preparing delivery.
+
+Import transactions are different: a timeout after an intent may have committed
+assets. Existing journal/UUID reconciliation must resolve that uncertainty before
+any replay. Recovery must not force-kill Photos. A graceful quit is followed by
+an actual process-state check, and an unconfirmed exit defers the restart.
+The osxphotos query timing cache learns only from validated responses covering a
+nonempty request completely, never from partial results, command failure,
+malformed JSON, permissions errors or conflicting UUIDs.
+
 ## Evidence And Remaining Work
 
 ### Full JPEG Search Order Comparison (2026-10-18)

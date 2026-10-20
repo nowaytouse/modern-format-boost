@@ -23,6 +23,16 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Photos Target Recovery (2026-10-20)
+
+- Replace the native witness query's single 30-second cutoff with bounded,
+  expanding read-only query recovery and non-destructive Photos activation.
+  Preserve the PhotoKit target proof and import journal reconciliation.
+- Remove automatic SIGKILL escalation when Photos does not quit gracefully;
+  defer recovery rather than force-close a potentially busy library.
+- Learn osxphotos startup timing only after validating its response, so failed
+  queries cannot falsely warm the cache or reduce future cold-start allowance.
+
 ### Full-Sample AVIF And Format-Aware Evidence (2026-10-19)
 
 - Share the checksum-pinned libavif 1.4.2 setup across IMG, shared checks and

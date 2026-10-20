@@ -4,13 +4,130 @@ use super::{
     PhotosImportCheckpointPlan, PhotosImportPendingEntry, Result, WorkingCopyMarker,
     checkpoint_photos_import_window, library_records_from_pending_import,
     osxphotos_uuid_from_photos_import_identifier, require_active_photos_library,
-    resolve_osascript_command, run_fast_img_command_with_timeout,
-    run_photos_import_applescript_session_mode_in_library,
+    resolve_osascript_command, run_photos_import_applescript_session_mode_in_library,
 };
 use crate::image::photos_import_metrics;
 use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
 use std::os::unix::fs::PermissionsExt;
+
+const WITNESS_QUERY_CONTEXT: &str = "selected Photos library witness";
+
+fn witness_query_is_transient(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::Interrupted
+    ) || error
+        .to_string()
+        .starts_with("selected Photos library witness timed out at hard timeout")
+}
+
+fn selected_library_witness_with_recovery(
+    mut query: impl FnMut(Duration) -> std::io::Result<std::process::Output>,
+    mut activate: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
+    // Read-only cold-start retries stop at eight minutes per query.
+    let mut budget = Duration::from_secs(120);
+    for attempt in 1..=3 {
+        anyhow::ensure!(
+            !crate::batch_control::is_cancelled()?,
+            "Photos witness query cancelled; delivery deferred, checkpoints and outputs retained"
+        );
+        let output = query(budget);
+        anyhow::ensure!(
+            !crate::batch_control::is_cancelled()?,
+            "Photos witness query cancelled; delivery deferred, checkpoints and outputs retained"
+        );
+        let error = match output {
+            Ok(output) if output.status.success() => {
+                let witness = String::from_utf8(output.stdout)?;
+                let witness = witness.trim();
+                let uuid = super::osxphotos_uuid_from_photos_import_identifier(witness)?;
+                anyhow::ensure!(
+                    !witness.contains(['\r', '\n'])
+                        && uuid.len() == 36
+                        && uuid.bytes().enumerate().all(|(index, byte)| match index {
+                            8 | 13 | 18 | 23 => byte == b'-',
+                            _ => byte.is_ascii_hexdigit(),
+                        }),
+                    "Photos witness query returned an invalid asset identifier; target cannot be proven"
+                );
+                if attempt > 1 {
+                    tracing::info!(target: "photos_import", attempt, "Photos library witness recovered; resuming target proof before import");
+                }
+                return Ok(witness.to_owned());
+            }
+            Ok(output) => {
+                let detail = String::from_utf8_lossy(&output.stderr);
+                anyhow::ensure!(
+                    !detail.contains("(-1743)")
+                        && ["(-1712)", "(-609)", "(-600)"]
+                            .iter()
+                            .any(|code| detail.contains(code)),
+                    "Photos witness query rejected: {detail}; target cannot be proven, sources retained"
+                );
+                detail.into_owned()
+            }
+            Err(error) if witness_query_is_transient(&error) => error.to_string(),
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(
+            attempt < 3,
+            "Photos delivery deferred after {attempt} witness attempts: {error}; verified outputs and checkpoints retained, no new import was submitted during target recovery"
+        );
+        anyhow::ensure!(
+            !crate::batch_control::is_cancelled()?,
+            "Photos witness recovery cancelled; delivery deferred, outputs and checkpoints retained"
+        );
+        tracing::warn!(target: "photos_import", attempt, budget_secs = budget.as_secs(), %error,
+            "Photos witness temporarily unavailable; activating Photos and retrying the read-only query with a larger budget");
+        activate().map_err(|recovery| anyhow::anyhow!(
+            "Photos witness recovery failed: {recovery:#}; preceding query: {error}; delivery deferred, verified outputs and checkpoints retained"
+        ))?;
+        budget *= 2;
+    }
+    anyhow::bail!("Photos delivery deferred; witness recovery exhausted, outputs retained")
+}
+
+fn selected_library_witness(library: Option<&Path>) -> anyhow::Result<String> {
+    selected_library_witness_with_recovery(
+        |budget| {
+            let script = format!(
+                "with timeout of {} seconds\ntell application \"Photos\" to return id of first media item\nend timeout",
+                budget.as_secs()
+            );
+            crate::process_runner::run_command_with_liveness_timeout(
+                std::process::Command::new(resolve_osascript_command()).args(["-e", &script]),
+                Duration::from_secs(30),
+                budget + Duration::from_secs(5),
+                WITNESS_QUERY_CONTEXT,
+            )
+        },
+        || {
+            let mut open = std::process::Command::new("/usr/bin/open");
+            open.args(["-a", "Photos"]);
+            if let Some(library) = library {
+                open.arg(library);
+            }
+            let output = crate::process_runner::run_command_with_liveness_timeout(
+                &mut open,
+                Duration::from_secs(15),
+                Duration::from_secs(120),
+                "activate Photos for read-only witness recovery",
+            )?;
+            anyhow::ensure!(
+                output.status.success(),
+                "Photos activation failed: {}; delivery deferred, outputs retained",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            require_active_photos_library(library)?;
+            Ok(())
+        },
+    )
+}
 
 struct ImportTask {
     identity: String,
@@ -406,23 +523,15 @@ where
     };
     require_active_photos_library(library)?;
     let startup = (|| -> anyhow::Result<(Client, Vec<String>)> {
-        let witness = run_fast_img_command_with_timeout(
-            std::process::Command::new(resolve_osascript_command()).args([
-                "-e",
-                "tell application \"Photos\" to return id of first media item",
-            ]),
-            Duration::from_secs(30),
-            "selected Photos library witness",
-        )?;
-        anyhow::ensure!(
-            witness.status.success(),
-            "selected library has no visible witness asset; native target cannot be proven"
-        );
-        let witnesses = vec![String::from_utf8(witness.stdout)?.trim().to_owned()];
+        let witnesses = vec![selected_library_witness(library)?];
         let client = Client::start(&app, &state, &witnesses)?;
         require_active_photos_library(library)?;
         Ok((client, witnesses))
     })();
+    anyhow::ensure!(
+        !crate::batch_control::is_cancelled()?,
+        "Photos startup cancelled; delivery deferred, outputs and checkpoints retained"
+    );
     let (mut client, witnesses) = match startup {
         Ok(ready) => ready,
         Err(error) if backend == "auto" && journal_files.is_empty() => {
@@ -662,6 +771,195 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt as _;
+
+    fn witness_reply(code: i32, text: &str) -> std::process::Output {
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: if code == 0 {
+                text.as_bytes().to_vec()
+            } else {
+                Vec::new()
+            },
+            stderr: if code == 0 {
+                Vec::new()
+            } else {
+                text.as_bytes().to_vec()
+            },
+        }
+    }
+
+    #[test]
+    fn witness_recovery_expands_budget_and_requires_a_real_identifier() -> anyhow::Result<()> {
+        let mut budgets = Vec::new();
+        let mut activations = 0;
+        let identifier = "01234567-89AB-CDEF-0123-456789ABCDEF/L0/001";
+        let result = selected_library_witness_with_recovery(
+            |budget| {
+                budgets.push(budget.as_secs());
+                match budgets.len() {
+                    1 => Err(std::io::Error::other(
+                        "selected Photos library witness timed out at hard timeout after 30s",
+                    )),
+                    2 => Ok(witness_reply(1, "Photos connection invalid (-609)")),
+                    _ => Ok(witness_reply(0, identifier)),
+                }
+            },
+            || {
+                activations += 1;
+                Ok(())
+            },
+        )?;
+        assert_eq!(result, identifier);
+        assert_eq!(budgets, [120, 240, 480]);
+        assert_eq!(activations, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn witness_recovery_allows_a_live_query_past_the_soft_deadline() -> anyhow::Result<()> {
+        let result = selected_library_witness_with_recovery(
+            |_| {
+                crate::process_runner::run_command_with_liveness_timeout(
+                    std::process::Command::new("/bin/sh").args([
+                        "-c",
+                        "sleep 0.05; printf '01234567-89AB-CDEF-0123-456789ABCDEF/L0/001'",
+                    ]),
+                    Duration::from_millis(1),
+                    Duration::from_secs(2),
+                    WITNESS_QUERY_CONTEXT,
+                )
+            },
+            || panic!("a slow successful query must not restart Photos"),
+        )?;
+        assert_eq!(result, "01234567-89AB-CDEF-0123-456789ABCDEF/L0/001");
+        Ok(())
+    }
+
+    #[test]
+    fn witness_recovery_defers_after_bounded_attempts_or_failed_activation() {
+        let mut queries = 0;
+        let mut activations = 0;
+        let error = selected_library_witness_with_recovery(
+            |_| {
+                queries += 1;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "synthetic timeout",
+                ))
+            },
+            || {
+                activations += 1;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!((queries, activations), (3, 2));
+        assert!(error.to_string().contains("delivery deferred"));
+        assert!(error.to_string().contains("checkpoints retained"));
+        let mut queries = 0;
+        let error = selected_library_witness_with_recovery(
+            |_| {
+                queries += 1;
+                Ok(witness_reply(1, "AppleEvent timed out (-1712)"))
+            },
+            || anyhow::bail!("selected library changed"),
+        )
+        .unwrap_err();
+        assert_eq!(queries, 1);
+        assert!(error.to_string().contains("selected library changed"));
+        assert!(error.to_string().contains("(-1712)"));
+    }
+
+    #[test]
+    fn witness_recovery_does_not_retry_permissions_or_invalid_evidence() {
+        for (code, text) in [
+            (1, "Not authorized (-1743)"),
+            (1, "Not authorized (-1743), previous timeout (-1712)"),
+            (1, "No first media item (-1728)"),
+            (0, ""),
+            (0, "missing value"),
+            (0, "first\nsecond"),
+        ] {
+            let mut queries = 0;
+            let result = selected_library_witness_with_recovery(
+                |_| {
+                    queries += 1;
+                    Ok(witness_reply(code, text))
+                },
+                || panic!("permanent errors must not activate or retry Photos"),
+            );
+            assert!(result.is_err(), "invalid evidence was accepted: {text}");
+            assert_eq!(queries, 1);
+        }
+    }
+
+    #[test]
+    fn witness_recovery_preserves_cancellation() -> anyhow::Result<()> {
+        let Some(control) = std::env::var_os("MFB_WITNESS_CANCELLATION_TEST_CHILD") else {
+            let root = tempfile::tempdir()?;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700))?;
+            let control = root.path().join("control");
+            std::fs::write(&control, "running\ntest-token")?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "image::fast_img::native_checkpoint::tests::witness_recovery_preserves_cancellation",
+                    "--nocapture",
+                ])
+                .env("MFB_WITNESS_CANCELLATION_TEST_CHILD", &control)
+                .env("MFB_BATCH_CONTROL_FILE", &control)
+                .env("MFB_HOME_ROOT", root.path())
+                .env("MFB_PHOTOS_IMPORT_BACKEND", "auto")
+                .env("MFB_PHOTOS_NATIVE_HELPER_APP", root.path().join("unused.app"))
+                .output()?;
+            anyhow::ensure!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+                "isolated cancellation check failed: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        };
+        let result = selected_library_witness_with_recovery(
+            |_| {
+                std::fs::write(&control, "cancelled\ntest-token")?;
+                Ok(witness_reply(
+                    0,
+                    "01234567-89AB-CDEF-0123-456789ABCDEF/L0/001",
+                ))
+            },
+            || panic!("cancelled queries must not activate Photos"),
+        );
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error:#}");
+        let entry = PhotosImportPendingEntry {
+            source_rel: "image.jxl".into(),
+            rel_path: "image.jxl".into(),
+            path: PathBuf::from("unused.jxl"),
+            album_name: "Test".into(),
+            blake3_entry: super::super::Blake3Entry::default(),
+        };
+        let result = try_import_inner(
+            &ImportTask {
+                identity: "cancelled-test".into(),
+                expected: 1,
+                relocated_originals: false,
+            },
+            &PhotosImportCheckpointPlan {
+                pending_entries: vec![entry],
+                proven_assets: Vec::new(),
+            },
+            &mut |_| panic!("cancelled startup must not query assets"),
+            &mut |_| panic!("cancelled startup must not inspect imports"),
+            None,
+            &mut |_, _| panic!("cancelled startup must not import"),
+        );
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("cancelled"), "{error:#}");
+        Ok(())
+    }
 
     #[test]
     fn originals_reuse_exact_receipts_and_reject_changed_delivery() -> anyhow::Result<()> {

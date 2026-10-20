@@ -4477,7 +4477,7 @@ fn complete_photos_quit_recovery(
             target: "photos_import",
             reason,
             error = %err,
-            "Photos graceful quit failed; falling back to process-state recovery"
+            "Photos graceful quit command failed; checking whether the process exited"
         );
     }
     wait_for_quit()
@@ -4643,33 +4643,6 @@ fn prepare_photos_import_session(reason: &str) -> Result<()> {
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
-fn attempt_photos_force_kill(signal: &str, phase: &str) {
-    let mut command = std::process::Command::new(MACOS_KILLALL_PATH);
-    command.args([signal, "Photos"]);
-    match run_fast_img_command_with_timeout(
-        &mut command,
-        FAST_IMG_SYSTEM_COMMAND_TIMEOUT,
-        "Photos force-kill",
-    ) {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => tracing::warn!(
-            target: "photos_import",
-            phase,
-            signal,
-            status = ?output.status.code(),
-            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-            "Photos force-kill command exited unsuccessfully"
-        ),
-        Err(err) => tracing::warn!(
-            target: "photos_import",
-            phase,
-            signal,
-            "Photos force-kill command failed: {err}"
-        ),
-    }
-}
-
-#[cfg(all(target_os = "macos", not(test)))]
 fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(
@@ -4707,53 +4680,10 @@ fn wait_for_photos_process_state(expected_running: bool, phase: &str) -> Result<
         tracing::warn!(
             target: "photos_import",
             phase,
-            "Photos failed to quit gracefully after {}s, forcing termination via killall -9",
-            FAST_IMG_PHOTOS_IMPORT_RELAUNCH_PROCESS_TIMEOUT_SECS
-        );
-        attempt_photos_force_kill("-9", phase);
-        std::thread::sleep(Duration::from_secs(2)); // Wait for kill to take effect
-
-        // Verify kill succeeded
-        if get_photos_pid()?.is_none() {
-            tracing::info!(
-                target: "photos_import",
-                phase,
-                "Photos force-killed successfully"
-            );
-            return Ok(());
-        }
-
-        // Last resort: try killall again
-        tracing::error!(
-            target: "photos_import",
-            phase,
-            "First killall failed, retrying with -KILL signal"
-        );
-        attempt_photos_force_kill("-KILL", phase);
-        std::thread::sleep(Duration::from_secs(2));
-
-        if get_photos_pid()?.is_none() {
-            return Ok(());
-        }
-
-        // Ultimate fallback: Photos is unkillable (SIP protection or kernel deadlock)
-        tracing::error!(
-            target: "photos_import",
-            phase,
-            "Photos process survived force-kill attempts; may be protected by SIP or kernel state"
-        );
-    }
-
-    // For quit phase: if force-kill exhausted, treat as best-effort failure
-    // (caller can decide to proceed with degraded session or abort)
-    if !expected_running {
-        tracing::error!(
-            target: "photos_import",
-            phase,
-            "Photos quit force-kill failed after all attempts; caller should assess risk"
+            "Photos did not exit after the graceful-quit deadline; leaving it running and deferring recovery"
         );
         return Err(ImgQualityError::AnalysisError(
-            "Photos process unkillable; system may require manual intervention".to_string(),
+            "Photos is still running after the graceful-quit deadline; recovery deferred without force-quitting; resume from the saved checkpoint after Photos becomes responsive".to_string(),
         ));
     }
 
@@ -5604,7 +5534,7 @@ fn query_osxphotos_asset_probes_from_library(
         })
         .map_err(|e| ImgQualityError::AnalysisError(format!("osxphotos query failed: {e}")))?;
     let elapsed = start.elapsed();
-    record_osxphotos_query_startup_time(elapsed.as_secs());
+    let probes = complete_osxphotos_asset_query(uuids, &output, elapsed)?;
     tracing::info!(
         target: "photos_import",
         uuid_count = uuids.len(),
@@ -5612,6 +5542,14 @@ fn query_osxphotos_asset_probes_from_library(
         library = %library.display(),
         "osxphotos query completed"
     );
+    Ok(probes)
+}
+
+fn complete_osxphotos_asset_query(
+    uuids: &[String],
+    output: &crate::process_runner::ProcessOutput,
+    elapsed: Duration,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
     if !output.status.success() {
         return Err(ImgQualityError::AnalysisError(format!(
             "osxphotos query failed for {} UUID(s): {}",
@@ -5632,7 +5570,8 @@ fn query_osxphotos_asset_probes_from_library(
         ImgQualityError::AnalysisError(format!("parse osxphotos query JSON failed: {e}"))
     })?;
     let requested = uuids.iter().map(String::as_str).collect::<BTreeSet<_>>();
-    records
+    let mut seen = BTreeSet::new();
+    let probes = records
         .into_iter()
         .map(|record| {
             if !requested.contains(record.uuid.as_str()) {
@@ -5640,6 +5579,11 @@ fn query_osxphotos_asset_probes_from_library(
                     "osxphotos query returned unexpected UUID {}",
                     record.uuid
                 )));
+            }
+            if !seen.insert(record.uuid.clone()) {
+                return Err(ImgQualityError::AnalysisError(
+                    "osxphotos query returned duplicate UUID".to_string(),
+                ));
             }
             Ok(FastImgLibraryAssetProbe {
                 uuid: record.uuid,
@@ -5649,7 +5593,11 @@ fn query_osxphotos_asset_probes_from_library(
                 ismissing: record.ismissing,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    if !requested.is_empty() && seen.len() == requested.len() {
+        record_osxphotos_query_startup_time(elapsed.as_secs());
+    }
+    Ok(probes)
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -5705,8 +5653,6 @@ const MACOS_PGREP_PATH: &str = "/usr/bin/pgrep";
 const FAST_IMG_SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(target_os = "macos")]
 const MACOS_OPEN_PATH: &str = "/usr/bin/open";
-#[cfg(target_os = "macos")]
-const MACOS_KILLALL_PATH: &str = "/usr/bin/killall";
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_DEFAULT: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_ATTEMPTS_MAX: usize = 5;
 const FAST_IMG_ICLOUD_VERIFY_BATCH_SIZE_DEFAULT: usize = 64;
@@ -7584,7 +7530,6 @@ mod tests {
             MACOS_VM_STAT_PATH,
             MACOS_PGREP_PATH,
             MACOS_OPEN_PATH,
-            MACOS_KILLALL_PATH,
         ] {
             assert!(
                 Path::new(path).is_absolute(),
@@ -8699,7 +8644,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_graceful_quit_still_reaches_force_kill_recovery() {
+    fn failed_graceful_quit_allows_recovery_after_observed_exit() {
         let mut waited_for_quit = false;
         let result = complete_photos_quit_recovery(
             "poisoned_session",
@@ -8714,12 +8659,32 @@ mod tests {
 
         assert!(
             result.is_ok(),
-            "quit timeout must fall through to process recovery"
+            "an observed exit must allow recovery despite a quit-command timeout"
         );
-        assert!(
-            waited_for_quit,
-            "process recovery must get a chance to force-quit Photos"
-        );
+        assert!(waited_for_quit, "recovery must check whether Photos exited");
+    }
+
+    #[test]
+    fn graceful_quit_requires_observed_exit_before_relaunch() {
+        for quit_result in [
+            Ok(()),
+            Err(ImgQualityError::AnalysisError(
+                "Photos recovery quit command timed out".to_string(),
+            )),
+        ] {
+            let result =
+                complete_photos_quit_recovery("poisoned_session", quit_result, &mut || {
+                    Err(ImgQualityError::AnalysisError(
+                        "Photos is still running; recovery deferred".to_string(),
+                    ))
+                });
+
+            let err = result.expect_err("an unconfirmed exit must defer Photos relaunch");
+            assert!(
+                err.to_string()
+                    .contains("Photos is still running; recovery deferred")
+            );
+        }
     }
 
     #[test]
@@ -10056,6 +10021,98 @@ mod tests {
         };
         safe_delete_modern_lossy_static_source_after_reverify(&src_path, &proof).unwrap();
         assert!(!src_path.exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn osxphotos_timeout_cache_records_only_validated_queries() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::sync::atomic::Ordering;
+
+        let row = serde_json::json!({
+            "uuid": "expected", "path": "/tmp/asset.jxl",
+            "iscloudasset": true, "incloud": true, "ismissing": false,
+        });
+        let mut wrong_uuid = row.clone();
+        wrong_uuid["uuid"] = serde_json::json!("unexpected");
+        let invalid_outputs = [
+            (1, "[]".to_string(), "query failed"),
+            (0, "[]".to_string(), "OperationalError"),
+            (0, "invalid JSON".to_string(), ""),
+            (0, serde_json::json!([wrong_uuid]).to_string(), ""),
+            (0, serde_json::json!([row, row]).to_string(), ""),
+        ];
+        OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.store(120, Ordering::SeqCst);
+        OSXPHOTOS_WARMED_UP.store(false, Ordering::SeqCst);
+
+        for (code, stdout, stderr) in invalid_outputs {
+            let output = crate::process_runner::ProcessOutput {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout,
+                stderr: stderr.to_string(),
+                command_line: "osxphotos query fixture".to_string(),
+            };
+            assert!(
+                complete_osxphotos_asset_query(
+                    &["expected".to_string()],
+                    &output,
+                    Duration::from_secs(300),
+                )
+                .is_err()
+            );
+            assert!(!OSXPHOTOS_WARMED_UP.load(Ordering::SeqCst));
+            assert_eq!(
+                OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
+                120
+            );
+        }
+
+        let mut output = crate::process_runner::ProcessOutput {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: "[]".to_string(),
+            stderr: String::new(),
+            command_line: "osxphotos query fixture".to_string(),
+        };
+        let probes = complete_osxphotos_asset_query(
+            &["expected".to_string()],
+            &output,
+            Duration::from_secs(300),
+        )
+        .expect("empty query results must remain valid for multi-library lookup");
+        assert!(probes.is_empty());
+        assert!(!OSXPHOTOS_WARMED_UP.load(Ordering::SeqCst));
+        assert_eq!(
+            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
+            120
+        );
+
+        output.stdout = serde_json::json!([row]).to_string();
+        let probes = complete_osxphotos_asset_query(
+            &["expected".to_string(), "missing".to_string()],
+            &output,
+            Duration::from_secs(300),
+        )
+        .expect("partial query results must remain valid for multi-library lookup");
+        assert_eq!(probes.len(), 1);
+        assert!(!OSXPHOTOS_WARMED_UP.load(Ordering::SeqCst));
+        assert_eq!(
+            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
+            120
+        );
+
+        let probes = complete_osxphotos_asset_query(
+            &["expected".to_string()],
+            &output,
+            Duration::from_secs(300),
+        )
+        .expect("valid query must update the adaptive timeout cache");
+        assert_eq!(probes.len(), 1);
+        assert!(OSXPHOTOS_WARMED_UP.load(Ordering::SeqCst));
+        assert_eq!(
+            OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
+            330
+        );
     }
 
     #[test]
