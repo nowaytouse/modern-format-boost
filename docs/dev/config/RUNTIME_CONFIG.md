@@ -564,6 +564,32 @@ unprocessed entries and unknown retention have explicit fields. Primary cleanup
 completion is persisted before the independent original import begins. Retained
 primary failures remain eligible for `--retry` even with pending original imports.
 
+### Deferred Photos Delivery
+
+`photos_delivery_deferred` is a typed target-preparation outcome, not a verdict
+inferred from an error message. It applies after primary verification when a
+temporary native witness/activation failure leaves pending delivery before
+primary source cleanup. Permission errors, invalid target evidence,
+cancellation, unrelated finalization errors and
+unreconciled native journals do not qualify. The worker and launcher still exit
+nonzero; encoded and pending counts are not promoted to delivered counts.
+
+The result also records `primary_verification_complete`, `source_directory` and
+`output_directory`. The launcher persists the current result as
+`MFB_HISTORY_FAST_IMG_RESULT`, bound to its run ID, only after reconciling counts
+against captured worker statistics. A malformed, duplicate or conflicting result
+does not authorize post-run cleanup. History and the native result overview use
+the same receipt and retain the original error and exit details.
+
+The waiting-delivery presentation currently covers one selected directory and
+requires matching source/output scope, complete counts, expected normal nonzero
+exits and no independent integrity or
+failed-source verification fault. Missing or contradictory evidence remains
+unconfirmed. The recorded output location is not proof of current contents or
+permission to delete it. Resuming still requires ordinary checkpoint, content and
+Photos reconciliation; this status adds neither an automatic retry nor a claim
+that all pending outputs are reusable.
+
 ## Launcher Preflight Content Identity
 
 The read-only routing report uses schema 3. Every visible inventory entry,

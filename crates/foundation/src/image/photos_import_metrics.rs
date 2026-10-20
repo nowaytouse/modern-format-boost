@@ -48,8 +48,17 @@ impl Profile {
     }
 
     // Rates are approximate diagnostics; exact custody counts stay integers.
-    #[allow(clippy::cast_precision_loss)]
     pub(super) fn report(&self, succeeded: bool) {
+        self.report_outcome(succeeded, false);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn deferred(&self) {
+        self.report_outcome(false, true);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn report_outcome(&self, succeeded: bool, deferred: bool) {
         CURRENT.with_borrow(|current| {
             if let Some(data) = current {
                 let total_seconds = self.started.elapsed().as_secs_f64();
@@ -59,8 +68,9 @@ impl Profile {
                 let report = serde_json::json!({
                     "schema_version": 1,
                     "backend": data.backend,
-                    "scope": "pending_import_and_verification",
+                    "scope": if deferred { "target_preparation" } else { "pending_import_and_verification" },
                     "succeeded": succeeded,
+                    "delivery_deferred": deferred,
                     "verified_assets": verified_assets,
                     "committed_assets": if data.backend == "native" { Some(data.committed_assets) } else { None },
                     "peak_verification_backlog": if data.backend == "native" { Some(data.peak_verification_backlog) } else { None },

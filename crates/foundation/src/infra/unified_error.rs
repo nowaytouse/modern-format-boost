@@ -157,6 +157,20 @@ pub use crate::types::{CrfError, IterationError, SsimError};
 
 // ─── Unified Error Types ─────────────────────────────────────────────────────
 
+/// Temporary Photos target-proof failure; no new native import was submitted.
+#[derive(Debug)]
+pub struct PhotosDeliveryDeferred {
+    pub detail: String,
+}
+
+impl fmt::Display for PhotosDeliveryDeferred {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Photos delivery deferred: {}", self.detail)
+    }
+}
+
+impl std::error::Error for PhotosDeliveryDeferred {}
+
 /// Master application error type - unified across all modules
 #[derive(Debug)]
 pub enum UnifiedError {
@@ -846,6 +860,7 @@ impl std::error::Error for UnifiedError {
             }
             Self::IoError(e) => Some(e),
             Self::ImageProcessingError(e) => Some(e),
+            Self::Other(error) => Some(error.as_ref()),
             _ => None,
         }
     }
@@ -958,6 +973,20 @@ impl UnifiedError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_error_preserves_photos_deferral_source() {
+        let error = anyhow::Error::new(PhotosDeliveryDeferred {
+            detail: "temporary target query exhaustion".to_string(),
+        })
+        .context("native target proof");
+        let error = anyhow::Error::new(UnifiedError::from(error)).context("fast-img delivery");
+        assert!(
+            error
+                .chain()
+                .any(<dyn std::error::Error>::is::<PhotosDeliveryDeferred>)
+        );
+    }
 
     #[test]
     fn test_unified_error_display() {

@@ -9,11 +9,13 @@ use super::{
 use crate::image::photos_import_metrics;
 use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
+use crate::unified_error::PhotosDeliveryDeferred;
 use std::os::unix::fs::PermissionsExt;
 
 const WITNESS_QUERY_CONTEXT: &str = "selected Photos library witness";
+const WITNESS_ACTIVATION_CONTEXT: &str = "activate Photos for read-only witness recovery";
 
-fn witness_query_is_transient(error: &std::io::Error) -> bool {
+fn photos_command_is_transient(error: &std::io::Error, context: &str) -> bool {
     matches!(
         error.kind(),
         std::io::ErrorKind::TimedOut
@@ -22,7 +24,39 @@ fn witness_query_is_transient(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::Interrupted
     ) || error
         .to_string()
-        .starts_with("selected Photos library witness timed out at hard timeout")
+        .strip_prefix(context)
+        .is_some_and(|detail| detail.starts_with(" timed out at hard timeout"))
+}
+
+fn photos_activation_error(error: std::io::Error) -> anyhow::Error {
+    if photos_command_is_transient(&error, WITNESS_ACTIVATION_CONTEXT) {
+        PhotosDeliveryDeferred {
+            detail: format!("safe Photos activation temporarily unavailable: {error}; outputs and checkpoints retained"),
+        }
+        .into()
+    } else {
+        error.into()
+    }
+}
+
+fn native_import_error(error: anyhow::Error, operation: &str) -> ImgQualityError {
+    if error.is::<PhotosDeliveryDeferred>() {
+        ImgQualityError::Other(error.context(format!("{operation}; sources and journals retained")))
+    } else {
+        ImgQualityError::AnalysisError(format!(
+            "{operation}: {error:#}; sources and journals retained"
+        ))
+    }
+}
+
+fn startup_error(error: anyhow::Error, unresolved_journals: bool) -> anyhow::Error {
+    if unresolved_journals && error.is::<PhotosDeliveryDeferred>() {
+        anyhow::anyhow!(
+            "native target unavailable with unresolved import journals; delivery state requires reconciliation: {error:#}"
+        )
+    } else {
+        error
+    }
 }
 
 fn selected_library_witness_with_recovery(
@@ -71,22 +105,30 @@ fn selected_library_witness_with_recovery(
                 );
                 detail.into_owned()
             }
-            Err(error) if witness_query_is_transient(&error) => error.to_string(),
+            Err(error) if photos_command_is_transient(&error, WITNESS_QUERY_CONTEXT) => {
+                error.to_string()
+            }
             Err(error) => return Err(error.into()),
         };
-        anyhow::ensure!(
-            attempt < 3,
-            "Photos delivery deferred after {attempt} witness attempts: {error}; verified outputs and checkpoints retained, no new import was submitted during target recovery"
-        );
+        if attempt == 3 {
+            return Err(PhotosDeliveryDeferred {
+                detail: format!("after {attempt} witness attempts: {error}; verified outputs and checkpoints retained, no new import was submitted during target recovery"),
+            }.into());
+        }
         anyhow::ensure!(
             !crate::batch_control::is_cancelled()?,
             "Photos witness recovery cancelled; delivery deferred, outputs and checkpoints retained"
         );
         tracing::warn!(target: "photos_import", attempt, budget_secs = budget.as_secs(), %error,
             "Photos witness temporarily unavailable; activating Photos and retrying the read-only query with a larger budget");
-        activate().map_err(|recovery| anyhow::anyhow!(
-            "Photos witness recovery failed: {recovery:#}; preceding query: {error}; delivery deferred, verified outputs and checkpoints retained"
-        ))?;
+        let recovery = activate();
+        anyhow::ensure!(
+            !crate::batch_control::is_cancelled()?,
+            "Photos witness recovery cancelled; delivery deferred, outputs and checkpoints retained"
+        );
+        recovery.map_err(|recovery| recovery.context(format!(
+            "Photos witness recovery failed; preceding query: {error}; verified outputs and checkpoints retained"
+        )))?;
         budget *= 2;
     }
     anyhow::bail!("Photos delivery deferred; witness recovery exhausted, outputs retained")
@@ -116,8 +158,9 @@ fn selected_library_witness(library: Option<&Path>) -> anyhow::Result<String> {
                 &mut open,
                 Duration::from_secs(15),
                 Duration::from_secs(120),
-                "activate Photos for read-only witness recovery",
-            )?;
+                WITNESS_ACTIVATION_CONTEXT,
+            )
+            .map_err(photos_activation_error)?;
             anyhow::ensure!(
                 output.status.success(),
                 "Photos activation failed: {}; delivery deferred, outputs retained",
@@ -235,14 +278,16 @@ pub(super) fn try_import_originals(
             handle
         }))
     })();
-    if !matches!(result, Ok(None)) {
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(anyhow::Error::is::<PhotosDeliveryDeferred>)
+    {
+        profile.deferred();
+    } else if !matches!(result, Ok(None)) {
         profile.report(result.is_ok());
     }
-    result.map_err(|error| {
-        ImgQualityError::AnalysisError(format!(
-            "PhotoKit original import: {error:#}; sources and journals retained"
-        ))
-    })
+    result.map_err(|error| native_import_error(error, "PhotoKit original import"))
 }
 
 fn resource(entry: &PhotosImportPendingEntry) -> anyhow::Result<serde_json::Value> {
@@ -454,14 +499,16 @@ where
             &mut |entries, assets| checkpoint_photos_import_window(marker, entries, assets),
         )
     });
-    if !matches!(result, Ok(None)) {
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(anyhow::Error::is::<PhotosDeliveryDeferred>)
+    {
+        profile.deferred();
+    } else if !matches!(result, Ok(None)) {
         profile.report(result.is_ok());
     }
-    result.map_err(|error| {
-        ImgQualityError::AnalysisError(format!(
-            "PhotoKit import: {error:#}; sources and journals retained"
-        ))
-    })
+    result.map_err(|error| native_import_error(error, "PhotoKit import"))
 }
 
 fn try_import_inner<Q, P, C>(
@@ -538,7 +585,7 @@ where
             tracing::warn!(target:"photos_import", %error, "PhotoKit unavailable before any import intent; using AppleScript compatibility backend");
             return Ok(None);
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(startup_error(error, !journal_files.is_empty())),
     };
     std::fs::create_dir_all(&journals)?;
     anyhow::ensure!(
@@ -817,6 +864,35 @@ mod tests {
     }
 
     #[test]
+    fn typed_deferral_does_not_cover_permanent_errors_or_unresolved_imports() {
+        let deferred = || {
+            anyhow::Error::new(PhotosDeliveryDeferred {
+                detail: "temporary target timeout".into(),
+            })
+        };
+        assert!(startup_error(deferred(), false).is::<PhotosDeliveryDeferred>());
+        assert!(!startup_error(deferred(), true).is::<PhotosDeliveryDeferred>());
+        let wrapped = anyhow::Error::new(native_import_error(deferred(), "import"));
+        assert!(
+            wrapped
+                .chain()
+                .any(<dyn std::error::Error>::is::<PhotosDeliveryDeferred>)
+        );
+        for permanent in [
+            "Not authorized (-1743)",
+            "selected library changed",
+            "cancelled",
+        ] {
+            let error = native_import_error(anyhow::anyhow!(permanent.to_owned()), "import");
+            assert!(
+                !anyhow::Error::new(error)
+                    .chain()
+                    .any(<dyn std::error::Error>::is::<PhotosDeliveryDeferred>)
+            );
+        }
+    }
+
+    #[test]
     fn witness_recovery_allows_a_live_query_past_the_soft_deadline() -> anyhow::Result<()> {
         let result = selected_library_witness_with_recovery(
             |_| {
@@ -855,6 +931,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!((queries, activations), (3, 2));
+        assert!(error.is::<PhotosDeliveryDeferred>());
         assert!(error.to_string().contains("delivery deferred"));
         assert!(error.to_string().contains("checkpoints retained"));
         let mut queries = 0;
@@ -867,8 +944,9 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(queries, 1);
-        assert!(error.to_string().contains("selected library changed"));
-        assert!(error.to_string().contains("(-1712)"));
+        assert!(!error.is::<PhotosDeliveryDeferred>());
+        assert!(format!("{error:#}").contains("selected library changed"));
+        assert!(format!("{error:#}").contains("(-1712)"));
     }
 
     #[test]

@@ -23,6 +23,20 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Deferred Photos Delivery In Results And History (2026-10-20)
+
+- Distinguish temporary native target-preparation failure from media verification
+  failure using a typed outcome, not error-text matching. Keep nonzero exits,
+  unresolved delivery counts and the original diagnostics.
+- Persist count-reconciled Fast IMG receipts in SQLite history, bound to the run
+  and recorded source/output paths. Malformed or conflicting receipts cannot
+  authorize post-run cleanup.
+- Show a restrained orange deferred state in the native result overview and
+  History for a single-directory run with complete matching evidence. Cancellation,
+  unexpected exits, unknown source retention, unreconciled import journals and
+  independent integrity faults do not qualify. Recorded paths are not deletion
+  permission or a promise that outputs can be reused without revalidation.
+
 ### Photos Target Recovery (2026-10-20)
 
 - Replace the native witness query's single 30-second cutoff with bounded,

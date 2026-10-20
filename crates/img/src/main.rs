@@ -4390,8 +4390,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         Ok(_) => execution,
         Err(error) => match execution {
             Ok(()) => Err(error.context("preserve fast-img source directory timestamps")),
-            Err(execution_error) => Err(execution_error.context(format!(
-                "source directory timestamp preservation also failed: {error:#}"
+            Err(execution_error) => Err(error.context(format!(
+                "source directory timestamp preservation failed; execution also failed: {execution_error:#}"
             ))),
         },
     };

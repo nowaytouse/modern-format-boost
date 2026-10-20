@@ -9,6 +9,7 @@ use foundation::pipeline::verification::{
     FastImgStageName, WorkingCopyMarker, gate1_complete_or_later, gate3_complete_or_later,
     write_marker_atomic,
 };
+use foundation::unified_error::PhotosDeliveryDeferred;
 use std::collections::BTreeSet;
 
 #[derive(Debug)]
@@ -51,6 +52,10 @@ impl std::error::Error for FileFailures {}
 #[derive(Debug, serde::Serialize)]
 struct Report {
     schema_version: u8,
+    source_directory: std::path::PathBuf,
+    output_directory: std::path::PathBuf,
+    photos_delivery_deferred: bool,
+    primary_verification_complete: bool,
     succeeded: usize,
     skipped: usize,
     ignored: usize,
@@ -211,6 +216,10 @@ impl Report {
         };
         Ok(Self {
             schema_version: 1,
+            source_directory: std::path::absolute(&marker.src_dir)?,
+            output_directory: std::path::absolute(&marker.working_copy)?,
+            photos_delivery_deferred: false,
+            primary_verification_complete: gate1_complete_or_later(&marker.stage),
             succeeded,
             skipped,
             ignored: 0,
@@ -229,6 +238,15 @@ impl Report {
     }
 
     fn record_execution(&mut self, execution: &anyhow::Result<()>, photos: bool) {
+        self.photos_delivery_deferred = photos
+            && self.primary_verification_complete
+            && !self.primary_cleanup_complete
+            && self.unprocessed > 0
+            && execution.as_ref().err().is_some_and(|error| {
+                error
+                    .chain()
+                    .any(<dyn std::error::Error>::is::<PhotosDeliveryDeferred>)
+            });
         self.finalization_error = execution.as_ref().err().and_then(|error| {
             let isolated_file_failures =
                 error
@@ -386,6 +404,34 @@ mod tests {
         assert_eq!(report.failed_sources_retained, Some(1));
         assert_eq!(report.failed, 1);
         assert_eq!(serde_json::to_value(&report)?["failed_sources_retained"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn only_typed_target_deferral_after_verification_is_reported_as_deferred() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let mut marker = partial_marker(root.path(), 1);
+        marker.stage = FastImgStageName::Importing;
+        let mut report = Report::from_marker(&marker, true, &[], 0, None)?;
+        let deferred = Err(anyhow::Error::new(PhotosDeliveryDeferred {
+            detail: "target unavailable".into(),
+        }));
+        report.record_execution(&deferred, true);
+        assert!(report.photos_delivery_deferred);
+        assert!(report.primary_verification_complete);
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(report.unprocessed, 1);
+        assert!(report.finalization_error.is_some());
+        assert_eq!(report.output_directory, marker.working_copy);
+        report.record_execution(&Err(anyhow::anyhow!("Photos delivery deferred")), true);
+        assert!(!report.photos_delivery_deferred);
+        report.record_execution(&deferred, false);
+        assert!(!report.photos_delivery_deferred);
+        marker.stage = FastImgStageName::OutputPrepared;
+        let mut report = Report::from_marker(&marker, true, &[], 0, None)?;
+        report.record_execution(&deferred, true);
+        assert!(!report.photos_delivery_deferred);
         Ok(())
     }
 

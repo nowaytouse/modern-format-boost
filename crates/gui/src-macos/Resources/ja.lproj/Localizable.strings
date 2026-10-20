@@ -426,6 +426,12 @@
 "log.details.show" = "処理の詳細を表示";
 "log.details.hide" = "処理の詳細を隠す";
 "result.unconfirmed" = "結果を完全に確認できません · 処理履歴を確認してください";
+"result.delivery_deferred" = "Photos への引き渡しを保留";
+"result.delivery_record_title" = "Photos への引き渡し記録";
+"result.delivery_invalid" = "Photos への引き渡し記録が不完全か矛盾しています。元の診断を確認してください。";
+"result.delivery_deferred_facts" = "エンコード済み %@ · ローカル Photos で検証済み %@ · 引き渡しは未完了";
+"result.delivery_recorded_output" = "記録された出力フォルダ: %@";
+"result.delivery_recorded_note" = "実行時の記録です。続行する前にファイルと引き渡し状態の再確認が必要です。元のエラーは詳細で確認できます。";
 "result.delivery_facts" = "エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
 "result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";

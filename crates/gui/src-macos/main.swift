@@ -4565,39 +4565,7 @@ private func processDiagnosticColor(_ line: String, confirmedFileFailure: Bool =
 }
 
 private struct BatchResults {
-    struct FastDelivery: Decodable {
-        let schemaVersion: Int
-        let succeeded: Int
-        let skipped: Int
-        let ignored: Int
-        let failed: Int
-        let unprocessed: Int
-        let encoded: Int
-        let photosVerified: Int
-        let sourceRetained: Int?
-        let failedSourcesRetained: Int?
-        let failedSourcesVerified: Int?
-        let failedSourceVerificationError: String?
-        let retentionUnknownReason: String?
-        let primaryCleanupComplete: Bool
-        let finalizationError: String?
-
-        var counts: [Int?] { [succeeded, skipped, failed, ignored] }
-        var isValid: Bool {
-            guard schemaVersion == 1,
-                  let total = processingCountTotal(counts + [unprocessed]),
-                  let deliveryCapacity = processingCountTotal([succeeded, unprocessed]),
-                  encoded >= 0, encoded <= deliveryCapacity,
-                  photosVerified >= 0, photosVerified <= deliveryCapacity else { return false }
-            if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
-            if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
-            if let sourceRetained {
-                return sourceRetained >= 0 && sourceRetained <= total && retentionUnknownReason == nil
-                    && failedSourcesRetained.map { $0 <= sourceRetained } != false
-            }
-            return retentionUnknownReason?.isEmpty == false
-        }
-    }
+    typealias FastDelivery = FastImgDeliveryReceipt
 
     struct Event: Decodable {
         let schemaVersion: Int
@@ -4687,6 +4655,22 @@ private struct BatchResults {
         return true
     }
 
+    func deliveryIsDeferred(photos: Bool, source: String?, processExit: Int32?, exitedNormally: Bool) -> Bool {
+        guard photos, processExit == 1, exitedNormally, !mandatoryEvidenceConflict,
+              !isIncomplete, !fastDeliveryInvalid, fastDeliveries.count == 1,
+              fastDeliveries.contains(where: \.isDeferred), totals.keys.allSatisfy({ $0 == "img" }),
+              pendingTotals.count == 1, let img = totals["img"], let pending = pendingTotals["img"] ?? nil,
+              pending == fastDeliveryCount(\.unprocessed), workerExitCodes.count == fastDeliveries.count,
+              fastDeliveries.allSatisfy({ FastImgDeliveryReceipt.samePath($0.sourceDirectory, source) && $0.failedSourceVerificationError == nil
+                  && $0.failedSourcesRetained == $0.failed && $0.failedSourcesVerified == $0.failed
+                  && $0.sourceRetained != nil && $0.retentionUnknownReason == nil
+                  && ($0.isDeferred || $0.finalizationError == nil) }),
+              zip(workerExitCodes, fastDeliveries).allSatisfy({ code, report in
+                  code == (report.isDeferred ? 2 : report.failed > 0 ? 1 : 0)
+              }) else { return false }
+        return (0..<4).allSatisfy { index in img[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) }
+    }
+
     mutating func observeMandatoryEvidence(_ line: String) {
         if hasSeriousProcessingDiagnostic(line) { mandatoryEvidenceConflict = true }
     }
@@ -4695,16 +4679,10 @@ private struct BatchResults {
 
     mutating func ingestFastDelivery(_ line: String) -> Bool {
         let raw = LogTone.message(line)
-        let prefix = "MFB_FAST_IMG_RESULT="
+        let prefix = FastImgDeliveryReceipt.prefix
         guard raw.hasPrefix(prefix) else { return false }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let payload = raw.dropFirst(prefix.count)
-        guard payload.utf8.count <= 32_768, fastDeliveries.count < 4_096,
-              let fields = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-              ["source_retained", "failed_sources_retained", "failed_sources_verified", "failed_source_verification_error",
-               "retention_unknown_reason", "finalization_error"].allSatisfy({ fields[$0] != nil }),
-              let event = try? decoder.decode(FastDelivery.self, from: Data(payload.utf8)), event.isValid else {
+        guard fastDeliveries.count < 4_096,
+              let event = try? FastImgDeliveryReceipt.decode(raw) else {
             fastDeliveryInvalid = true
             return true
         }
@@ -4837,6 +4815,13 @@ private struct PhotosDiagnostics {
         let verificationBatchSize: Int?
         let helperPeakRssBytes: Int?
         let phases: [String: Phase]?
+        let deliveryDeferred: Bool?
+        let scope: String?
+
+        var isDeferredPreparation: Bool {
+            deliveryDeferred == true && scope == "target_preparation" && backend == "native" && !succeeded
+                && committedAssets == 0 && verifiedAssets == 0 && transactionSamples == 0
+        }
     }
 
     private(set) var profile: Profile?
@@ -4863,13 +4848,14 @@ private struct PhotosDiagnostics {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             guard let decoded = try? decoder.decode(Profile.self, from: Data(raw.dropFirst(profilePrefix.count).utf8)),
                   decoded.schemaVersion == 1 else { return false }
+            let previouslyFailed = failed
             if backend != decoded.backend { reset() }
             profile = decoded
             backend = decoded.backend
             committedAssets = decoded.committedAssets ?? committedAssets
             verifiedAssets = decoded.verifiedAssets ?? verifiedAssets
             peakBacklog = decoded.peakVerificationBacklog ?? peakBacklog
-            failed = !decoded.succeeded
+            failed = previouslyFailed || (decoded.deliveryDeferred == true ? !decoded.isDeferredPreparation : !decoded.succeeded)
             return true
         }
         let progressPrefix = "[PHOTOS PROGRESS] "
@@ -4879,7 +4865,9 @@ private struct PhotosDiagnostics {
             if pair.count == 2 { result[String(pair[0])] = String(pair[1]) }
         }
         guard let newBackend = fields["backend"] else { return false }
+        let previouslyFailed = failed
         if backend != newBackend || profile != nil { reset() }
+        failed = previouslyFailed
         backend = newBackend
         if newBackend == "native", let value = fields["committed"].flatMap(Int.init), value >= 0 {
             committedAssets = value
@@ -5907,6 +5895,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let mainLayout = NSStackView()
     private var logDetailsExpanded = false
     private var processEndedWithError = false
+    private var deliveryFixture = false
     private var hasConfirmedFileFailures = false
     private let countStatusLabel = NSTextField(labelWithString: "")
     private var countStatus: String?
@@ -6050,6 +6039,10 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         requestClose()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if deliveryFixture, notification.object as? NSWindow === window { NSApp.terminate(nil) }
     }
 
     func requestClose() -> Bool {
@@ -7232,14 +7225,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .failure(error):
             let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
                 processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
-            if !deliveryConfirmed {
+            let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
+                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            if !deliveryConfirmed && !deferred {
                 photosDiagnostics.markFailed()
             }
             refreshDiagnostics()
             let failureMessage = batchResults.hasPartialSuccess
                 ? localized("result.partially_completed") + " · " + error.localizedDescription
                 : error.localizedDescription
-            let tag = deliveryConfirmed && batchResults.hasPartialSuccess ? "WARN" : "FAIL"
+            let tag = deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
             appendLog("[\(tag)] \(failureMessage)" + countSummary,
                       captureDiagnostics: latestDiagnostics.failure == nil)
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
@@ -7292,8 +7288,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             return
         }
         let photos = lastRequest?.shortestPath ?? false
-        let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: processExit ?? host.lastExitStatus,
-            exitedNormally: exitedNormally ?? host.lastExitWasNormal)
+        let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
+        let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
+        let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
+            exitedNormally: normalExit)
+        let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
+            source: lastRequest?.targetPath, processExit: terminalExit, exitedNormally: normalExit)
+        batchOverviewDelivery.maximumNumberOfLines = deferred ? 0 : 2
         let verifiedPartialFailure = confirmed && photos && countStatus?.uppercased() == "MATCH"
             && batchResults.hasPartialSuccess
         let previousConfirmation = hasConfirmedFileFailures
@@ -7302,7 +7303,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             storage.setAttributedString(styledLog(storage.string))
         }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
-            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed)
+            || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred)
             || (processEndedWithError && batchResults.totals.isEmpty)
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
@@ -7310,6 +7311,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         if batchResults.mandatoryEvidenceConflict { title = localized("result.unconfirmed") }
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
         else if uncertain { title = localized("result.unconfirmed") }
+        else if deferred { title = localized("result.delivery_deferred") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
         else if batchResults.hasPartialSuccess { title = localized("result.attention_count", String(failures ?? 0)) }
         else if batchResults.hasFileFailures { title = localized("result.finished_with_failures") }
@@ -7318,7 +7320,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
             : host.controlState == "cancelled" ? .secondaryLabelColor
-            : uncertain ? .systemRed : verifiedPartialFailure ? .secondaryLabelColor
+            : uncertain ? .systemRed : deferred ? .systemOrange : verifiedPartialFailure ? .secondaryLabelColor
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
             : batchResults.compactSummary
@@ -7353,6 +7355,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             batchOverviewCleanup.stringValue = (logDetailsExpanded ? primary + "\n" : "")
                 + batchResults.outputCleanupText(detailed: logDetailsExpanded)
             batchOverviewCleanup.textColor = cleanupNeedsAttention ? .systemOrange : .secondaryLabelColor
+            if deferred {
+                batchOverviewDelivery.stringValue = batchResults.fastDeliveries.filter(\.isDeferred)
+                    .map(\.deferredDetails).joined(separator: "\n")
+                batchOverviewCleanup.isHidden = !logDetailsExpanded
+            }
         }
         for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery, batchOverviewCleanup] {
             label.toolTip = label.stringValue
@@ -7364,6 +7371,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         if batchResults.mandatoryEvidenceConflict { setLocalizedStatus("result.unconfirmed") }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
+        else if deferred { setLocalizedStatus("result.delivery_deferred") }
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
     }
 
@@ -7950,6 +7958,102 @@ private final class AppController: NSObject, NSWindowDelegate {
         clearBatchLog()
     }
 
+    @discardableResult
+    private func configureDeferredDeliveryFixture() throws -> [String: Any] {
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/delivery-input", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 0, "skipped": 0, "ignored": 0,
+            "failed": 1, "unprocessed": 3, "encoded": 3, "photos_verified": 0, "source_retained": 4,
+            "failed_sources_retained": 1, "failed_sources_verified": 1,
+            "failed_source_verification_error": NSNull(), "retention_unknown_reason": NSNull(),
+            "primary_cleanup_complete": false, "primary_verification_complete": true,
+            "photos_delivery_deferred": true, "source_directory": "/synthetic/delivery-input",
+            "output_directory": "/synthetic/delivery-output", "finalization_error": "synthetic Photos target unavailable"]
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":3,"exit_code":2}"#)
+        appendLog(FastImgDeliveryReceipt.prefix + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        appendLog("[WARN] synthetic Photos target unavailable")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        return receipt
+    }
+
+    func showDeferredDeliveryFixture() throws {
+        deliveryFixture = true
+        try configureDeferredDeliveryFixture()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func validateDeferredDeliveryForSelfTest() throws {
+        let previousRequest = lastRequest
+        let previousDetails = logDetailsExpanded
+        defer {
+            lastRequest = previousRequest
+            logDetailsExpanded = previousDetails
+            clearBatchLog()
+            updateLogPresentation()
+        }
+        let receipt = try configureDeferredDeliveryFixture()
+        guard batchOverviewTitle.stringValue == localized("result.delivery_deferred"),
+              batchOverviewTitle.textColor == .systemOrange,
+              batchOverviewDelivery.stringValue.contains("/synthetic/delivery-output"),
+              !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1),
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: false),
+              !batchResults.deliveryIsDeferred(photos: false, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true),
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/other", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Deferred delivery lost its recorded facts or became confirmed delivery")
+        }
+        let batch = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":3,"exit_code":2}"#
+        var duplicate = batchResults
+        _ = duplicate.ingest(batch)
+        _ = duplicate.ingestFastDelivery(FastImgDeliveryReceipt.prefix
+            + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        guard !duplicate.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+            throw HostError(message: "Duplicate live receipts inflated a deferred delivery")
+        }
+        for (key, value) in [("photos_delivery_deferred", false as Any), ("primary_verification_complete", false as Any),
+                             ("failed_sources_verified", 0 as Any), ("retention_unknown_reason", "unknown" as Any),
+                             ("output_directory", "relative" as Any), ("encoded", 4 as Any),
+                             ("finalization_error", NSNull() as Any)] {
+            var changed = receipt
+            changed[key] = value
+            var results = BatchResults()
+            _ = results.ingest(batch)
+            _ = results.ingestFastDelivery(FastImgDeliveryReceipt.prefix
+                + String(decoding: try JSONSerialization.data(withJSONObject: changed), as: UTF8.self))
+            guard !results.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
+                throw HostError(message: "Invalid delivery-deferred evidence was accepted: \(key)")
+            }
+        }
+        var profile: [String: Any] = ["schema_version": 1, "backend": "native", "succeeded": false,
+            "delivery_deferred": true, "scope": "target_preparation", "committed_assets": 0,
+            "verified_assets": 0, "transaction_samples": 0]
+        func profileLine() throws -> String {
+            "[PHOTOS PROFILE] " + String(decoding: try JSONSerialization.data(withJSONObject: profile), as: UTF8.self)
+        }
+        appendLog(try profileLine())
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard !photosDiagnostics.failed, !batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.stringValue == localized("result.delivery_deferred") else {
+            throw HostError(message: "A zero-commit deferred preparation became a failed Photos verification")
+        }
+        profile["committed_assets"] = 1
+        appendLog(try profileLine())
+        profile["committed_assets"] = 0
+        appendLog(try profileLine())
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard photosDiagnostics.failed, batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+            throw HostError(message: "A later deferred profile concealed possible Photos side effects")
+        }
+        try configureDeferredDeliveryFixture()
+        appendLog("Integrity Issues: 1")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+            throw HostError(message: "Deferred delivery concealed an independent integrity failure")
+        }
+    }
+
     private func validateDiagnosticFoldingForSelfTest() throws {
         var folder = ConsecutiveDiagnosticLogFolder()
         let first = "[WARN] /tmp/clip-1.mov frame=17"
@@ -8312,6 +8416,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "Partial completion hid the failure, exit status or final counts")
         }
         try validateFastDeliveryForSelfTest()
+        try validateDeferredDeliveryForSelfTest()
         clearBatchLog()
         appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":1,"skipped":0,"failed":0,"ignored":0,"unprocessed":2,"exit_code":0}"#)
         guard logView.string.contains(localized("result.unprocessed", "2")), batchResults.hasUnprocessed else {
@@ -9328,6 +9433,22 @@ private func runSelfTest() -> Int32 {
 
 if CommandLine.arguments.contains("--self-test") {
     exit(MainActor.assumeIsolated { runSelfTest() })
+}
+
+if CommandLine.arguments.contains("--delivery-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let suite = "MFBDeliveryFixture.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let controller = AppController(preferences: preferences)
+        do { try controller.showDeferredDeliveryFixture() }
+        catch { fputs("Delivery fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
+        application.activate(ignoringOtherApps: true)
+        withExtendedLifetime(controller) { application.run() }
+    }
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--preflight-ui-fixture") {

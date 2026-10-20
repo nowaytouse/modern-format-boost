@@ -426,6 +426,12 @@
 "log.details.show" = "查看处理详情";
 "log.details.hide" = "收起处理详情";
 "result.unconfirmed" = "结果无法完整确认 · 请查看处理记录";
+"result.delivery_deferred" = "照片导入暂缓";
+"result.delivery_record_title" = "照片交付记录";
+"result.delivery_invalid" = "照片交付记录不完整或互相冲突，请查看原始诊断。";
+"result.delivery_deferred_facts" = "已编码 %@ · 照片本地已核验 %@ · 导入尚未完成";
+"result.delivery_recorded_output" = "记录的输出文件夹：%@";
+"result.delivery_recorded_note" = "以上为当时记录；继续处理前须重新检查文件和交付状态。展开详情可查看原始错误。";
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
 "result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";

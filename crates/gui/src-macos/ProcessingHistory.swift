@@ -221,6 +221,77 @@ private struct HistoryFinished: Decodable, Equatable {
     let output_sequence: Int64?
 }
 
+struct FastImgDeliveryReceipt: Codable, Equatable {
+    static let prefix = "MFB_FAST_IMG_RESULT="
+    static let historyPrefix = "MFB_HISTORY_FAST_IMG_RESULT="
+    let schemaVersion: Int
+    let succeeded: Int
+    let skipped: Int
+    let ignored: Int
+    let failed: Int
+    let unprocessed: Int
+    let encoded: Int
+    let photosVerified: Int
+    let sourceRetained: Int?
+    let failedSourcesRetained: Int?
+    let failedSourcesVerified: Int?
+    let failedSourceVerificationError: String?
+    let retentionUnknownReason: String?
+    let primaryCleanupComplete: Bool
+    let finalizationError: String?
+    let photosDeliveryDeferred: Bool?
+    let primaryVerificationComplete: Bool?
+    let sourceDirectory: String?
+    let outputDirectory: String?
+
+    var counts: [Int?] { [succeeded, skipped, failed, ignored] }
+    var isDeferred: Bool { photosDeliveryDeferred == true }
+    var isValid: Bool {
+        guard schemaVersion == 1,
+              let total = processingCountTotal(counts + [unprocessed]),
+              let capacity = processingCountTotal([succeeded, unprocessed]),
+              encoded >= 0, encoded <= capacity, photosVerified >= 0, photosVerified <= capacity else { return false }
+        if let failedSourcesRetained, !(0...failed).contains(failedSourcesRetained) { return false }
+        if let failedSourcesVerified, !(0...failed).contains(failedSourcesVerified) { return false }
+        if let sourceRetained {
+            guard sourceRetained >= 0, sourceRetained <= total, retentionUnknownReason == nil,
+                  failedSourcesRetained.map({ $0 <= sourceRetained }) != false else { return false }
+        } else if retentionUnknownReason?.isEmpty != false { return false }
+        if isDeferred {
+            guard primaryVerificationComplete == true, unprocessed > 0, !primaryCleanupComplete,
+                  finalizationError?.isEmpty == false,
+                  let sourceDirectory, let outputDirectory,
+                  Self.absolute(sourceDirectory), Self.absolute(outputDirectory) else { return false }
+        }
+        return true
+    }
+    static func absolute(_ path: String) -> Bool { path.hasPrefix("/") && !path.utf8.contains(0) }
+    static func samePath(_ left: String?, _ right: String?) -> Bool {
+        guard let left, let right else { return false }
+        return Data(left.utf8) == Data(right.utf8)
+    }
+    static func decode(_ line: String, prefix: String = FastImgDeliveryReceipt.prefix) throws -> Self? {
+        guard line.hasPrefix(prefix) else { return nil }
+        let data = Data(line.dropFirst(prefix.count).utf8)
+        guard data.count <= 32_768,
+              let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              ["source_retained", "failed_sources_retained", "failed_sources_verified", "failed_source_verification_error",
+               "retention_unknown_reason", "finalization_error"].allSatisfy({ fields[$0] != nil }) else {
+            throw HostError(message: localized("result.delivery_invalid"))
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let receipt = try decoder.decode(Self.self, from: data)
+        guard receipt.isValid else { throw HostError(message: localized("result.delivery_invalid")) }
+        return receipt
+    }
+    var deferredDetails: String {
+        localized("result.delivery_deferred_facts", String(encoded), String(photosVerified)) + "\n"
+            + localized("result.delivery_recorded_output", outputDirectory ?? localized("result.unknown")) + "\n"
+            + localized("result.delivery_recorded_note")
+    }
+}
+
 struct OutputCleanupReceipt: Decodable, Equatable {
     static let prefix = "MFB_OUTPUT_CLEANUP="
     static let historyPrefix = "MFB_HISTORY_OUTPUT_CLEANUP="
@@ -486,6 +557,8 @@ private struct HistoryEntry {
     var verification: HistoryVerification?
     var outputCleanups: [OutputCleanupReceipt] = []
     var outputCleanupInvalid = false
+    var fastDeliveries: [FastImgDeliveryReceipt] = []
+    var fastDeliveryInvalid = false
     var inputPlan: HistoryInputPlan?
     var inputVerifications: [String: HistoryVerification] = [:]
     var configSnapshots: [HistoryConfigSnapshot] = []
@@ -602,6 +675,24 @@ private struct HistoryEntry {
             || (summary?.integrity.issue_count ?? 0) > 0 || summary?.integrity.state == "WARNINGS"
     }
     var hasPending: Bool { (summary?.img.unprocessed ?? 0) > 0 || (summary?.vid.unprocessed ?? 0) > 0 }
+    var deliveryIsDeferred: Bool {
+        guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !fastDeliveryInvalid,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid,
+              workerExecutions.values.allSatisfy({ $0.last?.state == "exited" && $0.last?.signal == nil && $0.last?.exit_code == 2 }),
+              !hasVerificationFailure, context?.dry_run == false, context?.mode == "fast-img",
+              context?.inputs.count == 1, inputPlan == nil,
+              context?.shortest_path == true, let summary, summary.valid, summary.img.complete,
+              summary.integrity.state == nil || ["CLEAN", "WARNINGS"].contains(summary.integrity.state!),
+              !summary.vid.active, summary.img.exit_code == 2, fastDeliveries.count == 1,
+              fastDeliveries.contains(where: \.isDeferred),
+              finished?.outcome == "failed", finished?.error == "fast-img exited with code 2",
+              summary.img.unprocessed == processingCountTotal(fastDeliveries.map(\.unprocessed)),
+              fastDeliveries.allSatisfy({ $0.isDeferred && $0.sourceRetained != nil && $0.retentionUnknownReason == nil
+                  && $0.failedSourcesVerified == $0.failed && $0.failedSourcesRetained == $0.failed
+                  && $0.failedSourceVerificationError == nil }) else { return false }
+        let counts = [summary.img.succeeded, summary.img.skipped, summary.img.failed, summary.img.ignored]
+        return (0..<4).allSatisfy { index in counts[index] == processingCountTotal(fastDeliveries.map { $0.counts[index] }) }
+    }
     var hasPartialSuccess: Bool {
         guard !legacy, issues.isEmpty, contradictoryFields.isEmpty, !hasVerificationFailure, context?.dry_run == false,
               let summary, summary.valid, summary.img.complete, summary.vid.complete, !hasPending,
@@ -625,6 +716,7 @@ private struct HistoryEntry {
     var statusKey: String {
         if hasVerificationFailure { return "result.unconfirmed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
+        if deliveryIsDeferred { return "result.delivery_deferred" }
         if hasPartialSuccess { return "history.status.partial" }
         if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
@@ -658,6 +750,7 @@ private struct HistoryEntry {
     }
     var statusColor: NSColor {
         if hasVerificationFailure { return .systemRed }
+        if deliveryIsDeferred { return .systemOrange }
         if hasPartialSuccess { return .systemOrange }
         if finished?.outcome == "failed" || hasFailures { return .systemRed }
         return needsAttention ? .systemOrange : .labelColor
@@ -666,7 +759,8 @@ private struct HistoryEntry {
         ([stamp, timestamp, context?.mode ?? "", modeLabel ?? "", statusLabel] + (context?.inputs ?? [])
             + [context?.output ?? "", context?.backup ?? "", finished?.error ?? ""]
             + outputCleanups.flatMap { [$0.output_path, $0.outcome, $0.statusText, $0.error ?? ""] })
-            .joined(separator: " ") + " " + outputStorage.values.map(\.detailText)
+            .joined(separator: " ") + " " + fastDeliveries.filter(\.isDeferred).map(\.deferredDetails).joined(separator: " ")
+            + " " + outputStorage.values.map(\.detailText)
             .joined(separator: " ")
     }
     var succeededLabel: String {
@@ -717,7 +811,7 @@ private struct HistoryAudit {
             total + (entry.context == nil ? 0 : 1) + (entry.summary == nil ? 0 : 1)
                 + (entry.verification == nil ? 0 : 1) + (entry.configSnapshots.isEmpty ? 0 : 1)
                 + (entry.inputPlan == nil ? 0 : 1) + entry.inputVerifications.count
-                + (entry.finished == nil ? 0 : 1)
+                + (entry.finished == nil ? 0 : 1) + entry.fastDeliveries.count
         }
     }
 }
@@ -1027,6 +1121,14 @@ private enum HistoryStore {
                         else { throw HistoryParseError.invalid }
                         current.verification = verification
                     }
+                } else if event.hasPrefix(FastImgDeliveryReceipt.historyPrefix) {
+                    guard let receipt = try FastImgDeliveryReceipt.decode(event, prefix: FastImgDeliveryReceipt.historyPrefix),
+                          let context = current.context, context.mode == "fast-img", !context.dry_run,
+                          context.run_id != nil, !current.fastDeliveryInvalid, current.fastDeliveries.count < 64,
+                          !current.fastDeliveries.contains(where: { $0.sourceDirectory == receipt.sourceDirectory }) else {
+                        throw HistoryParseError.invalid
+                    }
+                    current.fastDeliveries.append(receipt)
                 } else if event.hasPrefix(OutputCleanupReceipt.historyPrefix) {
                     guard let receipt = try OutputCleanupReceipt.decode(event, prefix: OutputCleanupReceipt.historyPrefix),
                           let context = current.context, context.mode == "fast-img", !context.dry_run,
@@ -1121,6 +1223,10 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
+                if event.hasPrefix(FastImgDeliveryReceipt.historyPrefix) {
+                    current.fastDeliveries.removeAll()
+                    current.fastDeliveryInvalid = true
+                }
                 if event.hasPrefix(HistoryOutputStorage.prefix) {
                     let object = try? JSONSerialization.jsonObject(with: Data(event.dropFirst(HistoryOutputStorage.prefix.count).utf8)) as? [String: Any]
                     if let identity = object?["invocation_id"] as? String,
@@ -1166,6 +1272,21 @@ private enum HistoryStore {
         entries.append(current)
         for index in entries.indices {
             entries[index].aggregateInputVerification()
+            let entry = entries[index]
+            if entry.fastDeliveries.contains(where: { receipt in
+                guard let source = receipt.sourceDirectory, let output = receipt.outputDirectory else { return true }
+                if let plan = entry.inputPlan {
+                    return !plan.inputs.contains(where: { FastImgDeliveryReceipt.samePath($0.source, source)
+                        && FastImgDeliveryReceipt.samePath($0.output, output) })
+                }
+                return entry.context?.inputs.count != 1
+                    || !FastImgDeliveryReceipt.samePath(entry.context?.inputs.first, source)
+                    || entry.context?.output.map({ !FastImgDeliveryReceipt.samePath($0, output) }) == true
+            }) {
+                entries[index].fastDeliveries.removeAll()
+                entries[index].fastDeliveryInvalid = true
+                entries[index].issues.append(localized("result.delivery_invalid"))
+            }
             let planOutputs = entries[index].inputPlan?.inputs.compactMap(\.output)
             let contextOutput = entries[index].context?.output
             let verifiedOutput = entries[index].verification?.output_path
@@ -1698,6 +1819,11 @@ private enum HistoryStore {
             "output_storage_unbound_invalid": entry.unboundOutputStorageInvalid,
             "input_plan": nullable(plan), "verification": nullable(entry.verification.map(verification)),
             "input_verifications": entry.inputVerifications.mapValues(verification), "ignored_inventory": ignoredInventory,
+            "fast_img_delivery": ["invalid": entry.fastDeliveryInvalid, "receipts": try entry.fastDeliveries.map { receipt in
+                let encoder = JSONEncoder()
+                encoder.keyEncodingStrategy = .convertToSnakeCase
+                return try JSONSerialization.jsonObject(with: encoder.encode(receipt))
+            }],
             "output_cleanup": ["state": entry.outputCleanups.isEmpty ? "unavailable" : "recorded",
                 "receipts": entry.outputCleanups.map(\.recordedObject)], "records": retained]
         let data = try JSONSerialization.data(withJSONObject: artifact, options: [.prettyPrinted, .sortedKeys])
@@ -1917,6 +2043,11 @@ private enum HistoryStore {
                         if let a = left.summary, let b = right.summary, a != b { conflictingCopies = true }
                         if let a = left.verification, let b = right.verification, a != b { conflictingCopies = true }
                         if let a = left.inputPlan, let b = right.inputPlan, a != b { conflictingCopies = true }
+                        if !left.fastDeliveries.isEmpty && !right.fastDeliveries.isEmpty,
+                           left.fastDeliveries.sorted(by: { ($0.sourceDirectory ?? "") < ($1.sourceDirectory ?? "") })
+                            != right.fastDeliveries.sorted(by: { ($0.sourceDirectory ?? "") < ($1.sourceDirectory ?? "") }) {
+                            conflictingCopies = true
+                        }
                         for (source, receipt) in left.inputVerifications {
                             if let other = right.inputVerifications[source], receipt != other { conflictingCopies = true }
                         }
@@ -2853,6 +2984,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             }
         }
         if entry.context?.mode == "fast-img" {
+            if entry.fastDeliveryInvalid { lines += ["", localized("result.delivery_invalid")] }
+            for receipt in entry.fastDeliveries where receipt.isDeferred {
+                lines += ["", localized("result.delivery_record_title"), receipt.deferredDetails]
+                if let error = receipt.finalizationError { lines.append(error) }
+            }
             lines += ["", localized("cleanup.history_title")]
             if entry.outputCleanupInvalid { lines.append(localized("cleanup.invalid")) }
             else if entry.outputCleanups.isEmpty { lines.append(localized("cleanup.not_recorded")) }
@@ -4104,6 +4240,67 @@ func runProcessingHistorySelfTests() throws {
     let cancelled = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "outcome": "cancelled", "error": NSNull()])
     func parsed(_ events: [String]) throws -> HistoryAudit { HistoryStore.parse(data: try records(events), stamp: "test", audit: fixtureURL) }
     func require(_ condition: Bool, _ message: String) throws { if !condition { throw HostError(message: message) } }
+    let deferredRun = "run-delivery-deferred"
+    let deferredContext = try payload("MFB_HISTORY_CONTEXT", ["schema_version": 1, "run_id": deferredRun,
+        "inputs": ["/synthetic/input"], "output": "/synthetic/output", "backup": NSNull(), "mode": "fast-img",
+        "dry_run": false, "in_place": false, "shortest_path": true])
+    let deferredReceipt: [String: Any] = ["schema_version": 1, "run_id": deferredRun,
+        "source_directory": "/synthetic/input", "output_directory": "/synthetic/output",
+        "succeeded": 0, "skipped": 0, "ignored": 0, "failed": 1, "unprocessed": 3, "encoded": 3,
+        "photos_verified": 0, "source_retained": 4, "failed_sources_retained": 1, "failed_sources_verified": 1,
+        "failed_source_verification_error": NSNull(), "retention_unknown_reason": NSNull(),
+        "primary_cleanup_complete": false, "primary_verification_complete": true, "photos_delivery_deferred": true,
+        "finalization_error": "synthetic Photos target unavailable"]
+    var deferredSummary = summaryValue
+    deferredSummary["run_id"] = deferredRun
+    deferredSummary["img"] = ["active": true, "succeeded": 0, "skipped": 0, "ignored": 0,
+        "failed": 1, "unprocessed": 3, "exit_code": 2]
+    let deferredFinal = try payload("MFB_HISTORY_FINISHED", ["schema_version": 1, "run_id": deferredRun,
+        "outcome": "failed", "error": "fast-img exited with code 2"])
+    let deliveryEvent = try payload("MFB_HISTORY_FAST_IMG_RESULT", deferredReceipt)
+    let deliverySummary = try payload("MFB_HISTORY_SUMMARY", deferredSummary)
+    let deferredEntry = try parsed([deferredContext, deliveryEvent, deliverySummary, deferredFinal]).entries[0]
+    try require(deferredEntry.deliveryIsDeferred && deferredEntry.statusKey == "result.delivery_deferred"
+        && deferredEntry.statusColor == .systemOrange && deferredEntry.succeededLabel == "0"
+        && ProcessingHistoryPanel.render(deferredEntry).contains("/synthetic/output")
+        && ProcessingHistoryPanel.render(deferredEntry).contains("synthetic Photos target unavailable"),
+        "History lost deferred delivery evidence or claimed completed delivery")
+    for (key, value) in [("run_id", "another-run" as Any), ("source_directory", "/synthetic/other" as Any),
+                         ("output_directory", "/synthetic/other" as Any), ("failed_sources_verified", 0 as Any),
+                         ("primary_verification_complete", false as Any), ("unprocessed", 2 as Any)] {
+        var changed = deferredReceipt
+        changed[key] = value
+        let entry = try parsed([deferredContext, try payload("MFB_HISTORY_FAST_IMG_RESULT", changed),
+            deliverySummary, deferredFinal]).entries[0]
+        try require(!entry.deliveryIsDeferred, "History accepted contradictory deferred evidence: \(key)")
+    }
+    let duplicateDelivery = try parsed([deferredContext, deliveryEvent, deliveryEvent, deliverySummary, deferredFinal]).entries[0]
+    try require(duplicateDelivery.fastDeliveryInvalid && !duplicateDelivery.deliveryIsDeferred,
+                "Duplicate delivery observations inflated a deferred result")
+    var cancelledDelivery: [String: Any] = ["schema_version": 1, "run_id": deferredRun,
+        "outcome": "cancelled", "error": NSNull()]
+    let cancelledEntry = try parsed([deferredContext, deliveryEvent, deliverySummary,
+        try payload("MFB_HISTORY_FINISHED", cancelledDelivery)]).entries[0]
+    try require(cancelledEntry.statusKey == "history.status.cancelled", "Deferred delivery concealed cancellation")
+    cancelledDelivery["outcome"] = "failed"
+    cancelledDelivery["error"] = "synthetic crash"
+    let crashedDelivery = try parsed([deferredContext, deliveryEvent, deliverySummary,
+        try payload("MFB_HISTORY_FINISHED", cancelledDelivery)]).entries[0]
+    try require(!crashedDelivery.deliveryIsDeferred, "Deferred delivery concealed an unexpected terminal failure")
+    let deferredPlan = try payload("MFB_HISTORY_INPUT_PLAN", ["schema_version": 1, "run_id": deferredRun,
+        "inputs": [["source": "/synthetic/input", "output": "/synthetic/output",
+            "in_place": false, "requires_verification": true]]])
+    let plannedDelivery = try parsed([deferredContext, deferredPlan, deliveryEvent, deliverySummary, deferredFinal]).entries[0]
+    try require(!plannedDelivery.deliveryIsDeferred && plannedDelivery.verification == nil
+        && plannedDelivery.contradictoryFields.contains("input_plan"),
+        "An unsupported single-input plan bypassed History input validation")
+    var unsafeSummary = deferredSummary
+    unsafeSummary["integrity"] = ["state": "WARNINGS", "issue_count": 1]
+    let unsafeDelivery = try parsed([deferredContext, deliveryEvent, try payload("MFB_HISTORY_SUMMARY", unsafeSummary), deferredFinal]).entries[0]
+    try require(unsafeDelivery.statusKey == "result.unconfirmed", "Deferred delivery hid an independent integrity issue")
+    try require(ProcessingHistoryPanel.render(unsafeDelivery).contains(localized("result.delivery_record_title"))
+        && !ProcessingHistoryPanel.render(unsafeDelivery).contains(localized("result.delivery_deferred")),
+        "A historical delivery receipt overrode the unconfirmed primary verdict")
     func diagnosticRow(_ sequence: Int64, _ pipeline: String, _ line: String) -> HistoryStore.Output.Row {
         let tone = LogTone.classify(line)
         return HistoryStore.Output.Row(sequence: sequence, text: "[synthetic] \(pipeline): \(line)",

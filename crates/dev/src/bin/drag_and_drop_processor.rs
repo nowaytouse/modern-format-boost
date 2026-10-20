@@ -373,6 +373,46 @@ impl DragDropSession {
             .context("write output cleanup marker to stdout")
     }
 
+    fn record_fast_img_result(&self, text: &str, stats: &ProcessorStats) -> Result<()> {
+        let mut reports = text
+            .lines()
+            .filter(|line| line.contains("MFB_FAST_IMG_RESULT="));
+        let Some(line) = reports.next() else {
+            return Ok(());
+        };
+        let payload = line
+            .strip_prefix("MFB_FAST_IMG_RESULT=")
+            .context("fast-img result has an invalid record prefix")?;
+        anyhow::ensure!(
+            payload.len() <= 32_768 && reports.next().is_none(),
+            "fast-img result is oversized or duplicated"
+        );
+        let report: serde_json::Value =
+            serde_json::from_str(payload).context("decode fast-img result for history")?;
+        anyhow::ensure!(
+            report["schema_version"] == 1 && stats.counts_complete(),
+            "fast-img history requires complete current result counts"
+        );
+        for (key, expected) in [
+            ("succeeded", stats.succeeded),
+            ("skipped", stats.skipped),
+            ("failed", stats.failed),
+            ("ignored", stats.ignored),
+            (
+                "unprocessed",
+                stats
+                    .unprocessed
+                    .context("missing fast-img unprocessed count")?,
+            ),
+        ] {
+            anyhow::ensure!(
+                report[key].as_u64() == Some(u64::try_from(expected)?),
+                "fast-img result count {key} disagrees with worker output"
+            );
+        }
+        self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report)
+    }
+
     fn record_history_verification(
         &self,
         verify: &dev::infra::drag_drop::VerifyOutcome,
@@ -2788,12 +2828,23 @@ fn run_drag_drop_inner(
                 Ok((stats, output)) => {
                     summary.img = stats.clone();
                     let mut failed_sources_verified = None;
+                    let mut evidence_available = false;
                     match dev::infra::history_store::read_fast_img_finalization_since(
                         &session.expect("session").log_dir,
                         &session.expect("session").stamp,
                         output_cursor.context("fast-img run has no processing output boundary")?,
                     ) {
                         Ok(text) => {
+                            if let Err(error) = session
+                                .expect("session")
+                                .record_fast_img_result(&text, &stats)
+                            {
+                                eprintln!("[ERROR] fast-img result history failed: {error:#}");
+                                first_error =
+                                    Some(error.context("persist fast-img result receipt"));
+                            } else {
+                                evidence_available = true;
+                            }
                             if args.shortest_path {
                                 failed_sources_verified =
                                     fast_img_partial_cleanup_verified(&text, &stats);
@@ -2824,7 +2875,9 @@ fn run_drag_drop_inner(
                             stats.exit_code
                         ));
                     }
-                    let verified = if stats.exit_code == 0 || failed_sources_verified.is_some() {
+                    let verified = if evidence_available
+                        && (stats.exit_code == 0 || failed_sources_verified.is_some())
+                    {
                         run_fast_img_post_success(
                             args,
                             &root,
@@ -4454,6 +4507,46 @@ mod tests {
         assert_eq!(resolved.sources["img.avif_quality"], "CLI");
         assert_eq!(resolved.sources["img.avif_speed"], "CLI");
         Ok(())
+    }
+
+    #[test]
+    fn fast_img_result_history_binds_current_run_and_rejects_count_conflicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path())
+            .unwrap()
+            .for_run()
+            .unwrap();
+        let stats = ProcessorStats {
+            failed: 1,
+            unprocessed: Some(3),
+            exit_code: 2,
+            reported: [true; 4],
+            ..ProcessorStats::default()
+        };
+        let payload = serde_json::json!({
+            "schema_version":1,"succeeded":0,"failed":1,"skipped":0,"ignored":0,"unprocessed":3,
+            "photos_delivery_deferred":true,"source_directory":"/fixture/source","output_directory":"/fixture/output"
+        });
+        let line = format!("MFB_FAST_IMG_RESULT={payload}");
+        session.record_fast_img_result(&line, &stats).unwrap();
+        let receipts = history_payloads(&session, "MFB_HISTORY_FAST_IMG_RESULT");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0]["run_id"].as_str(), session.run_id.as_deref());
+        assert_eq!(receipts[0]["photos_delivery_deferred"], true);
+        let mut wrong = payload;
+        wrong["unprocessed"] = serde_json::json!(4);
+        for invalid in [
+            format!("MFB_FAST_IMG_RESULT={wrong}"),
+            format!("{line}\n{line}"),
+            "MFB_FAST_IMG_RESULT={}".into(),
+            format!("ERR: {line}"),
+        ] {
+            assert!(session.record_fast_img_result(&invalid, &stats).is_err());
+        }
+        assert_eq!(
+            history_payloads(&session, "MFB_HISTORY_FAST_IMG_RESULT").len(),
+            1
+        );
     }
 
     #[test]
