@@ -160,6 +160,7 @@
 "log.photos_preflight" = "“照片”导入预检已停止：%@";
 "log.omitted" = "[MFB 界面] 为保持响应，未显示 %llu 条普通日志。这不代表日志已完整保存；可到处理记录核查已保存内容。";
 "log.critical_overflow" = "界面未能接收 %llu 条重要处理记录，无法确认任务是否完整完成。请到处理记录核查已保存内容。";
+"log.diagnostics_omitted" = "界面已省略 %llu 条诊断明细；结果计数不受影响。请到处理记录查看已保存的明细。";
 "log.visible_tail" = "[MFB 界面] 较早内容已移出此视图；可到处理记录核查已保存内容。";
 "status.processor_diagnostic_truncated" = "启动检查输出过长，仅显示开头；后续诊断未保留。这不是批次处理日志。";
 "alert.resume.title" = "发现未完成的任务";
@@ -411,7 +412,9 @@
 "result.partially_completed" = "部分成功，仍有文件失败";
 "result.stopped_with_error" = "因错误停止";
 "result.invalid" = "批次结果格式无效或不受支持，结果计数不可用。";
-"result.incomplete" = "进程已结束，但未报告全部结果计数";
+"result.incomplete" = "处理计数尚不完整，请到处理记录核查。";
+"result.counts_need_review" = "处理已结束 · 部分计数待核查";
+"result.control_records_missing" = "部分关键记录未送达界面，无法确认整批结果。请到处理记录核查。";
 "result.unfinished" = "处理已结束，仍有未完成项目";
 "result.attention_count" = "本次处理已结束 · %@ 项未成功";
 "result.completed_count" = "已完成 %@ 项";
@@ -433,6 +436,7 @@
 "result.delivery_recorded_output" = "记录的输出文件夹：%@";
 "result.delivery_recorded_note" = "以上为当时记录；继续处理前须重新检查文件和交付状态。展开详情可查看原始错误。";
 "result.delivery_facts" = "已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
+"result.independent_delivery_facts" = "独立回执：已编码 %@ · 照片本地已核验 %@ · 已保留源文件 %@";
 "result.cleanup_primary" = "主流程清理已完成；其他残留目录未检查。照片本地核验不代表 iCloud 已同步。";
 "result.cleanup_unknown" = "收尾状态尚待确认；未自动清理其他目录。照片本地核验不代表 iCloud 已同步。";
 "cleanup.history_title" = "输出目录清理（当时记录）";

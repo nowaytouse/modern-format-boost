@@ -23,6 +23,23 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Reliable Native Result Counts Under Log Pressure (2026-10-21)
+
+- Give ordinary text, diagnostic details and control/safety receipts independent
+  bounded display budgets. Warning and per-file diagnostic bursts no longer erase
+  complete result counts by generating a fake empty worker result.
+- Report actual control-record loss explicitly and keep it fail-closed. Later
+  valid results cannot conceal lost safety evidence, malformed receipts or crashes.
+- Keep independent encoded/local-Photos/retained-source facts visible when count
+  reports are incomplete. Use a scoped count-review notice instead of repeating
+  five unknown totals; known delivery conflicts retain their stronger warning.
+- Add synthetic burst, concurrency, byte-budget and native summary regressions,
+  plus a float32 EXR round-trip regression for the existing dependency refresh.
+  No verification requirements, Photos receipts or source-deletion rules change.
+- Refresh the existing `crc32fast` pin to 1.5.3 and the `exr` source revision to
+  `a3c549b8`; cover CRC validation/migration and exact synthetic float32 sample
+  preservation without changing MFB's media policy.
+
 ### Photos Original Custody Reverification Progress (2026-10-20)
 
 - Show the real tier-2 Photos-original custody recheck in the native progress

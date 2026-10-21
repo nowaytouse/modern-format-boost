@@ -90,9 +90,20 @@ all entries ever stored in a checkpoint.
   Log destinations are opened before child work begins; separate output pipes
   are drained concurrently. Malformed final labels invalidate previous values;
   only known report decorations are accepted after a number.
-- GUI log backpressure reserves bounded capacity for result/control/error
-  records. Critical overflow invalidates the batch result, even when a later
-  valid result arrives. Display truncation never substitutes for complete proof.
+- GUI log backpressure has separate bounded budgets for ordinary text,
+  diagnostic details and control/safety evidence, retaining accepted record order.
+  A warning or ordinary per-file failure burst cannot displace final count and
+  delivery receipts. Valid ignored/file-failure detail rows use the diagnostic
+  budget; safety failures and malformed structured records use the control budget.
+  Diagnostic omissions do not invalidate intact counts. Actual control-record
+  loss is a sticky evidence gap, even when a later valid result arrives; a
+  dedicated GUI transport event reports that gap, never a fabricated worker result.
+- Missing/invalid counts are explained once rather than rendered as five unknown
+  totals. Independently received delivery facts remain visible in both compact and
+  detailed views without filling missing processing counts. Count-only gaps use a
+  scoped review notice; invalid delivery receipts, safety conflicts, missing control
+  evidence and abnormal termination cannot inherit a confirmed partial verdict.
+  Neither display truncation nor matching inventory substitutes for complete proof.
 
 ## Regression Scope
 

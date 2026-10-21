@@ -321,13 +321,23 @@ chosen after runtime fallback are not yet part of this record.
 
 ### Native Log Visibility
 
-The native live log is a bounded view, not a durable audit receipt. Queue pressure
-reports ordinary omitted display entries separately from lost important processing
-records (including stage/control records, results and diagnostics).
-Missing critical records still invalidate completion evidence, including when a
-later summary arrives; these are display-record counts, not source-log line or
-failed-media counts. Oversized source lines may span multiple bounded display
-records. The 3,000-line view includes a notice when older content has been removed and retains the newest
+The native live log is a bounded view, not a durable audit receipt. Ordinary text,
+diagnostic details, and result/control/safety records have independent bounded
+budgets while accepted records retain their arrival order. Ordinary warnings,
+per-file failures and valid ignored/file-failure detail rows cannot exhaust the
+result reserve; serious safety diagnostics and malformed structured detail rows
+remain control records. Replaceable file-progress snapshots are still coalesced.
+
+`MFB_GUI_TRANSPORT_GAP` reports omitted `diagnostic_records` and `control_records`
+separately. These are display-record counts, not source-log line or failed-media
+counts. Diagnostic omissions leave intact result counts usable. Missing control
+records still invalidate completion evidence even when a later summary arrives;
+the interface never manufactures an empty `MFB_BATCH_RESULT` to represent display
+pressure. Invalid gap reports also fail closed. Neither case alters worker or
+history counts. Missing count reports receive a scoped notice; independent delivery
+facts remain visible without being substituted for the missing processing totals.
+
+Oversized source lines may span multiple bounded display records. The 3,000-line view includes a notice when older content has been removed and retains the newest
 2,999 lines. Clearing or trimming this view does not delete backend records.
 
 These notices direct users to inspect **saved content** in Processing History;

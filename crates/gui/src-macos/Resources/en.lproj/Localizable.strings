@@ -160,6 +160,7 @@
 "log.photos_preflight" = "Photos import preflight stopped: %@";
 "log.omitted" = "[MFB UI] %llu ordinary log entries were not displayed to keep the interface responsive. This does not confirm complete storage; check saved content in processing history.";
 "log.critical_overflow" = "%llu important processing records could not reach the interface. Task completion cannot be confirmed; check saved content in processing history.";
+"log.diagnostics_omitted" = "The interface omitted %llu diagnostic details; result counts are unaffected. Review saved details in processing history.";
 "log.visible_tail" = "[MFB UI] Earlier content is no longer shown here; check saved content in processing history.";
 "status.processor_diagnostic_truncated" = "Startup check output was too long. Only the beginning is shown; later diagnostics were not retained. This is not a batch log.";
 "alert.resume.title" = "Unfinished task found";
@@ -411,7 +412,9 @@
 "result.partially_completed" = "Partially completed; some files failed";
 "result.stopped_with_error" = "Stopped with an error";
 "result.invalid" = "Batch result is malformed or unsupported; counts are unavailable.";
-"result.incomplete" = "Process exited; some result counts were not reported";
+"result.incomplete" = "Processing counts are incomplete. Review processing history.";
+"result.counts_need_review" = "Processing ended · Some counts need review";
+"result.control_records_missing" = "Some critical records did not reach the interface. The full batch result is unconfirmed; review processing history.";
 "result.unfinished" = "Processing ended with unfinished items";
 "result.attention_count" = "Processing ended · Unsuccessful items: %@";
 "result.completed_count" = "%@ completed";
@@ -433,6 +436,7 @@
 "result.delivery_recorded_output" = "Recorded output folder: %@";
 "result.delivery_recorded_note" = "These are recorded results. Files and delivery state must be checked again before continuing. Open details for the original error.";
 "result.delivery_facts" = "Encoded %@ · Verified in local Photos %@ · Source files retained %@";
+"result.independent_delivery_facts" = "Independent receipt: encoded %@ · Verified in local Photos %@ · Source files retained %@";
 "result.cleanup_primary" = "Primary cleanup completed; other leftover folders were not checked. Local Photos verification does not confirm iCloud sync.";
 "result.cleanup_unknown" = "Finalization needs review; other folders were not automatically removed. Local Photos verification does not confirm iCloud sync.";
 "cleanup.history_title" = "Output Folder Cleanup (Recorded Then)";

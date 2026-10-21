@@ -2403,6 +2403,45 @@ mod tests {
     }
 
     #[test]
+    fn exr_export_preserves_float32_samples() -> anyhow::Result<()> {
+        use exr::prelude::{pixel_vec::PixelVec, read_first_rgba_layer_from_file};
+
+        let temp = tempfile::tempdir()?;
+        let output = temp.path().join("float-samples.exr");
+        let samples: [f32; 12] = [
+            0.0,
+            0.1,
+            1.0,
+            -0.25,
+            2.5,
+            0.000_001,
+            0.5,
+            f32::MIN_POSITIVE,
+            65_504.0,
+            0.125,
+            1.5,
+            -2.0,
+        ];
+        write_exr(&samples, 2, 2, &output)?;
+        let decoded = read_first_rgba_layer_from_file(
+            &output,
+            PixelVec::<(f32, f32, f32, f32)>::constructor,
+            PixelVec::set_pixel,
+        )?;
+        let pixels = decoded.layer_data.channel_data.pixels;
+        assert_eq!((pixels.resolution.width(), pixels.resolution.height()), (2, 2));
+        assert_eq!(
+            pixels
+                .pixels
+                .iter()
+                .flat_map(|&(r, g, b, _)| [r.to_bits(), g.to_bits(), b.to_bits()])
+                .collect::<Vec<_>>(),
+            samples.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_sidecar_output_path_appends_suffix_before_extension() {
         let output = Path::new("/tmp/photo.jxl");
         assert_eq!(

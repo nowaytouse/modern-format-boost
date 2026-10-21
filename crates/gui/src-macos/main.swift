@@ -4772,6 +4772,8 @@ private struct BatchResults {
     private(set) var hasUnprocessed = false
     private(set) var pendingTotalOverflowed = false
     private(set) var invalid = false
+    private(set) var controlRecordsMissing = false
+    private(set) var transportGapNotice: String?
     private(set) var fastDeliveries: [FastDelivery] = []
     private(set) var fastDeliveryInvalid = false
     private(set) var outputCleanups: [OutputCleanupReceipt] = []
@@ -4779,6 +4781,32 @@ private struct BatchResults {
     private var workerExitCodes: [Int] = []
     private(set) var mandatoryEvidenceConflict = false
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    mutating func ingestTransportGap(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        let prefix = "MFB_GUI_TRANSPORT_GAP="
+        guard raw.hasPrefix(prefix) else { return false }
+        struct Gap: Decodable {
+            let schema_version: Int
+            let control_records: UInt64
+            let diagnostic_records: UInt64
+        }
+        guard let gap = try? JSONDecoder().decode(Gap.self, from: Data(raw.dropFirst(prefix.count).utf8)),
+              gap.schema_version == 1, gap.control_records > 0 || gap.diagnostic_records > 0 else {
+            controlRecordsMissing = true
+            mandatoryEvidenceConflict = true
+            transportGapNotice = localized("result.control_records_missing")
+            return true
+        }
+        if gap.control_records > 0 {
+            controlRecordsMissing = true
+            mandatoryEvidenceConflict = true
+            transportGapNotice = localized("log.critical_overflow", gap.control_records)
+        } else {
+            transportGapNotice = localized("log.diagnostics_omitted", gap.diagnostic_records)
+        }
+        return true
+    }
 
     mutating func ingestOutputCleanup(_ line: String) -> Bool {
         let raw = LogTone.message(line)
@@ -4865,7 +4893,7 @@ private struct BatchResults {
         return true
     }
     var isIncomplete: Bool {
-        if invalid || pendingTotalOverflowed || totals.values.contains(where: { $0.contains(where: { $0 == nil }) }) {
+        if invalid || controlRecordsMissing || pendingTotalOverflowed || totals.values.contains(where: { $0.contains(where: { $0 == nil }) }) {
             return true
         }
         var total = 0
@@ -4886,8 +4914,16 @@ private struct BatchResults {
                                         && pendingTotals.values.allSatisfy { $0 == 0 })
     }
 
+    var hasCompleteCountReport: Bool {
+        !isIncomplete && !totals.isEmpty && pendingTotals.count == totals.count
+            && pendingTotals.values.allSatisfy { $0 != nil }
+    }
+
     var summary: String? {
+        if controlRecordsMissing { return localized("result.control_records_missing") }
+        if invalid { return localized("result.invalid") }
         guard !totals.isEmpty else { return nil }
+        if isIncomplete { return localized("result.incomplete") }
         let count = { (value: Int?) in value.map(String.init) ?? localized("result.unknown") }
         let counts = (0..<4).map { field in
             count(invalid ? nil : processingCountTotal(totals.values.map { $0[field] }))
@@ -4898,13 +4934,14 @@ private struct BatchResults {
     }
 
     var compactSummary: String {
+        if controlRecordsMissing || invalid || isIncomplete { return summary ?? localized("result.incomplete") }
         guard !isIncomplete,
               let succeeded = processingCountTotal(totals.values.map { $0[0] }),
               let skipped = processingCountTotal(totals.values.map { $0[1] }),
               let failed = processingCountTotal(totals.values.map { $0[2] }),
               let ignored = processingCountTotal(totals.values.map { $0[3] }),
               let pending = processingCountTotal(Array(pendingTotals.values)) else {
-            return localized("result.review_details")
+            return localized("result.incomplete")
         }
         var parts = [localized("result.completed_count", String(succeeded))]
         for (count, key) in [(failed, "result.failed_count"), (pending, "result.pending_count"),
@@ -5330,9 +5367,15 @@ private func readBoundedProcessOutput(
 }
 
 private final class ProcessLogBackpressure: @unchecked Sendable {
+    static let gapPrefix = "MFB_GUI_TRANSPORT_GAP="
+
+    private enum RecordKind { case ordinary, diagnostic, control }
+
     private let lock = NSLock()
     private let maxBytes: Int
     private let maxEntries: Int
+    private let maxDiagnosticBytes: Int
+    private let maxDiagnosticEntries: Int
     private let maxCriticalBytes: Int
     private let maxCriticalEntries: Int
     private var pending = ""
@@ -5340,24 +5383,50 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     private var pendingEntries = 0
     private var criticalBytes = 0
     private var criticalEntries = 0
+    private var diagnosticBytes = 0
+    private var diagnosticEntries = 0
     private var omittedCriticalEntries: UInt64 = 0
+    private var omittedDiagnosticEntries: UInt64 = 0
     private var pendingProgress: String?
     private var omittedEntries: UInt64 = 0
     private var deliveryInFlight = false
 
     init(maxBytes: Int = maxProcessLogBatchBytes, maxEntries: Int = maxProcessLogBatchEntries,
-         maxCriticalBytes: Int = maxProcessLogBatchBytes, maxCriticalEntries: Int = maxProcessLogBatchEntries) {
-        precondition(maxBytes >= 0 && maxEntries >= 0 && maxCriticalBytes >= 0 && maxCriticalEntries >= 0)
+         maxCriticalBytes: Int = maxProcessLogBatchBytes, maxCriticalEntries: Int = maxProcessLogBatchEntries,
+         maxDiagnosticBytes: Int = maxProcessLogBatchBytes, maxDiagnosticEntries: Int = maxProcessLogBatchEntries) {
+        precondition(maxBytes >= 0 && maxEntries >= 0 && maxCriticalBytes >= 0 && maxCriticalEntries >= 0
+            && maxDiagnosticBytes >= 0 && maxDiagnosticEntries >= 0)
         self.maxBytes = maxBytes
         self.maxEntries = maxEntries
         self.maxCriticalBytes = maxCriticalBytes
         self.maxCriticalEntries = maxCriticalEntries
+        self.maxDiagnosticBytes = maxDiagnosticBytes
+        self.maxDiagnosticEntries = maxDiagnosticEntries
+    }
+
+    private static func recordKind(_ text: String) -> RecordKind {
+        let raw = LogTone.message(text)
+        if raw.hasPrefix(HistoryIgnoredSource.prefix) {
+            return (try? HistoryIgnoredSource.decode(raw)) == nil ? .control : .diagnostic
+        }
+        if raw.hasPrefix(HistoryFileFailure.prefix) {
+            guard let failure = try? HistoryFileFailure.decode(raw) else { return .control }
+            return hasSeriousProcessingDiagnostic(failure.message) ? .control : .diagnostic
+        }
+        if raw.hasPrefix("MFB_") || raw.hasPrefix("[PHOTOS PROFILE]")
+            || raw.hasPrefix("[PHOTOS PROGRESS]") || countStatusValue(in: raw) != nil
+            || raw.hasPrefix("Integrity:") || raw.hasPrefix("Integrity Issues:")
+            || raw.hasPrefix("[GATE") || hasSeriousProcessingDiagnostic(raw) {
+            return .control
+        }
+        let tone = LogTone.classify(text)
+        return tone == .warning || tone == .failure || tone == .result ? .diagnostic : .ordinary
     }
 
     func enqueue(_ entry: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        // Control records and diagnostics have a separate bounded reserve, preserving arrival order.
+        // Diagnostic bursts must not consume the reserve for result and safety evidence.
         for line in entry.split(separator: "\n", omittingEmptySubsequences: false) {
             let text = String(line)
             // Progress is a replaceable snapshot, not a result or diagnostic.
@@ -5365,29 +5434,43 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
                 pendingProgress = payload.utf8.count <= 1_024 ? text : "MFB_PROGRESS={}"
                 continue
             }
-            let tone = LogTone.classify(text)
-            let critical = text.contains("MFB_")
-                || text.contains("[PHOTOS PROFILE]") || countStatusValue(in: text) != nil
-                || tone == .warning || tone == .failure || tone == .result
-            let limit = critical ? maxCriticalBytes : maxBytes
-            let used = critical ? criticalBytes : pendingBytes
-            let entries = critical ? criticalEntries : pendingEntries
-            let entryLimit = critical ? maxCriticalEntries : maxEntries
+            let kind = Self.recordKind(text)
+            let limit: Int
+            let used: Int
+            let entries: Int
+            let entryLimit: Int
+            switch kind {
+            case .ordinary:
+                (limit, used, entries, entryLimit) = (maxBytes, pendingBytes, pendingEntries, maxEntries)
+            case .diagnostic:
+                (limit, used, entries, entryLimit) = (maxDiagnosticBytes, diagnosticBytes, diagnosticEntries, maxDiagnosticEntries)
+            case .control:
+                (limit, used, entries, entryLimit) = (maxCriticalBytes, criticalBytes, criticalEntries, maxCriticalEntries)
+            }
             let separatorBytes = pending.isEmpty ? 0 : 1
             let entryBytes = text.utf8.count
             if entries >= entryLimit || separatorBytes > limit - used
                 || entryBytes > limit - used - separatorBytes {
-                if critical {
+                switch kind {
+                case .control:
                     if omittedCriticalEntries < UInt64.max { omittedCriticalEntries += 1 }
-                } else if omittedEntries < UInt64.max { omittedEntries += 1 }
+                case .diagnostic:
+                    if omittedDiagnosticEntries < UInt64.max { omittedDiagnosticEntries += 1 }
+                case .ordinary:
+                    if omittedEntries < UInt64.max { omittedEntries += 1 }
+                }
                 continue
             }
             if separatorBytes > 0 { pending.append("\n") }
             pending.append(text)
-            if critical {
+            switch kind {
+            case .control:
                 criticalBytes += separatorBytes + entryBytes
                 criticalEntries += 1
-            } else {
+            case .diagnostic:
+                diagnosticBytes += separatorBytes + entryBytes
+                diagnosticEntries += 1
+            case .ordinary:
                 pendingBytes += separatorBytes + entryBytes
                 pendingEntries += 1
             }
@@ -5410,17 +5493,20 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
             if !payload.isEmpty { payload.append("\n") }
             payload.append(localized("log.omitted", omittedEntries))
         }
-        if omittedCriticalEntries > 0 {
-            // Missing control records must invalidate completion, even if a later record is valid.
+        if omittedCriticalEntries > 0 || omittedDiagnosticEntries > 0 {
             if !payload.isEmpty { payload.append("\n") }
-            payload.append("MFB_BATCH_RESULT={}\n[WARN] \(localized("log.critical_overflow", omittedCriticalEntries))")
+            payload.append(Self.gapPrefix
+                + "{\"schema_version\":1,\"control_records\":\(omittedCriticalEntries),\"diagnostic_records\":\(omittedDiagnosticEntries)}")
         }
         pending.removeAll(keepingCapacity: true)
         pendingBytes = 0
         pendingEntries = 0
         criticalBytes = 0
         criticalEntries = 0
+        diagnosticBytes = 0
+        diagnosticEntries = 0
         omittedCriticalEntries = 0
+        omittedDiagnosticEntries = 0
         omittedEntries = 0
         return payload
     }
@@ -5428,8 +5514,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     func finishDelivery() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let hasPending = pendingEntries > 0 || criticalEntries > 0 || omittedEntries > 0
-            || omittedCriticalEntries > 0 || pendingProgress != nil
+        let hasPending = pendingEntries > 0 || criticalEntries > 0 || diagnosticEntries > 0 || omittedEntries > 0
+            || omittedCriticalEntries > 0 || omittedDiagnosticEntries > 0 || pendingProgress != nil
         if !hasPending { deliveryInFlight = false }
         return hasPending
     }
@@ -5438,7 +5524,8 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return !deliveryInFlight && pendingEntries == 0 && criticalEntries == 0
-            && omittedEntries == 0 && omittedCriticalEntries == 0 && pendingProgress == nil
+            && diagnosticEntries == 0 && omittedEntries == 0 && omittedCriticalEntries == 0
+            && omittedDiagnosticEntries == 0 && pendingProgress == nil
     }
 }
 
@@ -7091,6 +7178,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
+            if batchResults.ingestTransportGap(line) {
+                let warning = "[WARN] " + (batchResults.transportGapNotice ?? localized("result.control_records_missing"))
+                displayLines.append(warning)
+                if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                continue
+            }
             if let phaseUpdate = logPhase.ingest(line, now: now) {
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
@@ -7518,11 +7611,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
             || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred)
             || (processEndedWithError && batchResults.totals.isEmpty)
+        let countsNeedReview = normalExit && !batchResults.hasCompleteCountReport
+            && !batchResults.fastDeliveryInvalid
+            && batchResults.fastDeliveries.allSatisfy {
+                $0.finalizationError == nil && $0.failedSourceVerificationError == nil && $0.retentionUnknownReason == nil
+            }
+            && (!batchResults.totals.isEmpty || (!batchResults.fastDeliveryInvalid && !batchResults.fastDeliveries.isEmpty))
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
         let title: String
         if batchResults.mandatoryEvidenceConflict { title = localized("result.unconfirmed") }
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
+        else if countsNeedReview { title = localized("result.counts_need_review") }
         else if uncertain { title = localized("result.unconfirmed") }
         else if deferred { title = localized("result.delivery_deferred") }
         else if pending.map({ $0 > 0 }) ?? true { title = localized("result.unfinished") }
@@ -7533,6 +7633,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
             : host.controlState == "cancelled" ? .secondaryLabelColor
+            : countsNeedReview ? .systemOrange
             : uncertain ? .systemRed : deferred ? .systemOrange : verifiedPartialFailure ? .secondaryLabelColor
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
         batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
@@ -7545,14 +7646,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewCleanup.isHidden = !batchResults.hasFastDelivery || (!logDetailsExpanded && !cleanupNeedsAttention)
         if batchResults.hasFastDelivery {
             let usable = !batchResults.fastDeliveryInvalid
-            batchOverviewDelivery.stringValue = localized("result.delivery_facts",
+            batchOverviewDelivery.stringValue = usable ? localized(uncertain || countsNeedReview
+                ? "result.independent_delivery_facts" : "result.delivery_facts",
                 value(usable ? batchResults.fastDeliveryCount(\.encoded) : nil),
                 value(usable ? batchResults.fastDeliveryCount(\.photosVerified) : nil),
                 value(usable ? processingCountTotal(batchResults.fastDeliveries.map(\.sourceRetained)) : nil))
-            if !logDetailsExpanded {
-                if uncertain {
-                    batchOverviewDelivery.stringValue = localized("result.review_details")
-                } else if failures.map({ $0 > 0 }) == true {
+                : localized("result.delivery_invalid")
+            if !logDetailsExpanded && !uncertain && !countsNeedReview {
+                if failures.map({ $0 > 0 }) == true {
                     let retained = value(processingCountTotal(batchResults.fastDeliveries.map(\.failedSourcesRetained)))
                     batchOverviewDelivery.stringValue = photos ? localized("result.photos_with_retained",
                         value(batchResults.fastDeliveryCount(\.photosVerified)), retained)
@@ -7583,6 +7684,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressRow.isHidden = true
         if batchResults.mandatoryEvidenceConflict { setLocalizedStatus("result.unconfirmed") }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if deferred { setLocalizedStatus("result.delivery_deferred") }
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
@@ -7920,23 +8022,33 @@ private final class AppController: NSObject, NSWindowDelegate {
                     == localized("status.processor_failed") + ": synthetic original failure" else {
                 throw HostError(message: "Untruncated startup output claimed missing diagnostics")
             }
-            for key in ["log.omitted", "log.critical_overflow", "log.visible_tail", "status.processor_diagnostic_truncated"] {
+            for key in ["log.omitted", "log.critical_overflow", "log.diagnostics_omitted", "log.visible_tail",
+                        "result.counts_need_review", "result.control_records_missing", "result.independent_delivery_facts",
+                        "status.processor_diagnostic_truncated"] {
                 guard localized(key) != key else { throw HostError(message: "Missing log visibility explanation: \(key)") }
             }
-            let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0)
+            let queue = ProcessLogBackpressure(maxBytes: 0, maxEntries: 0, maxCriticalBytes: 0, maxCriticalEntries: 0,
+                                              maxDiagnosticBytes: 0, maxDiagnosticEntries: 0)
             _ = queue.enqueue((1...11).map { "ordinary \($0)" }.joined(separator: "\n"))
             _ = queue.enqueue("[FAIL] synthetic diagnostic\nMFB_BATCH_RESULT={}")
-            let lostCritical = localized("log.critical_overflow", UInt64(2))
+            func gap(_ controls: UInt64, _ diagnostics: UInt64) -> String {
+                ProcessLogBackpressure.gapPrefix + "{\"schema_version\":1,\"control_records\":\(controls),\"diagnostic_records\":\(diagnostics)}"
+            }
+            var gapResults = BatchResults()
+            _ = gapResults.ingestTransportGap(gap(1, 1))
+            let lostCritical = localized("log.critical_overflow", UInt64(1))
             let omittedOrdinary = localized("log.omitted", UInt64(11))
-            guard queue.takeDelivery() == omittedOrdinary + "\nMFB_BATCH_RESULT={}\n[WARN] " + lostCritical,
-                  omittedOrdinary.contains("11"), lostCritical.contains("2"),
+            guard queue.takeDelivery() == omittedOrdinary + "\n" + gap(1, 1),
+                  omittedOrdinary.contains("11"), lostCritical.contains("1"), gapResults.transportGapNotice == lostCritical,
                   !queue.finishDelivery(), queue.isIdle else {
                 throw HostError(message: "Log visibility mixed ordinary and critical line counts")
             }
             _ = queue.enqueue("[FAIL] another diagnostic")
-            guard queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+            _ = gapResults.ingestTransportGap(gap(0, 1))
+            guard queue.takeDelivery() == gap(0, 1),
+                  gapResults.transportGapNotice == localized("log.diagnostics_omitted", UInt64(1)),
                   !queue.enqueue("MFB_LOG_PHASE={}"), queue.finishDelivery(), !queue.isIdle,
-                  queue.takeDelivery() == "MFB_BATCH_RESULT={}\n[WARN] " + localized("log.critical_overflow", UInt64(1)),
+                  queue.takeDelivery() == gap(1, 0),
                   !queue.finishDelivery(), queue.isIdle else {
                 throw HostError(message: "Critical-only overflow lost pending controls or inherited old counts")
             }
@@ -8052,6 +8164,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         logDetailsExpanded = false
         clearBatchLog()
+        appendLog(batch.replacingOccurrences(of: "\"unprocessed\":0", with: "\"unprocessed\":null"))
+        appendLog("MFB_FAST_IMG_RESULT={}")
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewTitle.textColor == .systemRed else {
+            throw HostError(message: "Incomplete counters concealed an invalid delivery receipt")
+        }
+        clearBatchLog()
         let cleanup: [String: Any] = ["schema_version": 1, "run_id": "synthetic-cleanup-run", "output_path": "/synthetic/results_optimized",
             "outcome": "removed", "removed_files": 2, "already_absent_files": 0, "pruned_directories": 1, "error": NSNull()]
         func cleanupLine(_ fields: [String: Any]) throws -> String {
@@ -8141,6 +8261,37 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
             throw HostError(message: "Malformed delivery receipt was presented as a confirmed partial completion")
         }
+        for expanded in [false, true] {
+            clearBatchLog()
+            logDetailsExpanded = expanded
+            appendLog(try line(receipt))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.counts_need_review"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  batchOverviewCounts.stringValue == localized("result.incomplete"),
+                  batchOverviewDelivery.stringValue == localized("result.independent_delivery_facts", "1163", "1829", "1"),
+                  !batchOverviewDelivery.isHidden,
+                  !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "Missing counts erased independent delivery facts or claimed confirmed completion")
+            }
+            appendLog("MFB_BATCH_RESULT={}")
+            appendLog(batch)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewCounts.stringValue == localized("result.invalid"),
+                  batchOverviewTitle.textColor == .systemOrange,
+                  !batchResults.fastDeliveryIsConfirmed(photos: true, processExit: 1) else {
+                throw HostError(message: "A later count receipt erased an invalid report or repeated unknown fields")
+            }
+            appendLog(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+                  batchOverviewTitle.textColor == .systemRed,
+                  batchOverviewCounts.stringValue == localized("result.control_records_missing"),
+                  batchOverviewDelivery.stringValue.contains("1829") else {
+                throw HostError(message: "Missing critical records were muted or independent receipt facts disappeared")
+            }
+        }
+        logDetailsExpanded = false
         clearBatchLog()
         appendLog(batch)
         try host.setControlState("cancelled")
@@ -8193,6 +8344,33 @@ private final class AppController: NSObject, NSWindowDelegate {
     func showDeferredDeliveryFixture() throws {
         deliveryFixture = true
         try configureDeferredDeliveryFixture()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showCountReceiptFixture(missing: Bool) throws {
+        deliveryFixture = true
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/results", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl, shortestPath: true)
+        targetField.stringValue = "/synthetic/results"
+        let receipt: [String: Any] = ["schema_version": 1, "succeeded": 5709, "skipped": 0,
+            "failed": 81, "ignored": 6850, "unprocessed": 0, "encoded": 5693,
+            "photos_verified": 5709, "source_retained": 81, "failed_sources_retained": 81,
+            "failed_sources_verified": 81, "failed_source_verification_error": NSNull(),
+            "retention_unknown_reason": NSNull(), "primary_cleanup_complete": true,
+            "primary_verification_complete": true, "finalization_error": NSNull()]
+        let queue = ProcessLogBackpressure()
+        for _ in 0..<600 { _ = queue.enqueue("[WARN] synthetic diagnostic detail") }
+        _ = queue.enqueue(FastImgDeliveryReceipt.prefix
+            + String(decoding: try JSONSerialization.data(withJSONObject: receipt), as: UTF8.self))
+        _ = queue.enqueue("Count status: MATCH")
+        if !missing {
+            _ = queue.enqueue(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":5709,"skipped":0,"failed":81,"ignored":6850,"unprocessed":0,"exit_code":1}"#)
+        }
+        if let payload = queue.takeDelivery() { appendLog(payload) }
+        _ = queue.finishDelivery()
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
@@ -9393,10 +9571,30 @@ private func runSelfTest() -> Int32 {
         }
         _ = mixed.ingest("MFB_BATCH_RESULT={}")
         guard !mixed.hasPartialSuccess, mixed.isIncomplete,
-              mixed.summary == localized("result.counts", localized("result.unknown"), localized("result.unknown"),
-                                         localized("result.unknown"), localized("result.unknown"))
-                + " · " + localized("result.unprocessed", localized("result.unknown")) else {
+              mixed.summary == localized("result.invalid") else {
             throw HostError(message: "Malformed receipt left partial counts appearing complete")
+        }
+        var diagnosticGap = BatchResults()
+        _ = diagnosticGap.ingest(mixedResult)
+        _ = diagnosticGap.ingestTransportGap(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":0,"diagnostic_records":3000}"#)
+        guard diagnosticGap.hasCompleteCountReport, diagnosticGap.hasPartialSuccess,
+              !diagnosticGap.mandatoryEvidenceConflict else {
+            throw HostError(message: "Omitted diagnostic details invalidated an intact result receipt")
+        }
+        for gap in [
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#,
+            "MFB_GUI_TRANSPORT_GAP={}",
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":-1,"diagnostic_records":0}"#,
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":2,"control_records":0,"diagnostic_records":1}"#,
+            #"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":0,"diagnostic_records":0}"#,
+        ] {
+            var missing = BatchResults()
+            _ = missing.ingestTransportGap(gap)
+            _ = missing.ingest(mixedResult)
+            guard !missing.hasCompleteCountReport, missing.isIncomplete, missing.mandatoryEvidenceConflict,
+                  missing.summary == localized("result.control_records_missing"), !missing.hasPartialSuccess else {
+                throw HostError(message: "A valid result concealed missing or malformed critical transport evidence")
+            }
         }
         let skipped = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":3,"skipped":2,"failed":0,"ignored":1,"exit_code":0}"#
         let legacyLine = results.ingest(skipped)
@@ -9740,14 +9938,102 @@ private func runSelfTest() -> Int32 {
         }
         let exhausted = ProcessLogBackpressure(maxBytes: 8, maxEntries: 1, maxCriticalBytes: 8, maxCriticalEntries: 1)
         _ = exhausted.enqueue(skipped)
-        var lostResults = BatchResults()
-        for line in (exhausted.takeDelivery() ?? "").split(separator: "\n") {
-            _ = lostResults.ingest(String(line))
+        func transportGaps(in payload: String) throws -> [(control: UInt64, diagnostic: UInt64)] {
+            struct Gap: Decodable {
+                let schema_version: Int
+                let control_records: UInt64
+                let diagnostic_records: UInt64
+            }
+            return try payload.split(separator: "\n").compactMap { line in
+                guard line.hasPrefix(ProcessLogBackpressure.gapPrefix) else { return nil }
+                let data = Data(line.dropFirst(ProcessLogBackpressure.gapPrefix.count).utf8)
+                let gap = try JSONDecoder().decode(Gap.self, from: data)
+                guard gap.schema_version == 1 else { throw HostError(message: "Unexpected GUI transport gap schema") }
+                return (gap.control_records, gap.diagnostic_records)
+            }
         }
-        _ = lostResults.ingest(skipped)
-        guard lostResults.invalid, lostResults.isIncomplete, !exhausted.finishDelivery(), exhausted.isIdle else {
-            fputs("native-host self-test critical log overflow must fail closed\n", stderr)
-            return 1
+        let exhaustedPayload = exhausted.takeDelivery() ?? ""
+        let exhaustedGaps = try transportGaps(in: exhaustedPayload)
+        guard exhaustedGaps.count == 1, exhaustedGaps[0].control == 1, exhaustedGaps[0].diagnostic == 0,
+              !exhaustedPayload.contains("MFB_BATCH_RESULT={}"), !exhausted.finishDelivery(), exhausted.isIdle else {
+            throw HostError(message: "Missing result evidence was not reported as an explicit control gap")
+        }
+        let exactResult = #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":5709,"skipped":0,"failed":81,"ignored":6850,"unprocessed":0,"exit_code":1}"#
+        for prefix in ["[WARN]", "[FAIL]"] {
+            let flooded = ProcessLogBackpressure()
+            for ordinal in 0..<513 { _ = flooded.enqueue("\(prefix) synthetic file diagnostic \(ordinal)") }
+            _ = flooded.enqueue(exactResult)
+            let payload = flooded.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            var retainedResults = BatchResults()
+            for line in payload.split(separator: "\n") {
+                if !retainedResults.ingestTransportGap(String(line)) { _ = retainedResults.ingest(String(line)) }
+            }
+            guard gaps.count == 1, gaps[0].control == 0, gaps[0].diagnostic == 257,
+                  let resultRange = payload.range(of: exactResult),
+                  let diagnosticRange = payload.range(of: "\(prefix) synthetic file diagnostic 255"),
+                  payload.contains("\(prefix) synthetic file diagnostic 255"),
+                  !payload.contains("\(prefix) synthetic file diagnostic 256\n"),
+                  resultRange.lowerBound > diagnosticRange.lowerBound,
+                  !payload.contains("MFB_BATCH_RESULT={}"), !retainedResults.invalid, !retainedResults.isIncomplete,
+                  !retainedResults.controlRecordsMissing, !retainedResults.mandatoryEvidenceConflict,
+                  retainedResults.totals["img"] == [5709, 0, 81, 6850], (retainedResults.pendingTotals["img"] ?? nil) == 0,
+                  !flooded.finishDelivery(), flooded.isIdle else {
+                throw HostError(message: "Diagnostic overflow erased exact final processing counts or reordered evidence")
+            }
+        }
+        let fileFailure = #"MFB_FILE_FAILURE={"schema_version":1,"pipeline":"img","source_path":"sample.jpeg","message":"synthetic file decode failure","run_id":"synthetic-run","invocation_id":"synthetic-invocation"}"#
+        let ignoredSource = #"MFB_FAST_IMG_IGNORED={"schema_version":1,"pipeline":"img","run_id":"synthetic-run","invocation_id":"synthetic-invocation","source_path":"sample.png","absolute_path":"/synthetic/sample.png","reason_code":"synthetic_reason","message":"synthetic excluded source","ordinal":1,"total":1}"#
+        for record in [fileFailure, ignoredSource] {
+            let structuredDiagnostics = ProcessLogBackpressure(maxDiagnosticEntries: 1)
+            _ = structuredDiagnostics.enqueue(record)
+            _ = structuredDiagnostics.enqueue(record)
+            _ = structuredDiagnostics.enqueue(exactResult)
+            let payload = structuredDiagnostics.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            guard gaps.count == 1, gaps[0].control == 0, gaps[0].diagnostic == 1,
+                  payload.contains(record), payload.contains(exactResult),
+                  !structuredDiagnostics.finishDelivery(), structuredDiagnostics.isIdle else {
+                throw HostError(message: "Per-file structured diagnostics consumed the final result reserve")
+            }
+        }
+        let seriousFileFailure = fileFailure.replacingOccurrences(of: "synthetic file decode failure", with: "No space left on device")
+        for safety in [exactResult, "ERR: Integrity Issues: 1", "ERR: Permission denied", "[GATE 3] verification FAIL",
+                       seriousFileFailure, "MFB_FILE_FAILURE={}", "MFB_FAST_IMG_IGNORED={}"] {
+            let bounded = ProcessLogBackpressure(maxCriticalBytes: 0, maxCriticalEntries: 0)
+            _ = bounded.enqueue(safety)
+            let payload = bounded.takeDelivery() ?? ""
+            let gaps = try transportGaps(in: payload)
+            var safetyResults = BatchResults()
+            for line in payload.split(separator: "\n") { _ = safetyResults.ingestTransportGap(String(line)) }
+            _ = safetyResults.ingest(exactResult)
+            guard gaps.count == 1, gaps[0].control == 1, gaps[0].diagnostic == 0,
+                  safetyResults.controlRecordsMissing, safetyResults.mandatoryEvidenceConflict,
+                  safetyResults.totals["img"] == [5709, 0, 81, 6850],
+                  !bounded.finishDelivery(), bounded.isIdle else {
+                throw HostError(message: "Missing safety evidence became an ordinary diagnostic omission")
+            }
+        }
+        let boundedDiagnostics = ProcessLogBackpressure(maxDiagnosticBytes: 8, maxDiagnosticEntries: 1)
+        _ = boundedDiagnostics.enqueue("[WARN] " + String(repeating: "x", count: 1_024))
+        let boundedPayload = boundedDiagnostics.takeDelivery() ?? ""
+        let boundedGaps = try transportGaps(in: boundedPayload)
+        guard boundedGaps.count == 1, boundedGaps[0].control == 0, boundedGaps[0].diagnostic == 1,
+              !boundedPayload.contains("xxxxxxxx"), boundedPayload.utf8.count < 256,
+              !boundedDiagnostics.finishDelivery(), boundedDiagnostics.isIdle else {
+            throw HostError(message: "Oversized diagnostic escaped its byte budget or invalidated result evidence")
+        }
+        let concurrent = ProcessLogBackpressure(maxDiagnosticBytes: 1_024, maxDiagnosticEntries: 8)
+        DispatchQueue.concurrentPerform(iterations: 1_000) { _ in
+            _ = concurrent.enqueue("[WARN] synthetic concurrent diagnostic")
+        }
+        _ = concurrent.enqueue(exactResult)
+        let concurrentPayload = concurrent.takeDelivery() ?? ""
+        let concurrentGaps = try transportGaps(in: concurrentPayload)
+        guard concurrentGaps.count == 1, concurrentGaps[0].control == 0, concurrentGaps[0].diagnostic == 992,
+              concurrentPayload.components(separatedBy: "[WARN] synthetic concurrent diagnostic").count == 9,
+              concurrentPayload.contains(exactResult), !concurrent.finishDelivery(), concurrent.isIdle else {
+            throw HostError(message: "Concurrent diagnostic bursts lost omission counts or displaced final results")
         }
         var diagnostics = PhotosDiagnostics()
         diagnostics.ingest("ERR: [PHOTOS PROGRESS] backend=native committed=250 verified=100 peak_backlog=150")
@@ -9855,7 +10141,8 @@ if CommandLine.arguments.contains("--self-test") {
 }
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
-    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture") {
+    || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
+    || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -9864,7 +10151,10 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }
+            if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
+                try controller.showCountReceiptFixture(missing: CommandLine.arguments.contains("--missing-counts-ui-fixture"))
+            }
+            else if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }
             else if CommandLine.arguments.contains("--photos-progress-ui-fixture")
                 || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") {
                 try controller.showPhotosProgressFixture(handoff: CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture"))

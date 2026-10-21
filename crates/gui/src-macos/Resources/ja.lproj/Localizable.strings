@@ -160,6 +160,7 @@
 "log.photos_preflight" = "写真への読み込み事前確認を停止しました: %@";
 "log.omitted" = "[MFB UI] 応答性を保つため通常ログ %llu 件を表示していません。完全な保存を保証するものではありません。保存済みの内容は処理履歴で確認してください。";
 "log.critical_overflow" = "重要な処理記録 %llu 件を受信できなかったため、処理の完了を確認できません。保存済みの内容は処理履歴で確認してください。";
+"log.diagnostics_omitted" = "画面では診断の詳細 %llu 件を省略しました。結果の件数には影響しません。保存済みの詳細は処理履歴で確認してください。";
 "log.visible_tail" = "[MFB UI] 古い内容はこの表示から除かれました。保存済みの内容は処理履歴で確認してください。";
 "status.processor_diagnostic_truncated" = "起動確認の出力が長すぎるため、先頭のみ表示しています。後続の診断は保持されていません。バッチの処理ログではありません。";
 "alert.resume.title" = "未完了のタスクが見つかりました";
@@ -411,7 +412,9 @@
 "result.partially_completed" = "一部成功、失敗したファイルがあります";
 "result.stopped_with_error" = "エラーにより停止";
 "result.invalid" = "バッチ結果の形式が無効または未対応のため、件数を確認できません。";
-"result.incomplete" = "プロセス終了、一部の結果件数は未報告";
+"result.incomplete" = "処理件数の記録が不完全です。処理履歴で確認してください。";
+"result.counts_need_review" = "処理終了 · 一部の件数は要確認";
+"result.control_records_missing" = "重要な記録の一部を画面で受信できませんでした。バッチ全体の結果は未確認です。処理履歴を確認してください。";
 "result.unfinished" = "処理終了、未完了の項目があります";
 "result.attention_count" = "処理終了 · 成功しなかった項目: %@ 件";
 "result.completed_count" = "%@ 件完了";
@@ -433,6 +436,7 @@
 "result.delivery_recorded_output" = "記録された出力フォルダ: %@";
 "result.delivery_recorded_note" = "実行時の記録です。続行する前にファイルと引き渡し状態の再確認が必要です。元のエラーは詳細で確認できます。";
 "result.delivery_facts" = "エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
+"result.independent_delivery_facts" = "独立した記録：エンコード済み %@ · ローカル Photos 確認済み %@ · 保持した元ファイル %@";
 "result.cleanup_primary" = "主処理の整理は完了。その他の残存フォルダは未確認です。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "result.cleanup_unknown" = "終了処理の確認が必要です。その他のフォルダは削除していません。ローカル Photos の確認は iCloud 同期の確認ではありません。";
 "cleanup.history_title" = "出力フォルダの整理（実行時の記録）";
