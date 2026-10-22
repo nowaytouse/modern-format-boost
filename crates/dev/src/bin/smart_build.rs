@@ -509,6 +509,10 @@ fn get_newest_binary_source_mtime(
             RUST_SOURCE_EXTENSIONS,
         ));
     }
+    newest = newest.max(newest_source_mtime_in_dir(
+        &project_root.join("vendor/jxl-jbr"),
+        RUST_SOURCE_EXTENSIONS,
+    ));
     for config in ["Cargo.toml", "Cargo.lock", RUST_TOOLCHAIN_FILE] {
         newest = newest.max(get_mtime(&project_root.join(config)));
     }
@@ -2153,19 +2157,24 @@ mod tests {
 
     #[test]
     fn test_img_source_inputs_include_foundation_dependency() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        let root = tempdir.path();
-        let binary = root.join("target/release/img");
-        fs::create_dir_all(binary.parent().unwrap())?;
-        fs::write(&binary, b"img")?;
+        for source in [
+            "crates/foundation/src/lib.rs",
+            "vendor/jxl-jbr/src/reconstruct.rs",
+        ] {
+            let tempdir = tempfile::tempdir()?;
+            let root = tempdir.path();
+            let binary = root.join("target/release/img");
+            fs::create_dir_all(binary.parent().unwrap())?;
+            fs::write(&binary, b"img")?;
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let dependency = root.join("crates/foundation/src/lib.rs");
-        fs::create_dir_all(dependency.parent().unwrap())?;
-        fs::write(dependency, "pub fn changed() {}")?;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let dependency = root.join(source);
+            fs::create_dir_all(dependency.parent().unwrap())?;
+            fs::write(dependency, "pub fn changed() {}")?;
 
-        let (action, reason) = decide_build_action(root, "crates/img", "img", false);
-        assert_eq!((action, reason), ("rebuild", "source-newer"));
+            let (action, reason) = decide_build_action(root, "crates/img", "img", false);
+            assert_eq!((action, reason), ("rebuild", "source-newer"));
+        }
         Ok(())
     }
 

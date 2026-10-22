@@ -6,7 +6,7 @@ members = [
   "crates/dev",
   "crates/dev/fuzz",
 ]
-exclude = ["crates/dev/dispatch2"]
+exclude = ["crates/dev/dispatch2", "vendor/jxl-jbr"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -92,6 +92,9 @@ zerocopy-derive = { git = "https://github.com/google/zerocopy" }
 profiling = { git = "https://github.com/aclysma/profiling" }
 profiling-procmacros = { git = "https://github.com/aclysma/profiling" }
 # equator 0.4.2 not available in git; use crates.io version
+
+[patch."https://github.com/tirr-c/jxl-oxide.git"]
+jxl-jbr = { path = "vendor/jxl-jbr" }
 
 [workspace.dependencies]
 # Core error_handling>

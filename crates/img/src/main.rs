@@ -8908,6 +8908,7 @@ fn run_restore_jpeg(
             println!("Skipped: {classified}");
             println!("Ignored: 0");
             println!("Failed: 0");
+            println!("Unprocessed: 0");
             println!(
                 "[DONE    ] no exact JPEG reconstruction was possible; every JXL-named source was retained and mirrored recovery/review markers preserve its relative location"
             );
@@ -8917,6 +8918,7 @@ fn run_restore_jpeg(
         println!("Skipped: 0");
         println!("Ignored: 0");
         println!("Failed: {}", probe_failures.len());
+        println!("Unprocessed: 0");
         if probe_failures.is_empty() {
             println!(
                 "[DONE    ] no true JXL files found in {}; no files were changed",
@@ -8970,6 +8972,7 @@ fn run_restore_jpeg(
         println!("Skipped: {}", ineligible_count + review_count);
         println!("Ignored: 0");
         println!("Failed: 0");
+        println!("Unprocessed: 0");
         println!(
             "[DONE    ] no JXL in this batch can reproduce original JPEG bytes; all {candidate_count} JXL/XMP sources were retained and mirrored recovery/review markers were committed without pixel fallback"
         );
@@ -9030,6 +9033,7 @@ fn run_restore_jpeg(
     println!("Skipped: {}", ineligible_count + review_count);
     println!("Ignored: 0");
     println!("Failed: {failure_count}");
+    println!("Unprocessed: 0");
     if failure_count == 0 {
         if ineligible_count == 0 {
             println!(

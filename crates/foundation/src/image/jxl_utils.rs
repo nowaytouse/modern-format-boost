@@ -1709,6 +1709,28 @@ mod tests {
     }
 
     #[test]
+    fn independent_jpeg_reconstruction_handles_progressive_subsampled_scans() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("progressive.jpg");
+        let jxl = temp.path().join("progressive.jxl");
+        for jpeg in [
+            include_bytes!("../../tests/fixtures/synthetic_progressive_420.jpg.fixture").as_slice(),
+            include_bytes!("../../tests/fixtures/synthetic_progressive_422.jpg.fixture").as_slice(),
+            include_bytes!("../../tests/fixtures/synthetic_progressive_440.jpg.fixture").as_slice(),
+        ] {
+            std::fs::write(&source, jpeg)?;
+            let mut encoder = jpegxl_rs::encoder_builder()
+                .use_container(true)
+                .uses_original_profile(true)
+                .build()?;
+            std::fs::write(&jxl, encoder.encode_jpeg(jpeg)?)?;
+            verify_reconstructed_jpeg_bytes(&jxl, &source).map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_is_icc_rounding_error() {
         assert!(is_icc_rounding_error("Invalid ICC profile: ..."));
         assert!(is_icc_rounding_error("bad connection space in ICC"));

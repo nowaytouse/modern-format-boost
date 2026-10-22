@@ -310,6 +310,14 @@ This proves recovery of the JPEG bytes stored in the current JXL; without a
 recorded historical original hash, it does not claim a separate historical
 hash comparison.
 
+The independent reconstructor uses the narrowly vendored `jxl-jbr` patch documented
+in `vendor/jxl-jbr/MFB-PATCH.md`. Progressive chroma-only scans retain the entire
+image's sampling denominator when calculating their MCU dimensions. The previous
+scan-local denominator could address coefficients outside the grid for valid
+subsampled JPEGs. Invalid coefficient ranges now return a reconstruction error
+instead of panicking at that accessor; they never authorize delivery or cleanup.
+Synthetic progressive 4:2:0, 4:2:2 and 4:4:0 JPEGs lock down complete-byte agreement.
+
 JPEG reconstructibility and metadata-layer agreement are separate facts. If
 the JXL reconstructs the original JPEG but its container XMP differs from an
 adjacent XMP, restoration still succeeds byte-for-byte and the adjacent XMP is

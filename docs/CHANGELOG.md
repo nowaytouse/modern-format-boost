@@ -23,6 +23,21 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Progressive JPEG Restoration Crash Fix (2026-10-22)
+
+- Fix the independent JPEG reconstructor's MCU geometry for progressive
+  subsampled chroma scans. Use the complete image's sampling denominator, not
+  just the components selected by one scan; retain complete-byte verification.
+- Vendor only the affected `jxl-jbr` crate at the existing upstream revision,
+  with its licenses and a documented local patch. Invalid coefficient ranges
+  return an error instead of triggering the known subgrid assertion.
+- Add small, generated solid-color progressive 4:2:0, 4:2:2 and 4:4:0 regressions.
+  The 4:2:0 fixture reproduces the production preflight crash before the fix;
+  each test requires exact original JPEG bytes, not only successful decoding.
+- Include the vendored reconstructor in incremental-build inputs, and report
+  zero unprocessed candidates only on completed local-restoration paths, so
+  completed runs do not leave the launcher's pending count unknown.
+
 ### Explicit Original-JPEG Restoration and Byte Proofs (2026-10-22)
 
 - Distinguish restoring original JPEG files from checking Photos-library JPEG
