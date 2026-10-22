@@ -23,6 +23,22 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Explicit Original-JPEG Restoration and Byte Proofs (2026-10-22)
+
+- Distinguish restoring original JPEG files from checking Photos-library JPEG
+  recoverability in the native operation label, action, preview and in-app help.
+  Explain the default separate output folder, verified JXL cleanup, and Photos
+  report/album-only effects; disable unrelated encoding settings.
+- Require complete JPEG-byte agreement between strict `djxl` reconstruction and
+  the existing independent `jxl-oxide` implementation. Reject negated or embedded
+  completion text instead of interpreting it as positive reconstruction evidence.
+- Bind the pre-decode JXL hash through restored snapshots and final source-cleanup
+  proofs. Reject source drift, pixel-only JXLs and mismatched JPEG output; do not
+  substitute JPEG re-encoding or claim an unrecorded historical original hash.
+- Cover exact bytes, decoder diagnostics, source drift and contextual native
+  controls with synthetic regressions. Validate the existing `exr` rolling-source
+  refresh to `994c5416` without changing media policy.
+
 ### Reliable Native Result Counts Under Log Pressure (2026-10-21)
 
 - Give ordinary text, diagnostic details and control/safety receipts independent

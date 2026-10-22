@@ -299,6 +299,17 @@ records are mirrored under `Reconstruction Blocked`, and uncertain/invalid
 records under `Needs Review`. Non-reconstructible media is never converted by
 a pixel-to-JPEG fallback and remains untouched.
 
+Exact reconstruction requires both strict `djxl` evidence and an independent
+`jxl-oxide` reconstruction from typed JPEG reconstruction data. The full JPEG
+byte hashes must agree, not just the decoded pixels. Missing reconstruction
+data, decoder disagreement, incomplete output or source-content changes reject
+the proof. The JXL hash captured before decoding remains bound to the restored
+snapshot, durable manifest and final source-cleanup gate. A previously restored
+JPEG is rechecked by the same current-evidence path before source cleanup.
+This proves recovery of the JPEG bytes stored in the current JXL; without a
+recorded historical original hash, it does not claim a separate historical
+hash comparison.
+
 JPEG reconstructibility and metadata-layer agreement are separate facts. If
 the JXL reconstructs the original JPEG but its container XMP differs from an
 adjacent XMP, restoration still succeeds byte-for-byte and the adjacent XMP is
@@ -327,6 +338,11 @@ compare a native folder UUID with an unrelated database folder identifier and
 does not use a display name as identity. Generated `MFB JXL Audit` containers
 are excluded from selection, and each selected scope receives an independent
 BLAKE3-derived checkpoint path.
+
+The native GUI names the file operation "Restore Original JPEG from JXL" and
+the Photos operation "Check Library JPEG Recoverability". Its notice, action
+button and in-app help distinguish actual file output from report/album audit
+effects. Encoding quality and effort settings do not apply to either operation.
 
 ## Recovery-original collection
 

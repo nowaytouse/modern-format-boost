@@ -803,7 +803,7 @@ dependencies = [
 [[package]]
 name = "exr"
 version = "1.74.2"
-source = "git+https://github.com/johannesvollmer/exrs#a3c549b8031c321bd93dbdf1683670a64a2bef50"
+source = "git+https://github.com/johannesvollmer/exrs#994c5416eb7a08a9e0f81e9961221c0588e48b40"
 dependencies = [
  "bit_field",
  "half",

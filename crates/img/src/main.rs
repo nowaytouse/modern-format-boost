@@ -7517,23 +7517,42 @@ fn run_restore_image_command(
     .with_context(|| format!("{context} failed to run"))
 }
 
-fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<()> {
-    if let Err(error) = foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
-        input,
-        temp_output,
-        "restore-jpeg djxl decode",
-    ) {
+fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<String> {
+    let source_hash =
+        calculate_blake3_hash(input).context("hash JXL before JPEG reconstruction")?;
+    let reconstruction = (|| -> anyhow::Result<String> {
+        foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
+            input,
+            temp_output,
+            "restore-jpeg djxl decode",
+        )
+        .map_err(anyhow::Error::msg)?;
+        foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, temp_output)
+            .map_err(anyhow::Error::msg)?;
+        let current_hash = calculate_blake3_hash(input)
+            .context("hash JXL after independent JPEG reconstruction verification")?;
+        anyhow::ensure!(
+            source_hash == current_hash,
+            "restore-jpeg source changed during exact JPEG reconstruction: {}",
+            input.display()
+        );
+        Ok(source_hash)
+    })();
+    if let Err(error) = &reconstruction {
         if temp_output.exists()
             && let Err(cleanup_error) = restore_jpeg_remove_temp(temp_output, "djxl failure")
         {
             anyhow::bail!(
-                "restore-jpeg djxl failed for {}: {error}; additionally cleanup failed: {cleanup_error}",
+                "restore-jpeg reconstruction failed for {}: {error:#}; additionally cleanup failed: {cleanup_error}",
                 input.display()
             );
         }
-        anyhow::bail!("restore-jpeg djxl failed for {}: {error}", input.display());
+        anyhow::bail!(
+            "restore-jpeg reconstruction failed for {}: {error:#}",
+            input.display()
+        );
     }
-    Ok(())
+    reconstruction
 }
 
 fn restore_jpeg_output_xmp_path(output: &Path) -> PathBuf {
@@ -7738,7 +7757,7 @@ fn restore_jpeg_build_current_proof_with_decoder<F>(
     decode_to_temp: F,
 ) -> anyhow::Result<RestoreJpegCommitProof>
 where
-    F: FnOnce(&Path, &Path) -> anyhow::Result<()>,
+    F: FnOnce(&Path, &Path) -> anyhow::Result<String>,
 {
     let source_format =
         foundation::image::format_detect::detect_true_format(input).with_context(|| {
@@ -7787,19 +7806,23 @@ where
 
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg proof temp path failed: {err}"))?;
-    if let Err(err) = decode_to_temp(input, &temp_output).with_context(|| {
+    let reconstruction_source_hash = match decode_to_temp(input, &temp_output).with_context(|| {
         format!(
             "restore-jpeg proof gate failed to fresh-decode {}",
             input.display()
         )
     }) {
-        if let Err(cleanup_err) = restore_jpeg_remove_temp(&temp_output, "failed fresh decode") {
-            return Err(err.context(format!(
-                "restore-jpeg proof temp cleanup also failed: {cleanup_err}"
-            )));
+        Ok(hash) => hash,
+        Err(err) => {
+            if let Err(cleanup_err) = restore_jpeg_remove_temp(&temp_output, "failed fresh decode")
+            {
+                return Err(err.context(format!(
+                    "restore-jpeg proof temp cleanup also failed: {cleanup_err}"
+                )));
+            }
+            return Err(err);
         }
-        return Err(err);
-    }
+    };
 
     let proof_result = (|| {
         let decoded_format = foundation::image::format_detect::detect_true_format(&temp_output)
@@ -7837,17 +7860,19 @@ where
             );
         }
 
+        let source_hash = calculate_blake3_hash(input)
+            .context("hash current JXL before issuing JPEG restoration proof")?;
+        anyhow::ensure!(
+            source_hash == reconstruction_source_hash,
+            "restore-jpeg proof gate: source changed after JPEG reconstruction: {}",
+            input.display()
+        );
         Ok(RestoreJpegCommitProof {
             source: input.to_path_buf(),
             output: output.to_path_buf(),
             source_rel: restore_jpeg_relative_string(input, input_root)?,
             output_rel: restore_jpeg_relative_string(output, output_root)?,
-            source_hash: calculate_blake3_hash(input).with_context(|| {
-                format!(
-                    "restore-jpeg proof gate failed to hash source JXL {}",
-                    input.display()
-                )
-            })?,
+            source_hash,
             reconstruction_hash: reconstructed_hash,
             output_hash,
             xmp_sidecar: None,
@@ -7918,7 +7943,7 @@ fn restore_single_jpeg(
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
-    restore_jpeg_decode_to_temp(input, &temp_output)?;
+    let reconstruction_source_hash = restore_jpeg_decode_to_temp(input, &temp_output)?;
 
     // Keep the official byte-exact djxl reconstruction for the
     // candidate byte proof. This avoids launching djxl a second time for
@@ -7947,8 +7972,8 @@ fn restore_single_jpeg(
                     output_root,
                     |_input, fresh_decode| {
                         std::fs::copy(&proof_snapshot, fresh_decode)
-                            .map(|_| ())
-                            .context("restore-jpeg failed to stage djxl proof snapshot")
+                            .context("restore-jpeg failed to stage djxl proof snapshot")?;
+                        Ok(reconstruction_source_hash.clone())
                     },
                 )?;
                 restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof")?;
@@ -10863,8 +10888,8 @@ mod fast_img_hardening_tests {
         FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, FreshFlag,
         RESTORE_JPEG_MANIFEST_NAME, RecursiveFlag, RestoreJpegAuditRecord, RestoreJpegAuditStatus,
         RestoreJpegCommitProof, RestoreJpegManifestRecord, RetryFlag, ShortestPathFlag,
-        canonicalize_img_run_roots, command_requires_database, fast_img_archive_stale_working_copy,
-        fast_img_cleanup_complete_has_shortest_path_proof,
+        calculate_blake3_hash, canonicalize_img_run_roots, command_requires_database,
+        fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
         fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
@@ -11141,9 +11166,9 @@ mod fast_img_hardening_tests {
             input_root,
             output,
             output_root,
-            |_input, temp_output| {
+            |input, temp_output| {
                 std::fs::copy(output, temp_output)?;
-                Ok(())
+                calculate_blake3_hash(input)
             },
         )?;
         let xmp_commit = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
@@ -11375,7 +11400,8 @@ mod fast_img_hardening_tests {
         assert!(write_real_reconstructible_jxl(&source)?);
         write_date_created_xmp(&source_xmp)?;
         let expected_jpeg = root.path().join("expected-camera.jpg");
-        restore_jpeg_decode_to_temp(&source, &expected_jpeg)?;
+        // Compare with the fixture's original JPEG bytes, not a second decoder output.
+        write_real_jpeg(&expected_jpeg, [10, 20, 30])?;
         #[cfg(target_os = "macos")]
         {
             let status = std::process::Command::new("/usr/bin/xattr")
@@ -11707,6 +11733,49 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn restore_jpeg_proof_rejects_source_changed_during_or_after_reconstruction()
+    -> anyhow::Result<()> {
+        for change_during_decode in [true, false] {
+            let root = TempDir::new()?;
+            let input_root = root.path().join("input");
+            let output_root = root.path().join("restored");
+            std::fs::create_dir_all(&input_root)?;
+            let source = input_root.join("sample.jxl");
+            std::fs::write(&source, b"\xff\x0a\x00\x00")?;
+            let source_hash = calculate_blake3_hash(&source)?;
+            let output = output_root.join("sample.jpg");
+            write_real_jpeg(&output, [10, 20, 30])?;
+            let output_bytes = std::fs::read(&output)?;
+            if !change_during_decode {
+                std::fs::write(&source, b"\xff\x0a\x01\x00")?;
+            }
+            let error = restore_jpeg_build_current_proof_with_decoder(
+                &source,
+                &input_root,
+                &output,
+                &output_root,
+                |input, temp_output| {
+                    std::fs::copy(&output, temp_output)?;
+                    if change_during_decode {
+                        std::fs::write(input, b"\xff\x0a\x01\x00")?;
+                    }
+                    Ok(source_hash.clone())
+                },
+            )
+            .expect_err("a JPEG snapshot must not acquire proof for a different JXL");
+            assert!(
+                error
+                    .to_string()
+                    .contains("source changed after JPEG reconstruction")
+            );
+            assert!(source.exists());
+            assert_eq!(std::fs::read(&output)?, output_bytes);
+            assert_eq!(std::fs::read_dir(&output_root)?.count(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn restore_jpeg_proof_refuses_same_pixels_with_different_bytes() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
@@ -11724,14 +11793,14 @@ mod fast_img_hardening_tests {
             &input_root,
             &output,
             &output_root,
-            |_input, temp_output| {
+            |input, temp_output| {
                 use std::io::Write;
                 std::fs::copy(&output, temp_output)?;
                 std::fs::OpenOptions::new()
                     .append(true)
                     .open(temp_output)?
                     .write_all(b"metadata-rewrite")?;
-                Ok(())
+                calculate_blake3_hash(input)
             },
         ) else {
             anyhow::bail!("byte-different JPEG was accepted as an original reconstruction");
@@ -11765,9 +11834,9 @@ mod fast_img_hardening_tests {
             &input_root,
             &output,
             &output_root,
-            |_input, temp_output| {
+            |input, temp_output| {
                 write_real_jpeg(temp_output, [200, 20, 30])?;
-                Ok(())
+                calculate_blake3_hash(input)
             },
         ) else {
             anyhow::bail!("pixel-mismatched fresh decode did not block restore deletion proof");

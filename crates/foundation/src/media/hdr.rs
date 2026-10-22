@@ -2429,7 +2429,10 @@ mod tests {
             PixelVec::set_pixel,
         )?;
         let pixels = decoded.layer_data.channel_data.pixels;
-        assert_eq!((pixels.resolution.width(), pixels.resolution.height()), (2, 2));
+        assert_eq!(
+            (pixels.resolution.width(), pixels.resolution.height()),
+            (2, 2)
+        );
         assert_eq!(
             pixels
                 .pixels

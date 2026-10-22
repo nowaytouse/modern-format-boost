@@ -15,7 +15,7 @@ use std::time::Duration;
 /// Whether an otherwise healthy JXL can reproduce its original JPEG bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JpegReconstructionEligibility {
-    /// The official decoder reconstructs the original JPEG without pixel fallback.
+    /// Official and independent typed reconstruction produce identical JPEG bytes.
     Exact,
     /// The JXL is pixel-decodable but contains no JPEG reconstruction data.
     PixelOnly,
@@ -64,11 +64,16 @@ fn djxl_used_pixel_to_jpeg_fallback(diagnostic: &str) -> bool {
 }
 
 fn djxl_reported_exact_jpeg_reconstruction(diagnostic: &str) -> bool {
-    let diagnostic = diagnostic.to_ascii_lowercase();
-    diagnostic.contains("reconstructed to jpeg")
-        || diagnostic.contains("reconstructed jpeg")
-        || (diagnostic.contains("jpeg reconstruction")
-            && (diagnostic.contains("complete") || diagnostic.contains("success")))
+    diagnostic.lines().any(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        matches!(
+            line.strip_suffix('.').unwrap_or(&line),
+            "reconstructed to jpeg"
+                | "reconstructed jpeg"
+                | "jpeg reconstruction complete"
+                | "jpeg reconstruction successful"
+        )
+    })
 }
 
 /// Whether `djxl` rejected the explicit option itself, rather than rejecting
@@ -234,6 +239,53 @@ pub fn run_exact_jpeg_reconstruction(
     Ok(result)
 }
 
+/// Verify the complete JPEG against an independent, typed JBRD reconstruction.
+/// This consumes reconstruction data, never decoded pixels or diagnostic text.
+///
+/// # Errors
+/// Returns an error for invalid/incomplete reconstruction data, read failures,
+/// or any difference between the reconstructed JPEG and the delivered bytes.
+pub fn verify_reconstructed_jpeg_bytes(input: &Path, output: &Path) -> Result<(), String> {
+    let image = jxl_oxide::JxlImage::builder()
+        .open(input)
+        .map_err(|error| {
+            format!(
+                "independent JPEG reconstruction could not read {}: {error}",
+                input.display()
+            )
+        })?;
+    let status = image.jpeg_reconstruction_status();
+    if status != jxl_oxide::JpegReconstructionStatus::Available {
+        return Err(format!(
+            "independent JPEG reconstruction is unavailable, incomplete or invalid for {}: {status:?}",
+            input.display()
+        ));
+    }
+    let mut reconstructed = blake3::Hasher::new();
+    image
+        .reconstruct_jpeg(&mut reconstructed)
+        .map_err(|error| {
+            format!(
+                "independent JPEG reconstruction failed for {}: {error}",
+                input.display()
+            )
+        })?;
+    let output_hash = crate::common_utils::calculate_blake3_hash(output).map_err(|error| {
+        format!(
+            "independent JPEG reconstruction could not hash {}: {error}",
+            output.display()
+        )
+    })?;
+    if reconstructed.finalize().to_hex().as_str() != output_hash {
+        return Err(format!(
+            "restored JPEG bytes do not match independent JBRD reconstruction: {} -> {}",
+            input.display(),
+            output.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Classify exact JPEG reconstruction without enabling pixel-to-JPEG fallback.
 ///
 /// A strict reconstruction rejection is only considered a safe
@@ -242,7 +294,8 @@ pub fn run_exact_jpeg_reconstruction(
 ///
 /// # Errors
 /// Returns an error when the required official tools are unavailable, the JXL
-/// is unreadable, or even its pixel payload cannot be decoded.
+/// is unreadable, its independent reconstruction disagrees, or even its pixel
+/// payload cannot be decoded.
 pub fn probe_jpeg_reconstruction_eligibility(
     path: &Path,
 ) -> Result<JpegReconstructionEligibility, String> {
@@ -293,6 +346,7 @@ pub fn probe_jpeg_reconstruction_eligibility(
             })?
             .len();
         if strict_output_len > 0 {
+            verify_reconstructed_jpeg_bytes(path, strict_output.path())?;
             return Ok(JpegReconstructionEligibility::Exact);
         }
     }
@@ -1580,6 +1634,78 @@ mod tests {
         assert!(!djxl_rejected_explicit_reconstruction_option(
             "invalid argument: damaged input\nUsage: --reconstruct_jpeg"
         ));
+    }
+
+    #[test]
+    fn exact_jpeg_reconstruction_rejects_negated_or_embedded_completion_text() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+
+        for diagnostic in [
+            "JPEG reconstruction incomplete",
+            "JPEG reconstruction unsuccessful",
+            "JPEG reconstruction did not complete",
+            "JPEG reconstruction success: false",
+            "not reconstructed JPEG",
+            "Reconstructed to JPEG. Actually failed.",
+            "Input filename: /tmp/reconstructed jpeg.jxl",
+            "Writing /tmp/jpeg reconstruction complete.jpg",
+        ] {
+            let output = std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: diagnostic.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            };
+            assert!(
+                !djxl_completed_exact_jpeg_reconstruction(&output),
+                "accepted non-completion diagnostic: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn independent_jpeg_reconstruction_verifies_complete_bytes() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("source.jpg");
+        let jxl = temp.path().join("archive.jxl");
+        let pixels = image::RgbImage::from_pixel(4, 4, image::Rgb([17, 63, 142]));
+        pixels.save_with_format(&source, image::ImageFormat::Jpeg)?;
+        let original_jpeg = std::fs::read(&source)?;
+        let mut encoder = jpegxl_rs::encoder_builder()
+            .use_container(true)
+            .uses_original_profile(true)
+            .build()
+            .context("build synthetic JPEG reconstruction encoder")?;
+        let archive = encoder
+            .encode_jpeg(&original_jpeg)
+            .context("encode synthetic JPEG with reconstruction data")?;
+        std::fs::write(&jxl, archive)?;
+        verify_reconstructed_jpeg_bytes(&jxl, &source).map_err(anyhow::Error::msg)?;
+
+        let mut changed_jpeg = original_jpeg;
+        changed_jpeg.extend_from_slice(b"changed-metadata-tail");
+        std::fs::write(&source, changed_jpeg)?;
+        let error = verify_reconstructed_jpeg_bytes(&jxl, &source)
+            .expect_err("a byte-different JPEG must not pass original reconstruction proof");
+        assert!(error.contains("do not match independent JBRD reconstruction"));
+
+        let pixel_jxl = temp.path().join("pixel-only.jxl");
+        let mut pixel_encoder = jpegxl_rs::encoder_builder()
+            .lossless(true)
+            .quality(0.0)
+            .use_container(true)
+            .uses_original_profile(true)
+            .color_encoding(jpegxl_rs::encode::ColorEncoding::Srgb)
+            .build()
+            .context("build synthetic pixel-only lossless encoder")?;
+        let pixel_archive = pixel_encoder
+            .encode::<u8>(pixels.as_raw(), 4, 4)
+            .context("encode synthetic pixel-only lossless JXL")?;
+        std::fs::write(&pixel_jxl, pixel_archive)?;
+        assert!(verify_reconstructed_jpeg_bytes(&pixel_jxl, &source).is_err());
+        Ok(())
     }
 
     #[test]

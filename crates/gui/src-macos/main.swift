@@ -6158,6 +6158,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var logDetailsExpanded = false
     private var processEndedWithError = false
     private var deliveryFixture = false
+    private var restoreFixture = false
     private var hasConfirmedFileFailures = false
     private let countStatusLabel = NSTextField(labelWithString: "")
     private var countStatus: String?
@@ -6727,6 +6728,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func choosePhotosScope() {
+        guard !restoreFixture else { return }
         let library = targetField.stringValue
         guard selectedOperation == .restoreJpeg,
               isPhotosLibraryPackagePath(library),
@@ -6839,7 +6841,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openInTerminal() {
-        guard developerMode, configurationControlsEnabled else { return }
+        guard !restoreFixture, developerMode, configurationControlsEnabled else { return }
         do { setStatus(try host.openInTerminal(request())) }
         catch { present(error) }
     }
@@ -7022,7 +7024,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func runHere() {
-        guard !host.isRunning else { return }
+        guard !restoreFixture, !host.isRunning else { return }
         invalidatePreflight()
         do {
             let request = try request()
@@ -7044,13 +7046,21 @@ private final class AppController: NSObject, NSWindowDelegate {
             .flatMap { OperationMode(rawValue: $0 as? String ?? "") } ?? .adjacent
     }
 
+    private var isPhotosRestoreAudit: Bool {
+        selectedOperation == .restoreJpeg && isPhotosLibraryPath(targetField.stringValue)
+    }
+
     private func applyCapabilityState() {
         let capabilities = selectedOperation.capabilities
+        if restoreFixture {
+            runButton.isEnabled = false
+            openButton.isEnabled = false
+        }
         preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
             && !targetField.stringValue.isEmpty
         preflightButton.toolTip = localized(selectedOperation == .adjacent ? "preflight.title" : "preflight.standard_only")
-        settingsButton.isEnabled = configurationControlsEnabled
-        settingsButton.toolTip = localized("settings.title")
+        settingsButton.isEnabled = configurationControlsEnabled && selectedOperation != .restoreJpeg
+        settingsButton.toolTip = localized(selectedOperation == .restoreJpeg ? "settings.restore_unused" : "settings.title")
         if let fixed = capabilities.fixedProcessingMode {
             processingPopup.selectItem(
                 at: ProcessingMode.allCases.firstIndex { $0.rawValue == fixed.rawValue } ?? 0,
@@ -7095,11 +7105,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         let backupAvailable = selectedOperation == .collect || selectedOperation == .compare
         backupRow.isHidden = !backupAvailable
         backupButton.isEnabled = configurationControlsEnabled && backupAvailable
-        let photosScopeAvailable = selectedOperation == .restoreJpeg
-            && isPhotosLibraryPackagePath(targetField.stringValue)
+        let photosScopeAvailable = isPhotosRestoreAudit && isPhotosLibraryPackagePath(targetField.stringValue)
         if !photosScopeAvailable { selectedPhotosContainer = nil }
         photosScopeRow.isHidden = !photosScopeAvailable
-        photosScopeButton.isEnabled = configurationControlsEnabled && photosScopeAvailable
+        photosScopeButton.isEnabled = !restoreFixture && configurationControlsEnabled && photosScopeAvailable
         photosScopeButton.title = selectedPhotosContainer.map {
             let kind = localized("photos.scope.\($0.kind.rawValue)")
             return "\(kind)  \($0.path.joined(separator: " › "))"
@@ -7128,7 +7137,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         case .adjacent, .fastImgJxl, .mergeXmp:
             key = "metadata.jxl_overlay"
         case .restoreJpeg:
-            key = "metadata.restore_auto"
+            key = isPhotosRestoreAudit ? "metadata.restore_audit" : "metadata.restore_auto"
         case .collect:
             key = "metadata.recovery_collect"
         case .compare:
@@ -7138,6 +7147,22 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         metadataSafetyLabel.isHidden = key == nil
         metadataSafetyLabel.stringValue = key.map { localized($0) } ?? ""
+        metadataSafetyLabel.toolTip = metadataSafetyLabel.stringValue
+        metadataSafetyLabel.setAccessibilityLabel(metadataSafetyLabel.stringValue)
+        let restoresJpeg = selectedOperation == .restoreJpeg
+        if let restoreItem = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue }) {
+            restoreItem.title = localized(isPhotosLibraryPath(targetField.stringValue)
+                ? "operation.restore_jpeg_audit" : "operation.restore_jpeg")
+        }
+        let runKey: String
+        if !restoresJpeg { runKey = "button.run" }
+        else if dryRunCheck.state == .on {
+            runKey = isPhotosRestoreAudit ? "button.preview_audit_restore_jpeg" : "button.preview_restore_jpeg"
+        } else { runKey = isPhotosRestoreAudit ? "button.audit_restore_jpeg" : "button.restore_jpeg" }
+        runButton.title = localized(runKey)
+        runButton.setAccessibilityLabel(runButton.title)
+        runButton.toolTip = restoresJpeg ? metadataSafetyLabel.stringValue : nil
+        settingsButton.toolTip = localized(restoresJpeg ? "settings.restore_unused" : "settings.title")
     }
 
     private func request() throws -> ProcessorRequest {
@@ -7691,7 +7716,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func showSettings() {
-        guard configurationControlsEnabled else { return }
+        guard configurationControlsEnabled, selectedOperation != .restoreJpeg else { return }
         settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
             fast: selectedOperation.backendMode == "fast-img",
             avif: selectedOperation == .fastImgAvif,
@@ -7704,7 +7729,8 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func openHelp() {
         if processingGuide == nil { processingGuide = ProcessingGuideController() }
-        processingGuide?.show(relativeTo: window, context: operationPopup.titleOfSelectedItem ?? "")
+        processingGuide?.show(relativeTo: window, context: operationPopup.titleOfSelectedItem ?? "",
+            topic: selectedOperation == .restoreJpeg ? "restore" : nil)
     }
 
     @objc private func repairCore() {
@@ -8371,6 +8397,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         if let payload = queue.takeDelivery() { appendLog(payload) }
         _ = queue.finishDelivery()
         refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showRestoreFixture(photosAudit: Bool) {
+        deliveryFixture = true
+        restoreFixture = true
+        targetField.stringValue = photosAudit ? "/synthetic/recovery.photoslibrary" : "/synthetic/reversible-archive"
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue
+        })
+        operationChanged()
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
@@ -9186,11 +9224,12 @@ private final class AppController: NSObject, NSWindowDelegate {
                 operationPopup.select(item)
                 operationChanged()
                 try validateOptionLayoutForSelfTest()
-                guard settingsButton.isEnabled else {
-                    throw HostError(message: "Settings unavailable in \(selectedOperation)")
+                guard settingsButton.isEnabled == (selectedOperation != .restoreJpeg) else {
+                    throw HostError(message: "Settings availability disagrees with the selected operation")
                 }
             }
         }
+        try validateRestorePresentationForSelfTest()
         setProcessing(true)
         defer { setProcessing(false) }
         processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
@@ -9208,6 +9247,66 @@ private final class AppController: NSObject, NSWindowDelegate {
               !languagePopup.isEnabled, !appearancePopup.isEnabled,
               optionControls.allSatisfy({ !$0.0.isEnabled })
         else { throw HostError(message: "Background status or running controls lost their state") }
+    }
+
+    private func validateRestorePresentationForSelfTest() throws {
+        let previousOperation = selectedOperation
+        let previousTarget = targetField.stringValue
+        let previousDryRun = dryRunCheck.state
+        let previousFixture = restoreFixture
+        let previousRunEnabled = runButton.isEnabled
+        let previousTerminalEnabled = openButton.isEnabled
+        defer {
+            restoreFixture = previousFixture
+            targetField.stringValue = previousTarget
+            operationPopup.select(operationPopup.itemArray.first {
+                ($0.representedObject as? String) == previousOperation.rawValue
+            })
+            operationChanged()
+            dryRunCheck.state = previousDryRun
+            configurationChanged()
+            runButton.isEnabled = previousRunEnabled
+            openButton.isEnabled = previousTerminalEnabled
+        }
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue
+        })
+        operationChanged()
+        for (path, audit, scopeAvailable) in [
+            ("/synthetic/source.jxl", false, false),
+            ("/synthetic/recovery.photoslibrary", true, true),
+            ("/synthetic/recovery.photoslibrary/originals/A/source.jxl", true, false),
+        ] {
+            targetField.stringValue = path
+            dryRunCheck.state = .off
+            configurationChanged()
+            let notice = localized(audit ? "metadata.restore_audit" : "metadata.restore_auto")
+            let runTitle = localized(audit ? "button.audit_restore_jpeg" : "button.restore_jpeg")
+            guard !settingsButton.isEnabled, settingsButton.toolTip == localized("settings.restore_unused"),
+                  photosScopeRow.isHidden == !scopeAvailable, photosScopeButton.isEnabled == scopeAvailable,
+                  metadataSafetyLabel.stringValue == notice, metadataSafetyLabel.accessibilityLabel() == notice,
+                  runButton.title == runTitle, runButton.accessibilityLabel() == runTitle,
+                  operationPopup.titleOfSelectedItem == localized(audit ? "operation.restore_jpeg_audit" : "operation.restore_jpeg"),
+                  try ProcessorCommand.arguments(from: request()).contains("restore-jpeg") else {
+                throw HostError(message: "JPEG reconstruction and Photos audit have ambiguous controls or descriptions")
+            }
+            dryRunCheck.state = .on
+            configurationChanged()
+            guard runButton.title == localized(audit ? "button.preview_audit_restore_jpeg" : "button.preview_restore_jpeg"),
+                  try ProcessorCommand.arguments(from: request()).contains("--dry-run") else {
+                throw HostError(message: "JPEG restoration preview was presented as an executed recovery")
+            }
+        }
+        restoreFixture = true
+        targetField.stringValue = "/synthetic/recovery.photoslibrary"
+        for state in [NSControl.StateValue.off, .on] {
+            dryRunCheck.state = state
+            configurationChanged()
+            guard configurationControlsEnabled, !photosScopeRow.isHidden,
+                  !runButton.isEnabled, !openButton.isEnabled, !photosScopeButton.isEnabled else {
+                throw HostError(message: "Restore UI fixture re-enabled live execution or Photos queries after a configuration change")
+            }
+        }
     }
 
     private func validateOptionLayoutForSelfTest() throws {
@@ -10142,7 +10241,8 @@ if CommandLine.arguments.contains("--self-test") {
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
     || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
-    || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
+    || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
+    || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -10151,7 +10251,10 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
+            if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture") {
+                controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"))
+            }
+            else if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
                 try controller.showCountReceiptFixture(missing: CommandLine.arguments.contains("--missing-counts-ui-fixture"))
             }
             else if CommandLine.arguments.contains("--photos-custody-ui-fixture") { controller.showPhotosCustodyFixture() }

@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
-        ("policy", 4), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4),
+        ("policy", 4), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4), ("restore", 3),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -262,6 +262,10 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             controller.show(relativeTo: nil, topic: "tools")
             try require(controller.textView.string.hasPrefix(translate("helpguide.tools.title")),
                 "Recovery guide shortcut did not select the tools topic")
+            controller.show(relativeTo: nil, topic: "restore")
+            try require(controller.textView.string.hasPrefix(translate("helpguide.restore.title"))
+                && controller.textView.string.contains(translate("helpguide.restore.2.body")),
+                "JPEG restoration help did not explain the file and Photos audit distinction")
             controller.close()
         }
     }
