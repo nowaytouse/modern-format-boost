@@ -4780,6 +4780,7 @@ private struct BatchResults {
     private(set) var outputCleanupInvalid = false
     private var workerExitCodes: [Int] = []
     private(set) var mandatoryEvidenceConflict = false
+    private(set) var integrityIssueCount: Int?
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
 
     mutating func ingestTransportGap(_ line: String) -> Bool {
@@ -4875,6 +4876,12 @@ private struct BatchResults {
     }
 
     mutating func observeMandatoryEvidence(_ line: String) {
+        let raw = LogTone.message(line)
+        if raw.range(of: #"^Integrity Issues:\s*[1-9]\d*\s*$"#, options: [.caseInsensitive, .regularExpression]) != nil,
+           let value = raw.split(separator: ":").last,
+           let count = Int(value.trimmingCharacters(in: .whitespaces)) {
+            integrityIssueCount = count
+        }
         if hasSeriousProcessingDiagnostic(line) { mandatoryEvidenceConflict = true }
     }
 
@@ -4917,6 +4924,11 @@ private struct BatchResults {
     var hasCompleteCountReport: Bool {
         !isIncomplete && !totals.isEmpty && pendingTotals.count == totals.count
             && pendingTotals.values.allSatisfy { $0 != nil }
+    }
+
+    var integritySummary: String? {
+        guard mandatoryEvidenceConflict, hasCompleteCountReport, let integrityIssueCount else { return nil }
+        return localized("result.integrity_issues", String(integrityIssueCount))
     }
 
     var summary: String? {
@@ -7645,7 +7657,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let pending = processingCountTotal(Array(batchResults.pendingTotals.values))
         let failures = processingCountTotal(batchResults.totals.values.map { $0[2] })
         let title: String
-        if batchResults.mandatoryEvidenceConflict { title = localized("result.unconfirmed") }
+        if batchResults.mandatoryEvidenceConflict { title = batchResults.integritySummary ?? localized("result.unconfirmed") }
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
         else if countsNeedReview { title = localized("result.counts_need_review") }
         else if uncertain { title = localized("result.unconfirmed") }
@@ -7707,7 +7719,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverview.isHidden = false
         updateLogPresentation()
         fileProgressRow.isHidden = true
-        if batchResults.mandatoryEvidenceConflict { setLocalizedStatus("result.unconfirmed") }
+        if batchResults.mandatoryEvidenceConflict { setStatus(title) }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
         else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
@@ -8330,13 +8342,35 @@ private final class AppController: NSObject, NSWindowDelegate {
         appendLog("Integrity Issues: 1")
         appendLog("Count status: MATCH")
         refreshBatchOverview(processExit: 130, exitedNormally: true)
-        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+        guard batchOverviewTitle.stringValue == localized("result.integrity_issues", "1"),
               batchOverviewTitle.textColor == .systemRed,
-              statusLabel.stringValue == localized("result.unconfirmed"),
+              statusLabel.stringValue == localized("result.integrity_issues", "1"),
               batchResults.totals["img"]?[0] == 1829 else {
             throw HostError(message: "Cancellation or later matching counts concealed an integrity failure")
         }
         try host.setControlState("running")
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/restore", processingMode: .imagesOnly,
+                                       operationMode: .restoreJpeg)
+        appendLog("Count status: MATCH\nIntegrity Issues:1269\nIntegrity: WARNINGS")
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":60831,"skipped":26042,"failed":0,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard countStatus == "MATCH", countStatusLabel.textColor == .systemTeal,
+              batchOverviewTitle.stringValue == localized("result.integrity_issues", "1269"),
+              batchOverviewTitle.textColor == .systemRed,
+              statusLabel.stringValue == batchOverviewTitle.stringValue,
+              batchOverviewCounts.stringValue.contains("60831"), batchOverviewCounts.stringValue.contains("26042"),
+              !batchOverviewCounts.stringValue.contains(localized("result.unknown")),
+              batchResults.hasCompleteCountReport, batchResults.mandatoryEvidenceConflict,
+              !batchResults.fastDeliveryIsConfirmed(photos: false, processExit: 1) else {
+            throw HostError(message: "Known integrity issues erased exact restore counts or became a count mismatch or confirmed success")
+        }
+        appendLog(#"MFB_GUI_TRANSPORT_GAP={"schema_version":1,"control_records":1,"diagnostic_records":0}"#)
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+              batchOverviewCounts.stringValue == localized("result.control_records_missing") else {
+            throw HostError(message: "Known integrity issues concealed missing critical records")
+        }
         clearBatchLog()
         guard batchOverview.isHidden, !batchResults.hasFastDelivery else {
             throw HostError(message: "Delivery overview leaked into the next batch")
@@ -8401,7 +8435,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    func showRestoreFixture(photosAudit: Bool) {
+    func showRestoreFixture(photosAudit: Bool, integrityIssues: Bool = false) {
         deliveryFixture = true
         restoreFixture = true
         targetField.stringValue = photosAudit ? "/synthetic/recovery.photoslibrary" : "/synthetic/reversible-archive"
@@ -8409,6 +8443,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             ($0.representedObject as? String) == OperationMode.restoreJpeg.rawValue
         })
         operationChanged()
+        if integrityIssues {
+            lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                           operationMode: .restoreJpeg)
+            appendLog("Count status: MATCH\nIntegrity Issues:1269\nIntegrity: WARNINGS")
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":60831,"skipped":26042,"failed":0,"ignored":0,"unprocessed":0,"exit_code":1}"#)
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+        }
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
@@ -8478,7 +8519,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         try configureDeferredDeliveryFixture()
         appendLog("Integrity Issues: 1")
         refreshBatchOverview(processExit: 1, exitedNormally: true)
-        guard batchOverviewTitle.stringValue == localized("result.unconfirmed") else {
+        guard batchOverviewTitle.stringValue == localized("result.integrity_issues", "1"),
+              batchOverviewTitle.textColor == .systemRed,
+              !batchResults.deliveryIsDeferred(photos: true, source: "/synthetic/delivery-input", processExit: 1, exitedNormally: true) else {
             throw HostError(message: "Deferred delivery concealed an independent integrity failure")
         }
     }
@@ -10242,7 +10285,8 @@ if CommandLine.arguments.contains("--self-test") {
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
     || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
     || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
-    || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture") {
+    || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
+    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -10251,8 +10295,10 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture") {
-                controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"))
+            if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
+                || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
+                controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"),
+                    integrityIssues: CommandLine.arguments.contains("--restore-integrity-ui-fixture"))
             }
             else if CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture") {
                 try controller.showCountReceiptFixture(missing: CommandLine.arguments.contains("--missing-counts-ui-fixture"))

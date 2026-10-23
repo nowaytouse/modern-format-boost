@@ -38,7 +38,7 @@
 "operation.cache_clean" = "Clean cache";
 "operation.database" = "Database manager";
 "metadata.jxl_overlay" = "Keeps the original image recoverable while adding updated metadata safely.";
-"metadata.restore_auto" = "Extracts the original JPEG data from JXL without recompression. Verified JPEGs go into a separate folder, then their source JXLs are removed. Unrestorable items stay unchanged.";
+"metadata.restore_auto" = "Extracts original JPEG data without recompression. Output to a separate folder requires byte-exact reconstruction and applicable XMP checks; source JXLs are then removed. XMP conflicts or missing evidence retain sources without new output.";
 "metadata.restore_audit" = "Checks recovery in Photos, creates reports and adds items needing attention to audit albums. It does not export JPEGs or delete or replace library media.";
 "settings.restore_unused" = "Restoration and recovery checks do not use quality, effort or encoding-tool settings.";
 "button.restore_jpeg" = "Restore JPEG";
@@ -52,7 +52,7 @@
 "helpguide.restore.2.title" = "Photos library: recovery checks only";
 "helpguide.restore.2.body" = "After selecting a Photos library package, check the whole library or a selected album scope. A resource path inside a library also uses this audit, not ordinary file export. The operation creates reports and adds references to items needing attention in MFB JXL Audit albums. It changes album membership, but does not export JPEGs or delete or replace media. A visible photo or thumbnail does not prove that its original resource can be restored. Unavailable resources and missing evidence must remain explicit.";
 "helpguide.restore.3.title" = "Exact restoration is not re-encoding";
-"helpguide.restore.3.body" = "Output must pass reconstruction-data and current-source identity checks; a successful decoder exit alone is insufficient. Without a saved historical original hash, this is not a historical-hash comparison. A JXL encoded from PNG pixels cannot recreate JPEG original data that was never stored, and the operation does not substitute JPEG re-encoding for restoration.";
+"helpguide.restore.3.body" = "Output must pass reconstruction-data, current-source identity and applicable XMP checks; a successful decoder exit alone is insufficient. Conflicting XMP inside the JXL and in an adjacent sidecar, or unverifiable output XMP, blocks new output and retains the source and associated files. Conflicting metadata is not written into the original JPEG. Without a saved historical original hash, this is not a historical-hash comparison. A JXL encoded from PNG pixels cannot recreate JPEG original data that was never stored, and the operation does not substitute JPEG re-encoding for restoration.";
 "metadata.recovery_collect" = "Copies verified originals from the matching backup. The backup is never changed, and uncertain matches are skipped.";
 "metadata.backup_compare" = "Compares two Photos libraries without changing either one.";
 "option.ultimate" = "Highest quality (automatic)";
@@ -444,6 +444,7 @@
 "log.details.show" = "Show processing details";
 "log.details.hide" = "Hide processing details";
 "result.unconfirmed" = "Results not fully confirmed · Review processing history";
+"result.integrity_issues" = "Integrity check found %@ issues · Review processing history";
 "result.delivery_deferred" = "Photos Delivery Deferred";
 "result.delivery_record_title" = "Photos Delivery Record";
 "result.delivery_invalid" = "Photos delivery records are incomplete or conflicting. Review the original diagnostics.";

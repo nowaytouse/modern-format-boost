@@ -318,12 +318,25 @@ subsampled JPEGs. Invalid coefficient ranges now return a reconstruction error
 instead of panicking at that accessor; they never authorize delivery or cleanup.
 Synthetic progressive 4:2:0, 4:2:2 and 4:4:0 JPEGs lock down complete-byte agreement.
 
-JPEG reconstructibility and metadata-layer agreement are separate facts. If
-the JXL reconstructs the original JPEG but its container XMP differs from an
-adjacent XMP, restoration still succeeds byte-for-byte and the adjacent XMP is
-committed as the output sidecar. The source JXL and source sidecar are retained,
-and the manifest records `MFB_RESTORE_JPEG_ATTENTION`; this preserves both XMP
-layers for review without falsely calling the JPEG non-reconstructible.
+JPEG reconstructibility and metadata-layer agreement are separate requirements
+for delivery. If the JXL container XMP and adjacent XMP differ byte-for-byte,
+restoration refuses to publish that JPEG or replace an output sidecar, even if
+the JPEG byte proof passes. Invalid XMP and an existing output sidecar without
+source XMP also block delivery. Absence of XMP in both source locations is valid;
+an existing source packet is preserved as a separate sidecar, never embedded by
+rewriting the reconstructed JPEG. `--force` does not override these gates. Sources
+and existing outputs remain intact on rejection; other independent files continue.
+Historical `MFB_RESTORE_JPEG_ATTENTION` records are explicit metadata failures in
+post-verification, not comments to discard or permission to delete old outputs.
+Every restored JPEG also requires a validated manifest proof naming that exact
+output path. A matching source filename or a different JPEG extension cannot
+replace the output's byte-hash proof.
+
+Count reconciliation and integrity are independent results. Matching inventory
+does not clear a byte/hash/XMP failure. A retained source whose reconstruction
+probe cannot be resolved leaves reconciliation unconfirmed, not a fabricated
+count mismatch. Known processing totals remain visible alongside the specific
+integrity concern; neither warning nor uncertainty authorizes source cleanup.
 
 For a Photos library or one concrete asset path inside it, the command switches
 automatically to live-library audit. It resolves and re-queries real asset UUIDs,

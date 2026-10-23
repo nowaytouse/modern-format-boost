@@ -23,6 +23,17 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Strict Restoration Metadata Delivery (2026-10-23)
+
+- Refuse JPEG and sidecar publication when container and adjacent XMP disagree,
+  instead of publishing an exact JPEG with metadata requiring review. Preserve
+  source files and prior deliveries, including when overwrite is requested.
+- Reject an unrelated output XMP sidecar when the source has no XMP. Preserve
+  exact JPEG bytes; do not resolve metadata conflicts by rewriting the JPEG.
+- Recognize historical restoration metadata-attention records during verification.
+  Separate inventory reconciliation from integrity findings, retaining known file
+  totals and showing a specific integrity notice in the native result summary.
+
 ### Progressive JPEG Restoration Crash Fix (2026-10-22)
 
 - Fix the independent JPEG reconstructor's MCU geometry for progressive

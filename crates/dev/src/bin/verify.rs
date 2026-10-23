@@ -9,6 +9,7 @@ use dev::media::scope::{
     load_rust_outcomes_from_logs, load_session_routing, true_format_matches_processing_mode,
 };
 use foundation::common_utils::calculate_blake3_hash;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
@@ -247,6 +248,7 @@ struct IntegrityStats {
     optimized_files_label: String,
     source_probe_errors: usize,
     optimized_probe_errors: usize,
+    reconstruction_probe_errors: usize,
     restore_manifest_errors: usize,
     verified_deleted_sources: usize,
     count_status_label: Option<String>,
@@ -255,16 +257,15 @@ struct IntegrityStats {
 }
 
 fn integrity_count_status(stats: &IntegrityStats) -> String {
+    let unresolved = stats.source_probe_errors
+        + stats.optimized_probe_errors
+        + stats.reconstruction_probe_errors;
+    if unresolved > 0 {
+        return format!("UNCONFIRMED ({unresolved} file classifications unresolved)");
+    }
     let delta = stats.count_delta;
     let mut delta_text = "MATCH".to_string();
-    if stats.integrity_failures > 0 {
-        let issue_count = stats.integrity_failures;
-        delta_text = format!(
-            "MISMATCH ({} invariant issue{})",
-            issue_count,
-            if issue_count == 1 { "" } else { "s" }
-        );
-    } else if stats.count_matches_with_handoff {
+    if stats.count_matches_with_handoff {
         let handoff_n = stats.pipeline_handoff;
         if handoff_n > 0 && delta == stats.expected_count_delta {
             delta_text = format!(
@@ -285,7 +286,7 @@ fn integrity_count_status(stats: &IntegrityStats) -> String {
     } else {
         let direction = if delta > 0 { "more" } else { "fewer" };
         let explained = stats.explained_gaps;
-        let unexplained = delta.unsigned_abs() - explained;
+        let unexplained = delta.unsigned_abs().saturating_sub(explained);
         if unexplained > 0 {
             delta_text = format!(
                 "MISMATCH ({} {direction}; {unexplained} still unexplained)",
@@ -496,6 +497,27 @@ fn load_restore_jpeg_manifest(
     for (line_no, raw_line) in content.lines().enumerate() {
         let line_idx = line_no + 1;
         let line = raw_line.trim();
+        if let Some(fields) = line.strip_prefix("# MFB_RESTORE_JPEG_ATTENTION\t") {
+            let attention = fields.split_once('\t').and_then(|(source, reason)| {
+                Some((
+                    String::from_utf8(hex_decode(source).ok()?).ok()?,
+                    String::from_utf8(hex_decode(reason).ok()?).ok()?,
+                ))
+            });
+            match attention {
+                Some((source, reason))
+                    if is_safe_manifest_relative_path(&source) && !reason.trim().is_empty() =>
+                {
+                    errors.push(format!(
+                        "line {line_idx}: unresolved restoration metadata for {source}: {reason}"
+                    ));
+                }
+                _ => errors.push(format!(
+                    "line {line_idx}: invalid restoration metadata attention"
+                )),
+            }
+            continue;
+        }
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -1278,7 +1300,18 @@ fn run_fast_img_restore_check(
             Ok(true_format) => {
                 if true_format == strategy {
                     let rel = path.strip_prefix(&source_dir)?;
-                    source_outputs.insert(integrity_stem_key(rel), path);
+                    match source_outputs.entry(integrity_stem_key(rel)) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(path);
+                        }
+                        Entry::Occupied(entry) => source_probe_errors.push((
+                            path,
+                            anyhow::anyhow!(
+                                "ambiguous source JXL stem also used by {}",
+                                entry.get().display()
+                            ),
+                        )),
+                    }
                 }
             }
             Err(e) => {
@@ -1317,7 +1350,18 @@ fn run_fast_img_restore_check(
             Ok(true_format) => {
                 if true_format == "jpeg" {
                     let rel = path.strip_prefix(&restored_dir)?;
-                    restored_jpeg.insert(integrity_stem_key(rel), path);
+                    match restored_jpeg.entry(integrity_stem_key(rel)) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(path);
+                        }
+                        Entry::Occupied(entry) => restored_probe_errors.push((
+                            path,
+                            anyhow::anyhow!(
+                                "ambiguous restored JPEG stem also used by {}",
+                                entry.get().display()
+                            ),
+                        )),
+                    }
                 } else {
                     non_jpeg_outputs.push((path, true_format));
                 }
@@ -1437,6 +1481,18 @@ fn run_fast_img_restore_check(
         manifest_sources.insert(source_key, record);
     }
 
+    for (key, path) in &restored_jpeg {
+        if manifest_sources
+            .get(key)
+            .is_none_or(|record| restored_dir.join(&record.output_rel) != *path)
+        {
+            restore_manifest_errors.push(format!(
+                "restored JPEG has no valid reconstruction manifest proof: {}",
+                path.strip_prefix(&restored_dir)?.display()
+            ));
+        }
+    }
+
     let mut expected_keys = HashSet::new();
     for k in manifest_sources.keys() {
         expected_keys.insert(k.clone());
@@ -1506,14 +1562,17 @@ fn run_fast_img_restore_check(
         }
     }
 
-    let source_candidate_count =
-        expected_keys.len() + retained_ineligible.len() + reconstruction_probe_errors.len();
+    let source_candidate_count = expected_keys.len()
+        + retained_ineligible.len()
+        + reconstruction_probe_errors.len()
+        + source_probe_errors.len();
     stats.source_files = source_candidate_count;
-    stats.source_remaining_files = source_outputs.len();
+    stats.source_remaining_files = source_outputs.len() + source_probe_errors.len();
     stats.verified_deleted_sources = manifest_deleted_sources.len();
     stats.optimized_files = restored_jpeg.len();
     stats.source_probe_errors = source_probe_errors.len();
     stats.optimized_probe_errors = restored_probe_errors.len();
+    stats.reconstruction_probe_errors = reconstruction_probe_errors.len();
     stats.restore_manifest_errors = restore_manifest_errors.len();
     stats.matched = restored_jpeg.len();
     stats.missing = missing_keys.len();
@@ -1533,7 +1592,10 @@ fn run_fast_img_restore_check(
         + reconstruction_probe_errors.len()
         + restored_probe_errors.len();
 
-    let count_matches = integrity_failures == 0;
+    let count_matches = stats.count_delta == 0
+        && missing_keys.is_empty()
+        && extra_keys.is_empty()
+        && non_jpeg_outputs.is_empty();
     stats.count_matches_with_handoff = count_matches;
     stats.count_fully_explained = count_matches;
     stats.count_status_label = if count_matches {
@@ -2697,7 +2759,7 @@ mod tests {
         stats.integrity_failures = 1;
         assert_eq!(
             integrity_count_status(&stats),
-            "MISMATCH (1 invariant issue)"
+            "MATCH (1 expected handoff gap)"
         );
         stats.integrity_failures = 0;
         stats.count_matches_with_handoff = false;
@@ -2712,6 +2774,11 @@ mod tests {
         assert_eq!(
             integrity_count_status(&stats),
             "MISMATCH (3 fewer; 2 still unexplained)"
+        );
+        stats.reconstruction_probe_errors = 1;
+        assert_eq!(
+            integrity_count_status(&stats),
+            "UNCONFIRMED (1 file classifications unresolved)"
         );
     }
 
@@ -2834,6 +2901,57 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\txmp_rel_hex\txmp_b
         assert_eq!(records[0].xmp_rel.as_deref(), Some("out/file1.xmp"));
         assert_eq!(records[0].xmp_blake3.as_deref(), Some("xmp-hash"));
         assert!(records[0].source_deleted);
+    }
+
+    #[test]
+    fn test_load_restore_jpeg_manifest_reports_metadata_attention() {
+        let tempdir = tempfile::tempdir().unwrap();
+        fs::write(
+            tempdir.path().join(".mfb_restore_jpeg_manifest.tsv"),
+            "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+             63616d6572612e4a584c\t63616d6572612e6a7067\thash1\thash2\tfalse\n\
+             # MFB_RESTORE_JPEG_ATTENTION\t63616d6572612e4a584c\t584d5020636f6e666c696374\n",
+        )
+        .unwrap();
+
+        let (records, errors) = load_restore_jpeg_manifest(tempdir.path());
+        assert_eq!(records.len(), 1);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("camera.JXL: XMP conflict"));
+    }
+
+    #[test]
+    fn test_fast_img_restore_check_reports_metadata_attention_without_count_mismatch() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let restored = tempdir.path().join("Album_restored_jpeg");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&restored).unwrap();
+        let source_path = source.join("camera.JXL");
+        let output_path = restored.join("camera.jpg");
+        fs::write(&source_path, b"\xff\x0atrue-jxl").unwrap();
+        fs::write(&output_path, b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+        fs::write(
+            restored.join(".mfb_restore_jpeg_manifest.tsv"),
+            format!(
+                "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+                 63616d6572612e4a584c\t63616d6572612e6a7067\t{}\t{}\tfalse\n\
+                 # MFB_RESTORE_JPEG_ATTENTION\t63616d6572612e4a584c\t584d5020636f6e666c696374\n",
+                calculate_blake3_hash(&source_path).unwrap(),
+                calculate_blake3_hash(&output_path).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        assert_eq!(stats.integrity_failures, 1, "{report}");
+        assert!(stats.has_warnings);
+        assert_eq!(stats.missing, 0);
+        assert_eq!(stats.extra, 0);
+        assert_eq!(integrity_count_status(&stats), "MATCH");
+        assert!(report.contains("camera.JXL: XMP conflict"));
+        assert!(!report.contains("RESTORE INVARIANTS PASS"));
     }
 
     #[test]
@@ -3235,7 +3353,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
 
     #[test]
     #[serial]
-    fn test_fast_img_restore_check_accepts_jxl_to_jpeg_roundtrip() {
+    fn test_fast_img_restore_check_rejects_matching_filenames_without_manifest_proof() {
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album_optimized");
         let restored = tempdir.path().join("Album_restored_jpeg");
@@ -3260,8 +3378,31 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.optimized_files, 1);
         assert_eq!(stats.matched, 1);
         assert_eq!(stats.count_delta, 0);
-        assert_eq!(stats.integrity_failures, 0);
-        assert!(!stats.has_warnings);
+        assert_eq!(stats.integrity_failures, 1);
+        assert!(stats.has_warnings);
+        assert_eq!(integrity_count_status(&stats), "MATCH");
+        assert!(report.contains(
+            "restored JPEG has no valid reconstruction manifest proof: nested/camera.jpeg"
+        ));
+        assert!(!report.contains("RESTORE INVARIANTS PASS"));
+
+        fs::write(
+            restored.join(".mfb_restore_jpeg_manifest.tsv"),
+            format!(
+                "source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted\n\
+                 6e65737465642f63616d6572612e4a584c\t6e65737465642f63616d6572612e6a7067\t{}\t{}\tfalse\n",
+                calculate_blake3_hash(&source.join("nested/camera.JXL")).unwrap(),
+                calculate_blake3_hash(&restored.join("nested/camera.jpeg")).unwrap(),
+            ),
+        )
+        .unwrap();
+        report.clear();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        assert_eq!(stats.integrity_failures, 1);
+        assert!(stats.has_warnings);
+        assert!(report.contains(
+            "restored JPEG has no valid reconstruction manifest proof: nested/camera.jpeg"
+        ));
     }
 
     #[test]
@@ -3315,10 +3456,36 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
 
         assert!(stats.has_warnings);
-        assert_eq!(stats.restore_manifest_errors, 1);
+        assert_eq!(stats.restore_manifest_errors, 2);
         assert!(report.contains(
             "source directory was removed but the restore manifest contains no proof records"
         ));
+    }
+
+    #[test]
+    fn test_fast_img_restore_check_reports_duplicate_source_and_output_stems() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let source = tempdir.path().join("Album");
+        let restored = tempdir.path().join("Album_restored_jpeg");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&restored).unwrap();
+        fs::write(source.join("camera.JXL"), b"\xff\x0atrue-jxl").unwrap();
+        fs::write(source.join("camera.jxl-copy"), b"\xff\x0atrue-jxl").unwrap();
+        fs::write(restored.join("camera.jpg"), b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+        fs::write(restored.join("camera.jpeg"), b"\xff\xd8\xff\xe0true-jpeg").unwrap();
+
+        let mut report = String::new();
+        let stats = run_fast_img_restore_check(&source, &restored, &mut report, "jxl").unwrap();
+        assert!(stats.has_warnings);
+        assert_eq!(stats.source_probe_errors, 1, "{report}");
+        assert_eq!(stats.optimized_probe_errors, 1, "{report}");
+        assert_eq!(stats.source_files, 2);
+        assert_eq!(stats.source_remaining_files, 2);
+        assert_eq!(stats.extra, 1);
+        assert!(!integrity_count_status(&stats).starts_with("MATCH"));
+        assert!(report.contains("ambiguous source JXL stem"));
+        assert!(report.contains("ambiguous restored JPEG stem"));
+        assert!(!report.contains("RESTORE INVARIANTS PASS"));
     }
 
     #[test]
@@ -3552,6 +3719,10 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert!(stats.integrity_failures >= 3);
         assert!(stats.has_warnings);
         assert!(report.contains("Source JXL reconstruction probe errors (2)"));
+        assert_eq!(
+            integrity_count_status(&stats),
+            "UNCONFIRMED (2 file classifications unresolved)"
+        );
     }
 
     #[test]

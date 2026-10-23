@@ -38,7 +38,7 @@
 "operation.cache_clean" = "清理缓存";
 "operation.database" = "数据库管理";
 "metadata.jxl_overlay" = "安全更新元数据，同时保留恢复原图的能力。";
-"metadata.restore_auto" = "提取 JXL 内的原始 JPEG 数据，不重新压缩。核验通过后输出到独立文件夹，并移除对应源 JXL；无法还原的项目保持不变。";
+"metadata.restore_auto" = "提取原始 JPEG，不重新压缩。仅在字节核验和适用的 XMP 检查均通过后输出到独立文件夹，并移除对应源 JXL；XMP 冲突或证据不足时保留来源，不产出新文件。";
 "metadata.restore_audit" = "照片图库会检查可恢复性并生成报告，待处理项目会加入检查相册；不导出 JPEG，不删除或替换媒体。";
 "settings.restore_unused" = "还原和可恢复性检查不使用质量、编码档位或编码工具设置。";
 "button.restore_jpeg" = "还原 JPEG";
@@ -52,7 +52,7 @@
 "helpguide.restore.2.title" = "照片图库：目前只做可恢复性检查";
 "helpguide.restore.2.body" = "选择照片图库包后，可以检查整个图库或指定相册范围；图库内部的单个资源路径也按图库检查处理，不作为普通文件导出。程序生成报告，并将待处理项目加入 MFB JXL Audit 检查相册。这会添加相册关联，但不导出 JPEG、不删除或替换媒体。能看到照片或缩略图，不足以证明原始资源可恢复；资源不可用或证据不足时必须如实报告。";
 "helpguide.restore.3.title" = "精确还原不等于重新编码";
-"helpguide.restore.3.body" = "输出须通过重建数据和当前源文件身份核验，不能只相信解码器的退出状态。没有保存的历史原件哈希时，不宣称已经完成历史哈希对照。由 PNG 像素编码得到的 JXL 不能还原出从未保存过的 JPEG 原件，程序也不会用重新编码来代替恢复。";
+"helpguide.restore.3.body" = "输出须通过重建数据、当前源文件身份和适用的 XMP 核验，不能只相信解码器的退出状态。JXL 内与相邻 XMP 文件的内容若冲突，或输出 XMP 无法核验，均拒绝新输出并保留来源及关联文件；不把冲突元数据写进原 JPEG。没有保存的历史原件哈希时，不宣称已经完成历史哈希对照。由 PNG 像素编码得到的 JXL 不能还原出从未保存过的 JPEG 原件，程序也不会用重新编码来代替恢复。";
 "metadata.recovery_collect" = "从对应备份复制经过验证的原件；不会修改备份，无法确定的匹配会跳过。";
 "metadata.backup_compare" = "只读比较两个照片图库，不修改任一图库。";
 "option.ultimate" = "最高质量（自动）";
@@ -444,6 +444,7 @@
 "log.details.show" = "查看处理详情";
 "log.details.hide" = "收起处理详情";
 "result.unconfirmed" = "结果无法完整确认 · 请查看处理记录";
+"result.integrity_issues" = "完整性检查发现 %@ 项问题 · 请查看处理记录";
 "result.delivery_deferred" = "照片导入暂缓";
 "result.delivery_record_title" = "照片交付记录";
 "result.delivery_invalid" = "照片交付记录不完整或互相冲突，请查看原始诊断。";

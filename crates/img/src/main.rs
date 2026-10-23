@@ -7641,7 +7641,6 @@ fn restore_jpeg_commit_xmp_sidecar(
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
     let extracted = restore_jpeg_extract_xmp_to_temp(input, &temp_xmp)?;
     let adjacent = foundation::metadata::find_xmp_sidecar(input);
-    let mut source_retention_reason = None;
     let expected_hash;
 
     if let Some(adjacent) = adjacent.as_deref() {
@@ -7654,24 +7653,24 @@ fn restore_jpeg_commit_xmp_sidecar(
         if extracted {
             let extracted_hash = calculate_blake3_hash(&temp_xmp)?;
             let adjacent_hash = calculate_blake3_hash(adjacent)?;
-            if extracted_hash == adjacent_hash {
-                expected_hash = extracted_hash;
-            } else {
-                let staged_hash = restore_jpeg_stage_adjacent_xmp(adjacent, &temp_xmp)?;
-                anyhow::ensure!(
-                    staged_hash == adjacent_hash,
-                    "restore-jpeg adjacent XMP changed before staging: {}",
-                    adjacent.display()
-                );
-                source_retention_reason = Some(format!(
-                    "exact JPEG reconstruction succeeded, but the JXL container XMP ({extracted_hash}) differs from the adjacent XMP ({adjacent_hash}); the adjacent XMP was delivered and the source JXL was retained so both metadata layers remain available for review"
-                ));
-                expected_hash = staged_hash;
-            }
+            anyhow::ensure!(
+                extracted_hash == adjacent_hash,
+                "restore-jpeg XMP gate refused delivery: JXL container XMP ({extracted_hash}) differs from adjacent XMP ({adjacent_hash}) for {}; no JPEG or XMP replacement is authorized; source JXL and XMP must be retained",
+                input.display()
+            );
+            expected_hash = extracted_hash;
         } else {
             expected_hash = restore_jpeg_stage_adjacent_xmp(adjacent, &temp_xmp)?;
         }
     } else if !extracted {
+        match std::fs::symlink_metadata(&sidecar_output) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("restore-jpeg cannot inspect output XMP"),
+            Ok(_) => anyhow::bail!(
+                "restore-jpeg XMP gate refused an output sidecar with no source XMP: {}; existing files must be retained",
+                sidecar_output.display()
+            ),
+        }
         return Ok(RestoreJpegXmpCommit::default());
     } else {
         expected_hash = calculate_blake3_hash(&temp_xmp)?;
@@ -7708,7 +7707,7 @@ fn restore_jpeg_commit_xmp_sidecar(
                     hash: current_hash,
                 }),
                 source_sidecar,
-                source_retention_reason,
+                source_retention_reason: None,
             });
         }
         anyhow::ensure!(
@@ -7745,7 +7744,7 @@ fn restore_jpeg_commit_xmp_sidecar(
             hash: current_hash,
         }),
         source_sidecar,
-        source_retention_reason,
+        source_retention_reason: None,
     })
 }
 
@@ -7899,7 +7898,6 @@ fn restore_jpeg_build_current_proof(
     output: &Path,
     output_root: &Path,
 ) -> anyhow::Result<RestoreJpegCommitProof> {
-    let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
     let mut proof = restore_jpeg_build_current_proof_with_decoder(
         input,
         input_root,
@@ -7907,6 +7905,7 @@ fn restore_jpeg_build_current_proof(
         output_root,
         restore_jpeg_decode_to_temp,
     )?;
+    let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
     proof.xmp_sidecar = xmp_commit.sidecar;
     proof.source_xmp_sidecar = xmp_commit.source_sidecar;
     proof.source_retention_reason = xmp_commit.source_retention_reason;
@@ -10912,9 +10911,8 @@ mod fast_img_hardening_tests {
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
-        record_and_delete_restored_jpeg_source, restore_jpeg_audit_marker_path,
-        restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
-        restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
+        restore_jpeg_audit_marker_path, restore_jpeg_build_current_proof_with_decoder,
+        restore_jpeg_candidate_files, restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
         restore_jpeg_delete_verified_source, restore_jpeg_hex_encode, restore_jpeg_output_path_for,
         restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
         restore_jpeg_validate_disjoint_roots, restore_single_jpeg, run_fast_img,
@@ -11455,6 +11453,22 @@ mod fast_img_hardening_tests {
         assert!(output_root.join("plain.jpg").exists());
         assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg")).is_none());
 
+        let plain_output = output_root.join("plain.jpg");
+        let plain_bytes = std::fs::read(&plain_output)?;
+        let unexpected_xmp = output_root.join("plain.xmp");
+        std::fs::write(&unexpected_xmp, b"unrelated output metadata")?;
+        for force in [false, true] {
+            let error = restore_single_jpeg(&source_without_xmp, &input_root, &output_root, force)
+                .expect_err("unproven output XMP must not be accepted or removed");
+            assert!(format!("{error:#}").contains("XMP"));
+            assert_eq!(std::fs::read(&plain_output)?, plain_bytes);
+            assert_eq!(
+                std::fs::read(&unexpected_xmp)?,
+                b"unrelated output metadata"
+            );
+            assert!(source_without_xmp.exists());
+        }
+
         // --force must not destroy an earlier delivery when its replacement's
         // sidecar fails validation after successful JPEG reconstruction.
         std::fs::write(&output, b"previous JPEG delivery")?;
@@ -11471,7 +11485,8 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
-    fn restore_jpeg_conflicting_xmp_restores_exact_jpeg_and_retains_source() -> anyhow::Result<()> {
+    fn restore_jpeg_conflicting_xmp_rejects_delivery_and_preserves_existing_files()
+    -> anyhow::Result<()> {
         if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
         {
@@ -11485,6 +11500,7 @@ mod fast_img_hardening_tests {
         let source_xmp = input_root.join("camera.xmp");
         assert!(write_real_reconstructible_jxl(&source)?);
         write_date_created_xmp(&source_xmp)?;
+        let original_xmp = std::fs::read(&source_xmp)?;
         assert!(foundation::metadata::merge_xmp_sidecar_into_dest(
             &source, &source,
         )?);
@@ -11494,32 +11510,37 @@ mod fast_img_hardening_tests {
         let expected_jpeg = root.path().join("expected-camera.jpg");
         restore_jpeg_decode_to_temp(&source, &expected_jpeg)?;
 
-        let restored = restore_single_jpeg(&source, &input_root, &output_root, false)?;
         let output = output_root.join("camera.jpg");
+        let source_bytes = std::fs::read(&source)?;
+        let error = restore_single_jpeg(&source, &input_root, &output_root, false)
+            .expect_err("conflicting XMP must reject an otherwise byte-exact JPEG");
+        assert!(format!("{error:#}").contains("XMP"));
+        assert!(!output.exists());
+        let delivered_xmp = output_root.join("camera.xmp");
+        assert!(!delivered_xmp.exists());
 
+        let previous_jpeg = std::fs::read(&expected_jpeg)?;
+        std::fs::write(&output, &previous_jpeg)?;
+        std::fs::write(&delivered_xmp, b"previous XMP delivery")?;
+        for force in [false, true] {
+            let error = restore_single_jpeg(&source, &input_root, &output_root, force)
+                .expect_err("XMP conflict must not overwrite an earlier delivery");
+            assert!(format!("{error:#}").contains("XMP"));
+            assert_eq!(std::fs::read(&output)?, previous_jpeg);
+            assert_eq!(std::fs::read(&delivered_xmp)?, b"previous XMP delivery");
+            assert_eq!(std::fs::read(&source)?, source_bytes);
+            assert_eq!(std::fs::read(&source_xmp)?, adjacent_xmp.as_bytes());
+        }
+
+        std::fs::write(&source_xmp, original_xmp)?;
+        let aligned_root = root.path().join("aligned_restored_jpeg");
+        let restored = restore_single_jpeg(&source, &input_root, &aligned_root, false)?;
         assert!(restored.committed);
-        assert_eq!(std::fs::read(&output)?, std::fs::read(&expected_jpeg)?);
-        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
-            .context("restored adjacent XMP sidecar missing")?;
-        assert_eq!(std::fs::read(restored_xmp)?, adjacent_xmp.as_bytes());
-        assert!(
-            restored
-                .proof
-                .source_retention_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("both metadata layers"))
+        assert_eq!(
+            std::fs::read(&restored.proof.output)?,
+            std::fs::read(&expected_jpeg)?
         );
-
-        let mut records = Vec::new();
-        assert!(!record_and_delete_restored_jpeg_source(
-            &output_root,
-            &mut records,
-            &restored.proof,
-        )?);
-        assert!(source.exists());
-        assert!(source_xmp.exists());
-        let manifest = std::fs::read_to_string(output_root.join(RESTORE_JPEG_MANIFEST_NAME))?;
-        assert!(manifest.contains("# MFB_RESTORE_JPEG_ATTENTION\t"));
+        assert!(restored.proof.source_retention_reason.is_none());
         Ok(())
     }
 
