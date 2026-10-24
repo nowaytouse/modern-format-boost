@@ -23,6 +23,27 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Bounded Disk I/O Improvements (2026-10-24)
+
+- Bind restored candidates directly to the complete JPEG hash already verified
+  by strict official and independent reconstruction, removing two full-file proof
+  copies without removing either reconstruction or the final source/output gates.
+- Stage and check XMP before processing-stage JPEG reconstruction. Preserve
+  source and sidecar identity checks through publication; unchanged existing XMP
+  remains verifiable after its temporary staging file has been consumed.
+- Write Fast IMG marker JSON without formatting whitespace. Keep its complete
+  data model, atomic replacement, file synchronization and directory synchronization.
+- Store checkpoint entries individually in the existing SQLite namespace, keeping
+  atomic per-entry commits and source validation. Migrate compatible schema-2
+  state transactionally; reject corrupt state and unsupported readers explicitly.
+- Append restored-JPEG proofs and identity-bound deletion receipts instead of
+  rewriting the complete manifest before and after every source deletion. Keep
+  prior proofs across runs; share the reader with post-verification and stop on
+  damaged, conflicting, occupied or unpersistable evidence.
+- These changes reduce identified logical write requests. They do not establish
+  a measured NAND-write or drive-lifetime improvement and are not hot-applied to
+  an already-running production instance.
+
 ### Strict Restoration Metadata Delivery (2026-10-23)
 
 - Refuse JPEG and sidecar publication when container and adjacent XMP disagree,

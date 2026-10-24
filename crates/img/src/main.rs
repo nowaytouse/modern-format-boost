@@ -7171,7 +7171,8 @@ fn restore_jpeg_input_root(input: &Path) -> anyhow::Result<PathBuf> {
     Ok(input.to_path_buf())
 }
 
-const RESTORE_JPEG_MANIFEST_NAME: &str = ".mfb_restore_jpeg_manifest.tsv";
+#[cfg(test)]
+const RESTORE_JPEG_MANIFEST_NAME: &str = foundation::restore_jpeg_manifest::MANIFEST_NAME;
 const RESTORE_JPEG_AUDIT_MANIFEST_NAME: &str = ".mfb_restore_jpeg_audit.tsv";
 
 #[derive(Debug, Clone)]
@@ -7201,6 +7202,14 @@ struct RestoreJpegXmpCommit {
     sidecar: Option<RestoreJpegSidecarProof>,
     source_sidecar: Option<RestoreJpegSidecarProof>,
     source_retention_reason: Option<String>,
+}
+
+struct RestoreJpegStagedXmp {
+    source_hash: String,
+    temp: PathBuf,
+    hash: Option<String>,
+    source_sidecar: Option<RestoreJpegSidecarProof>,
+    _guard: foundation::conversion::TempOutputGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -7395,77 +7404,55 @@ fn write_restore_jpeg_durable_text(
     Ok(())
 }
 
-fn write_restore_jpeg_manifest(
+fn append_restore_jpeg_manifest_record(
+    writer: &mut foundation::restore_jpeg_manifest::RestoreJpegManifestWriter,
     output_root: &Path,
-    records: &[RestoreJpegManifestRecord],
+    record: &RestoreJpegManifestRecord,
 ) -> anyhow::Result<()> {
-    std::fs::create_dir_all(output_root).with_context(|| {
-        format!(
-            "restore-jpeg failed to create manifest directory {}",
-            output_root.display()
-        )
-    })?;
-    let manifest = output_root.join(RESTORE_JPEG_MANIFEST_NAME);
-    let mut content = String::from(
-        "# MFB_RESTORE_JPEG_MANIFEST_V3\nsource_rel_hex\toutput_rel_hex\tsource_jxl_blake3\treconstruction_jpeg_blake3\trestored_jpeg_blake3\txmp_rel_hex\txmp_blake3\tverified_unix_seconds\tmfb_version\tdjxl_version_hex\tsource_deleted\n",
+    anyhow::ensure!(
+        !record.source_deleted && record.proof.source_retention_reason.is_none(),
+        "restore-jpeg cannot append an unverified or already-deleted source proof"
     );
-    for record in records {
-        content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
-        content.push('\t');
-        content.push_str(&restore_jpeg_hex_encode(&record.proof.output_rel));
-        content.push('\t');
-        content.push_str(&record.proof.source_hash);
-        content.push('\t');
-        content.push_str(&record.proof.reconstruction_hash);
-        content.push('\t');
-        content.push_str(&record.proof.output_hash);
-        content.push('\t');
-        if let Some(sidecar) = &record.proof.xmp_sidecar {
-            let sidecar_rel = restore_jpeg_relative_string(&sidecar.path, output_root)?;
-            content.push_str(&restore_jpeg_hex_encode(&sidecar_rel));
-            content.push('\t');
-            content.push_str(&sidecar.hash);
-        } else {
-            content.push('\t');
-        }
-        content.push('\t');
-        content.push_str(&record.proof.verified_unix_seconds.to_string());
-        content.push('\t');
-        content.push_str(env!("CARGO_PKG_VERSION"));
-        content.push('\t');
-        content.push_str(&restore_jpeg_hex_encode(&record.proof.djxl_version));
-        content.push('\t');
-        content.push_str(if record.source_deleted {
-            "true\n"
-        } else {
-            "false\n"
-        });
-        if let Some(reason) = &record.proof.source_retention_reason {
-            content.push_str("# MFB_RESTORE_JPEG_ATTENTION\t");
-            content.push_str(&restore_jpeg_hex_encode(&record.proof.source_rel));
-            content.push('\t');
-            content.push_str(&restore_jpeg_hex_encode(reason));
-            content.push('\n');
-        }
-    }
-    write_restore_jpeg_durable_text(&manifest, "mfb-restore-manifest-", &content)
+    let (sidecar_rel, sidecar_hash) = match &record.proof.xmp_sidecar {
+        Some(sidecar) => (
+            restore_jpeg_hex_encode(&restore_jpeg_relative_string(&sidecar.path, output_root)?),
+            sidecar.hash.as_str(),
+        ),
+        None => (String::new(), ""),
+    };
+    let line = format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tfalse\n",
+        restore_jpeg_hex_encode(&record.proof.source_rel),
+        restore_jpeg_hex_encode(&record.proof.output_rel),
+        record.proof.source_hash,
+        record.proof.reconstruction_hash,
+        record.proof.output_hash,
+        sidecar_rel,
+        sidecar_hash,
+        record.proof.verified_unix_seconds,
+        env!("CARGO_PKG_VERSION"),
+        restore_jpeg_hex_encode(&record.proof.djxl_version),
+    );
+    writer.record_proof(&line)
 }
 
 fn record_and_delete_restored_jpeg_source(
+    writer: &mut foundation::restore_jpeg_manifest::RestoreJpegManifestWriter,
     output_root: &Path,
     restore_records: &mut Vec<RestoreJpegManifestRecord>,
     proof: &RestoreJpegCommitProof,
 ) -> anyhow::Result<bool> {
-    restore_records.push(RestoreJpegManifestRecord {
+    let record = RestoreJpegManifestRecord {
         proof: proof.clone(),
         source_deleted: false,
-    });
-    write_restore_jpeg_manifest(output_root, restore_records).with_context(|| {
+    };
+    append_restore_jpeg_manifest_record(writer, output_root, &record).with_context(|| {
         format!(
             "restore-jpeg failed to persist recovery manifest before removing {}",
             proof.source.display()
         )
     })?;
+    restore_records.push(record);
     if proof.source_retention_reason.is_some() {
         return Ok(false);
     }
@@ -7474,13 +7461,13 @@ fn record_and_delete_restored_jpeg_source(
         let record = restore_records
             .last_mut()
             .context("restore-jpeg recovery manifest record disappeared")?;
-        record.source_deleted = true;
-        write_restore_jpeg_manifest(output_root, restore_records).with_context(|| {
+        writer.record_deleted(&proof.source_rel).with_context(|| {
             format!(
                 "restore-jpeg failed to persist completed deletion for {}",
                 proof.source.display()
             )
         })?;
+        record.source_deleted = true;
     }
     Ok(deleted)
 }
@@ -7517,18 +7504,22 @@ fn run_restore_image_command(
     .with_context(|| format!("{context} failed to run"))
 }
 
-fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Result<String> {
+fn restore_jpeg_decode_to_temp(
+    input: &Path,
+    temp_output: &Path,
+) -> anyhow::Result<(String, String)> {
     let source_hash =
         calculate_blake3_hash(input).context("hash JXL before JPEG reconstruction")?;
-    let reconstruction = (|| -> anyhow::Result<String> {
+    let reconstruction = (|| -> anyhow::Result<(String, String)> {
         foundation::image::jxl_utils::run_exact_jpeg_reconstruction(
             input,
             temp_output,
             "restore-jpeg djxl decode",
         )
         .map_err(anyhow::Error::msg)?;
-        foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, temp_output)
-            .map_err(anyhow::Error::msg)?;
+        let reconstructed_hash =
+            foundation::image::jxl_utils::verify_reconstructed_jpeg_bytes(input, temp_output)
+                .map_err(anyhow::Error::msg)?;
         let current_hash = calculate_blake3_hash(input)
             .context("hash JXL after independent JPEG reconstruction verification")?;
         anyhow::ensure!(
@@ -7536,7 +7527,7 @@ fn restore_jpeg_decode_to_temp(input: &Path, temp_output: &Path) -> anyhow::Resu
             "restore-jpeg source changed during exact JPEG reconstruction: {}",
             input.display()
         );
-        Ok(source_hash)
+        Ok((source_hash, reconstructed_hash))
     })();
     if let Err(error) = &reconstruction {
         if temp_output.exists()
@@ -7630,15 +7621,16 @@ fn restore_jpeg_stage_adjacent_xmp(adjacent: &Path, temp_xmp: &Path) -> anyhow::
     Ok(source_hash)
 }
 
-fn restore_jpeg_commit_xmp_sidecar(
+fn restore_jpeg_stage_xmp_sidecar(
     input: &Path,
     output: &Path,
-    force: bool,
-) -> anyhow::Result<RestoreJpegXmpCommit> {
+) -> anyhow::Result<RestoreJpegStagedXmp> {
+    let source_hash =
+        calculate_blake3_hash(input).context("hash JXL before staging restoration XMP")?;
     let sidecar_output = restore_jpeg_output_xmp_path(output);
     let temp_xmp = foundation::path_safety::isolated_temp_path_for_search(&sidecar_output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg XMP temp path failed: {err}"))?;
-    let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
+    let guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
     let extracted = restore_jpeg_extract_xmp_to_temp(input, &temp_xmp)?;
     let adjacent = foundation::metadata::find_xmp_sidecar(input);
     let expected_hash;
@@ -7671,7 +7663,13 @@ fn restore_jpeg_commit_xmp_sidecar(
                 sidecar_output.display()
             ),
         }
-        return Ok(RestoreJpegXmpCommit::default());
+        return Ok(RestoreJpegStagedXmp {
+            source_hash,
+            temp: temp_xmp,
+            hash: None,
+            source_sidecar: None,
+            _guard: guard,
+        });
     } else {
         expected_hash = calculate_blake3_hash(&temp_xmp)?;
     }
@@ -7697,10 +7695,59 @@ fn restore_jpeg_commit_xmp_sidecar(
         })
         .transpose()?;
 
+    Ok(RestoreJpegStagedXmp {
+        source_hash,
+        temp: temp_xmp,
+        hash: Some(expected_hash),
+        source_sidecar,
+        _guard: guard,
+    })
+}
+
+fn restore_jpeg_commit_xmp_sidecar(
+    input: &Path,
+    output: &Path,
+    force: bool,
+    staged: &RestoreJpegStagedXmp,
+    reconstruction_source_hash: &str,
+) -> anyhow::Result<RestoreJpegXmpCommit> {
+    anyhow::ensure!(
+        staged.source_hash == reconstruction_source_hash,
+        "restore-jpeg source changed between XMP staging and JPEG reconstruction"
+    );
+    let current_sidecar = foundation::metadata::find_xmp_sidecar(input);
+    anyhow::ensure!(
+        current_sidecar.as_deref()
+            == staged
+                .source_sidecar
+                .as_ref()
+                .map(|proof| proof.path.as_path()),
+        "restore-jpeg source XMP association changed after staging"
+    );
+    if let Some(sidecar) = &staged.source_sidecar {
+        anyhow::ensure!(
+            calculate_blake3_hash(&sidecar.path)? == sidecar.hash,
+            "restore-jpeg source XMP changed after staging: {}",
+            sidecar.path.display()
+        );
+    }
+    let Some(expected_hash) = staged.hash.as_deref() else {
+        anyhow::ensure!(
+            std::fs::symlink_metadata(restore_jpeg_output_xmp_path(output))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+            "restore-jpeg output XMP appeared or became unreadable after staging"
+        );
+        return Ok(RestoreJpegXmpCommit::default());
+    };
+    let sidecar_output = restore_jpeg_output_xmp_path(output);
+    let temp_xmp = &staged.temp;
+    let source_sidecar = staged.source_sidecar.clone();
     if sidecar_output.exists() {
         let current_hash = calculate_blake3_hash(&sidecar_output)?;
         if current_hash == expected_hash {
-            restore_jpeg_remove_temp(&temp_xmp, "matching existing XMP sidecar")?;
+            if temp_xmp.exists() {
+                restore_jpeg_remove_temp(temp_xmp, "matching existing XMP sidecar")?;
+            }
             return Ok(RestoreJpegXmpCommit {
                 sidecar: Some(RestoreJpegSidecarProof {
                     path: sidecar_output,
@@ -7717,8 +7764,12 @@ fn restore_jpeg_commit_xmp_sidecar(
         );
     }
 
+    anyhow::ensure!(
+        calculate_blake3_hash(temp_xmp)? == expected_hash,
+        "restore-jpeg staged XMP changed before commit"
+    );
     let committed = foundation::conversion::commit_temp_to_output_preserving_exact_payload(
-        &temp_xmp,
+        temp_xmp,
         &sidecar_output,
         force,
         Some(input),
@@ -7748,16 +7799,14 @@ fn restore_jpeg_commit_xmp_sidecar(
     })
 }
 
-fn restore_jpeg_build_current_proof_with_decoder<F>(
+fn restore_jpeg_build_current_proof_from_reconstruction(
     input: &Path,
     input_root: &Path,
     output: &Path,
     output_root: &Path,
-    decode_to_temp: F,
-) -> anyhow::Result<RestoreJpegCommitProof>
-where
-    F: FnOnce(&Path, &Path) -> anyhow::Result<String>,
-{
+    reconstruction_source_hash: &str,
+    reconstructed_hash: &str,
+) -> anyhow::Result<RestoreJpegCommitProof> {
     let source_format =
         foundation::image::format_detect::detect_true_format(input).with_context(|| {
             format!(
@@ -7803,27 +7852,62 @@ where
         );
     }
 
+    let output_hash = calculate_blake3_hash(output).with_context(|| {
+        format!(
+            "restore-jpeg proof gate failed to hash restored output {}",
+            output.display()
+        )
+    })?;
+    anyhow::ensure!(
+        reconstructed_hash == output_hash,
+        "restore-jpeg proof gate: restored JPEG bytes do not match strict djxl reconstruction for {} -> {}",
+        input.display(),
+        output.display()
+    );
+
+    let source_hash = calculate_blake3_hash(input)
+        .context("hash current JXL before issuing JPEG restoration proof")?;
+    anyhow::ensure!(
+        source_hash == reconstruction_source_hash,
+        "restore-jpeg proof gate: source changed after JPEG reconstruction: {}",
+        input.display()
+    );
+    Ok(RestoreJpegCommitProof {
+        source: input.to_path_buf(),
+        output: output.to_path_buf(),
+        source_rel: restore_jpeg_relative_string(input, input_root)?,
+        output_rel: restore_jpeg_relative_string(output, output_root)?,
+        source_hash,
+        reconstruction_hash: reconstructed_hash.to_string(),
+        output_hash,
+        xmp_sidecar: None,
+        source_xmp_sidecar: None,
+        source_retention_reason: None,
+        verified_unix_seconds: restore_jpeg_verified_unix_seconds()?,
+        djxl_version: restore_jpeg_djxl_version()?.to_string(),
+    })
+}
+
+fn restore_jpeg_build_current_proof_with_decoder<F>(
+    input: &Path,
+    input_root: &Path,
+    output: &Path,
+    output_root: &Path,
+    decode_to_temp: F,
+) -> anyhow::Result<RestoreJpegCommitProof>
+where
+    F: FnOnce(&Path, &Path) -> anyhow::Result<(String, String)>,
+{
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg proof temp path failed: {err}"))?;
-    let reconstruction_source_hash = match decode_to_temp(input, &temp_output).with_context(|| {
-        format!(
-            "restore-jpeg proof gate failed to fresh-decode {}",
-            input.display()
-        )
-    }) {
-        Ok(hash) => hash,
-        Err(err) => {
-            if let Err(cleanup_err) = restore_jpeg_remove_temp(&temp_output, "failed fresh decode")
-            {
-                return Err(err.context(format!(
-                    "restore-jpeg proof temp cleanup also failed: {cleanup_err}"
-                )));
-            }
-            return Err(err);
-        }
-    };
-
     let proof_result = (|| {
+        let (reconstruction_source_hash, reconstructed_hash) = decode_to_temp(input, &temp_output)
+            .with_context(|| {
+                format!(
+                    "restore-jpeg proof gate failed to fresh-decode {}",
+                    input.display()
+                )
+            })?;
         let decoded_format = foundation::image::format_detect::detect_true_format(&temp_output)
             .with_context(|| {
                 format!(
@@ -7831,55 +7915,24 @@ where
                     temp_output.display()
                 )
             })?;
-        if decoded_format != FormatKind::Jpeg {
-            anyhow::bail!(
-                "restore-jpeg proof gate: fresh djxl output is not a true JPEG for {} (detected {:?})",
-                input.display(),
-                decoded_format
-            );
-        }
-
-        let output_hash = calculate_blake3_hash(output).with_context(|| {
-            format!(
-                "restore-jpeg proof gate failed to hash restored output {}",
-                output.display()
-            )
-        })?;
-        let reconstructed_hash = calculate_blake3_hash(&temp_output).with_context(|| {
-            format!(
-                "restore-jpeg proof gate failed to hash strict djxl reconstruction {}",
-                temp_output.display()
-            )
-        })?;
-        if reconstructed_hash != output_hash {
-            anyhow::bail!(
-                "restore-jpeg proof gate: restored JPEG bytes do not match strict djxl reconstruction for {} -> {}",
-                input.display(),
-                output.display()
-            );
-        }
-
-        let source_hash = calculate_blake3_hash(input)
-            .context("hash current JXL before issuing JPEG restoration proof")?;
         anyhow::ensure!(
-            source_hash == reconstruction_source_hash,
-            "restore-jpeg proof gate: source changed after JPEG reconstruction: {}",
-            input.display()
+            decoded_format == FormatKind::Jpeg,
+            "restore-jpeg proof gate: fresh djxl output is not a true JPEG for {} (detected {:?})",
+            input.display(),
+            decoded_format
         );
-        Ok(RestoreJpegCommitProof {
-            source: input.to_path_buf(),
-            output: output.to_path_buf(),
-            source_rel: restore_jpeg_relative_string(input, input_root)?,
-            output_rel: restore_jpeg_relative_string(output, output_root)?,
-            source_hash,
-            reconstruction_hash: reconstructed_hash,
-            output_hash,
-            xmp_sidecar: None,
-            source_xmp_sidecar: None,
-            source_retention_reason: None,
-            verified_unix_seconds: restore_jpeg_verified_unix_seconds()?,
-            djxl_version: restore_jpeg_djxl_version()?.to_string(),
-        })
+        anyhow::ensure!(
+            calculate_blake3_hash(&temp_output)? == reconstructed_hash,
+            "restore-jpeg verified reconstruction changed before proof"
+        );
+        restore_jpeg_build_current_proof_from_reconstruction(
+            input,
+            input_root,
+            output,
+            output_root,
+            &reconstruction_source_hash,
+            &reconstructed_hash,
+        )
     })();
     let cleanup_result = restore_jpeg_remove_temp(&temp_output, "fresh decode proof");
     match (proof_result, cleanup_result) {
@@ -7897,6 +7950,7 @@ fn restore_jpeg_build_current_proof(
     input_root: &Path,
     output: &Path,
     output_root: &Path,
+    staged_xmp: &RestoreJpegStagedXmp,
 ) -> anyhow::Result<RestoreJpegCommitProof> {
     let mut proof = restore_jpeg_build_current_proof_with_decoder(
         input,
@@ -7905,7 +7959,8 @@ fn restore_jpeg_build_current_proof(
         output_root,
         restore_jpeg_decode_to_temp,
     )?;
-    let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, output, false)?;
+    let xmp_commit =
+        restore_jpeg_commit_xmp_sidecar(input, output, false, staged_xmp, &proof.source_hash)?;
     proof.xmp_sidecar = xmp_commit.sidecar;
     proof.source_xmp_sidecar = xmp_commit.source_sidecar;
     proof.source_retention_reason = xmp_commit.source_retention_reason;
@@ -7923,16 +7978,19 @@ fn restore_single_jpeg(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("restore-jpeg failed to create {}", parent.display()))?;
     }
+    // Reject unusable metadata before producing any full-sized JPEG scratch output.
+    let staged_xmp = restore_jpeg_stage_xmp_sidecar(input, &output)?;
 
     if !force && output.exists() {
-        let proof = restore_jpeg_build_current_proof(input, input_root, &output, output_root)
-            .with_context(|| {
-                format!(
-                    "restore-jpeg failed to re-verify existing output {} -> {}",
-                    input.display(),
-                    output.display()
-                )
-            })?;
+        let proof =
+            restore_jpeg_build_current_proof(input, input_root, &output, output_root, &staged_xmp)
+                .with_context(|| {
+                    format!(
+                        "restore-jpeg failed to re-verify existing output {} -> {}",
+                        input.display(),
+                        output.display()
+                    )
+                })?;
         return Ok(RestoreJpegResult {
             committed: false,
             proof,
@@ -7942,19 +8000,8 @@ fn restore_single_jpeg(
     let temp_output = foundation::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|err| anyhow::anyhow!("restore-jpeg temp path failed: {err}"))?;
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
-    let reconstruction_source_hash = restore_jpeg_decode_to_temp(input, &temp_output)?;
-
-    // Keep the official byte-exact djxl reconstruction for the
-    // candidate byte proof. This avoids launching djxl a second time for
-    // every committed file.
-    let proof_snapshot = temp_output.with_extension("mfb-restore-proof.jpg");
-    let _proof_guard = foundation::conversion::TempOutputGuard::new(proof_snapshot.clone());
-    std::fs::copy(&temp_output, &proof_snapshot).with_context(|| {
-        format!(
-            "restore-jpeg failed to snapshot official djxl output {}",
-            temp_output.display()
-        )
-    })?;
+    let (reconstruction_source_hash, reconstructed_hash) =
+        restore_jpeg_decode_to_temp(input, &temp_output)?;
 
     let mut candidate_proof = None;
     let committed = foundation::conversion::commit_temp_to_output_preserving_exact_payload_checked(
@@ -7964,23 +8011,25 @@ fn restore_single_jpeg(
         Some(input),
         |candidate| {
             let validate = (|| -> anyhow::Result<()> {
-                let mut proof = restore_jpeg_build_current_proof_with_decoder(
+                let mut proof = restore_jpeg_build_current_proof_from_reconstruction(
                     input,
                     input_root,
                     candidate,
                     output_root,
-                    |_input, fresh_decode| {
-                        std::fs::copy(&proof_snapshot, fresh_decode)
-                            .context("restore-jpeg failed to stage djxl proof snapshot")?;
-                        Ok(reconstruction_source_hash.clone())
-                    },
+                    &reconstruction_source_hash,
+                    &reconstructed_hash,
                 )?;
-                restore_jpeg_remove_temp(&proof_snapshot, "completed restore proof")?;
                 proof.output.clone_from(&output);
                 proof.output_rel = restore_jpeg_relative_string(&output, output_root)?;
                 // Validate and deliver sidecar metadata before replacing the JPEG.
                 // On any sidecar failure the previous JPEG remains untouched.
-                let xmp_commit = restore_jpeg_commit_xmp_sidecar(input, &output, force)?;
+                let xmp_commit = restore_jpeg_commit_xmp_sidecar(
+                    input,
+                    &output,
+                    force,
+                    &staged_xmp,
+                    &proof.source_hash,
+                )?;
                 proof.xmp_sidecar = xmp_commit.sidecar;
                 proof.source_xmp_sidecar = xmp_commit.source_sidecar;
                 proof.source_retention_reason = xmp_commit.source_retention_reason;
@@ -8001,7 +8050,7 @@ fn restore_single_jpeg(
     let proof = if committed {
         candidate_proof.context("restore-jpeg committed output is missing its candidate proof")?
     } else {
-        restore_jpeg_build_current_proof(input, input_root, &output, output_root)?
+        restore_jpeg_build_current_proof(input, input_root, &output, output_root, &staged_xmp)?
     };
 
     Ok(RestoreJpegResult { committed, proof })
@@ -8721,6 +8770,9 @@ fn restore_jpeg_process_candidates(
     force: bool,
     keep_source: bool,
 ) -> anyhow::Result<RestoreJpegProcessOutcome> {
+    let mut manifest =
+        foundation::restore_jpeg_manifest::RestoreJpegManifestWriter::open(output_root)
+            .context("restore-jpeg cannot own the output recovery manifest")?;
     if keep_source {
         let outcome = restore_jpeg_keep_source_parallel(files, input_root, output_root, force)?;
         for review in &outcome.metadata_reviews {
@@ -8733,13 +8785,15 @@ fn restore_jpeg_process_candidates(
         for failed in &outcome.failures {
             eprintln!("[FAIL    ] {}: {}", failed.source.display(), failed.reason);
         }
-        if !outcome.records.is_empty() {
-            write_restore_jpeg_manifest(output_root, &outcome.records).with_context(|| {
-                format!(
-                    "restore-jpeg failed to commit retained-source manifest after {} files",
-                    files.len()
-                )
-            })?;
+        for record in &outcome.records {
+            append_restore_jpeg_manifest_record(&mut manifest, output_root, record).with_context(
+                || {
+                    format!(
+                        "restore-jpeg failed to commit retained-source manifest after {} files",
+                        files.len()
+                    )
+                },
+            )?;
         }
         return Ok(outcome);
     }
@@ -8761,6 +8815,7 @@ fn restore_jpeg_process_candidates(
                     });
                 }
                 if record_and_delete_restored_jpeg_source(
+                    &mut manifest,
                     output_root,
                     &mut outcome.records,
                     &result.proof,
@@ -10891,8 +10946,9 @@ mod fast_img_hardening_tests {
         FastImgPostGate1Policy, FastImgRunOptions, FastImgTranscodeError, FreshFlag,
         RESTORE_JPEG_MANIFEST_NAME, RecursiveFlag, RestoreJpegAuditRecord, RestoreJpegAuditStatus,
         RestoreJpegCommitProof, RestoreJpegManifestRecord, RetryFlag, ShortestPathFlag,
-        calculate_blake3_hash, canonicalize_img_run_roots, command_requires_database,
-        fast_img_archive_stale_working_copy, fast_img_cleanup_complete_has_shortest_path_proof,
+        append_restore_jpeg_manifest_record, calculate_blake3_hash, canonicalize_img_run_roots,
+        command_requires_database, fast_img_archive_stale_working_copy,
+        fast_img_cleanup_complete_has_shortest_path_proof,
         fast_img_cleanup_complete_should_resume_shortest_path_import,
         fast_img_cleanup_complete_source_state, fast_img_cleanup_resume_source_subset_matches,
         fast_img_completed_marker_has_new_tier2_work, fast_img_container_is_static,
@@ -10911,13 +10967,14 @@ mod fast_img_hardening_tests {
         fast_img_validate_jxl_only_delivery_exit, fast_img_validate_recorded_source_hashes_current,
         fast_img_verified_output_format, fast_img_verify_source_hash_unchanged,
         fast_static_modern_compression, fast_static_uses_modern_compression_preflight,
-        restore_jpeg_audit_marker_path, restore_jpeg_build_current_proof_with_decoder,
-        restore_jpeg_candidate_files, restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
+        restore_jpeg_audit_marker_path, restore_jpeg_build_current_proof_from_reconstruction,
+        restore_jpeg_build_current_proof_with_decoder, restore_jpeg_candidate_files,
+        restore_jpeg_commit_xmp_sidecar, restore_jpeg_decode_to_temp,
         restore_jpeg_delete_verified_source, restore_jpeg_hex_encode, restore_jpeg_output_path_for,
-        restore_jpeg_preflight, restore_jpeg_prune_empty_source_dirs,
-        restore_jpeg_validate_disjoint_roots, restore_single_jpeg, run_fast_img,
-        validate_cleanup_complete_marker, validate_fast_img_marker_source_state,
-        write_restore_jpeg_manifest,
+        restore_jpeg_preflight, restore_jpeg_process_candidates,
+        restore_jpeg_prune_empty_source_dirs, restore_jpeg_validate_disjoint_roots,
+        restore_single_jpeg, run_fast_img, validate_cleanup_complete_marker,
+        validate_fast_img_marker_source_state,
     };
     use anyhow::Context;
     use clap::Parser;
@@ -11170,10 +11227,20 @@ mod fast_img_hardening_tests {
             output_root,
             |input, temp_output| {
                 std::fs::copy(output, temp_output)?;
-                calculate_blake3_hash(input)
+                Ok((
+                    calculate_blake3_hash(input)?,
+                    calculate_blake3_hash(temp_output)?,
+                ))
             },
         )?;
-        let xmp_commit = restore_jpeg_commit_xmp_sidecar(source, output, false)?;
+        let staged_xmp = super::restore_jpeg_stage_xmp_sidecar(source, output)?;
+        let xmp_commit = restore_jpeg_commit_xmp_sidecar(
+            source,
+            output,
+            false,
+            &staged_xmp,
+            &proof.source_hash,
+        )?;
         proof.xmp_sidecar = xmp_commit.sidecar;
         proof.source_xmp_sidecar = xmp_commit.source_sidecar;
         proof.source_retention_reason = xmp_commit.source_retention_reason;
@@ -11290,12 +11357,15 @@ mod fast_img_hardening_tests {
             verified_unix_seconds: 1,
             djxl_version: "djxl test-version".to_string(),
         };
-        write_restore_jpeg_manifest(
+        let mut writer =
+            foundation::restore_jpeg_manifest::RestoreJpegManifestWriter::open(root.path())?;
+        append_restore_jpeg_manifest_record(
+            &mut writer,
             root.path(),
-            &[RestoreJpegManifestRecord {
+            &RestoreJpegManifestRecord {
                 proof,
                 source_deleted: false,
-            }],
+            },
         )?;
 
         let manifest = std::fs::read_to_string(root.path().join(RESTORE_JPEG_MANIFEST_NAME))?;
@@ -11307,6 +11377,36 @@ mod fast_img_hardening_tests {
             manifest.lines().nth(2).map(|line| line.split('\t').count()),
             Some(11)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_manifest_ownership_failure_preserves_source_before_processing()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let input_root = root.path().join("input");
+        let output_root = root.path().join("restored");
+        std::fs::create_dir_all(&input_root)?;
+        let source = input_root.join("sample.jxl");
+        let bytes = b"\xff\x0a\x00\x00";
+        std::fs::write(&source, bytes)?;
+        let _owner =
+            foundation::restore_jpeg_manifest::RestoreJpegManifestWriter::open(&output_root)?;
+        let error = restore_jpeg_process_candidates(
+            std::slice::from_ref(&source),
+            &input_root,
+            &output_root,
+            false,
+            false,
+        )
+        .expect_err("an occupied manifest must stop before restoring or deleting any source");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot own the output recovery manifest")
+        );
+        assert_eq!(std::fs::read(&source)?, bytes);
+        assert!(!output_root.join("sample.jpg").exists());
         Ok(())
     }
 
@@ -11481,6 +11581,91 @@ mod fast_img_hardening_tests {
         assert_eq!(std::fs::read(&output)?, b"previous JPEG delivery");
         assert_eq!(std::fs::read(&delivered_xmp)?, previous_xmp);
         assert!(source.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_jpeg_staged_xmp_rejects_source_or_sidecar_changes() -> anyhow::Result<()> {
+        if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
+            || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
+        {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let source = root.path().join("camera.JXL");
+        assert!(write_real_reconstructible_jxl(&source)?);
+        let source_xmp = source.with_extension("xmp");
+        write_date_created_xmp(&source_xmp)?;
+        let output = root.path().join("restored.jpg");
+        let staged = super::restore_jpeg_stage_xmp_sidecar(&source, &output)?;
+        let staged_path = staged.temp.clone();
+        assert!(!output.exists());
+        assert!(!output.with_extension("xmp").exists());
+        std::fs::write(&source_xmp, b"<changed/>")?;
+        let error =
+            restore_jpeg_commit_xmp_sidecar(&source, &output, false, &staged, &staged.source_hash)
+                .expect_err("changed source XMP must not inherit staged evidence");
+        assert!(
+            error
+                .to_string()
+                .contains("source XMP changed after staging")
+        );
+        let error = restore_jpeg_commit_xmp_sidecar(
+            &source,
+            &output,
+            false,
+            &staged,
+            "different-reconstruction-source",
+        )
+        .expect_err("staged XMP must not bind to a different JXL reconstruction");
+        assert!(
+            error
+                .to_string()
+                .contains("source changed between XMP staging")
+        );
+        assert!(!output.exists());
+        assert!(!output.with_extension("xmp").exists());
+        assert!(source.exists());
+        drop(staged);
+        assert!(!staged_path.exists());
+
+        write_date_created_xmp(&source_xmp)?;
+        let staged = super::restore_jpeg_stage_xmp_sidecar(&source, &output)?;
+        let first =
+            restore_jpeg_commit_xmp_sidecar(&source, &output, false, &staged, &staged.source_hash)?;
+        assert!(!staged.temp.exists());
+        let repeated =
+            restore_jpeg_commit_xmp_sidecar(&source, &output, false, &staged, &staged.source_hash)?;
+        assert_eq!(first.sidecar.unwrap().hash, repeated.sidecar.unwrap().hash);
+
+        let plain = root.path().join("plain.JXL");
+        assert!(write_real_reconstructible_jxl(&plain)?);
+        let plain_output_root = root.path().join("restored");
+        std::fs::create_dir(&plain_output_root)?;
+        let plain_output = plain_output_root.join("plain.jpg");
+        let staged = super::restore_jpeg_stage_xmp_sidecar(&plain, &plain_output)?;
+        assert!(staged.hash.is_none());
+        std::fs::write(plain_output.with_extension("xmp"), b"<unexpected/>")?;
+        let error = restore_jpeg_commit_xmp_sidecar(
+            &plain,
+            &plain_output,
+            false,
+            &staged,
+            &staged.source_hash,
+        )
+        .expect_err("new output metadata must not be accepted as absent");
+        assert!(error.to_string().contains("output XMP appeared"));
+        write_date_created_xmp(&plain.with_extension("xmp"))?;
+        let error = restore_jpeg_commit_xmp_sidecar(
+            &plain,
+            &plain_output,
+            false,
+            &staged,
+            &staged.source_hash,
+        )
+        .expect_err("new sidecar association must invalidate staged evidence");
+        assert!(error.to_string().contains("source XMP association changed"));
         Ok(())
     }
 
@@ -11758,6 +11943,48 @@ mod fast_img_hardening_tests {
     }
 
     #[test]
+    fn restore_jpeg_captured_proof_rejects_changed_candidate_or_source_without_copies()
+    -> anyhow::Result<()> {
+        for change_candidate in [true, false] {
+            let root = TempDir::new()?;
+            let input_root = root.path().join("input");
+            let output_root = root.path().join("restored");
+            std::fs::create_dir_all(&input_root)?;
+            let source = input_root.join("sample.jxl");
+            std::fs::write(&source, b"\xff\x0a\x00\x00")?;
+            let source_hash = calculate_blake3_hash(&source)?;
+            let output = output_root.join("sample.jpg");
+            write_real_jpeg(&output, [10, 20, 30])?;
+            let reconstructed_hash = calculate_blake3_hash(&output)?;
+            if change_candidate {
+                write_real_jpeg(&output, [200, 20, 30])?;
+            } else {
+                std::fs::write(&source, b"\xff\x0a\x01\x00")?;
+            }
+            let source_bytes = std::fs::read(&source)?;
+            let output_bytes = std::fs::read(&output)?;
+            let error = restore_jpeg_build_current_proof_from_reconstruction(
+                &source,
+                &input_root,
+                &output,
+                &output_root,
+                &source_hash,
+                &reconstructed_hash,
+            )
+            .expect_err("captured proof must remain bound to both verified payload and source");
+            assert!(error.to_string().contains(if change_candidate {
+                "restored JPEG bytes do not match strict djxl reconstruction"
+            } else {
+                "source changed after JPEG reconstruction"
+            }));
+            assert_eq!(std::fs::read(&source)?, source_bytes);
+            assert_eq!(std::fs::read(&output)?, output_bytes);
+            assert_eq!(std::fs::read_dir(&output_root)?.count(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn restore_jpeg_proof_rejects_source_changed_during_or_after_reconstruction()
     -> anyhow::Result<()> {
         for change_during_decode in [true, false] {
@@ -11784,7 +12011,7 @@ mod fast_img_hardening_tests {
                     if change_during_decode {
                         std::fs::write(input, b"\xff\x0a\x01\x00")?;
                     }
-                    Ok(source_hash.clone())
+                    Ok((source_hash.clone(), calculate_blake3_hash(temp_output)?))
                 },
             )
             .expect_err("a JPEG snapshot must not acquire proof for a different JXL");
@@ -11825,7 +12052,10 @@ mod fast_img_hardening_tests {
                     .append(true)
                     .open(temp_output)?
                     .write_all(b"metadata-rewrite")?;
-                calculate_blake3_hash(input)
+                Ok((
+                    calculate_blake3_hash(input)?,
+                    calculate_blake3_hash(temp_output)?,
+                ))
             },
         ) else {
             anyhow::bail!("byte-different JPEG was accepted as an original reconstruction");
@@ -11861,7 +12091,10 @@ mod fast_img_hardening_tests {
             &output_root,
             |input, temp_output| {
                 write_real_jpeg(temp_output, [200, 20, 30])?;
-                calculate_blake3_hash(input)
+                Ok((
+                    calculate_blake3_hash(input)?,
+                    calculate_blake3_hash(temp_output)?,
+                ))
             },
         ) else {
             anyhow::bail!("pixel-mismatched fresh decode did not block restore deletion proof");

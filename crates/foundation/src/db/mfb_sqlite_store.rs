@@ -658,7 +658,7 @@ fn path_tree_get_with_status(
     Ok(outcome)
 }
 
-fn read_blob(
+pub(crate) fn read_blob(
     conn: &Connection,
     namespace: &str,
     cache_key: &str,
@@ -823,7 +823,7 @@ fn path_tree_put(
     Ok(())
 }
 
-fn upsert_blob(
+pub(crate) fn upsert_blob(
     conn: &Connection,
     namespace: &str,
     cache_key: &str,

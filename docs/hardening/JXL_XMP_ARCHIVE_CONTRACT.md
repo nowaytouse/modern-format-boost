@@ -303,12 +303,28 @@ Exact reconstruction requires both strict `djxl` evidence and an independent
 `jxl-oxide` reconstruction from typed JPEG reconstruction data. The full JPEG
 byte hashes must agree, not just the decoded pixels. Missing reconstruction
 data, decoder disagreement, incomplete output or source-content changes reject
-the proof. The JXL hash captured before decoding remains bound to the restored
-snapshot, durable manifest and final source-cleanup gate. A previously restored
+the proof. The JXL hash captured before decoding remains bound to the verified
+JPEG hash, durable manifest and final source-cleanup gate. A previously restored
 JPEG is rechecked by the same current-evidence path before source cleanup.
 This proves recovery of the JPEG bytes stored in the current JXL; without a
 recorded historical original hash, it does not claim a separate historical
 hash comparison.
+
+The official JPEG output is independently reconstructed and verified before its
+complete hash can be used as a candidate reference. Publication rehashes the
+actual staged JPEG and current source against that reference. Two copies of the
+same JPEG are not two independent proofs: this path retains the official and
+independent reconstructions while avoiding the two full-file proof copies.
+Existing output is still checked against a fresh strict reconstruction, not
+accepted from filenames or an old manifest. Source and final output are checked
+again at the deletion boundary.
+
+XMP is staged before the processing-stage JPEG reconstruction, so known metadata
+conflicts do not cause another full JPEG scratch output. The staged XMP remains
+bound to the source JXL hash, adjacent sidecar identity and exact packet hash;
+changes before publication reject the proof. Eligibility preflight can still
+reconstruct JPEG data. This is not a claim of zero scratch writes or reduced
+physical SSD wear, and it does not permit relaxing durability or integrity gates.
 
 The independent reconstructor uses the narrowly vendored `jxl-jbr` patch documented
 in `vendor/jxl-jbr/MFB-PATCH.md`. Progressive chroma-only scans retain the entire
@@ -331,6 +347,28 @@ post-verification, not comments to discard or permission to delete old outputs.
 Every restored JPEG also requires a validated manifest proof naming that exact
 output path. A matching source filename or a different JPEG extension cannot
 replace the output's byte-hash proof.
+
+The restoration manifest retains existing proof rows across runs. An exclusively
+locked writer appends and synchronizes one proof before source deletion, then
+appends a `MFB_RESTORE_JPEG_DELETED` receipt after the existing final source/output
+gate removes the source and its proved sidecar. The receipt binds source path,
+output path and both complete hashes to one preceding proof. Identical retained
+proofs can be reused after fresh media verification; changed identities or a
+previously deleted source that has reappeared cannot reuse deletion authority.
+
+Opening existing evidence synchronizes the file and parent directory before
+allowing reuse. Append failures poison the writer; lock contention, path
+replacement, external truncation, incomplete tails, duplicate identities and
+unbound receipts stop further deletion. The writer never truncates damaged
+evidence or rewrites old rows to hide a failure. The verifier uses the same
+parser, including historical metadata-attention errors. Writer and verifier must
+be updated together; older readers cannot interpret the new deletion receipts.
+Receipts record observed successful deletion, not a new guarantee that unlink
+survives power loss; a reappearing source is still rejected by verification.
+
+New manifest write volume is proportional to new proofs and receipts rather than
+the sum of all prior records at every deletion. Loading existing evidence still
+reads it once, and the independent media gates still read complete payloads.
 
 Count reconciliation and integrity are independent results. Matching inventory
 does not clear a byte/hash/XMP failure. A retained source whose reconstruction

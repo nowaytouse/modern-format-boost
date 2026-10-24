@@ -43,6 +43,7 @@
 //! }
 //! ```
 
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -248,49 +249,260 @@ struct CheckpointBlob {
 }
 
 const _: () = assert!(crate::constants::CHECKPOINT_FORMAT_VERSION == 2);
-const CHECKPOINT_BLOB_SCHEMA: i32 = 2;
+const LEGACY_CHECKPOINT_BLOB_SCHEMA: i32 = 2;
+const CHECKPOINT_BLOB_SCHEMA: i32 = 3;
+
+fn checkpoint_entry_key(key: &str, path: &str) -> String {
+    format!("{key}/{}", blake3::hash(path.as_bytes()).to_hex())
+}
+
+fn checkpoint_transaction<R>(
+    behavior: TransactionBehavior,
+    operation: impl FnOnce(&rusqlite::Transaction<'_>) -> anyhow::Result<R>,
+) -> io::Result<R> {
+    (|| -> anyhow::Result<R> {
+        let mut connection = crate::mfb_sqlite_store::open_store_connection()?;
+        let transaction = connection.transaction_with_behavior(behavior)?;
+        let value = operation(&transaction)?;
+        transaction.commit()?;
+        Ok(value)
+    })()
+    .map_err(io::Error::other)
+}
+
+fn checkpoint_entry_keys(
+    connection: &rusqlite::Connection,
+    key: &str,
+) -> anyhow::Result<Vec<String>> {
+    let prefix = format!("{key}/");
+    let mut statement = connection.prepare(
+        "SELECT cache_key FROM blob_store WHERE namespace = ?1
+         AND substr(cache_key, 1, length(?2)) = ?2 ORDER BY cache_key",
+    )?;
+    let rows = statement.query_map(
+        params![crate::mfb_sqlite_store::NS_CHECKPOINT, prefix],
+        |row| row.get(0),
+    )?;
+    rows.collect::<Result<_, _>>().map_err(Into::into)
+}
 
 fn load_progress_from_sqlite(key: &str) -> io::Result<Option<LoadedCheckpointState>> {
-    let Some(bytes) = crate::mfb_sqlite_store::blob_get(
-        crate::mfb_sqlite_store::NS_CHECKPOINT,
-        key,
-        CHECKPOINT_BLOB_SCHEMA,
-    )
-    .map_err(io::Error::other)?
-    else {
-        return Ok(None);
-    };
-    let blob: CheckpointBlob = serde_json::from_slice(&bytes).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to parse checkpoint SQLite blob: {err}"),
-        )
-    })?;
-    Ok(Some(LoadedCheckpointState {
-        header: Some(blob.header),
-        entries: blob.entries,
-    }))
+    checkpoint_transaction(TransactionBehavior::Deferred, |transaction| {
+        let schema: Option<i32> = transaction
+            .query_row(
+                "SELECT schema_version FROM blob_store WHERE namespace = ?1 AND cache_key = ?2",
+                params![crate::mfb_sqlite_store::NS_CHECKPOINT, key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let entry_keys = checkpoint_entry_keys(transaction, key)?;
+        let Some(schema) = schema else {
+            anyhow::ensure!(
+                entry_keys.is_empty(),
+                "checkpoint entries have no header; state retained"
+            );
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            matches!(
+                schema,
+                LEGACY_CHECKPOINT_BLOB_SCHEMA | CHECKPOINT_BLOB_SCHEMA
+            ),
+            "unsupported checkpoint SQLite schema {schema}; state retained"
+        );
+        let bytes = crate::mfb_sqlite_store::read_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            key,
+            schema,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint header disappeared from snapshot"))?;
+        if schema == LEGACY_CHECKPOINT_BLOB_SCHEMA {
+            anyhow::ensure!(
+                entry_keys.is_empty(),
+                "legacy checkpoint has unexpected entry rows; state retained"
+            );
+            let blob: CheckpointBlob = serde_json::from_slice(&bytes)?;
+            return Ok(Some(LoadedCheckpointState {
+                header: Some(blob.header),
+                entries: blob.entries,
+            }));
+        }
+        let header: CheckpointHeader = serde_json::from_slice(&bytes)?;
+        let mut entries = HashMap::new();
+        for entry_key in entry_keys {
+            let payload = crate::mfb_sqlite_store::read_blob(
+                transaction,
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                &entry_key,
+                CHECKPOINT_BLOB_SCHEMA,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("checkpoint entry disappeared from snapshot"))?;
+            let entry: CheckpointEntry = serde_json::from_slice(&payload)?;
+            anyhow::ensure!(
+                entry_key == checkpoint_entry_key(key, &entry.path),
+                "checkpoint entry identity mismatch; state retained"
+            );
+            anyhow::ensure!(
+                entries.insert(entry.path.clone(), entry).is_none(),
+                "duplicate checkpoint source identity; state retained"
+            );
+        }
+        Ok(Some(LoadedCheckpointState {
+            header: Some(header),
+            entries,
+        }))
+    })
 }
 
 fn save_progress_to_sqlite(
     key: &str,
     header: &CheckpointHeader,
     entries: &HashMap<String, CheckpointEntry>,
+    superseded_key: Option<&str>,
 ) -> io::Result<()> {
-    let blob = CheckpointBlob {
-        header: header.clone(),
-        entries: entries.clone(),
-    };
-    let bytes =
-        serde_json::to_vec(&blob).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    crate::mfb_sqlite_store::blob_put(
-        crate::mfb_sqlite_store::NS_CHECKPOINT,
-        key,
-        CHECKPOINT_BLOB_SCHEMA,
-        None,
-        &bytes,
-    )
-    .map_err(io::Error::other)
+    checkpoint_transaction(TransactionBehavior::Immediate, |transaction| {
+        delete_checkpoint_rows(transaction, key)?;
+        if let Some(old_key) = superseded_key.filter(|old_key| *old_key != key) {
+            delete_checkpoint_rows(transaction, old_key)?;
+        }
+        let updated_at = i64::try_from(current_unix_secs()?)?;
+        crate::mfb_sqlite_store::upsert_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            key,
+            CHECKPOINT_BLOB_SCHEMA,
+            None,
+            &serde_json::to_vec(header)?,
+            updated_at,
+        )?;
+        for entry in entries.values() {
+            crate::mfb_sqlite_store::upsert_blob(
+                transaction,
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                &checkpoint_entry_key(key, &entry.path),
+                CHECKPOINT_BLOB_SCHEMA,
+                None,
+                &serde_json::to_vec(entry)?,
+                updated_at,
+            )?;
+        }
+        Ok(())
+    })
+}
+
+fn delete_checkpoint_rows(connection: &rusqlite::Connection, key: &str) -> anyhow::Result<usize> {
+    let prefix = format!("{key}/");
+    Ok(connection.execute(
+        "DELETE FROM blob_store WHERE namespace = ?1
+         AND (cache_key = ?2 OR substr(cache_key, 1, length(?3)) = ?3)",
+        params![crate::mfb_sqlite_store::NS_CHECKPOINT, key, prefix],
+    )?)
+}
+
+fn delete_progress_from_sqlite(key: &str) -> io::Result<usize> {
+    checkpoint_transaction(TransactionBehavior::Immediate, |transaction| {
+        delete_checkpoint_rows(transaction, key)
+    })
+}
+
+fn save_checkpoint_entry(
+    key: &str,
+    header: &CheckpointHeader,
+    entry: &CheckpointEntry,
+) -> io::Result<()> {
+    checkpoint_transaction(TransactionBehavior::Immediate, |transaction| {
+        let updated_at = i64::try_from(current_unix_secs()?)?;
+        if let Some(saved) = crate::mfb_sqlite_store::read_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )? {
+            let current: CheckpointHeader = serde_json::from_slice(&saved)?;
+            anyhow::ensure!(
+                current.is_compatible_with(header),
+                "checkpoint header changed; state retained"
+            );
+        } else {
+            anyhow::ensure!(
+                checkpoint_entry_keys(transaction, key)?.is_empty(),
+                "checkpoint entries have no header; state retained"
+            );
+            crate::mfb_sqlite_store::upsert_blob(
+                transaction,
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                key,
+                CHECKPOINT_BLOB_SCHEMA,
+                None,
+                &serde_json::to_vec(header)?,
+                updated_at,
+            )?;
+        }
+        let row_key = checkpoint_entry_key(key, &entry.path);
+        if let Some(saved) = crate::mfb_sqlite_store::read_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &row_key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )? {
+            let current: CheckpointEntry = serde_json::from_slice(&saved)?;
+            anyhow::ensure!(
+                current.path == entry.path,
+                "checkpoint entry identity changed; state retained"
+            );
+        }
+        crate::mfb_sqlite_store::upsert_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &row_key,
+            CHECKPOINT_BLOB_SCHEMA,
+            None,
+            &serde_json::to_vec(entry)?,
+            updated_at,
+        )?;
+        Ok(())
+    })
+}
+
+fn delete_checkpoint_entry(
+    key: &str,
+    header: &CheckpointHeader,
+    entry: &CheckpointEntry,
+) -> io::Result<()> {
+    checkpoint_transaction(TransactionBehavior::Immediate, |transaction| {
+        let saved_header = crate::mfb_sqlite_store::read_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint header is missing; state retained"))?;
+        let saved_header: CheckpointHeader = serde_json::from_slice(&saved_header)?;
+        anyhow::ensure!(
+            saved_header.is_compatible_with(header),
+            "checkpoint header changed; state retained"
+        );
+        let row_key = checkpoint_entry_key(key, &entry.path);
+        let saved = crate::mfb_sqlite_store::read_blob(
+            transaction,
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &row_key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint entry is missing; state retained"))?;
+        let current: CheckpointEntry = serde_json::from_slice(&saved)?;
+        anyhow::ensure!(
+            current == *entry,
+            "checkpoint entry changed; state retained"
+        );
+        let deleted = transaction.execute(
+            "DELETE FROM blob_store WHERE namespace = ?1 AND cache_key = ?2",
+            params![crate::mfb_sqlite_store::NS_CHECKPOINT, row_key],
+        )?;
+        anyhow::ensure!(deleted == 1, "checkpoint entry was not deleted");
+        Ok(())
+    })
 }
 
 fn open_checkpoint_lock(path: &Path) -> io::Result<File> {
@@ -444,20 +656,28 @@ impl Manager {
         let lock_file = central_dir.join(format!("{checkpoint_key}.lock"));
         let owned_lock = acquire_checkpoint_lock(&lock_file)?;
 
-        let (completed_set, resume_mode, reset_reason, loaded_legacy_key) = if resume_enabled {
-            let (loaded, loaded_legacy_key) =
-                Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
-            let (completed_set, resume_mode, reset_reason) =
-                Self::validate_loaded_state(&loaded, &header, output_root);
-            (completed_set, resume_mode, reset_reason, loaded_legacy_key)
-        } else {
-            Self::discard_progress_for_fresh_run(&checkpoint_key)?;
-            if legacy_key != checkpoint_key {
-                Self::discard_progress_for_fresh_run(&legacy_key)?;
-            }
-            crate::conversion::clear_processed_list();
-            (HashMap::new(), false, None, None)
-        };
+        let (completed_set, resume_mode, reset_reason, loaded_legacy_key, persist_loaded_state) =
+            if resume_enabled {
+                let (loaded, loaded_legacy_key) =
+                    Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
+                let (completed_set, resume_mode, reset_reason) =
+                    Self::validate_loaded_state(&loaded, &header, output_root);
+                let persist_loaded_state = loaded.header.is_some() && reset_reason.is_none();
+                (
+                    completed_set,
+                    resume_mode,
+                    reset_reason,
+                    loaded_legacy_key,
+                    persist_loaded_state,
+                )
+            } else {
+                Self::discard_progress_for_fresh_run(&checkpoint_key)?;
+                if legacy_key != checkpoint_key {
+                    Self::discard_progress_for_fresh_run(&legacy_key)?;
+                }
+                crate::conversion::clear_processed_list();
+                (HashMap::new(), false, None, None, false)
+            };
 
         if let Some(reason) = reset_reason.as_deref() {
             crate::media_conversion_gate::delivery_checkpoint_batch_audit(
@@ -465,10 +685,7 @@ impl Manager {
                 reason,
             );
             let stale_key = loaded_legacy_key.as_deref().unwrap_or(&checkpoint_key);
-            if let Err(err) = crate::mfb_sqlite_store::blob_delete(
-                crate::mfb_sqlite_store::NS_CHECKPOINT,
-                stale_key,
-            ) {
+            if let Err(err) = delete_progress_from_sqlite(stale_key) {
                 let message = format!(
                     "Failed to remove invalidated checkpoint blob for key {stale_key}: {err}"
                 );
@@ -481,28 +698,19 @@ impl Manager {
         }
 
         // Keep the owned handle alive across validation and every required commit.
-        if resume_mode {
-            if let Err(err) = save_progress_to_sqlite(&checkpoint_key, &header, &completed_set) {
+        if persist_loaded_state {
+            if let Err(err) = save_progress_to_sqlite(
+                &checkpoint_key,
+                &header,
+                &completed_set,
+                loaded_legacy_key.as_deref(),
+            ) {
                 let message = format!("Failed to compact validated checkpoint state: {err}");
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
                     &message,
                 );
                 return Err(io::Error::other(message));
-            }
-            if let Some(legacy_key) = loaded_legacy_key
-                && let Err(err) = crate::mfb_sqlite_store::blob_delete(
-                    crate::mfb_sqlite_store::NS_CHECKPOINT,
-                    &legacy_key,
-                )
-            {
-                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                    "checkpoint_progress",
-                    format!(
-                        "Migrated checkpoint to BLAKE3 key but failed to remove legacy key \
-                         {legacy_key}: {err}"
-                    ),
-                );
             }
         }
 
@@ -518,10 +726,7 @@ impl Manager {
     }
 
     fn discard_progress_for_fresh_run(checkpoint_key: &str) -> io::Result<()> {
-        match crate::mfb_sqlite_store::blob_delete(
-            crate::mfb_sqlite_store::NS_CHECKPOINT,
-            checkpoint_key,
-        ) {
+        match delete_progress_from_sqlite(checkpoint_key) {
             Ok(rows) if rows > 0 => {
                 crate::media_conversion_gate::delivery_checkpoint_batch_audit(
                     "checkpoint_progress",
@@ -582,7 +787,7 @@ impl Manager {
             return validate_checkpoint_lock_path(file, &self.lock_file);
         }
         let file = acquire_checkpoint_lock(&self.lock_file)?;
-        let (loaded, _) =
+        let (loaded, loaded_legacy_key) =
             Self::load_progress_for_path(Path::new(&self.header.target_dir), &self.checkpoint_key)?;
         let (completed, resume_mode, reset_reason) = Self::validate_loaded_state(
             &loaded,
@@ -595,8 +800,13 @@ impl Manager {
                 format!("cannot reuse released checkpoint manager: {reason}"),
             ));
         }
-        if resume_mode {
-            save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)?;
+        if loaded.header.is_some() {
+            save_progress_to_sqlite(
+                &self.checkpoint_key,
+                &self.header,
+                &completed,
+                loaded_legacy_key.as_deref(),
+            )?;
         }
         *crate::media_conversion_gate::mutex_guard_or_recover(
             "checkpoint_completed",
@@ -735,16 +945,8 @@ impl Manager {
         if completed.get(&key) == Some(&entry) {
             return Ok(());
         }
-        let previous = completed.insert(key.clone(), entry);
-        if let Err(error) = save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)
-        {
-            if let Some(previous) = previous {
-                completed.insert(key, previous);
-            } else {
-                completed.remove(&key);
-            }
-            return Err(error);
-        }
+        save_checkpoint_entry(&self.checkpoint_key, &self.header, &entry)?;
+        completed.insert(key, entry);
         self.resume_mode.store(true, Ordering::Relaxed);
 
         // Also sync to the global processed list in conversion module
@@ -788,11 +990,7 @@ impl Manager {
             "checkpoint_completed",
             self.completed.lock(),
         );
-        crate::mfb_sqlite_store::blob_delete(
-            crate::mfb_sqlite_store::NS_CHECKPOINT,
-            &self.checkpoint_key,
-        )
-        .map_err(io::Error::other)?;
+        delete_progress_from_sqlite(&self.checkpoint_key)?;
         completed.clear();
         self.resume_mode.store(false, Ordering::Relaxed);
         drop(completed);
@@ -994,14 +1192,8 @@ impl Manager {
         if completed.get(key) != Some(expected) {
             return Ok(());
         }
-        let Some(previous) = completed.remove(key) else {
-            return Ok(());
-        };
-        if let Err(error) = save_progress_to_sqlite(&self.checkpoint_key, &self.header, &completed)
-        {
-            completed.insert(key.to_owned(), previous);
-            return Err(error);
-        }
+        delete_checkpoint_entry(&self.checkpoint_key, &self.header, expected)?;
+        completed.remove(key);
         self.resume_mode
             .store(!completed.is_empty(), Ordering::Relaxed);
         drop(completed);
@@ -1568,6 +1760,230 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_entry_commits_do_not_rewrite_other_rows() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let first = target.path().join("first.mp4");
+        let second = target.path().join("second.mp4");
+        create_test_file(&first)?;
+        create_test_file(&second)?;
+        let manager = Manager::new(target.path())?;
+        manager.mark_completed(&first)?;
+        let connection = crate::mfb_sqlite_store::open_store_connection()?;
+        connection.execute(
+            "UPDATE blob_store SET updated_at = 1 WHERE namespace = 'checkpoint'",
+            [],
+        )?;
+        let row = |key: &str| {
+            connection.query_row(
+                "SELECT payload, payload_blake3, updated_at FROM blob_store
+                 WHERE namespace = 'checkpoint' AND cache_key = ?1",
+                [key],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+        };
+        let first_key =
+            checkpoint_entry_key(&manager.checkpoint_key, &Manager::normalize_path(&first));
+        let header = row(&manager.checkpoint_key)?;
+        let saved_first = row(&first_key)?;
+        manager.mark_completed(&second)?;
+        assert_eq!(row(&manager.checkpoint_key)?, header);
+        assert_eq!(row(&first_key)?, saved_first);
+        let loaded = load_progress_from_sqlite(&manager.checkpoint_key)?.unwrap();
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(
+            checkpoint_entry_keys(&connection, &manager.checkpoint_key)?.len(),
+            2
+        );
+        manager.drop_completed_entry(
+            &Manager::normalize_path(&first),
+            &loaded.entries[&Manager::normalize_path(&first)],
+        )?;
+        assert_eq!(row(&manager.checkpoint_key)?, header);
+        assert_eq!(
+            load_progress_from_sqlite(&manager.checkpoint_key)?
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        manager.cleanup()?;
+        assert!(checkpoint_entry_keys(&connection, &manager.checkpoint_key)?.is_empty());
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_legacy_checkpoint_migrates_before_first_entry_without_creating_absent_state()
+    -> anyhow::Result<()> {
+        let (root, _progress, guard) = setup_test_env()?;
+        let cases = [(false, false), (false, true), (true, false), (true, true)];
+        for (reacquire, saved_header) in cases {
+            let target = root.path().join(format!("{reacquire}-{saved_header}"));
+            fs::create_dir_all(&target)?;
+            let input = target.join("first.mp4");
+            create_test_file(&input)?;
+            let released = if reacquire {
+                let manager = Manager::new(&target)?;
+                manager.release_lock()?;
+                Some(manager)
+            } else {
+                None
+            };
+            let canonical_target = Manager::normalize_path_to_buf(&target);
+            let key = Manager::hash_path(&canonical_target);
+            if saved_header {
+                let legacy = CheckpointBlob {
+                    header: CheckpointHeader::new(&canonical_target, None)?,
+                    entries: HashMap::new(),
+                };
+                crate::mfb_sqlite_store::blob_put(
+                    crate::mfb_sqlite_store::NS_CHECKPOINT,
+                    &key,
+                    LEGACY_CHECKPOINT_BLOB_SCHEMA,
+                    None,
+                    &serde_json::to_vec(&legacy)?,
+                )?;
+            }
+            let manager = if let Some(manager) = released {
+                manager.acquire_lock()?;
+                manager
+            } else {
+                Manager::new_resuming(&target)?
+            };
+            assert!(!manager.is_resume_mode());
+            assert_eq!(manager.completed_count(), 0);
+            assert_eq!(
+                crate::mfb_sqlite_store::blob_get(
+                    crate::mfb_sqlite_store::NS_CHECKPOINT,
+                    &key,
+                    CHECKPOINT_BLOB_SCHEMA,
+                )?
+                .is_some(),
+                saved_header
+            );
+            manager.mark_completed(&input)?;
+            assert!(manager.is_completed(&input));
+            assert_eq!(load_progress_from_sqlite(&key)?.unwrap().entries.len(), 1);
+            manager.cleanup()?;
+        }
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_v2_migration_rolls_back_header_and_entries_together() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let canonical_target = Manager::normalize_path_to_buf(target.path());
+        let key = Manager::hash_path(&canonical_target);
+        let header = CheckpointHeader::new(&canonical_target, None)?;
+        let entry = CheckpointEntry::from_path(&input)?;
+        let legacy = serde_json::to_vec(&CheckpointBlob {
+            header,
+            entries: HashMap::from([(entry.path.clone(), entry)]),
+        })?;
+        crate::mfb_sqlite_store::blob_put(
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &key,
+            LEGACY_CHECKPOINT_BLOB_SCHEMA,
+            None,
+            &legacy,
+        )?;
+        let connection = crate::mfb_sqlite_store::open_store_connection()?;
+        connection.execute_batch(
+            "CREATE TRIGGER reject_checkpoint_entry BEFORE INSERT ON blob_store
+             WHEN NEW.namespace = 'checkpoint' AND instr(NEW.cache_key, '/') > 0
+             BEGIN SELECT RAISE(ABORT, 'fixture migration failure'); END;",
+        )?;
+        assert!(Manager::new_resuming(target.path()).is_err());
+        assert_eq!(
+            crate::mfb_sqlite_store::blob_get(
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                &key,
+                LEGACY_CHECKPOINT_BLOB_SCHEMA
+            )?,
+            Some(legacy)
+        );
+        assert!(checkpoint_entry_keys(&connection, &key)?.is_empty());
+        assert!(!crate::conversion::is_already_processed(&input));
+        assert_eq!(fs::read(&input)?, b"checkpoint-test");
+        connection.execute_batch("DROP TRIGGER reject_checkpoint_entry;")?;
+        let resumed = Manager::new_resuming(target.path())?;
+        assert!(resumed.is_completed(&input));
+        assert_eq!(checkpoint_entry_keys(&connection, &key)?.len(), 1);
+        assert!(
+            crate::mfb_sqlite_store::blob_get(
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                &key,
+                CHECKPOINT_BLOB_SCHEMA
+            )?
+            .is_some()
+        );
+        resumed.cleanup()?;
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_checkpoint_entry_rows_are_retained_and_block_resume() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.mp4");
+        create_test_file(&input)?;
+        let manager = Manager::new(target.path())?;
+        manager.mark_completed(&input)?;
+        let key = manager.checkpoint_key.clone();
+        let entry_key = checkpoint_entry_key(&key, &Manager::normalize_path(&input));
+        drop(manager);
+        let connection = crate::mfb_sqlite_store::open_store_connection()?;
+        let original = crate::mfb_sqlite_store::blob_get(
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &entry_key,
+            CHECKPOINT_BLOB_SCHEMA,
+        )?
+        .unwrap();
+        let mut wrong: CheckpointEntry = serde_json::from_slice(&original)?;
+        wrong.path = Manager::normalize_path(&target.path().join("other.mp4"));
+        let wrong = serde_json::to_vec(&wrong)?;
+        for payload in [&original, &wrong] {
+            crate::mfb_sqlite_store::blob_put(
+                crate::mfb_sqlite_store::NS_CHECKPOINT,
+                &entry_key,
+                CHECKPOINT_BLOB_SCHEMA,
+                None,
+                payload,
+            )?;
+            if payload == &original {
+                connection.execute("UPDATE blob_store SET payload_blake3 = X'00' WHERE namespace = 'checkpoint' AND cache_key = ?1", [&entry_key])?;
+            }
+            assert!(Manager::saved_entry_count(target.path(), None).is_err());
+            assert!(Manager::new_resuming(target.path()).is_err());
+            let retained: Vec<u8> = connection.query_row(
+                "SELECT payload FROM blob_store WHERE namespace = 'checkpoint' AND cache_key = ?1",
+                [&entry_key],
+                |row| row.get(0),
+            )?;
+            assert_eq!(&retained, payload);
+        }
+        connection.execute(
+            "DELETE FROM blob_store WHERE namespace = 'checkpoint' AND cache_key = ?1",
+            [&key],
+        )?;
+        assert!(Manager::saved_entry_count(target.path(), None).is_err());
+        assert!(Manager::new_resuming(target.path()).is_err());
+        assert_eq!(checkpoint_entry_keys(&connection, &key)?.len(), 1);
+        assert_eq!(fs::read(&input)?, b"checkpoint-test");
+        teardown_test_env(guard);
+        Ok(())
+    }
+
+    #[test]
     fn legacy_checkpoint_key_is_migrated_to_blake3() -> anyhow::Result<()> {
         let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
@@ -1584,7 +2000,13 @@ mod tests {
         header.cache_schema_version = 4;
         let entry = CheckpointEntry::from_path(&input)?;
         let entries = HashMap::from([(entry.path.clone(), entry)]);
-        save_progress_to_sqlite(&legacy_key, &header, &entries)?;
+        crate::mfb_sqlite_store::blob_put(
+            crate::mfb_sqlite_store::NS_CHECKPOINT,
+            &legacy_key,
+            LEGACY_CHECKPOINT_BLOB_SCHEMA,
+            None,
+            &serde_json::to_vec(&CheckpointBlob { header, entries })?,
+        )?;
 
         let checkpoint = Manager::new_resuming(target)?;
         assert!(checkpoint.is_completed(&input));

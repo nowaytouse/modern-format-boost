@@ -38,6 +38,8 @@ pub mod ctrlc_guard;
 
 pub mod process_lock;
 
+pub mod restore_jpeg_manifest;
+
 pub mod entry_guard;
 
 pub mod flag_validator;

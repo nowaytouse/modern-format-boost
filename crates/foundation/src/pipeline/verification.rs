@@ -3373,7 +3373,7 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     })?;
     std::fs::create_dir_all(marker_dir)?;
     let tmp = path.with_extension("json.tmp");
-    let data = serde_json::to_vec_pretty(marker).map_err(std::io::Error::other)?;
+    let data = serde_json::to_vec(marker).map_err(std::io::Error::other)?;
     let mut tmp_file = std::fs::File::create(&tmp)?;
     tmp_file.write_all(&data)?;
     tmp_file.sync_all()?;
@@ -3873,9 +3873,13 @@ mod working_copy_tests {
         marker.stage = FastImgStageName::OutputPrepared;
 
         write_marker_atomic(&marker).unwrap();
+        let stored = std::fs::read(marker_path_for_working_copy(&marker.working_copy)).unwrap();
+        assert_eq!(stored, serde_json::to_vec(&marker).unwrap());
+        assert!(stored.len() < serde_json::to_vec_pretty(&marker).unwrap().len());
         let read = read_marker(&marker.working_copy).unwrap();
 
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
+        assert_eq!(read, marker);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&marker.working_copy).exists());
     }

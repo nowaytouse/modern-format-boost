@@ -241,11 +241,12 @@ pub fn run_exact_jpeg_reconstruction(
 
 /// Verify the complete JPEG against an independent, typed JBRD reconstruction.
 /// This consumes reconstruction data, never decoded pixels or diagnostic text.
+/// Returns the verified JPEG's complete BLAKE3 hash for binding later candidates.
 ///
 /// # Errors
 /// Returns an error for invalid/incomplete reconstruction data, read failures,
 /// or any difference between the reconstructed JPEG and the delivered bytes.
-pub fn verify_reconstructed_jpeg_bytes(input: &Path, output: &Path) -> Result<(), String> {
+pub fn verify_reconstructed_jpeg_bytes(input: &Path, output: &Path) -> Result<String, String> {
     let image = jxl_oxide::JxlImage::builder()
         .open(input)
         .map_err(|error| {
@@ -283,7 +284,7 @@ pub fn verify_reconstructed_jpeg_bytes(input: &Path, output: &Path) -> Result<()
             output.display()
         ));
     }
-    Ok(())
+    Ok(output_hash)
 }
 
 /// Classify exact JPEG reconstruction without enabling pixel-to-JPEG fallback.
@@ -1682,7 +1683,12 @@ mod tests {
             .encode_jpeg(&original_jpeg)
             .context("encode synthetic JPEG with reconstruction data")?;
         std::fs::write(&jxl, archive)?;
-        verify_reconstructed_jpeg_bytes(&jxl, &source).map_err(anyhow::Error::msg)?;
+        let verified_hash =
+            verify_reconstructed_jpeg_bytes(&jxl, &source).map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            verified_hash,
+            blake3::hash(&original_jpeg).to_hex().as_str()
+        );
 
         let mut changed_jpeg = original_jpeg;
         changed_jpeg.extend_from_slice(b"changed-metadata-tail");
