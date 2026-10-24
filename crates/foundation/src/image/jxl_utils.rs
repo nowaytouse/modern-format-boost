@@ -240,6 +240,7 @@ pub fn run_exact_jpeg_reconstruction(
 }
 
 /// Verify the complete JPEG against an independent, typed JBRD reconstruction.
+///
 /// This consumes reconstruction data, never decoded pixels or diagnostic text.
 /// Returns the verified JPEG's complete BLAKE3 hash for binding later candidates.
 ///

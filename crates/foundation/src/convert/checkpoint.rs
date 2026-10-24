@@ -698,20 +698,20 @@ impl Manager {
         }
 
         // Keep the owned handle alive across validation and every required commit.
-        if persist_loaded_state {
-            if let Err(err) = save_progress_to_sqlite(
+        if persist_loaded_state
+            && let Err(err) = save_progress_to_sqlite(
                 &checkpoint_key,
                 &header,
                 &completed_set,
                 loaded_legacy_key.as_deref(),
-            ) {
-                let message = format!("Failed to compact validated checkpoint state: {err}");
-                crate::media_conversion_gate::delivery_checkpoint_batch_audit(
-                    "checkpoint_progress",
-                    &message,
-                );
-                return Err(io::Error::other(message));
-            }
+            )
+        {
+            let message = format!("Failed to compact validated checkpoint state: {err}");
+            crate::media_conversion_gate::delivery_checkpoint_batch_audit(
+                "checkpoint_progress",
+                &message,
+            );
+            return Err(io::Error::other(message));
         }
 
         Ok(Self {
@@ -1813,7 +1813,10 @@ mod tests {
             1
         );
         manager.cleanup()?;
-        assert!(checkpoint_entry_keys(&connection, &manager.checkpoint_key)?.is_empty());
+        assert_eq!(
+            checkpoint_entry_keys(&connection, &manager.checkpoint_key)?,
+            Vec::<String>::new()
+        );
         teardown_test_env(guard);
         Ok(())
     }
@@ -1911,7 +1914,10 @@ mod tests {
             )?,
             Some(legacy)
         );
-        assert!(checkpoint_entry_keys(&connection, &key)?.is_empty());
+        assert_eq!(
+            checkpoint_entry_keys(&connection, &key)?,
+            Vec::<String>::new()
+        );
         assert!(!crate::conversion::is_already_processed(&input));
         assert_eq!(fs::read(&input)?, b"checkpoint-test");
         connection.execute_batch("DROP TRIGGER reject_checkpoint_entry;")?;

@@ -9,6 +9,9 @@
 //! Covered paths: `convert_to_jxl`, `convert_jpeg_to_jxl` (including fallback),
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
+mod jxl_probe_cache;
+mod jxl_probe_identity;
+
 use crate::Rational;
 use crate::{ImgQualityError, Result};
 use foundation::ImagePrecisionProfile;
@@ -4520,6 +4523,28 @@ fn run_direct_jxl_encode_with_effort(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> std::io::Result<Output> {
+    run_image_process(build_direct_jxl_encode_command(
+        input,
+        output,
+        distance,
+        effort,
+        max_threads,
+        flags,
+        icc_path,
+        color_info,
+    ))
+}
+
+fn build_direct_jxl_encode_command(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    effort: u8,
+    max_threads: usize,
+    flags: ConvertFlags,
+    icc_path: Option<&Path>,
+    color_info: Option<&ColorInfo>,
+) -> Command {
     let mut builder = foundation::CjxlBuilder::new();
     builder
         .input(input)
@@ -4537,7 +4562,7 @@ fn run_direct_jxl_encode_with_effort(
         builder.icc_profile(icc);
     }
 
-    run_image_process(builder.build())
+    builder.build()
 }
 
 fn run_direct_jxl_encode_with_policy(
@@ -4569,27 +4594,9 @@ fn run_direct_jxl_encode_with_policy(
     .map_err(JxlDirectEncodeError::Launch)
 }
 
-fn encode_direct_jxl_probe_with_effort(
-    input: &Path,
-    output: &Path,
-    distance: f32,
-    effort: u8,
-    max_threads: usize,
-    flags: ConvertFlags,
-    icc_path: Option<&Path>,
-    color_info: Option<&ColorInfo>,
-) -> std::result::Result<(), String> {
-    let output = run_direct_jxl_encode_with_effort(
-        input,
-        output,
-        distance,
-        effort,
-        max_threads,
-        flags,
-        icc_path,
-        color_info,
-    )
-    .map_err(|e| format!("Failed to run cjxl probe: {e}"))?;
+fn encode_direct_jxl_probe_command(command: Command) -> std::result::Result<(), String> {
+    let output =
+        run_image_process(command).map_err(|e| format!("Failed to run cjxl probe: {e}"))?;
 
     if output.status.success() {
         Ok(())
@@ -4617,17 +4624,54 @@ struct JxlProbeContext<'a> {
     stage_label: &'a str,
 }
 
+impl JxlProbeContext<'_> {
+    fn command(&self) -> Command {
+        build_direct_jxl_encode_command(
+            self.actual_input,
+            self.output,
+            self.distance,
+            self.effort,
+            self.max_threads,
+            self.flags,
+            self.icc_path,
+            self.color_info,
+        )
+    }
+}
+
+struct JxlProbeEncoding {
+    payload_size: u64,
+    direct: bool,
+}
+
 fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Result<u64, String> {
+    let mut direct_launches = 0;
+    let mut fallback_requests = 0;
+    encode_jxl_probe_observed(
+        context,
+        context.command(),
+        &mut direct_launches,
+        &mut fallback_requests,
+    )
+    .map(|result| result.payload_size)
+}
+
+fn encode_jxl_probe_observed(
+    context: JxlProbeContext<'_>,
+    command: Command,
+    direct_launch_attempts: &mut u32,
+    fallback_probe_requests: &mut u32,
+) -> std::result::Result<JxlProbeEncoding, String> {
     let JxlProbeContext {
         input,
-        actual_input,
+        actual_input: _,
         output,
         distance,
         effort,
         max_threads,
         flags,
-        icc_path,
-        color_info,
+        icc_path: _,
+        color_info: _,
         stage_label,
     } = context;
     foundation::media_conversion_gate::delivery_remove_file_or_audit(
@@ -4635,23 +4679,24 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
         output,
     );
 
-    let mut direct_encode = |candidate_distance| {
-        encode_direct_jxl_probe_with_effort(
-            actual_input,
-            output,
-            candidate_distance,
-            effort,
-            max_threads,
-            flags,
-            icc_path,
-            color_info,
-        )?;
+    let mut command = Some(command);
+    let mut direct = false;
+    let mut direct_encode = |_candidate_distance| {
+        let command = command
+            .take()
+            .ok_or("cjxl probe command already consumed")?;
+        *direct_launch_attempts += 1;
+        encode_direct_jxl_probe_command(command)?;
         verify_jxl_health(output)
             .map_err(|err| format!("Health check failed after direct cjxl probe: {err}"))?;
-        foundation::image::static_payload::jxl(output).map_err(|error| error.to_string())
+        let payload =
+            foundation::image::static_payload::jxl(output).map_err(|error| error.to_string())?;
+        direct = true;
+        Ok(payload)
     };
 
     let mut fallback_encode = |candidate_distance| {
+        *fallback_probe_requests += 1;
         foundation::media_conversion_gate::delivery_remove_file_or_audit(
             "jxl probe fallback output pre-clean",
             output,
@@ -4678,13 +4723,192 @@ fn encode_jxl_probe_to_output(context: JxlProbeContext<'_>) -> std::result::Resu
         foundation::image::static_payload::jxl(output).map_err(|error| error.to_string())
     };
 
-    run_jxl_exploration_probe_with(
+    let payload_size = run_jxl_exploration_probe_with(
         distance,
         flags.contains(ConvertFlags::ALLOW_EXPERT_OPTIONS),
         alternate_tools_allowed(),
         &mut direct_encode,
         &mut fallback_encode,
-    )
+    )?;
+    Ok(JxlProbeEncoding {
+        payload_size,
+        direct,
+    })
+}
+
+struct JxlProbeRunner {
+    identity: jxl_probe_identity::JxlProbeIdentity,
+    cache: jxl_probe_cache::JxlProbeCache,
+    fatal_error: Option<String>,
+    direct_launch_attempts: u32,
+    fallback_probe_requests: u32,
+    reuse_hits: u32,
+    revalidation_failures: u32,
+}
+
+impl JxlProbeRunner {
+    fn new(context: JxlProbeContext<'_>) -> std::io::Result<Self> {
+        Ok(Self {
+            identity: jxl_probe_identity::JxlProbeIdentity::new(
+                context.input,
+                context.actual_input,
+                context.icc_path,
+                &context.command(),
+            )?,
+            // Per-file disposable budget; eviction only causes the original probe to run again.
+            cache: jxl_probe_cache::JxlProbeCache::new(16, 64 * 1024 * 1024),
+            fatal_error: None,
+            direct_launch_attempts: 0,
+            fallback_probe_requests: 0,
+            reuse_hits: 0,
+            revalidation_failures: 0,
+        })
+    }
+
+    fn critical<T>(&mut self, result: std::io::Result<T>) -> std::result::Result<T, String> {
+        result.map_err(|error| {
+            let message = format!("JXL probe reuse cannot establish current evidence: {error}");
+            self.fatal_error.get_or_insert_with(|| message.clone());
+            message
+        })
+    }
+
+    fn check_cancelled(&mut self) -> std::result::Result<(), String> {
+        let state = foundation::batch_control::is_cancelled().and_then(|cancelled| {
+            if cancelled {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "JXL exploration cancelled",
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        self.critical(state)
+    }
+
+    fn retain(
+        &mut self,
+        key: String,
+        output: &Path,
+        payload: u64,
+    ) -> std::result::Result<(), String> {
+        let retained = self.cache.retain(key, output.to_path_buf(), payload);
+        if !self.critical(retained)? {
+            log_detail!(
+                "JXL probe not retained within the 16-candidate / 64 MiB per-search budget; a later request will recompute it"
+            );
+        }
+        Ok(())
+    }
+
+    fn run(
+        &mut self,
+        context: JxlProbeContext<'_>,
+        retain: bool,
+    ) -> std::result::Result<u64, String> {
+        if let Some(error) = &self.fatal_error {
+            return Err(error.clone());
+        }
+        self.check_cancelled()?;
+        let mut command = context.command();
+        let key = self.identity.prepare_and_key(&mut command, context.output);
+        let key = self.critical(key)?;
+        let cached = self.cache.take(&key, context.output);
+        if let Some(expected_payload) = self.critical(cached)? {
+            // Reusing encoder bytes never reuses permission to bypass health or final gates.
+            let validated = (|| -> std::result::Result<u64, String> {
+                verify_jxl_health(context.output).map_err(|error| error.to_string())?;
+                let payload = foundation::image::static_payload::jxl(context.output)
+                    .map_err(|error| error.to_string())?;
+                if payload != expected_payload || payload == 0 {
+                    return Err(
+                        "retained candidate payload changed during revalidation".to_string()
+                    );
+                }
+                Ok(payload)
+            })();
+            self.check_cancelled()?;
+            let unchanged = self.identity.validate(&command);
+            self.critical(unchanged)?;
+            match validated {
+                Ok(payload) => {
+                    self.reuse_hits += 1;
+                    if retain {
+                        self.retain(key, context.output, payload)?;
+                    }
+                    return Ok(payload);
+                }
+                Err(error) => {
+                    self.revalidation_failures += 1;
+                    log_detail!(&format!(
+                        "JXL retained probe invalidated; recomputing: {error}"
+                    ));
+                    let cleanup = foundation::io_utils::safe_remove_file(context.output);
+                    self.critical(cleanup)?;
+                }
+            }
+        }
+
+        let encoded = encode_jxl_probe_observed(
+            context,
+            command,
+            &mut self.direct_launch_attempts,
+            &mut self.fallback_probe_requests,
+        );
+        let unchanged = self.identity.validate(&context.command());
+        self.critical(unchanged)?;
+        self.check_cancelled()?;
+        let encoded = encoded?;
+        if retain {
+            if encoded.direct {
+                self.retain(key, context.output, encoded.payload_size)?;
+            } else {
+                log_detail!(
+                    "JXL fallback probe not retained: its complete pipeline identity is unavailable"
+                );
+                let cleanup = foundation::io_utils::safe_remove_file(context.output);
+                self.critical(cleanup)?;
+            }
+        }
+        Ok(encoded.payload_size)
+    }
+
+    fn finish(&mut self, command: &Command) -> std::result::Result<String, String> {
+        let mut failures = Vec::new();
+        if let Err(error) = self.identity.validate_association(command) {
+            failures.push(error.to_string());
+        }
+        if let Err(error) = self.check_cancelled() {
+            failures.push(error);
+        }
+        let stats = self.cache.stats();
+        let summary = format!(
+            "JXL candidate reuse: requests={} verified_hits={} invalidated={} evicted={} \
+             revalidation_failures={} retained_bytes_at_finish={} direct_launch_attempts={} \
+             fallback_probe_requests={}; fallback requests are not pipeline process counts",
+            stats.requests,
+            self.reuse_hits,
+            stats.invalidated,
+            stats.evicted,
+            self.revalidation_failures,
+            stats.retained_bytes,
+            self.direct_launch_attempts,
+            self.fallback_probe_requests,
+        );
+        if let Err(error) = self.cache.clear() {
+            failures.push(format!("JXL probe candidate cleanup failed: {error}"));
+        }
+        if let Some(error) = self.fatal_error.take()
+            && !failures.contains(&error)
+        {
+            failures.insert(0, error);
+        }
+        if !failures.is_empty() {
+            return Err(failures.join("; "));
+        }
+        Ok(summary)
+    }
 }
 
 fn run_jxl_exploration_probe_with<Direct, Fallback>(
@@ -4797,49 +5021,62 @@ fn try_explore_ultimate_jxl_distance(
     icc_path: Option<&Path>,
     color_info: Option<&ColorInfo>,
 ) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
-    let source_hash = foundation::common_utils::calculate_blake3_hash(input)?;
-    let actual_hash = foundation::common_utils::calculate_blake3_hash(actual_input)?;
-    let result = try_explore_jxl_distance_in_domain(
+    let context = JxlProbeContext {
         input,
         actual_input,
-        temp_output,
-        input_size,
-        initial_output_size,
+        output: temp_output,
+        distance: 0.0,
+        effort: exploration_effort,
         max_threads,
-        exploration_effort,
-        options,
+        flags: options.flags,
         icc_path,
         color_info,
+        stage_label: "Distance search",
+    };
+    let mut probes = JxlProbeRunner::new(context)?;
+    let result = try_explore_jxl_distance_in_domain(
+        context,
+        input_size,
+        initial_output_size,
+        options,
+        &mut probes,
     );
-    let unchanged: Result<bool> = (|| {
-        Ok(
-            foundation::common_utils::calculate_blake3_hash(input)? == source_hash
-                && foundation::common_utils::calculate_blake3_hash(actual_input)? == actual_hash,
-        )
-    })();
-    if !matches!(unchanged, Ok(true)) {
-        cleanup_temp_output(temp_output, input);
-        unchanged?;
-        return Err(ImgQualityError::ConversionError(
-            "JXL exploration input changed; no candidate may be delivered".to_string(),
-        ));
+    match probes.finish(&context.command()) {
+        Ok(summary) => {
+            log_detail!(&summary);
+            result.map(|result| {
+                result.map(|mut result| {
+                    result.log.push(summary);
+                    result
+                })
+            })
+        }
+        Err(error) => {
+            cleanup_temp_output(temp_output, input);
+            Err(ImgQualityError::ConversionError(error))
+        }
     }
-    result
 }
 
 fn try_explore_jxl_distance_in_domain(
-    input: &Path,
-    actual_input: &Path,
-    temp_output: &Path,
+    context: JxlProbeContext<'_>,
     input_size: u64,
     initial_output_size: u64,
-    max_threads: usize,
-    exploration_effort: u8,
     options: &ConvertOptions,
-    icc_path: Option<&Path>,
-    color_info: Option<&ColorInfo>,
+    probes: &mut JxlProbeRunner,
 ) -> Result<Option<foundation::jxl_explorer::JxlExploreResult>> {
     const MAX_REFINEMENT_ITERATIONS: u32 = 20;
+    let JxlProbeContext {
+        input,
+        actual_input,
+        output: temp_output,
+        max_threads,
+        effort,
+        icc_path,
+        color_info,
+        ..
+    } = context;
+    let exploration_effort = effort;
     foundation::infra::static_logs::log_stage(
         foundation::modern_ui::symbols::SEARCH,
         "JXL",
@@ -4856,22 +5093,27 @@ fn try_explore_jxl_distance_in_domain(
             let candidate_output =
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| e.to_string())?;
-            let result = encode_jxl_probe_to_output(JxlProbeContext {
-                input,
-                actual_input,
-                output: &candidate_output,
-                distance,
-                effort: exploration_effort,
-                max_threads,
-                flags: options.flags,
-                icc_path,
-                color_info,
-                stage_label: "Screening probe",
-            });
-            foundation::media_conversion_gate::delivery_remove_file_or_audit(
-                "jxl screening probe candidate cleanup",
-                &candidate_output,
+            let result = probes.run(
+                JxlProbeContext {
+                    input,
+                    actual_input,
+                    output: &candidate_output,
+                    distance,
+                    effort: exploration_effort,
+                    max_threads,
+                    flags: options.flags,
+                    icc_path,
+                    color_info,
+                    stage_label: "Screening probe",
+                },
+                true,
             );
+            if result.is_err() {
+                foundation::media_conversion_gate::delivery_remove_file_or_audit(
+                    "jxl failed screening probe candidate cleanup",
+                    &candidate_output,
+                );
+            }
             result
         },
     );
@@ -4920,18 +5162,21 @@ fn try_explore_jxl_distance_in_domain(
         let candidate_output = foundation::path_safety::isolated_temp_path_for_search(temp_output)
             .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-        let finalist_result = encode_jxl_probe_to_output(JxlProbeContext {
-            input,
-            actual_input,
-            output: &candidate_output,
-            distance: finalist.distance,
-            effort: exploration_effort,
-            max_threads,
-            flags: options.flags,
-            icc_path,
-            color_info,
-            stage_label: "Finalist encode",
-        });
+        let finalist_result = probes.run(
+            JxlProbeContext {
+                input,
+                actual_input,
+                output: &candidate_output,
+                distance: finalist.distance,
+                effort: exploration_effort,
+                max_threads,
+                flags: options.flags,
+                icc_path,
+                color_info,
+                stage_label: "Finalist encode",
+            },
+            false,
+        );
         total_iterations = total_iterations.saturating_add(1);
 
         match finalist_result {
@@ -5082,18 +5327,21 @@ fn try_explore_jxl_distance_in_domain(
                 foundation::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-            let refinement_result = encode_jxl_probe_to_output(JxlProbeContext {
-                input,
-                actual_input,
-                output: &candidate_output,
-                distance: candidate_distance,
-                effort: exploration_effort,
-                max_threads,
-                flags: options.flags,
-                icc_path,
-                color_info,
-                stage_label: "Quality-boundary refinement",
-            });
+            let refinement_result = probes.run(
+                JxlProbeContext {
+                    input,
+                    actual_input,
+                    output: &candidate_output,
+                    distance: candidate_distance,
+                    effort: exploration_effort,
+                    max_threads,
+                    flags: options.flags,
+                    icc_path,
+                    color_info,
+                    stage_label: "Quality-boundary refinement",
+                },
+                false,
+            );
             refinement_iterations += 1;
             total_iterations = total_iterations.saturating_add(1);
 
@@ -7855,6 +8103,211 @@ mod tests {
         assert_eq!(size, 77);
         assert_eq!(direct_calls.get(), 1);
         assert_eq!(fallback_calls.get(), 0);
+    }
+
+    #[test]
+    fn jxl_probe_reuse_preserves_real_candidates_and_reduces_encoder_launches() -> anyhow::Result<()>
+    {
+        for tool in ["cjxl", "djxl", "jxlinfo"] {
+            if !test_tool_available(tool) {
+                eprintln!("real JXL reuse comparison unavailable: {tool} is missing");
+                return Ok(());
+            }
+        }
+        let root = tempdir()?;
+        let source = root.path().join("source.png");
+        image::RgbImage::from_fn(64, 64, |x, y| {
+            image::Rgb([
+                u8::try_from((x * 17 + y * 37) % 256).expect("modulo 256 fits u8"),
+                u8::try_from((x * 53 + y * 7) % 256).expect("modulo 256 fits u8"),
+                u8::try_from((x * 11 + y * 97) % 256).expect("modulo 256 fits u8"),
+            ])
+        })
+        .save(&source)?;
+        let baseline = root.path().join("baseline.jxl");
+        let context = JxlProbeContext {
+            input: &source,
+            actual_input: &source,
+            output: &baseline,
+            distance: 0.001,
+            effort: 1,
+            max_threads: 1,
+            flags: ConvertFlags::empty(),
+            icc_path: None,
+            color_info: None,
+            stage_label: "reuse comparison",
+        };
+        let mut comparisons = Vec::new();
+        for enabled in [false, true] {
+            let started = std::time::Instant::now();
+            let mut probes = JxlProbeRunner::new(context)?;
+            if !enabled {
+                probes.cache = jxl_probe_cache::JxlProbeCache::new(0, 0);
+            }
+            let distances = [0.001_f32, 0.04, 0.1];
+            for (index, distance) in distances.into_iter().enumerate() {
+                let output = root.path().join(format!("screen-{enabled}-{index}.jxl"));
+                probes
+                    .run(
+                        JxlProbeContext {
+                            output: &output,
+                            distance,
+                            ..context
+                        },
+                        true,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+            }
+            let mut candidates = Vec::new();
+            for (index, distance) in distances.into_iter().enumerate() {
+                let output = root.path().join(format!("final-{enabled}-{index}.jxl"));
+                let _guard = foundation::conversion::TempOutputGuard::new(output.clone());
+                let size = probes
+                    .run(
+                        JxlProbeContext {
+                            output: &output,
+                            distance,
+                            ..context
+                        },
+                        false,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                candidates.push((
+                    distance.to_bits(),
+                    size,
+                    foundation::common_utils::calculate_blake3_hash(&output)?,
+                ));
+            }
+            assert_eq!(probes.direct_launch_attempts, if enabled { 3 } else { 6 });
+            assert_eq!(probes.reuse_hits, if enabled { 3 } else { 0 });
+            assert_eq!(probes.fallback_probe_requests, 0);
+            let summary = probes
+                .finish(&context.command())
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(probes.cache.stats().retained_bytes, 0);
+            eprintln!(
+                "reuse={enabled} elapsed_ms={} {summary}",
+                started.elapsed().as_millis()
+            );
+            comparisons.push(candidates);
+        }
+        assert_eq!(
+            comparisons[0], comparisons[1],
+            "reuse changed a measured payload or complete JXL"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn jxl_probe_reuse_source_change_cannot_be_swallowed_as_no_screening_winner()
+    -> anyhow::Result<()> {
+        if !test_tool_available("cjxl") {
+            eprintln!("JXL source-change integration unavailable: cjxl is missing");
+            return Ok(());
+        }
+        let root = tempdir()?;
+        let source = root.path().join("source.png");
+        fs::write(&source, b"initial input identity")?;
+        let output = root.path().join("candidate.jxl");
+        let context = JxlProbeContext {
+            input: &source,
+            actual_input: &source,
+            output: &output,
+            distance: 0.0,
+            effort: 1,
+            max_threads: 1,
+            flags: ConvertFlags::empty(),
+            icc_path: None,
+            color_info: None,
+            stage_label: "source-change denial",
+        };
+        let mut probes = JxlProbeRunner::new(context)?;
+        fs::write(&source, b"changed input identity")?;
+        let result = try_explore_jxl_distance_in_domain(
+            context,
+            1_000,
+            2_000,
+            &ConvertOptions::default(),
+            &mut probes,
+        )?;
+        assert!(result.is_none());
+        assert_eq!(probes.direct_launch_attempts, 0);
+        let error = probes
+            .finish(&context.command())
+            .expect_err("lost identity must remain fatal");
+        assert!(error.contains("changed"), "{error}");
+        assert!(!output.exists());
+        assert!(source.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn jxl_probe_reuse_cancelled_hit_is_refused_in_isolated_child() -> anyhow::Result<()> {
+        const CHILD_ENV: &str = "MFB_JXL_REUSE_CONTROL_TEST";
+        if let Some(control) = std::env::var_os(CHILD_ENV) {
+            let root = tempdir()?;
+            let source = root.path().join("source.png");
+            image::RgbImage::from_pixel(16, 16, image::Rgb([1, 2, 3])).save(&source)?;
+            let first = root.path().join("first.jxl");
+            let context = JxlProbeContext {
+                input: &source,
+                actual_input: &source,
+                output: &first,
+                distance: 0.001,
+                effort: 1,
+                max_threads: 1,
+                flags: ConvertFlags::empty(),
+                icc_path: None,
+                color_info: None,
+                stage_label: "cancellation denial",
+            };
+            let mut probes = JxlProbeRunner::new(context)?;
+            probes.run(context, true).map_err(anyhow::Error::msg)?;
+            fs::write(control, "cancelled\nreuse-test")?;
+            let second = root.path().join("second.jxl");
+            let error = probes
+                .run(
+                    JxlProbeContext {
+                        output: &second,
+                        ..context
+                    },
+                    false,
+                )
+                .expect_err("cancelled search must not consume a retained candidate");
+            assert!(error.contains("cancelled"), "{error}");
+            assert_eq!(probes.direct_launch_attempts, 1);
+            assert_eq!(probes.reuse_hits, 0);
+            assert!(probes.finish(&context.command()).is_err());
+            assert!(!first.exists());
+            assert!(!second.exists());
+            return Ok(());
+        }
+        for tool in ["cjxl", "djxl", "jxlinfo"] {
+            if !test_tool_available(tool) {
+                eprintln!("real JXL cancellation regression unavailable: {tool} is missing");
+                return Ok(());
+            }
+        }
+        let root = tempdir()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
+        }
+        let control = root.path().join("control");
+        fs::write(&control, "running\nreuse-test")?;
+        let output = Command::new(std::env::current_exe()?)
+            .args(["--exact", "lossless_converter::tests::jxl_probe_reuse_cancelled_hit_is_refused_in_isolated_child", "--test-threads=1", "--nocapture"])
+            .env(CHILD_ENV, &control)
+            .env("MFB_BATCH_CONTROL_FILE", &control)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
     }
 
     #[test]

@@ -26,7 +26,9 @@ fn decode_hex(value: &str) -> anyhow::Result<String> {
     ensure!(value.len().is_multiple_of(2), "invalid odd-length hex");
     let bytes = value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = char::from(pair[0]).to_digit(16).context("invalid hex")?;
             let low = char::from(pair[1]).to_digit(16).context("invalid hex")?;
@@ -80,9 +82,12 @@ fn parse_record(line: &str) -> anyhow::Result<RestoreJpegManifestRecord> {
             reconstruction == output,
             "reconstruction and restored JPEG hashes differ"
         );
+        let verified_unix_seconds = parts[7]
+            .parse::<u64>()
+            .context("invalid verified_unix_seconds integer")?;
         ensure!(
-            parts[7].parse::<u64>().is_ok_and(|value| value > 0),
-            "verified_unix_seconds must be a positive integer"
+            verified_unix_seconds > 0,
+            "verified_unix_seconds must be positive"
         );
         ensure!(!parts[8].trim().is_empty(), "missing MFB version");
         let version = decode_hex(parts[9]).context("invalid djxl version hex/UTF-8")?;
@@ -516,6 +521,18 @@ mod tests {
         ] {
             assert!(!parse_manifest(&invalid).1.is_empty(), "{invalid}");
         }
+        for timestamp in ["", "invalid", "0", "-1", "18446744073709551616"] {
+            let mut fields = row.split('\t').collect::<Vec<_>>();
+            fields[7] = timestamp;
+            let (records, errors) = parse_manifest(&fields.join("\t"));
+            assert_eq!(records, Vec::new(), "{timestamp}");
+            assert_eq!(errors.len(), 1, "{timestamp}: {errors:?}");
+            assert!(errors[0].contains("verified_unix_seconds"), "{errors:?}");
+        }
+        for invalid in ["6", "61z0", "ff"] {
+            assert!(decode_hex(invalid).is_err(), "{invalid}");
+        }
+        assert_eq!(decode_hex("612e6a786c").unwrap(), "a.jxl");
     }
 
     #[test]
@@ -554,7 +571,7 @@ mod tests {
             .append(true)
             .open(&path)?
             .write_all(b"# MFB_RESTORE_JPEG_DEL")?;
-        assert!(!load_manifest(root.path()).1.is_empty());
+        assert_ne!(load_manifest(root.path()).1, Vec::<String>::new());
         assert!(RestoreJpegManifestWriter::open(root.path()).is_err());
         Ok(())
     }
@@ -574,7 +591,7 @@ mod tests {
         std::fs::remove_file(&path)?;
         std::os::unix::fs::symlink(root.path().join("previous.tsv"), &path)?;
         assert!(RestoreJpegManifestWriter::open(root.path()).is_err());
-        assert!(!load_manifest(root.path()).1.is_empty());
+        assert_ne!(load_manifest(root.path()).1, Vec::<String>::new());
         Ok(())
     }
 }

@@ -457,6 +457,12 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     None
 }
 
+/// Hash an in-memory identity without writing a temporary file.
+#[must_use]
+pub fn blake3_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
 /// Calculate the BLAKE3 hash of a file.
 ///
 /// # Errors

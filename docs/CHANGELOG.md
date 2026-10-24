@@ -23,6 +23,32 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### CI Contract Corrections (2026-10-24)
+
+- Preserve the field-specific error when a restored-JPEG manifest timestamp
+  cannot be parsed. Zero, negative, missing and overflowing timestamps remain
+  invalid; malformed hex/UTF-8 and torn or conflicting receipts remain rejected.
+- Correct the shared checkpoint, reconstruction documentation and test assertion
+  expressions reported by strict lint, preserving persistence and failure paths.
+  No check or archival gate is disabled to address the failed workflow.
+- Refresh the approved lock entries for smallvec 1.16.4 and uuid 1.29.0.
+
+### Reuse Direct JXL Distance Candidates (2026-10-24)
+
+- Reuse actual direct-cjxl files across distance screening, finalist comparison
+  and refinement when their input, D/E and effective encoding context agree.
+  Bind source/actual-input/ICC/XMP and encoder content, arguments, working
+  directory and captured environment; reject changed or unreadable evidence.
+- Bound each disposable pool to 16 candidates and 64 MiB. Recompute after
+  eviction, corruption or a miss; refuse occupied destinations, recheck candidate
+  health/payload and keep final archival Gates independent. Cancellation and
+  search completion explicitly release owned candidates.
+- Report requests and actual direct launch attempts separately. Fallback
+  candidates and cross-run recovery remain outside this reuse scope; no search
+  range, fidelity requirement or JPEG E1–E11 coverage is reduced.
+- This removes a defined source of duplicate encoding, not a demonstrated
+  production throughput or physical disk-write improvement.
+
 ### Bounded Disk I/O Improvements (2026-10-24)
 
 - Bind restored candidates directly to the complete JPEG hash already verified

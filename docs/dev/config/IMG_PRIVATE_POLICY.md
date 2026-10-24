@@ -151,6 +151,37 @@ candidate under the existing rules, but its failure stays visible. The selected
 result is the best verified tested candidate; local binary-search precision does
 not prove monotonic file sizes, a continuous global optimum or full media delivery.
 
+Direct-cjxl distance probes retain actual candidate files for reuse across
+screening, finalist comparison and refinement within one exploration. Identity
+includes source and actual encoder input, selected XMP (including absence), ICC,
+encoder executable content, effective arguments, working directory and frozen
+process environment. Only the output-path argument is normalized; D and E remain
+exact. Changed or unreadable input evidence rejects the exploration, even when
+an individual screening callback would otherwise return no candidate.
+
+The disposable pool holds at most 16 candidates and 64 MiB of complete files per
+exploration. Evicted, oversized, missing or corrupt candidates require a fresh
+probe; a recorded size alone cannot supply a candidate. Reuse checks complete
+file content before and after transport, then repeats health and payload checks.
+Transport refuses an occupied destination. Cancellation rejects a retained hit,
+and finishing the search explicitly cleans remaining owned candidates. The log
+separates probe requests, verified reuse, invalidation, eviction and direct launch
+attempts; fallback requests are not a count of their internal processes.
+
+ImageMagick fallback candidates are not retained because this path does not yet
+provide the complete fallback-pipeline identity. This pool is neither a persistent
+resume cache nor proof of dynamic-library or external configuration identity.
+Its fresh command builder captures the inherited environment once and executes
+that prepared command. It does not support arbitrary previously env-cleared
+commands. Final metadata enrichment, pixel/geometry, size and publication Gates
+remain independent and mandatory. Fewer duplicate encodes do not by themselves
+prove lower total I/O, a representative speedup or a drive-lifetime improvement;
+identity hashing and sidecar discovery also have a cost. XMP association is
+discovered at search entry and checked again before accepting its result;
+individual probes recheck the bound sidecar's content without rescanning the
+source directory. A changed association rejects the whole exploration before
+final metadata processing, including a search that otherwise found no winner.
+
 `mode-default` retains the historical mode trigger and the manual D where that
 route does not explore. Explicit adaptive D search leaves the saved manual D
 inactive without replacing it. The native checkbox distinguishes inherited
@@ -220,6 +251,24 @@ nonempty request completely, never from partial results, command failure,
 malformed JSON, permissions errors or conflicting UUIDs.
 
 ## Evidence And Remaining Work
+
+### Direct Distance Candidate Reuse (2026-10-24)
+
+A synthetic 64-by-64 RGB probe compared the new pool disabled and enabled, with
+cjxl `0.13.0 777e88f4`, one encoder thread, E1 and exact D coordinates 0.001,
+0.04 and 0.1. Three screening requests followed by the same three finalist
+requests launched six encodes without retention and three with retention. All
+three complete-file hashes, D bit patterns and payload sizes agreed. The repeat
+measured 358 ms versus 223 ms for these six requests. Both variants include the
+new identity checks; this is not a comparison with the historical implementation,
+a representative batch benchmark or a claim about physical drive writes.
+
+Twelve focused tests cover content corruption, missing/evicted/oversized files,
+occupied and symlink paths, ownership cleanup, input/tool/ICC/XMP/context changes,
+actual command preparation, candidate equivalence and cancellation in an isolated
+child using the real batch-control protocol. Six existing distance/probe/final
+rejection regressions also passed. These probe tests do not establish the
+remaining strict D>0 acceptance contract or Photos acceptance.
 
 ### Full JPEG Search Order Comparison (2026-10-18)
 
