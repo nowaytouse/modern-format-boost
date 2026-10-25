@@ -158,7 +158,10 @@ impl JxlProbeIdentity {
         icc: Option<&Path>,
         command: &Command,
     ) -> io::Result<Self> {
-        let cwd = fs::canonicalize(std::env::current_dir()?)?;
+        let cwd = fs::canonicalize(
+            foundation::media_conversion_gate::delivery_cwd_or_err("JXL probe identity")
+                .map_err(io::Error::other)?,
+        )?;
         let environment = std::env::vars_os().collect();
         let source = BoundFile::read(&absolute(input, &cwd))?;
         let actual_path = absolute(actual_input, &cwd);

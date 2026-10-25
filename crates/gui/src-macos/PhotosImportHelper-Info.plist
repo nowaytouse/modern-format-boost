@@ -2,11 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.modernformatboost.photos-import</string>
-<key>CFBundleName</key><string>MFB Photos Import</string>
+<key>CFBundleName</key><string>$(MFB_APP_NAME)</string>
+<key>CFBundleDisplayName</key><string>$(MFB_APP_DISPLAY_NAME)</string>
+<key>CFBundleIconFile</key><string>$(MFB_APP_ICON)</string>
 <key>CFBundleExecutable</key><string>mfb-photos-import</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$(MFB_VERSION)</string>
 <key>CFBundleVersion</key><string>$(MFB_VERSION)</string>
 <key>LSUIElement</key><true/>
-<key>NSPhotoLibraryUsageDescription</key><string>MFB imports your selected originals into Photos and verifies their local asset identities before cleanup.</string>
+<key>NSPhotoLibraryUsageDescription</key><string>Imports your selected originals into Photos and verifies their local asset identities before cleanup.</string>
 </dict></plist>

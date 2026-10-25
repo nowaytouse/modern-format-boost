@@ -843,7 +843,7 @@ pub fn animatable_format_confirmed_static_only(
     detected_animated: bool,
     frame_count: Option<u32>,
 ) -> Result<bool> {
-    if detected_animated || frame_count.is_some_and(|c| c > 1) {
+    if detected_animated || frame_count.is_some_and(|c| c != 1) {
         return Ok(false);
     }
 
@@ -906,7 +906,7 @@ pub fn animatable_format_confirmed_static_only(
                 return Ok(false);
             }
             if let Some(explicit) = crate::ffprobe::get_frame_count(path) {
-                return Ok(explicit <= 1);
+                return Ok(explicit == 1);
             }
             Ok(false)
         }
@@ -957,7 +957,7 @@ fn isobmff_confirmed_static_only(path: &Path) -> Result<bool> {
         return Ok(false);
     }
     if let Some(explicit) = crate::ffprobe::get_frame_count(path) {
-        return Ok(explicit <= 1);
+        return Ok(explicit == 1);
     }
     Ok(false)
 }

@@ -186,7 +186,10 @@ pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
 
     // Check each component of the path
     for ancestor in canonical.ancestors() {
-        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str())
+        if let Some(name) = ancestor
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_ascii_lowercase)
             && (name.ends_with(".photoslibrary") || name.ends_with(".photolibrary"))
         {
             return Err(
@@ -242,6 +245,12 @@ mod tests {
             ))
             .is_err()
         );
+        for library in ["Archive.PHOTOSLIBRARY", "Archive.PhotoLibrary"] {
+            assert!(
+                check_apple_photos_library(&Path::new("/tmp").join(library).join("originals"))
+                    .is_err()
+            );
+        }
 
         // Test safe paths
         assert!(

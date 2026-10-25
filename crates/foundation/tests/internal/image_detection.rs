@@ -92,10 +92,7 @@ fn parse_png_structure_rejects_truncated_text_chunk() {
 
 #[test]
 fn png_text_decompression_rejects_output_beyond_remaining_budget() {
-    let mut encoder = flate2::write::ZlibEncoder::new(
-        Vec::new(),
-        flate2::Compression::fast(),
-    );
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     encoder
         .write_all(&[b'a'; 65])
         .expect("compress PNG text fixture");
@@ -106,7 +103,10 @@ fn png_text_decompression_rejects_output_beyond_remaining_budget() {
         .expect_err("decompressed PNG text beyond the budget must fail loudly");
 
     assert!(error.to_string().contains("exceeds remaining 64 byte"));
-    assert_eq!(remaining_budget, 64, "failed payload must not consume budget");
+    assert_eq!(
+        remaining_budget, 64,
+        "failed payload must not consume budget"
+    );
 }
 
 #[test]
@@ -439,8 +439,7 @@ fn apng_timing_stats_from_fctl_delays() {
 fn gif_two_decoded_frames_remain_animation_evidence_after_later_corruption() {
     let mut data = Vec::new();
     {
-        let mut encoder =
-            ::gif::Encoder::new(&mut data, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+        let mut encoder = ::gif::Encoder::new(&mut data, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
         for pixel in [0_u8, 1] {
             let frame = ::gif::Frame {
                 width: 1,
@@ -451,7 +450,11 @@ fn gif_two_decoded_frames_remain_animation_evidence_after_later_corruption() {
             encoder.write_frame(&frame).unwrap();
         }
     }
-    assert_eq!(data.pop(), Some(0x3B), "generated GIF must end in a trailer");
+    assert_eq!(
+        data.pop(),
+        Some(0x3B),
+        "generated GIF must end in a trailer"
+    );
     data.push(0x2C); // Start a third image descriptor, then truncate it.
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -461,7 +464,10 @@ fn gif_two_decoded_frames_remain_animation_evidence_after_later_corruption() {
     let (animated, frame_count, fps) = detect_animation(&path, &DetectedFormat::GIF)
         .expect("two fully decoded frames already prove animation");
     assert!(animated);
-    assert_eq!(frame_count, None, "corrupt tail prevents an exact frame count");
+    assert_eq!(
+        frame_count, None,
+        "corrupt tail prevents an exact frame count"
+    );
     assert_eq!(fps, None, "corrupt tail prevents exact timing statistics");
 }
 
@@ -627,7 +633,7 @@ fn jp2_compression_uses_cod_wavelet_transform() {
         &reversible_path,
         synthetic_jp2_raw_codestream(1, Some(1), None, None),
     )
-        .expect("write reversible-wavelet jp2");
+    .expect("write reversible-wavelet jp2");
     assert_eq!(
         detect_compression(&DetectedFormat::JP2, &reversible_path)
             .expect("reversible-wavelet jp2 codestream"),
@@ -647,8 +653,7 @@ fn jp2_compression_resolves_tile_and_wide_component_overrides() {
     )
     .expect("write tile override");
     assert_eq!(
-        detect_compression(&DetectedFormat::JP2, &tile_reversible)
-            .expect("tile override jp2"),
+        detect_compression(&DetectedFormat::JP2, &tile_reversible).expect("tile override jp2"),
         CompressionType::Unknown,
         "tile COD must replace a lossy main-header default before admission"
     );
@@ -660,8 +665,7 @@ fn jp2_compression_resolves_tile_and_wide_component_overrides() {
     )
     .expect("write wide-component override");
     assert_eq!(
-        detect_compression(&DetectedFormat::JP2, &wide_component)
-            .expect("wide-component jp2"),
+        detect_compression(&DetectedFormat::JP2, &wide_component).expect("wide-component jp2"),
         CompressionType::Lossy,
         "COC must use a two-byte component index when Csiz exceeds 256"
     );
@@ -671,11 +675,8 @@ fn jp2_compression_resolves_tile_and_wide_component_overrides() {
 fn jp2_compression_fails_closed_without_cod_marker() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("codless.j2k");
-    std::fs::write(
-        &path,
-        synthetic_jp2_raw_codestream(1, None, None, None),
-    )
-    .expect("write codless jp2");
+    std::fs::write(&path, synthetic_jp2_raw_codestream(1, None, None, None))
+        .expect("write codless jp2");
 
     let error = detect_compression(&DetectedFormat::JP2, &path)
         .expect_err("missing COD marker must not fabricate a lossy verdict");
@@ -727,11 +728,7 @@ fn detect_compression_is_explicit_for_jpeg_and_fails_closed_for_non_still_media(
 fn static_by_spec_formats_are_confirmed_static_only() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("image.j2k");
-    std::fs::write(
-        &path,
-        synthetic_jp2_raw_codestream(1, Some(0), None, None),
-    )
-    .expect("write jp2");
+    std::fs::write(&path, synthetic_jp2_raw_codestream(1, Some(0), None, None)).expect("write jp2");
 
     // JP2 carries no animation capability in-spec: admission paths (tier-2
     // modern lossy import) must confirm it static instead of silently
@@ -741,6 +738,19 @@ fn static_by_spec_formats_are_confirmed_static_only() {
             .expect("JP2 static confirmation"),
         "JP2 must be confirmed static-only by format definition"
     );
+    for count in [0, 1, 2] {
+        assert_eq!(
+            animatable_format_confirmed_static_only(
+                &path,
+                &DetectedFormat::JP2,
+                false,
+                Some(count),
+            )
+            .expect("explicit static frame count"),
+            count == 1,
+            "an explicit count must prove exactly one frame, got {count}"
+        );
+    }
     assert!(
         !animatable_format_confirmed_static_only(&path, &DetectedFormat::MP4, false, None)
             .expect("MP4 static confirmation"),
@@ -835,9 +845,7 @@ fn avif_compression_identity_colr_is_not_lossless_proof() {
     let mut data = synthetic_avif_with_av1c(0x00);
     // Append an nclx colr box with identity matrix coefficients (MC=0):
     // a color description, not a quantization proof.
-    let colr_payload = [
-        b'n', b'c', b'l', b'x', 0, 1, 0, 0, 0, 0, 0, 0,
-    ];
+    let colr_payload = [b'n', b'c', b'l', b'x', 0, 1, 0, 0, 0, 0, 0, 0];
     let size = u32::try_from(colr_payload.len() + 8).expect("colr size fits u32");
     data.extend_from_slice(&size.to_be_bytes());
     data.extend_from_slice(b"colr");
@@ -933,15 +941,11 @@ fn exr_multipart_flag_scans_every_part_for_lossy_compression() {
 #[test]
 fn jxlinfo_only_promotes_explicit_lossy_summary() {
     assert_eq!(
-        parse_jxlinfo_compression_hint(
-            "JPEG XL image, 64x64, lossy, 8-bit RGB\n"
-        ),
+        parse_jxlinfo_compression_hint("JPEG XL image, 64x64, lossy, 8-bit RGB\n"),
         Some(CompressionType::Lossy)
     );
     assert_eq!(
-        parse_jxlinfo_compression_hint(
-            "JPEG XL image, 64x64, (possibly) lossless, 8-bit RGB\n"
-        ),
+        parse_jxlinfo_compression_hint("JPEG XL image, 64x64, (possibly) lossless, 8-bit RGB\n"),
         None,
         "jxlinfo's hedged lossless text is not proof"
     );

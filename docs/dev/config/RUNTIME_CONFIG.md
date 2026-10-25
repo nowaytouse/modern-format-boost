@@ -364,6 +364,37 @@ Neither receipt state changes independently established media counts or delivery
 proof. Storage or receipt-write failure remains an explicit launcher error after
 the child is drained, without discarding the child's reported counts or exit.
 
+### Optional Display Privacy
+
+The native **Hide routine file names and paths** preference is off by default.
+It changes presentation and copied visible text only; it is not a runtime media
+policy and does not redact existing SQLite rows, disk logs, manifests, terminal
+output or delivery proofs. Enabling it retains structured counts and progress,
+hides normal-item paths and unclassified free-form text, and keeps explicitly
+identified problem details available for diagnosis. A filename containing words
+such as `error` or `failed` does not itself identify a problem.
+
+Main-window and History rendering use the same preference, including tooltips,
+configuration/argument details and visible-text copying. Raw log/JSON export and
+external-log actions are unavailable while this display mode is enabled, because
+those records have not been redacted. Turn the preference off to inspect them.
+Unknown diagnostic continuations can remain hidden; this mode does not promise
+that every arbitrary log line can be safely classified or anonymized.
+
+### Native Photos Import Attribution
+
+Photos/macOS may retain the importing application's identity on imported media.
+The import setting and in-app guide explain that this may be unwanted and may
+persist after import. Selecting another backend is not a guarantee that no
+attribution will be recorded. The UI does not promise to erase existing source
+attribution.
+
+Packaged native helpers inherit the parent application's display name and icon
+when built. The main and helper bundle identifiers and executable identities
+remain unchanged. Updating future helper branding does not retroactively rename
+attribution already stored by Photos, and the displayed name/icon ultimately
+remain subject to macOS behavior.
+
 ### Runtime JSON
 
 | Field | Default | Meaning |
@@ -756,3 +787,36 @@ Tool selection currently exposes executable paths and single/fallback policy.
 The established recovery ordering is retained; arbitrary per-format tool
 reordering is not implemented. The September 30 GUI editor adds per-media
 overrides above; it does not rewrite runtime JSON or change tool ordering.
+
+## Remove Selected Processing History
+
+The native history window supports removing one or multiple completed database
+runs. It first previews the selected run identities, captured-output rows and
+owned logs. Confirmation sends the same selection and snapshot token to the
+shared `cache_cleaner` backend; stale selections, active writers, ambiguous
+identities and unsupported schemas are rejected before removal.
+
+The backend deletes selected event/output rows in a transaction. External files
+are eligible only when their registered ownership, current file identity and
+complete content hash agree. Shared session logs and unregistered worker or
+legacy logs are explicitly retained, not guessed from a filename or timestamp.
+Media, output folders, cache and resume/checkpoint state are outside this action.
+An unexpected owned-log failure produces a partial receipt with its retained or
+recovery path; expected retention alone does not make the operation fail.
+
+An identity-only `history_removed_sessions_v1` table prevents retained legacy
+JSONL files from recreating removed sessions in the window. It contains no media
+names or paths, and a retired identity cannot be reused by a writer. The database
+file remains available to other runs; removal is not a secure-erasure operation
+or an instruction to delete its live WAL/SHM files.
+
+Controlled errors attempt no-clobber log restoration and report any recovery
+path. A hard crash between renaming logs to `.pending` files and committing the
+database can leave those logs in place without an automatic recovery journal.
+Their bytes are retained; this action does not claim atomic crash recovery
+across SQLite and the filesystem. That broader lifecycle work remains open.
+
+Automation uses `--history-directory`, `--history-cleanup-preview` and
+`--history-cleanup` with schema-1 JSON containing authoritative `session_id` and
+`run_id` pairs. Execution additionally requires the exact preview
+`snapshot_token` and `--yes`; `--json` returns the verified preview or receipt.

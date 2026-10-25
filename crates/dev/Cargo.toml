@@ -19,7 +19,7 @@ foundation = { workspace = true }
 img = { workspace = true }
 vid = { workspace = true }
 tempfile = { workspace = true }
-rusqlite = { workspace = true }
+rusqlite = { workspace = true, features = ["fallible_uint"] }
 libc = { workspace = true }
 notify = ">= 6.0"
 sysinfo = ">= 0.30"

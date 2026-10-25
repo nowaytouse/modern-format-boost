@@ -174,7 +174,7 @@ bitflags = { git = "https://github.com/bitflags/bitflags", features = [
 ], version = ">= 2.0" }
 
 # Database and Caching
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
 rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
 postgres = { features = ["with-serde_json-1"], version = ">= 0.19" }

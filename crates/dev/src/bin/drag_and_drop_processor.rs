@@ -249,6 +249,7 @@ struct Args {
 
 #[derive(Clone)]
 struct DragDropSession {
+    _history_lease: std::sync::Arc<dev::infra::history_store::HistorySessionLease>,
     started_at: DateTime<Local>,
     stamp: String,
     log_dir: PathBuf,
@@ -300,6 +301,9 @@ impl DragDropSession {
             started_at.timestamp_subsec_nanos()
         );
         let session = Self {
+            _history_lease: dev::infra::history_store::acquire_history_session_lease(
+                &log_dir, &stamp,
+            )?,
             started_at,
             session_log: log_dir.join(format!("MFB_Session_{stamp}.log")),
             verbose_log: log_dir.join(format!("verbose_{stamp}.log")),
@@ -309,11 +313,17 @@ impl DragDropSession {
             run_id: None,
         };
         // A collision must never append another session's events or counters.
-        fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&session.session_log)
-            .context("reserve unique processing session log")?;
+        for path in [
+            &session.session_log,
+            &session.verbose_log,
+            &session.session_audit,
+        ] {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .context("reserve unique processing session log")?;
+        }
         if set_child_env {
             unsafe {
                 std::env::set_var("MFB_SESSION_ID", &session.stamp);
@@ -328,6 +338,15 @@ impl DragDropSession {
         session.append_line(&session.session_log, "SESSION_STARTED")?;
         session.append_line(&session.verbose_log, "SESSION_STARTED")?;
         append_jsonl_audit_record(&session.session_audit, "SESSION_STARTED")?;
+        dev::infra::history_store::register_history_artifacts(
+            &session.log_dir,
+            &session.stamp,
+            &[
+                session.session_log.clone(),
+                session.verbose_log.clone(),
+                session.session_audit.clone(),
+            ],
+        )?;
         Ok(session)
     }
 
@@ -609,6 +628,19 @@ impl DragDropSession {
         if let Some(bundle) = &archived {
             let archived_audit = bundle.join(format!("session_audit_{}.jsonl", self.stamp));
             append_jsonl_audit_record(&archived_audit, "SESSION_ARCHIVE_DONE")?;
+            let paths = [&self.session_log, &self.verbose_log, &self.session_audit]
+                .into_iter()
+                .map(|path| {
+                    path.file_name()
+                        .map(|name| bundle.join(name))
+                        .context("session artifact has no filename")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            dev::infra::history_store::register_history_artifacts(
+                &self.log_dir,
+                &self.stamp,
+                &paths,
+            )?;
         }
         Ok(archived)
     }
@@ -5027,9 +5059,37 @@ mod tests {
         let database_path = session
             .log_dir
             .join(dev::infra::history_store::HISTORY_DATABASE);
-        assert!(!database_path.try_exists().unwrap());
+        let history_snapshot = || {
+            let database = rusqlite::Connection::open_with_flags(
+                &database_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            [
+                "SELECT session_id,updated_at FROM history_sessions ORDER BY session_id",
+                "SELECT sequence,session_id,ts,event FROM history_events ORDER BY sequence",
+                "SELECT sequence,session_id,ts,pipeline,line FROM history_output ORDER BY sequence",
+                "SELECT session_id,owner_pid,artifacts_json FROM history_session_ownership_v1 ORDER BY session_id",
+            ].into_iter().map(|sql| {
+                let mut statement = database.prepare(sql).unwrap();
+                let columns = statement.column_count();
+                statement.query_map([], |row| {
+                    (0..columns).map(|column| row.get::<_, rusqlite::types::Value>(column))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                }).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
+            }).collect::<Vec<_>>()
+        };
+        let before = history_snapshot();
+        assert_eq!(
+            before.iter().map(Vec::len).collect::<Vec<_>>(),
+            [1, 0, 0, 1]
+        );
         command.run_collecting(true, Some(&session), false).unwrap();
-        assert!(!database_path.try_exists().unwrap());
+        assert_eq!(
+            history_snapshot(),
+            before,
+            "dry-run must not persist worker observations or output"
+        );
         let mut long_session = session.clone();
         long_session.stamp = "Unicode 界面".repeat(300);
         let long_invocation = command.invocation(&long_session).unwrap();

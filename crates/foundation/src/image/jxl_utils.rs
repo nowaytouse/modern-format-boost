@@ -1738,6 +1738,39 @@ mod tests {
     }
 
     #[test]
+    fn independent_jpeg_reconstruction_preserves_raw_lf_with_render_smoothing() -> anyhow::Result<()>
+    {
+        let jpeg = include_bytes!("../../tests/fixtures/synthetic_jpeg_lfs1.jpg.fixture");
+        let archive = include_bytes!("../../tests/fixtures/synthetic_jpeg_lfs1.jxl.fixture");
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("source.jpg");
+        let jxl = temp.path().join("smoothed.jxl");
+        std::fs::write(&source, jpeg)?;
+        std::fs::write(&jxl, archive)?;
+
+        let image = jxl_oxide::JxlImage::builder()
+            .open(&jxl)
+            .map_err(anyhow::Error::from_boxed)?;
+        let frame = image
+            .frame_header(0)
+            .context("missing synthetic JPEG frame")?;
+        assert!(!image.image_header().metadata.xyb_encoded);
+        assert!(!frame.flags.use_lf_frame());
+        assert!(!frame.flags.skip_adaptive_lf_smoothing());
+        let verified_hash =
+            verify_reconstructed_jpeg_bytes(&jxl, &source).map_err(anyhow::Error::msg)?;
+        assert_eq!(verified_hash, blake3::hash(jpeg).to_hex().as_str());
+
+        let mut changed = jpeg.to_vec();
+        changed.extend_from_slice(b"changed-metadata-tail");
+        std::fs::write(&source, changed)?;
+        let error = verify_reconstructed_jpeg_bytes(&jxl, &source)
+            .expect_err("render smoothing must not permit a byte-different JPEG");
+        assert!(error.contains("do not match independent JBRD reconstruction"));
+        Ok(())
+    }
+
+    #[test]
     fn test_is_icc_rounding_error() {
         assert!(is_icc_rounding_error("Invalid ICC profile: ..."));
         assert!(is_icc_rounding_error("bad connection space in ICC"));
@@ -1881,4 +1914,5 @@ mod tests {
     fn verify_jxl_has_icc_returns_result_contract() {
         let _: anyhow::Result<bool> = verify_jxl_has_icc(Path::new("missing.jxl"));
     }
+
 }

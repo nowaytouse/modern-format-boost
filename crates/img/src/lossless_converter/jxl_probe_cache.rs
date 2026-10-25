@@ -277,10 +277,13 @@ impl JxlProbeCache {
                 "JXL probe output has no parent",
             )
         })?;
-        let staged = tempfile::Builder::new()
-            .prefix(".mfb-jxl-probe-reuse-")
-            .tempfile_in(parent)?
-            .into_temp_path();
+        let staged = foundation::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "JXL probe reuse",
+            parent,
+            ".mfb-jxl-probe-reuse-",
+            "",
+        )?
+        .into_temp_path();
         if let Err(error) = foundation::io_utils::robust_move(&candidate.path, &staged) {
             return Err(with_cleanup_error(error, &staged));
         }

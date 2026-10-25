@@ -200,6 +200,11 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             append(text("helpguide.\(section).\(index).title"), heading: true)
             append(text("helpguide.\(section).\(index).body"), heading: false)
         }
+        if section == "safety" {
+            append(text("photos.source.title"), heading: true)
+            append(text("photos.source.notice"), heading: false)
+            append(text("photos.source.detail"), heading: false)
+        }
         textView.textStorage?.setAttributedString(result)
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
     }
@@ -212,6 +217,7 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
         var keys = ["helpguide.title", "helpguide.context", "helpguide.topics", "helpguide.content", "helpguide.boundary", "helpguide.find"]
         keys += ["settings.imgFallback", "settings.imgFallback.note", "settings.imgToolPolicy",
                  "settings.imgToolPolicy.note", "settings.recovery.guide"]
+        keys += ["photos.source.title", "photos.source.notice", "photos.source.detail"]
         for (section, count) in sections {
             keys += ["helpguide.\(section).title", "helpguide.\(section).intro"]
             for index in 1...count {
@@ -266,6 +272,10 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             try require(controller.textView.string.hasPrefix(translate("helpguide.restore.title"))
                 && controller.textView.string.contains(translate("helpguide.restore.2.body")),
                 "JPEG restoration help did not explain the file and Photos audit distinction")
+            controller.show(relativeTo: nil, topic: "safety")
+            try require(controller.textView.string.contains(translate("photos.source.notice"))
+                && controller.textView.string.contains(translate("photos.source.detail")),
+                "Processing guide did not explain native import source attribution")
             controller.close()
         }
     }

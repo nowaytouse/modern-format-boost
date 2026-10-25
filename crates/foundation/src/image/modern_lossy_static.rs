@@ -8,6 +8,7 @@
 use crate::image_detection::{CompressionType, DetectedFormat, detect_compression};
 use crate::unified_error::{ImgQualityError, Result};
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::format_detect::{FormatKind, detect_true_format, validate_format_forensic};
@@ -82,7 +83,20 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
         ))
     })?;
 
-    if !confirmed_static_only(path, &detected)? {
+    let webp_compression = if format == FormatKind::WebP {
+        let Some(compression) = probe_static_webp_compression(path)? else {
+            tracing::debug!(
+                target: "modern_lossy_static",
+                path = %path.display(),
+                "retaining WebP without positive static codec evidence"
+            );
+            return Ok(None);
+        };
+        Some(compression)
+    } else {
+        None
+    };
+    if format != FormatKind::WebP && !confirmed_static_only(path, &detected)? {
         tracing::debug!(
             target: "modern_lossy_static",
             path = %path.display(),
@@ -92,7 +106,8 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
         return Ok(None);
     }
 
-    let compression = detect_modern_compression_authoritative(path, format, &detected)?;
+    let compression =
+        detect_modern_compression_authoritative(path, format, &detected, webp_compression)?;
     match compression {
         CompressionType::Lossy => {}
         CompressionType::Lossless => {
@@ -230,10 +245,71 @@ fn confirmed_static_only(path: &Path, detected: &DetectedFormat) -> Result<bool>
     animatable_format_confirmed_static_only(path, detected, false, frame_count)
 }
 
+fn probe_static_webp_compression(path: &Path) -> Result<Option<CompressionType>> {
+    let limit = crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE;
+    crate::common_utils::validate_file_size_limit(path, limit)
+        .map_err(|error| ImgQualityError::AnalysisError(error.to_string()))?;
+    let mut data = Vec::new();
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_end(&mut data)?;
+    let read_bytes =
+        crate::numeric_cast::usize_to_u64_strict(data.len(), "modern_webp_read_length")
+            .ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "WebP read byte count cannot be represented".to_string(),
+                )
+            })?;
+    if read_bytes > limit {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "WebP compressed input exceeded the {limit}-byte analysis limit while reading {}",
+            path.display()
+        )));
+    }
+    let has_animation_chunks =
+        crate::image_formats::webp::contains_top_level_chunk(&data, *b"ANIM")?
+            || crate::image_formats::webp::contains_top_level_chunk(&data, *b"ANMF")?;
+    let features = ::webp::BitstreamFeatures::new(&data).ok_or_else(|| {
+        ImgQualityError::AnalysisError(format!(
+            "WebP static admission requires valid native bitstream features: {}",
+            path.display()
+        ))
+    })?;
+    if features.has_animation() || has_animation_chunks {
+        return Ok(None);
+    }
+    if features.width() == 0 || features.height() == 0 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "WebP static admission requires nonzero native dimensions: {}",
+            path.display()
+        )));
+    }
+    let compression = match features.format() {
+        Some(::webp::BitstreamFormat::Lossy) => CompressionType::Lossy,
+        Some(::webp::BitstreamFormat::Lossless) => CompressionType::Lossless,
+        Some(::webp::BitstreamFormat::Undefined) | None => return Ok(None),
+    };
+    // Header features establish codec semantics, not complete pixel validity.
+    let decoded = crate::image_detection::open_image_with_limits(path).map_err(|error| {
+        ImgQualityError::AnalysisError(format!(
+            "WebP static admission could not establish a complete bounded decode for {}: {error}",
+            path.display()
+        ))
+    })?;
+    if decoded.width() != features.width() || decoded.height() != features.height() {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "WebP decoded dimensions disagree with native bitstream features: {}",
+            path.display()
+        )));
+    }
+    Ok(Some(compression))
+}
+
 fn detect_modern_compression_authoritative(
     path: &Path,
     format: FormatKind,
     detected: &DetectedFormat,
+    webp_compression: Option<CompressionType>,
 ) -> Result<CompressionType> {
     let forensic_tool =
         super::format_detect::forensic_tool_for_format(format).map(|policy| policy.tool);
@@ -264,8 +340,30 @@ fn detect_modern_compression_authoritative(
         return Ok(CompressionType::Unknown);
     }
 
-    match validate_format_forensic(path, format) {
-        Ok(check) => {
+    require_forensic_result_when_available(
+        path,
+        format,
+        forensic_validator_available.then(|| validate_format_forensic(path, format)),
+    )?;
+
+    if format == FormatKind::WebP {
+        return webp_compression.ok_or_else(|| {
+            ImgQualityError::AnalysisError(format!(
+                "WebP compression admission is missing complete native static proof: {}",
+                path.display()
+            ))
+        });
+    }
+    detect_compression(detected, path)
+}
+
+fn require_forensic_result_when_available(
+    path: &Path,
+    format: FormatKind,
+    validation: Option<Result<super::format_detect::ForensicFormatCheck>>,
+) -> Result<()> {
+    match validation {
+        Some(Ok(check)) => {
             tracing::debug!(
                 target: "modern_lossy_static",
                 path = %path.display(),
@@ -274,24 +372,23 @@ fn detect_modern_compression_authoritative(
                 "forensic format validation passed before compression probe"
             );
         }
-        Err(err) if forensic_validator_available => {
+        Some(Err(err)) => {
             return Err(ImgQualityError::AnalysisError(format!(
                 "forensic validation rejected modern format candidate {} ({format:?}): {err}",
                 path.display()
             )));
         }
-        Err(err) => {
+        None => {
             tracing::debug!(
                 target: "modern_lossy_static",
                 path = %path.display(),
                 format = ?format,
-                error = %err,
-                "forensic tool unavailable; falling back to spec-level compression probe"
+                "forensic tool unavailable; continuing only with the route's native compression evidence"
             );
         }
     }
 
-    detect_compression(detected, path)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -317,6 +414,137 @@ mod tests {
             .expect("write");
         assert!(probe_modern_lossy_static(file.path())?.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn modern_webp_requires_native_codec_and_complete_decode_evidence() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let pixels = (0..16 * 16 * 3)
+            .map(|sample| u8::try_from(sample % 251).expect("bounded synthetic sample"))
+            .collect::<Vec<_>>();
+        let lossy = ::webp::Encoder::from_rgb(&pixels, 16, 16)
+            .encode(70.0)
+            .to_vec();
+        let lossless = ::webp::Encoder::from_rgb(&pixels, 16, 16)
+            .encode_lossless()
+            .to_vec();
+        let lossy_path = directory.path().join("lossy.webp");
+        let lossless_path = directory.path().join("lossless.webp");
+        std::fs::write(&lossy_path, &lossy)?;
+        std::fs::write(&lossless_path, &lossless)?;
+        assert_eq!(
+            probe_static_webp_compression(&lossy_path)?,
+            Some(CompressionType::Lossy)
+        );
+        assert_eq!(
+            probe_static_webp_compression(&lossless_path)?,
+            Some(CompressionType::Lossless)
+        );
+        assert!(probe_modern_lossy_static(&lossy_path)?.is_some());
+        assert!(probe_modern_lossy_static(&lossless_path)?.is_none());
+
+        assert_eq!(&lossy[12..16], b"VP8 ");
+        let payload_len = usize::try_from(u32::from_le_bytes(
+            lossy[16..20].try_into().expect("VP8 chunk length"),
+        ))
+        .expect("synthetic payload length fits usize");
+        assert!(payload_len <= 16 * 1024, "bounded synthetic prefix search");
+        let payload = lossy
+            .get(20..20 + payload_len)
+            .expect("complete encoder-produced VP8 chunk");
+        let incomplete = (1..payload_len)
+            .find_map(|prefix_len| {
+                let padded_len = prefix_len + (prefix_len & 1);
+                let mut candidate = lossy[..20].to_vec();
+                candidate[4..8].copy_from_slice(
+                    &u32::try_from(12 + padded_len)
+                        .expect("bounded RIFF size")
+                        .to_le_bytes(),
+                );
+                candidate[16..20].copy_from_slice(
+                    &u32::try_from(prefix_len)
+                        .expect("bounded VP8 prefix size")
+                        .to_le_bytes(),
+                );
+                candidate.extend_from_slice(&payload[..prefix_len]);
+                if prefix_len & 1 != 0 {
+                    candidate.push(0);
+                }
+                let features = ::webp::BitstreamFeatures::new(&candidate)?;
+                (matches!(features.format(), Some(::webp::BitstreamFormat::Lossy))
+                    && !features.has_animation()
+                    && ::webp::Decoder::new(&candidate).decode().is_none())
+                .then_some(candidate)
+            })
+            .expect(
+                "a strict VP8 prefix must retain native features while failing complete decode",
+            );
+        let features = ::webp::BitstreamFeatures::new(&incomplete)
+            .expect("truncated fixture retains readable native VP8 header");
+        assert!(matches!(
+            features.format(),
+            Some(::webp::BitstreamFormat::Lossy)
+        ));
+        assert!(::webp::Decoder::new(&incomplete).decode().is_none());
+        let incomplete_path = directory.path().join("header-only.webp");
+        std::fs::write(&incomplete_path, &incomplete)?;
+        assert!(probe_modern_lossy_static(&incomplete_path).is_err());
+        assert_eq!(std::fs::read(&incomplete_path)?, incomplete);
+        assert_eq!(std::fs::read(&lossy_path)?, lossy);
+        assert_eq!(std::fs::read(&lossless_path)?, lossless);
+        Ok(())
+    }
+
+    #[test]
+    fn modern_webp_empty_bitstream_is_quarantined_not_admitted_from_chunk_name() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("empty-vp8.webp");
+        let bytes = b"RIFF\x0c\0\0\0WEBPVP8 \0\0\0\0";
+        std::fs::write(&path, bytes)?;
+        assert!(::webp::BitstreamFeatures::new(bytes).is_none());
+        let scan = scan_modern_lossy_static_candidates(directory.path(), &[path.clone()])?;
+        assert_eq!(scan.candidates.len(), 0);
+        assert_eq!(scan.probe_failures.len(), 1);
+        assert_eq!(scan.probe_failures[0].0, path);
+        assert_eq!(std::fs::read(&path)?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn modern_webp_animation_stays_outside_static_admission() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("animation.webp");
+        let red = [255, 0, 0].repeat(16 * 16);
+        let blue = [0, 0, 255].repeat(16 * 16);
+        let green = [0, 255, 0].repeat(16 * 16);
+        let config = ::webp::WebPConfig::new().expect("native WebP config");
+        let mut encoder = ::webp::AnimEncoder::new(16, 16, &config);
+        encoder.add_frame(::webp::AnimFrame::from_rgb(&red, 16, 16, 0));
+        encoder.add_frame(::webp::AnimFrame::from_rgb(&blue, 16, 16, 80));
+        encoder.add_frame(::webp::AnimFrame::from_rgb(&green, 16, 16, 160));
+        let bytes = encoder.try_encode().expect("synthetic animation").to_vec();
+        assert!(
+            ::webp::BitstreamFeatures::new(&bytes)
+                .expect("animated header")
+                .has_animation()
+        );
+        std::fs::write(&path, &bytes)?;
+        assert!(probe_static_webp_compression(&path)?.is_none());
+        assert!(probe_modern_lossy_static(&path)?.is_none());
+        assert_eq!(std::fs::read(&path)?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn modern_forensic_rejection_remains_an_error_when_native_evidence_exists() {
+        let path = Path::new("synthetic.webp");
+        let rejected =
+            || ImgQualityError::AnalysisError("explicit validator rejection".to_string());
+        let error =
+            require_forensic_result_when_available(path, FormatKind::WebP, Some(Err(rejected())))
+                .expect_err("available forensic validation cannot be replaced by native success");
+        assert!(error.to_string().contains("explicit validator rejection"));
+        assert!(require_forensic_result_when_available(path, FormatKind::WebP, None,).is_ok());
     }
 
     #[test]

@@ -103,7 +103,8 @@ impl<'jbrd, 'frame, 'meta> JpegBitstreamReconstructor<'jbrd, 'frame, 'meta> {
         if !frame_header.frame_type.is_normal_frame() {
             return Err(Error::IncompatibleFrame);
         }
-        if frame_header.flags.use_lf_frame() || !frame_header.flags.skip_adaptive_lf_smoothing() {
+        // Reconstruction uses raw integer LF coefficients, not the smoothed rendering copy.
+        if frame_header.flags.use_lf_frame() {
             return Err(Error::IncompatibleFrame);
         }
 

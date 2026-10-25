@@ -23,6 +23,40 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Strict Restoration And Native Privacy Controls (2026-10-25)
+
+- Correct the independent JPEG reconstructor's rejection of adaptive LF
+  smoothing. Reconstruction consumes raw integer LF coefficients, not the
+  separate smoothed rendering image; complete independent JPEG-byte agreement
+  and the remaining frame, metadata, source and cleanup checks stay mandatory.
+- Add a small generated gradient regression with the actual smoothing flag and
+  a changed-byte rejection. Strict local restoration of a disposable reported
+  input completed with its source retained and matched official JPEG bytes;
+  this does not establish other-media or Photos acceptance.
+- Require native WebP codec features and a complete bounded decode before
+  static/lossy admission. Preserve forensic rejections, retain JP2 without its
+  required validator and reject explicit zero-frame static claims. The full
+  modern-container review remains open.
+- Add optional native display privacy, off by default: hide normal names/paths
+  while keeping explicit problems diagnosable. Stored evidence is unchanged;
+  raw log/JSON export is disabled in this display mode rather than presented as
+  anonymized output.
+- Anchor diagnostic classification to actual warning/error markers, including
+  both native warning-symbol forms; routine filenames do not become warnings.
+- Explain native Photos source attribution and its possible persistence. Built
+  helpers inherit the parent's name and icon while preserving bundle identities;
+  existing Photos attribution is not retroactively changed.
+- Add single/multiple history removal with an exact preview, shared backend,
+  writer protection and owned-log receipts. Keep unknown/shared logs and media;
+  identity-only retirement markers prevent retained legacy logs from recreating
+  removed records. Make Photos-library path guards case-insensitive.
+- Route JXL candidate working-directory and temporary-file creation through the
+  existing shared safety helpers required by CI contracts, without disabling a
+  check or altering candidate selection.
+- Refresh the authorized rusqlite 0.41/SQLite dependency transition together
+  with rolling zerocopy, anyhow and notify lock entries. Platform/runtime results
+  remain distinct from a lockfile update.
+
 ### CI Contract Corrections (2026-10-24)
 
 - Preserve the field-specific error when a restored-JPEG manifest timestamp

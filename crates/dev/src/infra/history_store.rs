@@ -6,6 +6,13 @@ use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod cleanup;
+pub use cleanup::{
+    HistoryArtifactDecision, HistoryCleanupPreview, HistoryCleanupReceipt, HistoryCleanupRequest,
+    HistoryRunSelection, HistorySessionLease, acquire_history_session_lease,
+    execute_history_cleanup, preview_history_cleanup, register_history_artifacts,
+};
+
 pub const HISTORY_DATABASE: &str = "history.sqlite3";
 const SCHEMA_VERSION: i64 = 2;
 const OUTPUT_BATCH_LINES: usize = 128;
@@ -429,6 +436,7 @@ struct OutputLine {
 
 /// Buffered writer for the combined output captured from one processing session.
 pub struct HistoryOutputWriter {
+    _lease: std::sync::Arc<HistorySessionLease>,
     connection: Connection,
     session_id: String,
     pending: Vec<OutputLine>,
@@ -441,8 +449,10 @@ impl HistoryOutputWriter {
     /// Open the history database once and ensure this session has an identity row.
     pub fn open(log_dir: &Path, session_id: &str) -> Result<Self> {
         ensure!(!session_id.is_empty(), "history session identity is empty");
+        let lease = acquire_history_session_lease(log_dir, session_id)?;
         let mut connection = open_history_write(log_dir)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        cleanup::claim_history_session(&transaction, session_id)?;
         let timestamp = now_timestamp();
         transaction.execute(
             "INSERT INTO history_sessions(session_id, updated_at) VALUES (?1, ?2)
@@ -453,6 +463,7 @@ impl HistoryOutputWriter {
             .commit()
             .context("initialize history output session")?;
         Ok(Self {
+            _lease: lease,
             connection,
             session_id: session_id.to_owned(),
             pending: Vec::new(),
@@ -566,8 +577,10 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
         "unsupported history payload version"
     );
 
+    let _lease = acquire_history_session_lease(log_dir, session_id)?;
     let mut connection = open_history_write(log_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    cleanup::claim_history_session(&transaction, session_id)?;
     let timestamp = now_timestamp();
     transaction.execute(
         "INSERT INTO history_sessions(session_id, updated_at) VALUES (?1, ?2)

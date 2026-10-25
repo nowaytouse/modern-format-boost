@@ -1454,6 +1454,72 @@ fn stamp_bundle_version(info_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn sync_bundle_branding(
+    native_dir: &Path,
+    resources_dir: &Path,
+    helper_contents: &Path,
+) -> Result<()> {
+    let app_info = native_dir.join("Info.plist");
+    let output = Command::new("plutil")
+        .args(["-convert", "json", "-o", "-"])
+        .arg(&app_info)
+        .output()
+        .with_context(|| format!("read app branding from {}", app_info.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "plutil failed reading app branding: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("decode app branding plist")?;
+    let string = |key: &str| -> Result<&str> {
+        info.get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("missing or invalid {key} in {}", app_info.display()))
+    };
+    let name = string("CFBundleName")?;
+    let display_name = if info.get("CFBundleDisplayName").is_some() {
+        string("CFBundleDisplayName")?
+    } else {
+        name
+    };
+    let icon = string("CFBundleIconFile")?;
+    let icon_path = Path::new(icon);
+    anyhow::ensure!(
+        icon_path.file_name().is_some_and(|file| file == icon_path.as_os_str()),
+        "CFBundleIconFile must name a resource file"
+    );
+    let icon_file = if icon_path.extension().is_some() {
+        icon_path.to_path_buf()
+    } else {
+        icon_path.with_extension("icns")
+    };
+    let helper_resources = helper_contents.join("Resources");
+    fs::create_dir_all(&helper_resources).context("create Photos helper Resources dir")?;
+    for destination in [resources_dir.join(&icon_file), helper_resources.join(&icon_file)] {
+        fs::copy(native_dir.join(&icon_file), &destination)
+            .with_context(|| format!("copy app icon to {}", destination.display()))?;
+    }
+    let helper_info = helper_contents.join("Info.plist");
+    for (key, value) in [
+        ("CFBundleName", name),
+        ("CFBundleDisplayName", display_name),
+        ("CFBundleIconFile", icon),
+    ] {
+        let status = Command::new("plutil")
+            .args(["-replace", key, "-string", value])
+            .arg(&helper_info)
+            .status()
+            .with_context(|| format!("set {key} in {}", helper_info.display()))?;
+        if !status.success() {
+            anyhow::bail!("plutil failed setting {key} in {}", helper_info.display());
+        }
+    }
+    Ok(())
+}
+
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
@@ -1546,6 +1612,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         &helper_info,
     )?;
     stamp_bundle_version(&helper_info)?;
+    sync_bundle_branding(&native_dir, &resources_dir, &photos_helper.join("Contents"))?;
     let status = Command::new("codesign")
         .args(["--force", "--sign"])
         .arg(app_bundle_codesign_identity()?)
@@ -1561,11 +1628,6 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
     fs::copy(&info_src, &info_dst)
         .with_context(|| format!("copy Info.plist to {}", info_dst.display()))?;
     stamp_bundle_version(&info_dst)?;
-
-    let icon_src = native_dir.join("icon.icns");
-    let icon_dst = resources_dir.join("icon.icns");
-    fs::copy(&icon_src, &icon_dst)
-        .with_context(|| format!("copy icon.icns to {}", icon_dst.display()))?;
 
     let localized_resources = native_dir.join("Resources");
     let status = Command::new("ditto")
@@ -2326,6 +2388,66 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn photos_helper_inherits_parent_name_and_icon_without_changing_identity() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let native_dir = temp.path().join("native");
+        let resources = temp.path().join("app/Contents/Resources");
+        let helper = temp.path().join("helper/Contents");
+        for directory in [&native_dir, &resources, &helper] {
+            fs::create_dir_all(directory)?;
+        }
+        let helper_info = helper.join("Info.plist");
+        fs::write(
+            &helper_info,
+            include_str!("../../../gui/src-macos/PhotosImportHelper-Info.plist"),
+        )?;
+        for (name, display_name, icon) in [
+            ("Modern Format Boost", None, "icon"),
+            ("MFB & <Next>", Some("MFB Next"), "next.icns"),
+        ] {
+            let mut parent = serde_json::json!({
+                "CFBundleName": name,
+                "CFBundleIconFile": icon,
+                "CFBundleIdentifier": "com.modernformatboost.app",
+            });
+            if let Some(display_name) = display_name {
+                parent["CFBundleDisplayName"] = display_name.into();
+            }
+            let parent_bytes = serde_json::to_vec(&parent)?;
+            fs::write(native_dir.join("Info.plist"), &parent_bytes)?;
+            let icon_file = if icon.ends_with(".icns") {
+                icon.to_owned()
+            } else {
+                format!("{icon}.icns")
+            };
+            fs::write(native_dir.join(&icon_file), name.as_bytes())?;
+            sync_bundle_branding(&native_dir, &resources, &helper)?;
+            let output = Command::new("plutil")
+                .args(["-convert", "json", "-o", "-"])
+                .arg(&helper_info)
+                .output()?;
+            assert!(output.status.success());
+            let helper_info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(helper_info["CFBundleName"], name);
+            assert_eq!(helper_info["CFBundleDisplayName"], display_name.unwrap_or(name));
+            assert_eq!(helper_info["CFBundleIconFile"], icon);
+            assert_eq!(helper_info["CFBundleIdentifier"], "com.modernformatboost.photos-import");
+            assert_eq!(helper_info["CFBundleExecutable"], "mfb-photos-import");
+            assert_eq!(fs::read(native_dir.join("Info.plist"))?, parent_bytes);
+            for directory in [&resources, &helper.join("Resources")] {
+                assert_eq!(fs::read(directory.join(&icon_file))?, name.as_bytes());
+            }
+        }
+        fs::write(
+            native_dir.join("Info.plist"),
+            br#"{"CFBundleName":"MFB","CFBundleIconFile":"../outside.icns"}"#,
+        )?;
+        assert!(sync_bundle_branding(&native_dir, &resources, &helper).is_err());
         Ok(())
     }
 

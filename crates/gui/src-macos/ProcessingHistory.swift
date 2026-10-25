@@ -1949,7 +1949,30 @@ private enum HistoryStore {
             }
             let eventSchema = try statement(database, "SELECT sequence, session_id, ts, event FROM history_events LIMIT 0")
             sqlite3_finalize(eventSchema)
-            let sessions = try statement(database, "SELECT session_id, updated_at FROM history_sessions ORDER BY updated_at DESC, session_id DESC LIMIT \(maximumSessions + 1)")
+            let removalTable = try statement(database, "SELECT type FROM sqlite_master WHERE name='history_removed_sessions_v1'")
+            let removalResult = sqlite3_step(removalTable)
+            var hasRemovedSessions = false
+            if removalResult == SQLITE_ROW {
+                hasRemovedSessions = try databaseText(removalTable, 0, database: database) == "table"
+                guard hasRemovedSessions, sqlite3_step(removalTable) == SQLITE_DONE else {
+                    sqlite3_finalize(removalTable); throw databaseError(database, "invalid removal registry")
+                }
+            } else if removalResult != SQLITE_DONE {
+                sqlite3_finalize(removalTable); throw databaseError(database)
+            }
+            sqlite3_finalize(removalTable)
+            if hasRemovedSessions {
+                let columns = try statement(database, "PRAGMA table_info(history_removed_sessions_v1)")
+                defer { sqlite3_finalize(columns) }
+                guard sqlite3_step(columns) == SQLITE_ROW,
+                      try databaseText(columns, 1, database: database) == "session_id",
+                      try databaseText(columns, 2, database: database).uppercased() == "TEXT",
+                      sqlite3_column_int(columns, 3) == 1, sqlite3_column_int(columns, 5) == 1,
+                      sqlite3_step(columns) == SQLITE_DONE else { throw databaseError(database, "unsupported removal registry") }
+            }
+            let retainedSessions = hasRemovedSessions
+                ? " WHERE NOT EXISTS (SELECT 1 FROM history_removed_sessions_v1 r WHERE r.session_id=history_sessions.session_id)" : ""
+            let sessions = try statement(database, "SELECT session_id, updated_at FROM history_sessions\(retainedSessions) ORDER BY updated_at DESC, session_id DESC LIMIT \(maximumSessions + 1)")
             defer { sqlite3_finalize(sessions) }
             let formatter = ISO8601DateFormatter()
             let fractionalFormatter = ISO8601DateFormatter()
@@ -1971,7 +1994,8 @@ private enum HistoryStore {
                 }
                 databaseSessions[stamp] = date
             }
-            let membership = try statement(database, "SELECT 1 FROM history_sessions WHERE session_id = ? LIMIT 1")
+            let retiredMembership = hasRemovedSessions ? " UNION ALL SELECT 1 FROM history_removed_sessions_v1 WHERE session_id=?1" : ""
+            let membership = try statement(database, "SELECT 1 FROM history_sessions WHERE session_id = ?1\(retiredMembership) LIMIT 1")
             defer { sqlite3_finalize(membership) }
             for stamp in groups.keys {
                 sqlite3_reset(membership)
@@ -2240,6 +2264,169 @@ private final class HistoryResultCell: NSTableCellView {
     }
 }
 
+private struct HistoryRunSelection: Codable, Hashable {
+    let session_id: String
+    let run_id: String
+}
+
+private struct HistoryRemovalRequest: Encodable {
+    let schema_version = 1
+    let runs: [HistoryRunSelection]
+    var snapshot_token: String?
+
+    init(entries: [HistoryEntry], directory: URL) throws {
+        guard !entries.isEmpty, entries.count <= 128 else { throw HostError(message: localized("history.remove.unsupported")) }
+        runs = try entries.map { entry in
+            guard !entry.legacy, entry.finished != nil, entry.hasStoredOutput,
+                  entry.audit.standardizedFileURL == directory.appendingPathComponent("history.sqlite3").standardizedFileURL,
+                  validHistoryIdentity(entry.stamp), let run = entry.context?.run_id, validHistoryIdentity(run) else {
+                throw HostError(message: localized("history.remove.unsupported"))
+            }
+            return HistoryRunSelection(session_id: entry.stamp, run_id: run)
+        }
+        guard Set(runs).count == runs.count, Set(runs.map(\.run_id)).count == runs.count else {
+            throw HostError(message: localized("history.remove.unsupported"))
+        }
+    }
+
+    func arguments(directory: URL) throws -> [String] {
+        let encoded = try JSONEncoder().encode(self)
+        guard encoded.count <= 65536 else { throw HostError(message: localized("history.remove.unsupported")) }
+        return ["--history-directory", directory.path,
+                snapshot_token == nil ? "--history-cleanup-preview" : "--history-cleanup",
+                String(decoding: encoded, as: UTF8.self)] + (snapshot_token == nil ? [] : ["--yes"]) + ["--json"]
+    }
+}
+
+private struct HistoryRemovalArtifact: Codable {
+    let path: String
+    let scope: String
+    let status: String
+    let reason: String
+
+    var valid: Bool { path.hasPrefix("/") && !path.contains("\0") && !scope.isEmpty && !reason.isEmpty }
+}
+
+private struct HistoryRemovalPreview: Codable {
+    let schema_version: Int
+    let kind: String
+    let source: String
+    let snapshot_token: String
+    let runs: [HistoryRunSelection]
+    let event_rows: UInt64
+    let output_rows: UInt64
+    let event_bytes: UInt64
+    let output_bytes: UInt64
+    let artifacts: [HistoryRemovalArtifact]
+    let can_execute: Bool
+    let external_log_scope: String
+
+    static func decode(_ data: Data, request: HistoryRemovalRequest, directory: URL) throws -> Self {
+        let preview = try JSONDecoder().decode(Self.self, from: data)
+        guard preview.schema_version == 1, preview.kind == "history_cleanup_preview", preview.can_execute,
+              preview.source.hasPrefix("/"), !preview.source.contains("\0"),
+              URL(fileURLWithPath: preview.source).standardizedFileURL == directory.resolvingSymlinksInPath().appendingPathComponent("history.sqlite3").standardizedFileURL,
+              preview.snapshot_token.utf8.count == 64, preview.snapshot_token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              preview.runs.count == request.runs.count, Set(preview.runs) == Set(request.runs),
+              preview.external_log_scope == "registered_session_logs_only",
+              [preview.event_rows, preview.output_rows, preview.event_bytes, preview.output_bytes].allSatisfy({ $0 <= UInt64(Int64.max) }),
+              preview.event_rows >= UInt64(request.runs.count * 2), preview.artifacts.count <= request.runs.count * 4,
+              preview.artifacts.allSatisfy({ $0.valid && ["delete", "retained"].contains($0.status)
+                  && ["registered_file", "registered_file_problem", "unregistered_external_logs"].contains($0.scope)
+                  && ($0.status != "delete" || $0.scope == "registered_file") }) else {
+            throw HostError(message: localized("history.remove.invalid"))
+        }
+        return preview
+    }
+
+    func detail(privacy: Bool) -> String {
+        var rows = [localized("history.remove.scope"),
+            localized("history.remove.counts", runs.count, event_rows, output_rows),
+            localized("history.remove.artifacts", artifacts.filter { $0.status == "delete" }.count,
+                      artifacts.filter { $0.status == "retained" }.count)]
+        for artifact in artifacts {
+            rows.append("\n" + localized(artifact.status == "delete" ? "history.remove.confirm" : "history.remove.retained")
+                + ": " + DisplayPrivacy.path(artifact.path, hidden: privacy, problem: artifact.scope == "registered_file_problem") + "\n" + artifact.reason)
+        }
+        return rows.joined(separator: "\n")
+    }
+}
+
+private struct HistoryRemovalReceipt: Codable {
+    let schema_version: Int
+    let kind: String
+    let status: String
+    let database_committed: Bool
+    let removed_runs: UInt64
+    let event_rows: UInt64
+    let output_rows: UInt64
+    let removed_artifacts: UInt64
+    let retained_artifacts: [HistoryRemovalArtifact]
+    let failed_artifacts: [HistoryRemovalArtifact]
+
+    static func decode(_ data: Data, preview: HistoryRemovalPreview) throws -> Self {
+        let receipt = try JSONDecoder().decode(Self.self, from: data)
+        guard receipt.schema_version == 1, receipt.kind == "history_cleanup_receipt", receipt.database_committed,
+              ["completed", "partial"].contains(receipt.status),
+              receipt.removed_runs == UInt64(preview.runs.count), receipt.event_rows == preview.event_rows,
+              receipt.output_rows == preview.output_rows,
+              receipt.removed_artifacts <= UInt64(preview.artifacts.filter { $0.status == "delete" }.count),
+              receipt.retained_artifacts.count <= preview.artifacts.count,
+              receipt.failed_artifacts.count <= preview.artifacts.count + 1,
+              receipt.retained_artifacts.allSatisfy({ artifact in
+                  artifact.valid && artifact.status == "retained" && preview.artifacts.contains {
+                      $0.status == "retained" && $0.path == artifact.path && $0.scope == artifact.scope && $0.reason == artifact.reason
+                  }
+              }),
+              receipt.failed_artifacts.allSatisfy({ $0.valid && $0.status == "failed"
+                  && ["registered_file", "ownership_registry"].contains($0.scope) }),
+              receipt.removed_artifacts + UInt64(receipt.failed_artifacts.filter { $0.scope == "registered_file" }.count)
+                  == UInt64(preview.artifacts.filter { $0.status == "delete" }.count),
+              (receipt.status == "completed") == (receipt.failed_artifacts.isEmpty
+                  && !receipt.retained_artifacts.contains { $0.scope == "registered_file_problem" }) else {
+            throw HostError(message: localized("history.remove.invalid"))
+        }
+        return receipt
+    }
+
+    func detail(privacy: Bool) -> String {
+        ([localized(status == "completed" ? "history.remove.completed" : "history.remove.partial", removed_runs, removed_artifacts)]
+            + (retained_artifacts + failed_artifacts).map { artifact in
+                "\n" + localized(artifact.status == "failed" ? "history.remove.failed" : "history.remove.retained") + ": "
+                    + DisplayPrivacy.path(artifact.path, hidden: privacy, problem: artifact.status == "failed" || artifact.scope == "registered_file_problem")
+                    + "\n" + artifact.reason
+            }).joined(separator: "\n")
+    }
+}
+
+private func historyRemovalOutput(_ request: HistoryRemovalRequest, directory: URL) throws -> Data {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    // A destructive operation must finish its transaction and report recovery paths before it exits.
+    return try settingsToolOutput(binary, arguments: request.arguments(directory: directory), timeout: request.snapshot_token == nil ? 10 : nil)
+}
+
+private func historyRemovalFixtureOutput(_ request: HistoryRemovalRequest, directory: URL) throws -> Data {
+    let retained = HistoryRemovalArtifact(path: directory.path, scope: "unregistered_external_logs", status: "retained",
+        reason: "Synthetic example: older logs have no ownership record and are kept.")
+    let eventRows = UInt64(request.runs.count * 4)
+    let outputRows = UInt64(request.runs.count * 8)
+    if request.snapshot_token != nil {
+        return try JSONEncoder().encode(HistoryRemovalReceipt(schema_version: 1, kind: "history_cleanup_receipt",
+            status: "completed", database_committed: true, removed_runs: UInt64(request.runs.count),
+            event_rows: eventRows, output_rows: outputRows, removed_artifacts: 1,
+            retained_artifacts: [retained], failed_artifacts: []))
+    }
+    return try JSONEncoder().encode(HistoryRemovalPreview(schema_version: 1, kind: "history_cleanup_preview",
+        source: directory.resolvingSymlinksInPath().appendingPathComponent("history.sqlite3").path,
+        snapshot_token: String(repeating: "a", count: 64), runs: request.runs,
+        event_rows: eventRows, output_rows: outputRows, event_bytes: 1024, output_bytes: 4096,
+        artifacts: [HistoryRemovalArtifact(path: directory.appendingPathComponent("Private holiday photographs.log").path,
+            scope: "registered_file", status: "delete", reason: "Synthetic owned log"), retained],
+        can_execute: true, external_log_scope: "registered_session_logs_only"))
+}
+
 final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
     private let table = NSTableView()
     private let search = NSSearchField()
@@ -2330,9 +2517,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var copyButton = NSButton()
     private var exportButton = NSButton()
     private var cleanupButton = NSButton()
+    private var removeButton = NSButton()
+    private var removalBusy = false
+    private var removalAlert: NSAlert?
+    private var removalQuery = historyRemovalOutput
+    private var removalFixture = false
     private var entries: [HistoryEntry] = []
     private var displayed: [HistoryEntry] = []
     private var directory: URL
+    private let preferences: UserDefaults
+    private var privacyEnabled: Bool { DisplayPrivacy.enabled(in: preferences) }
     private var generation = UUID()
     private var outputGeneration = UUID()
     private var exportGeneration = UUID()
@@ -2342,8 +2536,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var initialDividerConfigured = false
     private var selectionInitialized = false
 
-    init(directory: URL) {
+    init(directory: URL, preferences: UserDefaults = .standard) {
         self.directory = directory
+        self.preferences = preferences
         outputGeneration = UUID()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 620),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -2353,6 +2548,26 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         window.delegate = self
         window.setFrameAutosaveName("MFBProcessingHistory")
         buildInterface()
+        NotificationCenter.default.addObserver(self, selector: #selector(displayPrivacyChanged),
+            name: DisplayPrivacy.changed, object: preferences)
+    }
+
+    @objc private func displayPrivacyChanged() {
+        clearCleanupDetails()
+        let selection = Set(selectedEntries.map(\.id))
+        if let sheet = removalAlert?.window, sheet.sheetParent != nil { sheet.sheetParent?.endSheet(sheet, returnCode: .alertSecondButtonReturn) }
+        if exportBusy {
+            exportGeneration = UUID()
+            exportBusy = false
+            refreshButton.isEnabled = true
+            progress.stopAnimation(nil)
+        }
+        if privacyEnabled, detailMode.selectedSegment == 4 { detailMode.selectedSegment = 0 }
+        table.reloadData()
+        table.selectRowIndexes(IndexSet(displayed.indices.filter { selection.contains(displayed[$0].id) }), byExtendingSelection: false)
+        copyButton.toolTip = localized(privacyEnabled ? "privacy.display.copy_visible" : "history.copy_sources")
+        copyButton.setAccessibilityLabel(copyButton.toolTip)
+        detailModeChanged()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -2374,6 +2589,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func refresh(directory: URL) {
+        guard !removalBusy else { return }
         exportGeneration = UUID()
         exportBusy = false
         resetOutput()
@@ -2538,6 +2754,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
         exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
         cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails))
+        removeButton = iconButton("trash", key: "history.remove.title", action: #selector(removeSelectedHistory))
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -2545,7 +2762,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, cleanupButton, progress, status])
+        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, cleanupButton, removeButton, progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -2638,6 +2855,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                               (revealButton, "history.reveal"), (copyButton, "history.copy_sources"),
                               (exportButton, "history.export.title"),
                                (cleanupButton, "cleanup.inspect"),
+                               (removeButton, "history.remove.title"),
                                (failedDetailsButton, "history.file_failure.detail"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
@@ -2685,7 +2903,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             : localized("history.shown", displayed.count, entries.count)
         if limited { status.stringValue += " · " + localized("history.limited") }
         if !loadIssues.isEmpty { status.stringValue += " · " + loadIssues.joined(separator: " · ") }
-        status.toolTip = directory.path
+        status.toolTip = DisplayPrivacy.path(directory.path, hidden: privacyEnabled, problem: !loadIssues.isEmpty)
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { tableView === failedTable ? failedPaths.count : displayed.count }
@@ -2723,7 +2941,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         switch column.identifier.rawValue {
         case "time": label.stringValue = Self.timestampLabel(entry.timestamp)
         case "source":
-            if let paths = entry.context?.inputs, !paths.isEmpty {
+            if privacyEnabled {
+                label.stringValue = localized("privacy.display.hidden")
+                label.toolTip = label.stringValue
+            } else if let paths = entry.context?.inputs, !paths.isEmpty {
                 let first = URL(fileURLWithPath: paths[0]).lastPathComponent
                 label.stringValue = paths.count == 1 ? first : localized("history.source_multiple", first, paths.count)
                 label.toolTip = paths.joined(separator: "\n")
@@ -2776,15 +2997,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         let selection = selectedEntries
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare" : "history.summary"), forSegment: 0)
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare.failures" : "history.failed_files"), forSegment: 2)
-        if selection.count == 2 { detail.string = Self.renderComparison(selection) }
+        if selection.count == 2 { detail.string = Self.renderComparison(selection, privacy: privacyEnabled) }
         else if selection.count > 2 { detail.string = localized("history.compare.select_two") }
-        else { detail.string = selected.map { Self.render($0) } ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select") }
+        else { detail.string = selected.map { Self.render($0, privacy: privacyEnabled) } ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select") }
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
     }
 
-    fileprivate static func renderComparison(_ entries: [HistoryEntry]) -> String {
+    fileprivate static func renderComparison(_ entries: [HistoryEntry], privacy: Bool = false) -> String {
         guard entries.count == 2 else { return localized("history.compare.select_two") }
+        if privacy {
+            return ([localized("history.compare")] + entries.enumerated().map { index, entry in
+                localized("history.compare.batch", index + 1) + "\n" + renderPrivate(entry)
+            }).joined(separator: "\n\n")
+        }
         var sections = [localized("history.compare")]
         if !entries[0].sizeMeasurementsComparable(to: entries[1]) {
             sections.append(localized("history.compare.not_comparable"))
@@ -2869,7 +3095,61 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         return lines.joined(separator: "\n")
     }
 
-    fileprivate static func render(_ entry: HistoryEntry) -> String {
+    private static func renderPrivate(_ entry: HistoryEntry) -> String {
+        let unknown = localized("result.unknown")
+        func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
+        func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
+        var lines = [entry.statusLabel, timestampLabel(entry.timestamp), localized("privacy.display.scope"), "",
+            row("mode", entry.modeLabel ?? unknown), entry.sizeOutcome]
+        for (key, media) in [("img", entry.summary?.img), ("vid", entry.summary?.vid)] {
+            lines.append(localized("history.media.\(key)"))
+            if media?.active == false { lines.append(localized("history.not_run")); continue }
+            lines += [localized("result.counts", count(media?.succeeded), count(media?.skipped),
+                count(media?.failed), count(media?.ignored)), localized("result.unprocessed", count(media?.unprocessed)),
+                row("exit", count(media?.exit_code))]
+        }
+        lines += [row("sources", localized("privacy.display.hidden")), row("output", localized("privacy.display.hidden")),
+            row("integrity", entry.summary?.integrity.state ?? unknown), row("issues", count(entry.summary?.integrity.issue_count))]
+        for verification in entry.inputVerifications.isEmpty ? [entry.verification].compactMap({ $0 }) : Array(entry.inputVerifications.values) {
+            lines += [row("source_inventory", String(verification.source_count)),
+                row("optimized_inventory", String(verification.optimized_count)), row("failed_inventory", String(verification.failed_count)),
+                row("remaining_inventory", String(verification.source_remaining_count)), row("deleted_inventory", String(verification.verified_deleted_count))]
+            if verification.has_warnings || verification.issue_count > 0 || verification.count_status?.hasPrefix("MISMATCH") == true {
+                lines += [row("verified_source", verification.source_path ?? unknown), row("count_status", verification.count_status ?? unknown)]
+            }
+        }
+        func numericFields(_ object: [String: Any], prefix: String = "") -> [String] {
+            object.keys.sorted().flatMap { key -> [String] in
+                let field = prefix.isEmpty ? key : prefix + "." + key
+                if let nested = object[key] as? [String: Any] { return numericFields(nested, prefix: field) }
+                if let value = object[key] as? NSNumber {
+                    return [field + ": " + (CFGetTypeID(value) == CFBooleanGetTypeID() ? (value.boolValue ? "true" : "false") : value.stringValue)]
+                }
+                return []
+            }
+        }
+        for snapshot in entry.configSnapshots {
+            lines += ["", localized("history.effective_config"), row("config_pipeline", snapshot.pipeline)]
+            if let object = try? JSONSerialization.jsonObject(with: Data(snapshot.values.utf8)) as? [String: Any] {
+                lines += numericFields(object)
+            } else { lines.append(localized("history.config.invalid")) }
+        }
+        if let error = entry.finished?.error { lines += ["", row("error", error)] }
+        lines += entry.issues
+        if let summary = entry.summary, !summary.failed_files.isEmpty { lines += ["", localized("history.failed_files")] + summary.failed_files }
+        for receipt in entry.outputCleanups where receipt.needsAttention { lines += ["", receipt.detailText] }
+        for receipt in entry.fastDeliveries where receipt.isDeferred { lines += ["", receipt.deferredDetails] }
+        for invocation in entry.invocations {
+            if let error = invocation.binary.diagnostic { lines += ["", row("worker_observation_error", error)] }
+        }
+        for storage in entry.outputStorage.values where storage.state == "failed" || !storage.capture_complete {
+            lines += ["", storage.detailText]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    fileprivate static func render(_ entry: HistoryEntry, privacy: Bool = false) -> String {
+        if privacy { return renderPrivate(entry) }
         let unknown = localized("result.unknown")
         func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
         func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
@@ -3006,7 +3286,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func updateActions() {
-        let ready = refreshButton.isEnabled && !exportBusy
+        let ready = refreshButton.isEnabled && !exportBusy && !removalBusy
         let single = ready && selected != nil
         let pair = ready && selectedEntries.count == 2 && selectedEntries.allSatisfy(\.hasStoredOutput)
         table.isEnabled = ready
@@ -3025,18 +3305,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failedRevealButton.isEnabled = failuresVisible && selectedFailedURL != nil
         failedDetailsButton.isEnabled = failuresVisible && failureDisplayRows.indices.contains(failedTable.selectedRow)
             && !failureDisplayRows[failedTable.selectedRow].observations.isEmpty
-        logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || selected?.logs.isEmpty == false)
+        logButton.isEnabled = single && !outputLoading && (selected?.hasStoredOutput == true || (!privacyEnabled && selected?.logs.isEmpty == false))
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 1)
         detailMode.setEnabled(single || pair, forSegment: 2)
         detailMode.setEnabled(single && selected?.hasStoredOutput == true, forSegment: 3)
-        detailMode.setEnabled(single && selected?.hasStoredOutput == true && selected?.context?.mode == "fast-img", forSegment: 4)
+        detailMode.setEnabled(single && !privacyEnabled && selected?.hasStoredOutput == true && selected?.context?.mode == "fast-img", forSegment: 4)
         olderButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasOlder == true
         newerButton.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage?.hasNewer == true
         outputFilter.isEnabled = single && detailMode.selectedSegment == 1 && !outputLoading && outputPage != nil
-        revealButton.isEnabled = single
-        copyButton.isEnabled = ready && selectedEntries.contains { $0.context?.inputs.isEmpty == false }
-        exportButton.isEnabled = single && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
-        cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img"
+        revealButton.isEnabled = single && !privacyEnabled
+        copyButton.isEnabled = ready && (privacyEnabled ? !selectedEntries.isEmpty : selectedEntries.contains { $0.context?.inputs.isEmpty == false })
+        copyButton.toolTip = localized(privacyEnabled ? "privacy.display.copy_visible" : "history.copy_sources")
+        copyButton.setAccessibilityLabel(copyButton.toolTip)
+        exportButton.isEnabled = single && !privacyEnabled && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
+        exportButton.toolTip = privacyEnabled ? localized("privacy.display.raw_disabled") : localized("history.export.scope")
+        cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img" && (!privacyEnabled || selected?.hasCleanupAttention == true)
+        removeButton.isEnabled = ready && (try? HistoryRemovalRequest(entries: selectedEntries, directory: directory)) != nil
+        removeButton.toolTip = localized(removeButton.isEnabled || selectedEntries.isEmpty ? "history.remove.title" : "history.remove.unsupported")
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -3055,8 +3340,131 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         updateActions()
     }
 
+    @objc private func removeSelectedHistory() {
+        guard removeButton.isEnabled, let window, window.isVisible, window.attachedSheet == nil,
+              let request = try? HistoryRemovalRequest(entries: selectedEntries, directory: directory) else { return }
+        let source = directory
+        let query = removalQuery
+        removalBusy = true
+        refreshButton.isEnabled = false
+        status.stringValue = localized("history.remove.loading")
+        progress.startAnimation(nil)
+        updateActions()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try HistoryRemovalPreview.decode(query(request, source), request: request, directory: source) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                do {
+                    let preview = try result.get()
+                    guard self.window?.isVisible == true, window.attachedSheet == nil else { self.finishRemoval(localized("history.remove.cancelled")); return }
+                    self.progress.stopAnimation(nil)
+                    let alert = NSAlert()
+                    alert.messageText = localized("history.remove.preview")
+                    alert.informativeText = localized("history.remove.scope")
+                    Self.setRemovalDetails(preview.detail(privacy: self.privacyEnabled), on: alert)
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: localized("history.remove.confirm"))
+                    alert.addButton(withTitle: localized("history.remove.cancel"))
+                    alert.buttons.first?.hasDestructiveAction = true
+                    self.removalAlert = alert
+                    alert.beginSheetModal(for: window) { [weak self] response in
+                        guard let self else { return }
+                        self.removalAlert = nil
+                        guard response == .alertFirstButtonReturn, window.isVisible else {
+                            self.finishRemoval(localized("history.remove.cancelled")); return
+                        }
+                        var approved = request
+                        approved.snapshot_token = preview.snapshot_token
+                        self.executeRemoval(approved, preview: preview, source: source)
+                    }
+                } catch { self.finishRemoval(error.localizedDescription) }
+            }
+        }
+    }
+
+    private func finishRemoval(_ message: String) {
+        removalBusy = false
+        refreshButton.isEnabled = true
+        progress.stopAnimation(nil)
+        status.stringValue = message
+        updateActions()
+    }
+
+    private static func setRemovalDetails(_ text: String, on alert: NSAlert) {
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 560, height: 280))
+        view.string = text
+        view.isEditable = false
+        view.isSelectable = true
+        view.isHorizontallyResizable = false
+        view.isVerticallyResizable = true
+        view.minSize = .zero
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        view.autoresizingMask = [.width]
+        view.textContainer?.widthTracksTextView = true
+        view.font = HistoryLayout.detailFont
+        view.textContainerInset = NSSize(width: HistoryLayout.spacing, height: HistoryLayout.spacing)
+        view.setAccessibilityLabel(localized("history.remove.preview"))
+        let scroll = NSScrollView(frame: view.frame)
+        scroll.hasVerticalScroller = true
+        scroll.documentView = view
+        alert.accessoryView = scroll
+    }
+
+    private func executeRemoval(_ request: HistoryRemovalRequest, preview: HistoryRemovalPreview, source: URL) {
+        status.stringValue = localized("history.remove.running")
+        progress.startAnimation(nil)
+        let query = removalQuery
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Swift.Result { try HistoryRemovalReceipt.decode(query(request, source), preview: preview) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                do {
+                    let receipt = try result.get()
+                    let receiptDetail = receipt.detail(privacy: self.privacyEnabled)
+                    self.finishRemoval(receiptDetail)
+                    if self.removalFixture { self.entries = []; self.applyFilter() }
+                    else { self.refresh(directory: source) }
+                    if let window = self.window, window.isVisible {
+                        let alert = NSAlert()
+                        alert.messageText = localized(receipt.status == "completed" ? "history.remove.completed" : "history.remove.partial", receipt.removed_runs, receipt.removed_artifacts)
+                        alert.informativeText = localized("history.remove.scope")
+                        Self.setRemovalDetails(receiptDetail, on: alert)
+                        alert.alertStyle = receipt.status == "completed" ? .informational : .warning
+                        alert.beginSheetModal(for: window)
+                    }
+                } catch {
+                    // A failed response can follow a committed transaction; never claim that nothing changed.
+                    self.finishRemoval(error.localizedDescription)
+                    self.detail.string = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func showRemovalFixture() {
+        removalFixture = true
+        var fixture = HistoryEntry(id: "fixture:0", stamp: "fixture-session", audit: directory.appendingPathComponent("history.sqlite3"), timestamp: "2026-10-25T09:30:00Z")
+        fixture.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/Private holiday photographs"], output: nil,
+            backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
+            version: "0.12.0", retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: "fixture-run-one")
+        fixture.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4)
+        fixture.summary = HistorySummary(schema_version: 1, count_scope: "processor_outcomes",
+            img: HistoryMedia(active: true, succeeded: 12, skipped: 2, ignored: 0, failed: 0, unprocessed: 0, exit_code: 0),
+            vid: HistoryMedia(active: false, succeeded: nil, skipped: nil, ignored: nil, failed: nil, unprocessed: nil, exit_code: nil),
+            integrity: HistorySummary.Integrity(state: "CLEAN", issue_count: 0), failed_files: [], skipped_files: [])
+        var second = HistoryEntry(id: "fixture:1", stamp: "fixture-session-two", audit: fixture.audit, timestamp: "2026-10-25T09:00:00Z",
+            context: fixture.context, summary: fixture.summary, finished: fixture.finished)
+        second.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/Second private folder"], output: nil,
+            backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
+            version: "0.12.0", retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: "fixture-run-two")
+        entries = [fixture, second]
+        removalQuery = historyRemovalFixtureOutput
+        applyFilter()
+        show()
+    }
+
     @objc private func exportSelectedRun() {
-        guard exportButton.isEnabled, let entry = selected, let window, window.isVisible else { return }
+        guard !privacyEnabled, exportButton.isEnabled, let entry = selected, let window, window.isVisible else { return }
         let token = UUID()
         exportGeneration = token
         exportBusy = true
@@ -3083,7 +3491,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     try HistoryDiagnosticStaging.prepare(HistoryStore.diagnosticArtifact(for: entry), destination: destination)
                 }
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.exportGeneration == token, self.window?.isVisible == true,
+                    guard let self, !self.privacyEnabled, self.exportGeneration == token, self.window?.isVisible == true,
                           self.selected?.id == entry.id else {
                         if case let .success(staging) = result {
                             do { try staging.discard() }
@@ -3109,7 +3517,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             loadOutput(entry: entry)
             return
         }
-        guard let url = selected?.logs.first, HistoryStore.regularFile(url), NSWorkspace.shared.open(url) else {
+        guard !privacyEnabled, let url = selected?.logs.first, HistoryStore.regularFile(url), NSWorkspace.shared.open(url) else {
             status.stringValue = localized("history.issue.open_log"); return
         }
     }
@@ -3132,13 +3540,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     @objc private func detailModeChanged() {
         clearCleanupDetails()
         clearFailureDetails()
+        if privacyEnabled, detailMode.selectedSegment == 4 { detailMode.selectedSegment = 0 }
         if selectedEntries.count == 2 {
             if detailMode.selectedSegment == 2 {
                 if let issues = comparisonIssues { displayFailureComparison(issues) }
                 else { loadFailureComparison(entries: selectedEntries) }
             } else {
                 cancelIssueScan()
-                detail.string = Self.renderComparison(selectedEntries)
+                detail.string = Self.renderComparison(selectedEntries, privacy: privacyEnabled)
                 updateHistoryStatus()
             }
             updateActions()
@@ -3150,7 +3559,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         if ![2, 3, 4].contains(detailMode.selectedSegment)
             || (issueScanControl != nil && issueScanIsIgnored != (detailMode.selectedSegment == 4)) { cancelIssueScan() }
         if detailMode.selectedSegment == 0 {
-            detail.string = selected.map { Self.render($0) } ?? localized("history.select")
+            detail.string = selected.map { Self.render($0, privacy: privacyEnabled) } ?? localized("history.select")
             updateHistoryStatus()
         }
         else if detailMode.selectedSegment == 2 {
@@ -3255,9 +3664,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         cleanupDetailAlert = nil
     }
 
-    private static func cleanupDirectories(for entry: HistoryEntry) -> [URL] {
+    private static func cleanupDirectories(for entry: HistoryEntry, privacy: Bool = false) -> [URL] {
         guard !entry.outputCleanupInvalid else { return [] }
         return entry.outputCleanups.compactMap { receipt in
+            if privacy && !receipt.needsAttention { return nil }
             let url = URL(fileURLWithPath: receipt.output_path)
             guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isSymbolicLink != true else { return nil }
@@ -3265,7 +3675,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
     }
 
-    private static func cleanupDetailText(for entry: HistoryEntry) throws -> String {
+    private static func cleanupDetailText(for entry: HistoryEntry, privacy: Bool = false) throws -> String {
+        if privacy {
+            return ([localized("cleanup.history_title"), localized("privacy.display.scope")]
+                + entry.outputCleanups.filter(\.needsAttention).map(\.detailText)
+                + (entry.outputCleanupInvalid ? [localized("cleanup.invalid")] : [])).joined(separator: "\n\n")
+        }
         let state = entry.outputCleanupInvalid ? "inconsistent" : entry.outputCleanups.isEmpty ? "unavailable" : "recorded"
         let object: [String: Any] = ["run_id": entry.context?.run_id as Any? ?? NSNull(),
             "state": state, "receipts": entry.outputCleanupInvalid ? [] : entry.outputCleanups.map(\.recordedObject)]
@@ -3279,7 +3694,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     @objc private func openCleanupDetails() {
         guard cleanupButton.isEnabled, let entry = selected, let window, window.attachedSheet == nil else { return }
         do {
-            let text = try Self.cleanupDetailText(for: entry)
+            let text = try Self.cleanupDetailText(for: entry, privacy: privacyEnabled)
             let alert = NSAlert()
             alert.alertStyle = .informational
             alert.messageText = localized("cleanup.inspect")
@@ -3304,7 +3719,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             alert.addButton(withTitle: localized("history.file_failure.detail.close"))
             alert.addButton(withTitle: localized("cleanup.inspect.copy"))
             let reveal = alert.addButton(withTitle: localized("cleanup.inspect.reveal"))
-            reveal.isEnabled = !Self.cleanupDirectories(for: entry).isEmpty
+            reveal.isEnabled = !Self.cleanupDirectories(for: entry, privacy: privacyEnabled).isEmpty
             if !reveal.isEnabled { reveal.toolTip = localized("cleanup.inspect.unavailable") }
             let token = UUID()
             cleanupDetailGeneration = token
@@ -3317,7 +3732,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     self.status.stringValue = localized(NSPasteboard.general.setString(text, forType: .string)
                         ? "cleanup.inspect.copied" : "cleanup.inspect.copy_failed")
                 } else if response == .alertThirdButtonReturn {
-                    let urls = Self.cleanupDirectories(for: entry)
+                    let urls = Self.cleanupDirectories(for: entry, privacy: self.privacyEnabled)
                     guard !urls.isEmpty else {
                         self.status.stringValue = localized("cleanup.inspect.unavailable"); return
                     }
@@ -3435,7 +3850,13 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard let page = outputPage else { return }
         let end = page.shown == 0 ? 0 : page.firstOrdinal + Int64(page.shown) - 1
         let label = localized("history.output.range", page.firstOrdinal, end, page.total)
-        if outputFilter.selectedSegment == 1 {
+        if privacyEnabled {
+            let rows = page.rows.filter { row in
+                row.line.map { DisplayPrivacy.problemTone($0) != nil } ?? true
+            }
+            detail.string = label + "\n" + localized("privacy.display.output_notice") + "\n\n"
+                + rows.map(\.text).joined(separator: "\n")
+        } else if outputFilter.selectedSegment == 1 {
             let groups = page.diagnosticGroups
             let count = groups.reduce(0) { $0 + $1.count }
             let sections = groups.map { group in
@@ -3665,7 +4086,20 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
+    private var visibleCopyText: String {
+        if !failedContent.isHidden {
+            return ([failedStatus.stringValue] + failureDisplayRows.map { $0.path + "\n" + $0.reason }).joined(separator: "\n")
+        }
+        return detail.string
+    }
+
     @objc private func copySources() {
+        if privacyEnabled {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(visibleCopyText, forType: .string)
+            status.stringValue = localized("history.copied")
+            return
+        }
         var seen = Set<String>()
         let paths = selectedEntries.flatMap { $0.context?.inputs ?? [] }.filter { seen.insert($0).inserted }
         guard !paths.isEmpty else { return }
@@ -3855,6 +4289,76 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         showSelected()
         guard comparisonIssues == nil, issueScanControl == nil, detailMode.selectedSegment == 0 else {
             throw HostError(message: "Changing selection retained the previous reason comparison")
+        }
+    }
+
+    func validatePrivacyForSelfTest() throws {
+        let original = preferences.object(forKey: DisplayPrivacy.preferenceKey)
+        defer {
+            if let original { preferences.set(original, forKey: DisplayPrivacy.preferenceKey) }
+            else { preferences.removeObject(forKey: DisplayPrivacy.preferenceKey) }
+        }
+        let normalPath = "/synthetic/private/error_failed_[WARN].jpg"
+        let problemPath = "/synthetic/problem.jpg"
+        var entry = HistoryEntry(id: "privacy:0", stamp: "privacy", audit: URL(fileURLWithPath: "/synthetic/history.sqlite3"),
+            timestamp: "2026-01-01T00:00:00Z")
+        entry.context = HistoryContext(schema_version: 1, inputs: [normalPath], output: "/synthetic/private/output",
+            backup: nil, mode: "auto", dry_run: false, in_place: false, shortest_path: false, version: "synthetic",
+            retry: false, resume: false, no_resume: false, output_sequence: 0, run_id: "run-privacy")
+        let media = HistoryMedia(active: true, succeeded: 1, skipped: 0, ignored: 0, failed: 1, unprocessed: 0, exit_code: 1)
+        let inactive = HistoryMedia(active: false, succeeded: nil, skipped: nil, ignored: nil, failed: nil, unprocessed: nil, exit_code: nil)
+        entry.summary = HistorySummary(schema_version: 1, count_scope: "processor_outcomes", img: media, vid: inactive,
+            integrity: .init(state: "CLEAN", issue_count: 0), failed_files: [problemPath], skipped_files: [normalPath])
+        entry.finished = HistoryFinished(schema_version: 1, outcome: "failed", error: "decoder failed: " + problemPath, output_sequence: 2)
+        entry.invocations = [HistoryInvocation(schema_version: 1, invocation_id: "invocation-privacy", run_id: "run-privacy",
+            pipeline: "img", state: "launch_requested", program_requested: "img", program_path: "/synthetic/bin/img",
+            arguments: ["--input", normalPath], binary: .init(scope: "observed_before_launch", bytes: 1,
+                blake3: String(repeating: "a", count: 64), diagnostic: nil))]
+        entry.configSnapshots = [HistoryConfigSnapshot(pipeline: "img", packageVersion: "synthetic",
+            values: #"{"img":{"jxl_distance":0.8},"photos":{"album_name":"private-album"}}"#, sources: "{}")]
+        entries = [entry]
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        preferences.set(true, forKey: DisplayPrivacy.preferenceKey)
+        displayPrivacyChanged()
+        let column = table.tableColumns.first { $0.identifier.rawValue == "source" }!
+        let cell = tableView(table, viewFor: column, row: 0) as? NSTableCellView
+        let privacyChecks: [(String, Bool)] = [
+            ("source label", cell?.textField?.stringValue == localized("privacy.display.hidden")),
+            ("source tooltip", cell?.textField?.toolTip == localized("privacy.display.hidden")),
+            ("normal path hidden", !detail.string.contains(normalPath)),
+            ("album hidden", !detail.string.contains("private-album")),
+            ("problem preserved", detail.string.contains(problemPath)),
+            ("numeric setting preserved", detail.string.contains("jxl_distance: 0.8")),
+            ("visible copy", visibleCopyText == detail.string),
+            ("export disabled", !exportButton.isEnabled), ("reveal disabled", !revealButton.isEnabled),
+            ("source evidence unchanged", entry.context?.inputs == [normalPath]),
+            ("arguments unchanged", entry.invocations.first?.arguments == ["--input", normalPath]),
+            ("comparison path hidden", !Self.renderComparison([entry, entry], privacy: true).contains(normalPath))]
+        guard privacyChecks.allSatisfy({ $0.1 }) else {
+            throw HostError(message: "History privacy invariant failed: " + privacyChecks.filter { !$0.1 }.map(\.0).joined(separator: ", ")
+                + "; selected=\(selectedEntries.count), tab=\(detailMode.selectedSegment), detail=\(detail.string)")
+        }
+        outputPage = HistoryStore.Output(rows: [
+            .init(sequence: 1, text: "[SUCCESS] " + normalPath, diagnostic: false, pipeline: "IMG", line: "[SUCCESS] " + normalPath),
+            .init(sequence: 2, text: "[FAIL] " + problemPath + ": decoder failed", diagnostic: true,
+                pipeline: "IMG", line: "[FAIL] " + problemPath + ": decoder failed")],
+            total: 2, upper: 2, firstOrdinal: 1, issues: [])
+        detailMode.selectedSegment = 1
+        renderOutput()
+        guard !detail.string.contains(normalPath), detail.string.contains(problemPath), visibleCopyText == detail.string else {
+            throw HostError(message: "History output privacy hid a failure or copied an ordinary path")
+        }
+        failureDisplayRows = [FailureDisplayRow(path: problemPath, absolutePath: nil, reason: "decoder failed", source: nil, observations: [])]
+        failedContent.isHidden = false
+        guard visibleCopyText.contains(problemPath), !visibleCopyText.contains(normalPath) else {
+            throw HostError(message: "Visible failure-list copy read a hidden summary")
+        }
+        preferences.set(false, forKey: DisplayPrivacy.preferenceKey)
+        displayPrivacyChanged()
+        let restored = tableView(table, viewFor: column, row: 0) as? NSTableCellView
+        guard restored?.textField?.toolTip == normalPath, Self.render(entry).contains(normalPath) else {
+            throw HostError(message: "History privacy changed or erased the retained original evidence")
         }
     }
 
@@ -4213,7 +4717,104 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 }
 
+private func runHistoryRemovalSelfTests() throws {
+    let directory = URL(fileURLWithPath: "/private/tmp/synthetic-history-removal")
+    let database = directory.appendingPathComponent("history.sqlite3")
+    func entry(_ run: String, index: Int) -> HistoryEntry {
+        var value = HistoryEntry(id: "display-only:\(index)", stamp: "synthetic-session", audit: database, timestamp: "2026-10-25")
+        value.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/private-normal.jpeg"], output: nil,
+            backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
+            version: nil, retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: run)
+        value.finished = HistoryFinished(schema_version: 1, outcome: "completed", error: nil, output_sequence: 4)
+        return value
+    }
+    func require(_ value: Bool, _ message: String) throws { if !value { throw HostError(message: message) } }
+    func reject(_ operation: () throws -> Void) throws {
+        do { try operation() } catch { return }
+        throw HostError(message: "History removal accepted unavailable or contradictory evidence")
+    }
+    let first = entry("run-one", index: 3)
+    let second = entry("run-two", index: 7)
+    let request = try HistoryRemovalRequest(entries: [first, second], directory: directory)
+    try require(request.runs.map(\.run_id) == ["run-one", "run-two"] && request.runs.allSatisfy { $0.session_id == "synthetic-session" },
+                "History removal used presentation row identity")
+    let single = try HistoryRemovalRequest(entries: [first], directory: directory)
+    try require(single.runs.count == 1, "History removal lost single selection")
+    for fixtureRequest in [single, request] {
+        let fixturePreview = try HistoryRemovalPreview.decode(historyRemovalFixtureOutput(fixtureRequest, directory: directory),
+            request: fixtureRequest, directory: directory)
+        var fixtureExecution = fixtureRequest
+        fixtureExecution.snapshot_token = fixturePreview.snapshot_token
+        let fixtureReceipt = try HistoryRemovalReceipt.decode(historyRemovalFixtureOutput(fixtureExecution, directory: directory),
+            preview: fixturePreview)
+        try require(fixtureReceipt.status == "completed" && fixtureReceipt.removed_runs == UInt64(fixtureRequest.runs.count),
+            "History removal visual fixture did not encode a valid single/multiple-selection round trip")
+    }
+    try reject { _ = try HistoryRemovalRequest(entries: [first, first], directory: directory) }
+    var legacy = first
+    legacy.legacy = true
+    try reject { _ = try HistoryRemovalRequest(entries: [legacy], directory: directory) }
+    var unfinished = first
+    unfinished.finished = nil
+    try reject { _ = try HistoryRemovalRequest(entries: [unfinished], directory: directory) }
+    let token = String(repeating: "a", count: 64)
+    let artifact: [String: Any] = ["path": directory.appendingPathComponent("private-normal.log").path,
+        "scope": "registered_file", "status": "delete", "reason": "registered session file"]
+    let retained: [String: Any] = ["path": directory.path, "scope": "unregistered_external_logs", "status": "retained", "reason": "unowned logs remain"]
+    let value: [String: Any] = ["schema_version": 1, "kind": "history_cleanup_preview", "source": database.path,
+        "snapshot_token": token, "runs": [["session_id": "synthetic-session", "run_id": "run-one"],
+            ["session_id": "synthetic-session", "run_id": "run-two"]], "event_rows": 4, "output_rows": 8,
+        "event_bytes": 200, "output_bytes": 400, "artifacts": [artifact, retained], "can_execute": true,
+        "external_log_scope": "registered_session_logs_only"]
+    func preview(_ fields: [String: Any]) throws -> HistoryRemovalPreview {
+        try HistoryRemovalPreview.decode(JSONSerialization.data(withJSONObject: fields), request: request, directory: directory)
+    }
+    let approved = try preview(value)
+    try require(!approved.detail(privacy: true).contains("private-normal.log")
+        && !approved.detail(privacy: true).contains(directory.path)
+        && approved.detail(privacy: false).contains("private-normal.log"), "History removal preview leaked a normal or expected-retained log path")
+    var problemPreview = value
+    problemPreview["artifacts"] = [["path": directory.appendingPathComponent("owned-problem.log").path,
+        "scope": "registered_file_problem", "status": "retained", "reason": "registered identity could not be verified"], retained]
+    try require(try preview(problemPreview).detail(privacy: true).contains("owned-problem.log"),
+        "History removal privacy hid an actual retained-log problem")
+    var invalid = value
+    invalid["source"] = "/different/history.sqlite3"
+    try reject { _ = try preview(invalid) }
+    invalid = value; invalid["snapshot_token"] = "stale"
+    try reject { _ = try preview(invalid) }
+    invalid = value; invalid["runs"] = [["session_id": "synthetic-session", "run_id": "other-run"]]
+    try reject { _ = try preview(invalid) }
+    var execution = request
+    execution.snapshot_token = approved.snapshot_token
+    let arguments = try execution.arguments(directory: directory)
+    guard let encoded = arguments.firstIndex(of: "--history-cleanup").map({ arguments[$0 + 1] }),
+          let body = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any] else {
+        throw HostError(message: "History removal did not construct an explicit backend request")
+    }
+    try require(body["snapshot_token"] as? String == token && arguments.contains("--yes")
+        && !encoded.contains("display-only"), "History removal lost the approved snapshot or run identities")
+    let receipt: [String: Any] = ["schema_version": 1, "kind": "history_cleanup_receipt", "status": "completed",
+        "database_committed": true, "removed_runs": 2, "event_rows": 4, "output_rows": 8,
+        "removed_artifacts": 1, "retained_artifacts": [retained], "failed_artifacts": []]
+    let completedReceipt = try HistoryRemovalReceipt.decode(JSONSerialization.data(withJSONObject: receipt), preview: approved)
+    try require(!completedReceipt.detail(privacy: true).contains(directory.path)
+        && completedReceipt.detail(privacy: false).contains(directory.path),
+        "History removal receipt leaked an expected-retained normal log path")
+    var badReceipt = receipt; badReceipt["removed_runs"] = 1
+    try reject { _ = try HistoryRemovalReceipt.decode(JSONSerialization.data(withJSONObject: badReceipt), preview: approved) }
+    badReceipt = receipt; badReceipt["removed_artifacts"] = 0
+    try reject { _ = try HistoryRemovalReceipt.decode(JSONSerialization.data(withJSONObject: badReceipt), preview: approved) }
+    var partial = receipt
+    partial["status"] = "partial"; partial["removed_artifacts"] = 0
+    partial["failed_artifacts"] = [["path": directory.appendingPathComponent("recovery.log").path,
+        "scope": "registered_file", "status": "failed", "reason": "owned file retained at recovery path"]]
+    let partialReceipt = try HistoryRemovalReceipt.decode(JSONSerialization.data(withJSONObject: partial), preview: approved)
+    try require(partialReceipt.detail(privacy: true).contains("recovery.log"), "History removal hid an actual cleanup problem")
+}
+
 func runProcessingHistorySelfTests() throws {
+    try runHistoryRemovalSelfTests()
     let fixtureURL = URL(fileURLWithPath: "/synthetic/session_audit_test.jsonl")
     func records(_ events: [String]) throws -> Data {
         var data = Data()
@@ -5263,6 +5864,7 @@ func runProcessingHistorySelfTests() throws {
               let database else { throw HostError(message: "Unable to create synthetic history database") }
         defer { sqlite3_close(database) }
         let setup = """
+        DROP TABLE IF EXISTS history_removed_sessions_v1;
         DROP TABLE IF EXISTS history_output;
         DROP TABLE IF EXISTS history_events;
         DROP TABLE IF EXISTS history_sessions;
@@ -5345,6 +5947,25 @@ func runProcessingHistorySelfTests() throws {
     let mixed = try HistoryStore.load(directory: directory)
     try require(mixed.entries.count == expectedStatuses.count + 1 && mixed.entries.contains { $0.stamp == "legacy" && $0.legacy },
                 "Database migration concealed unrelated legacy sessions")
+    let retainedAuditBytes = try Data(contentsOf: rootAudit)
+    do {
+        var removedDB: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &removedDB, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let removedDB else {
+            throw HostError(message: "Synthetic removal registry open failed")
+        }
+        defer { sqlite3_close(removedDB) }
+        guard sqlite3_exec(removedDB, """
+            CREATE TABLE history_removed_sessions_v1(session_id TEXT PRIMARY KEY NOT NULL);
+            INSERT INTO history_removed_sessions_v1 VALUES ('test');
+            DELETE FROM history_events WHERE session_id='test';
+            DELETE FROM history_sessions WHERE session_id='test';
+            """, nil, nil, nil) == SQLITE_OK else { throw HostError(message: "Synthetic removal registry setup failed") }
+    }
+    let removedHistory = try HistoryStore.load(directory: directory)
+    try require(!removedHistory.entries.contains { $0.stamp == "test" }
+        && removedHistory.entries.contains { $0.stamp == "legacy" }
+        && (try Data(contentsOf: rootAudit)) == retainedAuditBytes,
+        "Retained legacy audit resurrected a removed database session or was altered")
     let many = (0...HistoryStore.maximumSessions).map { (String(format: "session_%03d", $0), [context, summary, completed]) }
     try writeDatabase(many)
     try records([context, summary, failed]).write(to: directory.appendingPathComponent("session_audit_session_000.jsonl"))

@@ -103,6 +103,40 @@ For example, complex TIFF/ICO/auxiliary-image inputs may require retaining their
 original container despite having a recognizable raster. Nothing here changes
 those checks, source identity, XMP relationships, ICC, gain maps or timestamps.
 
+### Independent JPEG Reconstruction And Rendering Flags
+
+Strict restoration compares the complete JPEG produced by the official decoder
+with the complete independent `jxl-oxide`/JBRD reconstruction. The local `jxl-jbr`
+patch accepts adaptive LF smoothing because reconstruction reads raw integer LF
+coefficients, while display rendering smooths a separate floating-point copy.
+It does not reconstruct JPEGs from rendered pixels or waive a byte mismatch.
+External LF-frame references and the remaining frame/quantization restrictions
+still apply. Source identity, XMP agreement, final publication and cleanup proofs
+remain separate requirements.
+
+A generated gradient regression carries the actual smoothing flag, proves exact
+JPEG bytes and rejects appended bytes. A disposable copy of the reported JXL also
+completed strict local restoration with the source retained and its restored
+JPEG matching the official decoder's bytes. This is scoped restoration evidence,
+not certification of other files or Photos delivery. Patch provenance and fixture
+generation are recorded in `vendor/jxl-jbr/MFB-PATCH.md`.
+
+### Positive Modern Static Admission
+
+Fast IMG's direct modern-lossy route requires positive static and lossy evidence.
+WebP admission parses top-level RIFF chunks, requires valid native codec features
+and nonzero dimensions, rejects animation and requires a complete bounded decode
+whose dimensions agree. A `VP8 ` chunk name or failed animation probe does not
+prove admission. Compressed input is bounded while reading, including growth
+after the initial size check. Source hashes before and after classification must
+agree with the final detected format.
+
+An executed forensic validator's rejection remains an error; native evidence
+cannot replace that failure. JP2 without its required structural validator is
+retained. Explicit frame counts must be exactly one, rather than zero or merely
+at most one. These corrections do not complete the review of every modern
+container, auxiliary-image relationship or final delivery path.
+
 ## Search Semantics
 
 Fixed E passes one effort to the encoder. Optional E exploration compares

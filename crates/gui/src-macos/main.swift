@@ -826,7 +826,7 @@ private struct EffectiveRuntimeSettings {
     }
 }
 
-private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval = 10, acceptedExitCodes: Set<Int32> = [0]) throws -> Data {
+func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval? = 10, acceptedExitCodes: Set<Int32> = [0]) throws -> Data {
     let process = Process()
     process.executableURL = binary
     process.arguments = arguments
@@ -834,9 +834,12 @@ private func settingsToolOutput(_ binary: URL, arguments: [String], timeout: Tim
     process.standardOutput = output
     process.standardError = output
     try process.run()
-    let watchdog = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
-    defer { watchdog.cancel() }
+    let watchdog = timeout.map { interval in
+        let item = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + interval, execute: item)
+        return item
+    }
+    defer { watchdog?.cancel() }
     let capture = try readBoundedProcessOutput(output.fileHandleForReading, limit: 1024 * 1024)
     process.waitUntilExit()
     guard !capture.exceeded, process.terminationReason == .exit, acceptedExitCodes.contains(process.terminationStatus) else {
@@ -1724,10 +1727,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var inheritedMixed: Set<MediaSetting> = []
     private var displayed: [MediaSetting: String] = [:]
     private var rows: [MediaSetting: NSGridRow] = [:]
+    private var photosSourceNotice: NSStackView?
     private let developer: Bool
     private let fast: Bool
     private let avif: Bool
     private let videos: Bool
+    private let privacyCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let privacyNote = NSTextField(wrappingLabelWithString: "")
     private let advanced = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(wrappingLabelWithString: "")
     private let tabs = NSTabView()
@@ -1882,6 +1888,32 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     stack.spacing = 3
                     note.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
                     fieldView = stack
+                } else if field == .photosBackend {
+                    let symbol = NSImageView()
+                    symbol.image = NSImage(systemSymbolName: "info.circle.fill", accessibilityDescription: nil)
+                    symbol.contentTintColor = .systemOrange
+                    symbol.setContentHuggingPriority(.required, for: .horizontal)
+                    let title = NSTextField(labelWithString: localized("photos.source.title"))
+                    title.font = .systemFont(ofSize: 11, weight: .medium)
+                    let heading = NSStackView(views: [symbol, title])
+                    heading.spacing = 5
+                    let message = NSTextField(wrappingLabelWithString: localized("photos.source.notice") + "\n" + localized("photos.source.detail"))
+                    message.font = .systemFont(ofSize: 11)
+                    message.textColor = .secondaryLabelColor
+                    let notice = NSStackView(views: [heading, message])
+                    notice.orientation = .vertical
+                    notice.alignment = .leading
+                    notice.spacing = 3
+                    notice.setAccessibilityLabel(localized("photos.source.title"))
+                    notice.setAccessibilityHelp(message.stringValue)
+                    message.widthAnchor.constraint(equalTo: notice.widthAnchor).isActive = true
+                    photosSourceNotice = notice
+                    let stack = NSStackView(views: [control, notice])
+                    stack.orientation = .vertical
+                    stack.alignment = .leading
+                    stack.spacing = 7
+                    notice.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                    fieldView = stack
                 } else { fieldView = control }
                 var cells: [NSView] = toggles[field] == nil
                     ? [NSTextField(labelWithString: field.title), fieldView] : [control, NSView()]
@@ -1962,6 +1994,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         advanced.action = #selector(updateVisibility)
         advanced.isHidden = true
         root.addArrangedSubview(advanced)
+        privacyCheck.title = localized("privacy.display.title")
+        privacyCheck.toolTip = localized("privacy.display.scope")
+        privacyCheck.setAccessibilityLabel(privacyCheck.title)
+        privacyCheck.setAccessibilityHelp(privacyCheck.toolTip)
+        privacyCheck.state = DisplayPrivacy.enabled(in: preferences) ? .on : .off
+        privacyCheck.target = self
+        privacyCheck.action = #selector(changeDisplayPrivacy)
+        root.addArrangedSubview(privacyCheck)
+        privacyNote.stringValue = localized("privacy.display.scope")
+        privacyNote.font = .systemFont(ofSize: 11)
+        privacyNote.textColor = .secondaryLabelColor
+        root.addArrangedSubview(privacyNote)
+        privacyNote.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.maximumNumberOfLines = 3
@@ -2574,7 +2619,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheMessageRow?.isHidden = false
     }
 
+    @objc private func changeDisplayPrivacy() {
+        preferences.set(privacyCheck.state == .on, forKey: DisplayPrivacy.preferenceKey)
+        NotificationCenter.default.post(name: DisplayPrivacy.changed, object: preferences)
+    }
+
     func show(for window: NSWindow) {
+        privacyCheck.state = DisplayPrivacy.enabled(in: preferences) ? .on : .off
         if tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
         window.beginSheet(panel)
         loadInheritedValues()
@@ -2613,9 +2664,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             } + CGFloat(max(0, visibleRows.count - 1)) * grid.rowSpacing
         }
         tabHeight.constant = rowsHeight + 64
+        panel.contentView?.layoutSubtreeIfNeeded()
         let searchExtras: CGFloat = 36 + (searchResults.isHidden ? 0 : (searchHeight?.constant ?? 0) + 12)
             + (searchEmpty.isHidden ? 0 : 30)
-        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras
+        let privacyHeight = privacyCheck.fittingSize.height + privacyNote.fittingSize.height + root.spacing * 2
+        let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras + privacyHeight
         panel.setContentSize(NSSize(width: 660, height: tabHeight.constant + 76 + extras))
         panel.contentView?.layoutSubtreeIfNeeded()
     }
@@ -2818,6 +2871,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         for (field, row) in rows {
             row.isHidden = !isApplicable(field) || (field.range != nil && field.isPhotos && !developer && advanced.state != .on)
         }
+        let photosBackend = draft().values[.photosBackend] ?? inherited[.photosBackend] ?? "auto"
+        photosSourceNotice?.isHidden = !["auto", "native"].contains(photosBackend)
         updateSearch()
     }
 
@@ -3215,8 +3270,16 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 throw HostError(message: "Settings grid extends outside its tab")
             }
             if tabs.selectedTabViewItem?.identifier as? String == "performance",
-               let surface = panel.contentView, surface.bounds.height > 230 {
-                throw HostError(message: "Single-row settings tab retained oversized empty space")
+               let surface = panel.contentView {
+                let privacyHeight = privacyCheck.frame.height + privacyNote.frame.height + root.spacing * 2
+                guard surface.bounds.height - privacyHeight <= 230 else {
+                    throw HostError(message: "Single-row settings tab retained oversized empty space")
+                }
+                let checkbox = privacyCheck.convert(privacyCheck.bounds, to: surface)
+                let note = privacyNote.convert(privacyNote.bounds, to: surface)
+                guard surface.bounds.contains(checkbox), surface.bounds.contains(note), !checkbox.intersects(note) else {
+                    throw HostError(message: "Settings privacy controls clipped or overlapped")
+                }
             }
             for rowIndex in 0..<grid.numberOfRows {
                 let row = grid.row(at: rowIndex)
@@ -3660,6 +3723,17 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     func validatePhotosForSelfTest() throws {
+        let original = draft()
+        defer { restore(original) }
+        for backend in ["auto", "native", "applescript"] {
+            var settings = original
+            settings.values[.photosBackend] = backend
+            restore(settings)
+            guard photosSourceNotice?.isHidden == (backend == "applescript"),
+                  photosSourceNotice?.accessibilityLabel() == localized("photos.source.title") else {
+                throw HostError(message: "Native and automatic Photos import lost the persistent-source notice")
+            }
+        }
         guard tabs.tabViewItems.contains(where: { $0.identifier as? String == "photos" }),
               MediaSetting.allCases.filter(\.isPhotos).allSatisfy({ rows[$0] != nil }) else {
             throw HostError(message: "Photos import settings disappeared outside Fast IMG")
@@ -5161,6 +5235,44 @@ private struct PhotosDiagnostics {
     }
 }
 
+enum DisplayPrivacy {
+    static let preferenceKey = "MFBGuiDisplayPrivacy"
+    static let changed = Notification.Name("MFBGuiDisplayPrivacyChanged")
+
+    static func enabled(in preferences: UserDefaults) -> Bool {
+        preferences.object(forKey: preferenceKey) as? Bool ?? false
+    }
+
+    static func path(_ value: String?, hidden: Bool, problem: Bool = false) -> String {
+        guard let value else { return localized("result.unknown") }
+        return hidden && !problem ? localized("privacy.display.hidden") : value
+    }
+
+    // Only explicit diagnostic prefixes or validated records can reveal a path.
+    static func problemTone(_ line: String) -> LogTone? {
+        let raw = LogTone.message(line)
+        if raw.hasPrefix(HistoryIgnoredSource.prefix)
+            || ["[IGNORED] ", "[忽略] ", "[対象外] "].contains(where: raw.hasPrefix) { return nil }
+        if raw.hasPrefix(HistoryFileFailure.prefix) {
+            return (try? HistoryFileFailure.decode(raw)) != nil ? .failure : .warning
+        }
+        if raw.hasPrefix(OutputCleanupReceipt.prefix) {
+            do { return try OutputCleanupReceipt.decode(raw)?.needsAttention == true ? .warning : nil }
+            catch { return .warning }
+        }
+        if let count = countStatusValue(in: raw) {
+            return count.uppercased() == "MATCH" ? nil : count.uppercased() == "EXPLAINED" ? .warning : .failure
+        }
+        if raw.range(of: #"(?i)^\s*(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|(?:Permission denied|No space left on device|exiting with failures)\b|\[Summary\]\s*.*\bfailed=[1-9]\d*(?:\s|$)|Integrity Issues:\s*[1-9]\d*|Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil
+            || hasSeriousProcessingDiagnostic(raw) { return .failure }
+        if raw.range(of: #"(?i)^\s*(?:\[WARN(?:ING)?\s*\]|(?:warning|警告):|Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
+        if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:✗|❌)(?:\s|$)"#, options: .regularExpression) != nil { return .failure }
+        // String regex uses graphemes: both literal forms must require a warning symbol.
+        if raw.range(of: #"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)?(?:⚠️|⚠)(?:\s|$)"#, options: .regularExpression) != nil { return .warning }
+        return nil
+    }
+}
+
 enum LogTone: Equatable {
     case muted, normal, stage, result, warning, failure
 
@@ -5194,10 +5306,7 @@ enum LogTone: Equatable {
         if let count = countStatusValue(in: line) {
             return count.uppercased() == "MATCH" ? .result : count.uppercased() == "EXPLAINED" ? .warning : .failure
         }
-        if line.range(of: #"(?i)(?:\[(?:ERROR|FATAL|FAIL(?:ED)?)\s*\]|✗|^\s*(?:Error|Failed|Fatal|错误|失败|エラー|失敗):|^\s*(?:Permission denied|No space left on device|exiting with failures)\b|^\s*\[Summary\].*\bfailed=[1-9]\d*(?:\s|$)|^\s*Integrity Issues:\s*[1-9]\d*|^\s*Integrity:(?!\s*(?:CLEAN|WARNINGS)\b)|^\s*\[GATE\s*\d+\s*\].*\bFAIL\b)"#, options: .regularExpression) != nil {
-            return .failure
-        }
-        if line.range(of: #"(?i)(?:\[WARN(?:ING)?\s*\]|⚠|^\s*(?:warning|警告):|^\s*Integrity:\s*WARNINGS\b)"#, options: .regularExpression) != nil { return .warning }
+        if let diagnostic = DisplayPrivacy.problemTone(line) { return diagnostic }
         if line.range(of: #"(?i)(?:\[(?:DONE|SUMMARY|SUCCESS|OK)\]|^\s*(?:Success rate:|Integrity:|Integrity Issues:|Total time:)|^\s*✓)"#, options: .regularExpression) != nil { return .result }
         if line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:#|\[(?:SCAN|COPY|ENCODE|VERIFY|CHECK|IMPORT|SKIP|RETAIN|RESTORE|RESUME|FINAL|STATS|ARCHIVE|PROGRESS|PHASE)\s*\])"#, options: .regularExpression) != nil { return .stage }
         if line.range(of: #"(?i)^\s*(?:INF|INFO|DBG|DEBUG|TRACE)\b"#, options: .regularExpression) != nil { return .muted }
@@ -5541,7 +5650,7 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
     }
 }
 
-private enum ProcessorLocator {
+enum ProcessorLocator {
     static func candidates(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executable: URL? = Bundle.main.executableURL,
@@ -6164,6 +6273,12 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let watchCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let commandField = NSTextField()
     private let logView = NSTextView()
+    private let fullLogPresentation = NSMutableAttributedString(string: "")
+    private let privateLogPresentation = NSMutableAttributedString(string: "")
+    private let privacyButton = NSButton()
+    private let copyVisibleLogButton = NSButton()
+    private let targetPrivacyLabel = NSTextField(labelWithString: "")
+    private let backupPrivacyLabel = NSTextField(labelWithString: "")
     private let logScroll = NSScrollView()
     private let logDetailsButton = NSButton(title: "", target: nil, action: nil)
     private let mainLayout = NSStackView()
@@ -6241,6 +6356,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var processingActivity: NSObjectProtocol?
 
     private var developerMode: Bool { developerCheck.state == .on }
+    private var privacyEnabled: Bool { DisplayPrivacy.enabled(in: preferences) }
 
     private var optionControls: [(NSButton, String)] { [
         (verboseCheck, "verbose"), (shortestPathCheck, "shortestPath"),
@@ -6294,6 +6410,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         super.init()
         configureWindow()
         configureHost()
+        NotificationCenter.default.addObserver(self, selector: #selector(displayPrivacyChanged),
+            name: DisplayPrivacy.changed, object: preferences)
+        refreshPrivacyPresentation()
     }
 
     func show() {
@@ -6440,7 +6559,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         targetField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         chooseButton.target = self
         chooseButton.action = #selector(chooseTarget)
-        let targetRow = NSStackView(views: [targetField, chooseButton])
+        let targetRow = NSStackView(views: [targetField, targetPrivacyLabel, chooseButton])
+        targetPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        targetPrivacyLabel.widthAnchor.constraint(equalTo: targetField.widthAnchor).isActive = true
         targetRow.orientation = .horizontal
         targetRow.alignment = .centerY
         targetRow.spacing = 8
@@ -6458,6 +6579,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         backupLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
         backupRow.addArrangedSubview(backupLabel)
         backupRow.addArrangedSubview(backupField)
+        backupRow.addArrangedSubview(backupPrivacyLabel)
+        backupPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         backupRow.addArrangedSubview(backupButton)
         backupRow.orientation = .horizontal
         backupRow.alignment = .centerY
@@ -6602,6 +6725,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         logDetailsButton.bezelStyle = .inline
         logDetailsButton.imagePosition = .imageLeading
         logDetailsButton.alignment = .left
+        privacyButton.target = self
+        privacyButton.action = #selector(toggleDisplayPrivacy)
+        privacyButton.bezelStyle = .inline
+        privacyButton.setButtonType(.toggle)
+        copyVisibleLogButton.target = self
+        copyVisibleLogButton.action = #selector(copyVisibleLog)
+        copyVisibleLogButton.bezelStyle = .inline
+        copyVisibleLogButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+        let logToolbar = NSStackView(views: [logDetailsButton, privacyButton, copyVisibleLogButton])
+        logToolbar.orientation = .horizontal
+        logToolbar.spacing = 10
 
         countStatusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         countStatusLabel.isHidden = true
@@ -6674,7 +6808,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let stack = mainLayout
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -6683,7 +6817,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logDetailsButton, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -6853,12 +6987,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openInTerminal() {
-        guard !restoreFixture, developerMode, configurationControlsEnabled else { return }
+        guard !restoreFixture, developerMode, configurationControlsEnabled, !privacyEnabled else { return }
         do { setStatus(try host.openInTerminal(request())) }
         catch { present(error) }
     }
 
     @objc private func copyCommand() {
+        guard !privacyEnabled else { return }
         do {
             let command = try host.terminalCommand(for: request())
             NSPasteboard.general.clearContents()
@@ -6871,6 +7006,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         processEndedWithError = false
         hasConfirmedFileFailures = false
         logView.string = ""
+        fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        privateLogPresentation.setAttributedString(NSAttributedString(string: ""))
         logPhase = PhaseLogPresentation()
         diagnosticLogFolder.reset()
         batchResults = BatchResults()
@@ -6890,7 +7027,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openHistory() {
-        if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory) }
+        if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory, preferences: preferences) }
         historyPanel?.refresh(directory: resolvedHistoryDirectory)
         historyPanel?.show()
     }
@@ -7141,6 +7278,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         optionsSpacer.isHidden = developerMode
         options.distribution = developerMode ? .fillEqually : .fill
+        refreshPrivacyPresentation()
     }
 
     private func updateMetadataSafetyNotice() {
@@ -7205,12 +7343,65 @@ private final class AppController: NSObject, NSWindowDelegate {
         )
     }
 
+    @objc private func toggleDisplayPrivacy() {
+        preferences.set(!privacyEnabled, forKey: DisplayPrivacy.preferenceKey)
+        NotificationCenter.default.post(name: DisplayPrivacy.changed, object: preferences)
+    }
+
+    @objc private func displayPrivacyChanged() {
+        invalidatePreflight()
+        preflightPanel?.close()
+        refreshPrivacyPresentation()
+        updateLogPresentation()
+    }
+
+    private func refreshPrivacyPresentation() {
+        let hidden = privacyEnabled
+        privacyButton.state = hidden ? .on : .off
+        privacyButton.image = NSImage(systemSymbolName: hidden ? "eye.slash" : "eye", accessibilityDescription: nil)
+        privacyButton.toolTip = localized("privacy.display.title") + "\n" + localized("privacy.display.scope")
+        privacyButton.setAccessibilityLabel(localized("privacy.display.title"))
+        privacyButton.setAccessibilityHelp(localized("privacy.display.scope"))
+        copyVisibleLogButton.toolTip = localized("privacy.display.copy_visible")
+        copyVisibleLogButton.setAccessibilityLabel(copyVisibleLogButton.toolTip)
+        for (field, label) in [(targetField, targetPrivacyLabel), (backupField, backupPrivacyLabel)] {
+            field.isHidden = hidden
+            field.setAccessibilityHidden(hidden)
+            label.isHidden = !hidden
+            label.stringValue = field.stringValue.isEmpty ? (field.placeholderString ?? "") : localized("privacy.display.hidden")
+        }
+        commandField.isHidden = !developerMode || hidden
+        copyButton.isHidden = !developerMode || hidden
+        openButton.isHidden = !developerMode || hidden
+        historyButton.toolTip = hidden ? localized("button.history") : resolvedHistoryDirectory.path
+        preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
+            && !targetField.stringValue.isEmpty && !hidden
+        photosScopeButton.title = hidden ? localized("privacy.display.hidden") : selectedPhotosContainer.map {
+            localized("photos.scope.\($0.kind.rawValue)") + "  " + $0.path.joined(separator: " › ")
+        } ?? localized("photos.scope.entire_library")
+        logView.textStorage?.setAttributedString(hidden ? privateLogPresentation : fullLogPresentation)
+    }
+
+    private var visibleLogText: String {
+        if logDetailsExpanded { return logView.string }
+        return [countStatusLabel, fileProgressLabel, batchOverviewTitle, batchOverviewCounts,
+            batchOverviewDelivery, batchOverviewCleanup, latestFailureLabel, latestWarningLabel]
+            .filter { !$0.isHidden && !($0.superview?.isHidden ?? false) }
+            .map(\.stringValue).filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    @objc private func copyVisibleLog() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(visibleLogText, forType: .string)
+    }
+
     private func appendLog(_ text: String, captureDiagnostics: Bool = true,
                            now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         var latestChanged = false
         var replacePresentation = false
         var presentationChanged = false
         var displayLines: [String] = []
+        var privateLines: [String] = []
         var lastBufferedDiagnostic: (line: String, index: Int)?
         var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
@@ -7218,6 +7409,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             if batchResults.ingestTransportGap(line) {
                 let warning = "[WARN] " + (batchResults.transportGapNotice ?? localized("result.control_records_missing"))
                 displayLines.append(warning)
+                privateLines.append(warning)
                 if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 continue
             }
@@ -7229,13 +7421,16 @@ private final class AppController: NSObject, NSWindowDelegate {
                     if phase == .processing { gateActivity = GateCheckActivity() }
                     if replace {
                         displayLines.removeAll(keepingCapacity: true)
+                        privateLines.removeAll(keepingCapacity: true)
                         replacePresentation = true
                     }
                     displayLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
+                    privateLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
                     refreshFileProgress(now: now)
                 case .invalid:
                     let warning = "[WARN] " + localized("log.phase.invalid")
                     displayLines.append(warning)
+                    privateLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 case .unchanged: break
                 }
@@ -7253,6 +7448,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if photosImportProgress.invalid {
                     let warning = "[WARN] " + localized("photos.progress.invalid")
                     displayLines.append(warning)
+                    privateLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 }
                 continue
@@ -7265,6 +7461,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if gateActivity.invalid {
                     let warning = "[WARN] " + localized("gate.activity.invalid")
                     displayLines.append(warning)
+                    privateLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 }
                 continue
@@ -7279,6 +7476,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
                 displayLines.append(developerMode ? "\(line)\n\(summary)" : summary)
+                privateLines.append(summary)
                 continue
             }
             if batchResults.ingestFastDelivery(line) {
@@ -7298,6 +7496,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 } catch {
                     let warning = "[WARN] " + localized("history.ignored.invalid")
                     displayLines.append(warning)
+                    privateLines.append(warning)
                     if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
                 }
                 diagnosticLogFolder.reset()
@@ -7316,10 +7515,12 @@ private final class AppController: NSObject, NSWindowDelegate {
                 } catch { visibleLine = "[WARN] " + localized("history.batch_issues.invalid") }
                 if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
                 displayLines.append(visibleLine)
+                privateLines.append(visibleLine)
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
                 continue
             }
+            if DisplayPrivacy.problemTone(line) != nil { privateLines.append(visibleLine) }
             if captureDiagnostics && latestDiagnostics.ingest(visibleLine) { latestChanged = true }
             switch diagnosticLogFolder.ingest(visibleLine) {
             case .append(let raw):
@@ -7336,8 +7537,8 @@ private final class AppController: NSObject, NSWindowDelegate {
                    buffered.line == raw, buffered.index == displayLines.count - 1 {
                     displayLines[buffered.index] = repeated
                 } else if !replacePresentation,
-                          let range = trailingLogLineRange(raw, in: logView.string as NSString),
-                          let storage = logView.textStorage {
+                          let range = trailingLogLineRange(raw, in: fullLogPresentation.string as NSString) {
+                    let storage = fullLogPresentation
                     storage.replaceCharacters(in: range, with: styledLog(repeated))
                     presentationChanged = true
                 } else {
@@ -7362,7 +7563,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
                 resolvedHistoryDirectory = URL(fileURLWithPath: path, isDirectory: true)
                 preferences.set(path, forKey: historyPreferenceKey)
-                historyButton.toolTip = path
+                historyButton.toolTip = privacyEnabled ? localized("button.history") : path
             }
         }
         if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
@@ -7373,18 +7574,22 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         guard !displayText.isEmpty || presentationChanged else { return }
-        let storage = logView.textStorage!
-        if !displayText.isEmpty {
-            if replacePresentation { storage.setAttributedString(NSAttributedString(string: "")) }
-            if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
-            storage.append(styledLog(displayText))
-            let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.count > 3_000 {
-                let retained = lines.suffix(2_999).joined(separator: "\n")
-                storage.setAttributedString(styledLog(localized("log.visible_tail") + "\n" + retained))
-            }
-        }
+        appendPresentation(displayText, to: fullLogPresentation, replace: replacePresentation)
+        appendPresentation(privateLines.joined(separator: "\n"), to: privateLogPresentation, replace: replacePresentation)
+        logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
         logView.scrollToEndOfDocument(nil)
+    }
+
+    private func appendPresentation(_ text: String, to storage: NSMutableAttributedString, replace: Bool) {
+        if replace { storage.setAttributedString(NSAttributedString(string: "")) }
+        guard !text.isEmpty else { return }
+        if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
+        storage.append(styledLog(text))
+        let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > 3_000 {
+            let retained = lines.suffix(2_999).joined(separator: "\n")
+            storage.setAttributedString(styledLog(localized("log.visible_tail") + "\n" + retained))
+        }
     }
 
     private func styledLog(_ text: String) -> NSAttributedString {
@@ -7642,8 +7847,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             && batchResults.hasPartialSuccess
         let previousConfirmation = hasConfirmedFileFailures
         hasConfirmedFileFailures = confirmed && batchResults.hasFileFailures
-        if previousConfirmation != hasConfirmedFileFailures, let storage = logView.textStorage {
-            storage.setAttributedString(styledLog(storage.string))
+        if previousConfirmation != hasConfirmedFileFailures {
+            fullLogPresentation.setAttributedString(styledLog(fullLogPresentation.string))
+            privateLogPresentation.setAttributedString(styledLog(privateLogPresentation.string))
+            logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
         }
         let uncertain = batchResults.isIncomplete || batchResults.mandatoryEvidenceConflict
             || ((expectsFastDelivery || batchResults.hasFastDelivery) && !confirmed && !deferred)
@@ -7830,7 +8037,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         diagnosticsButton.toolTip = localized("button.photos_diagnostics")
         diagnosticsButton.setAccessibilityLabel(localized("button.photos_diagnostics"))
         diagnosticsPanel?.title = localized("button.photos_diagnostics")
-        historyButton.toolTip = resolvedHistoryDirectory.path
+        historyButton.toolTip = privacyEnabled ? localized("button.history") : resolvedHistoryDirectory.path
+        refreshPrivacyPresentation()
         pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
         stopButton.title = localized("button.stop")
         statusLabel.toolTip = localized("status.core_help")
@@ -7874,6 +8082,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             (dryRunCheck, "option.dry_run.help"), (plainCheck, "option.plain.help"),
             (inPlaceCheck, "option.in_place.help"), (watchCheck, "option.watch.help"),
         ] { control.toolTip = localized(key) }
+        shortestPathCheck.toolTip = localized("option.shortest_path.help") + "\n"
+            + localized("photos.source.notice") + "\n" + localized("photos.source.detail")
     }
 
     private func refreshOperationPopup() {
@@ -7941,7 +8151,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         let oldActivity = gateActivity
         let oldWarnings = latestDiagnostics
         let oldLog = logView.string
+        let oldFullLog = NSAttributedString(attributedString: fullLogPresentation)
+        let oldPrivateLog = NSAttributedString(attributedString: privateLogPresentation)
         defer {
+            fullLogPresentation.setAttributedString(oldFullLog)
+            privateLogPresentation.setAttributedString(oldPrivateLog)
             logPhase = oldPhase
             gateActivity = oldActivity
             latestDiagnostics = oldWarnings
@@ -8761,6 +8975,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
 
         let oldLog = NSAttributedString(attributedString: logView.textStorage!)
+        let oldFullLog = NSAttributedString(attributedString: fullLogPresentation)
+        let oldPrivateLog = NSAttributedString(attributedString: privateLogPresentation)
         let oldFolder = diagnosticLogFolder
         let oldPhase = logPhase
         let oldLatest = latestDiagnostics
@@ -8773,6 +8989,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         let oldCountStatusHidden = countStatusLabel.isHidden
         defer {
             logView.textStorage?.setAttributedString(oldLog)
+            fullLogPresentation.setAttributedString(oldFullLog)
+            privateLogPresentation.setAttributedString(oldPrivateLog)
             diagnosticLogFolder = oldFolder
             logPhase = oldPhase
             latestDiagnostics = oldLatest
@@ -8825,6 +9043,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         logPhase = PhaseLogPresentation(now: 0)
         diagnosticLogFolder.reset()
         logView.string = ""
+        fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
+        privateLogPresentation.setAttributedString(NSAttributedString(string: ""))
         let processing = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
         let verification = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
         appendLog(processing, now: 3)
@@ -8902,6 +9122,56 @@ private final class AppController: NSObject, NSWindowDelegate {
               LogTone.classify(localized("history.ignored.live", ignored.source_path, ignored.userReason)) == .normal,
               LogTone.classify(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self)) == .muted else {
             throw HostError(message: "An ignored record's literal path became a failure or changed media counts")
+        }
+    }
+
+    func validatePrivacyForSelfTest() throws {
+        let original = preferences.object(forKey: DisplayPrivacy.preferenceKey)
+        let originalTarget = targetField.stringValue
+        let originalExpanded = logDetailsExpanded
+        defer {
+            if let original { preferences.set(original, forKey: DisplayPrivacy.preferenceKey) }
+            else { preferences.removeObject(forKey: DisplayPrivacy.preferenceKey) }
+            targetField.stringValue = originalTarget
+            logDetailsExpanded = originalExpanded
+            clearBatchLog()
+            displayPrivacyChanged()
+        }
+        preferences.removeObject(forKey: DisplayPrivacy.preferenceKey)
+        guard !DisplayPrivacy.enabled(in: preferences) else { throw HostError(message: "Display privacy was enabled by default") }
+        let ordinary = "[SUCCESS] /synthetic/private/error_failed_[WARN].jpg"
+        let plainCopy = "[COPY] /synthetic/error_failed.jpg"
+        let failure = "[FAIL] /synthetic/problem.jpg: synthetic decoder failure"
+        let warning = "[WARN] /synthetic/warning.jpg: synthetic metadata warning"
+        guard DisplayPrivacy.problemTone(ordinary) == nil,
+              DisplayPrivacy.problemTone(plainCopy) == nil,
+              DisplayPrivacy.problemTone(failure) == .failure, DisplayPrivacy.problemTone(warning) == .warning,
+              ["⚠ /synthetic/problem.jpg", "⚠️ /synthetic/problem.jpg", "[tool] ⚠️ /synthetic/problem.jpg"]
+                .allSatisfy({ DisplayPrivacy.problemTone($0) == .warning }),
+              LogTone.classify(ordinary) != .failure, LogTone.classify(ordinary) != .warning else {
+            throw HostError(message: "A normal filename changed diagnostic or privacy classification: ordinary=\(String(describing: DisplayPrivacy.problemTone(ordinary))), copy=\(String(describing: DisplayPrivacy.problemTone(plainCopy))), failure=\(String(describing: DisplayPrivacy.problemTone(failure))), warning=\(String(describing: DisplayPrivacy.problemTone(warning))), tone=\(LogTone.classify(ordinary))")
+        }
+        targetField.stringValue = "/synthetic/private/error_failed.jpg"
+        clearBatchLog()
+        appendLog(ordinary + "\n" + failure + "\n" + warning)
+        appendLog(#"MFB_PROGRESS={"schema_version":1,"stage_id":"privacy","stage":"image_processing","processed":1,"total":2,"state":"running"}"#)
+        let ignored = HistoryIgnoredSource(schema_version: 1, pipeline: "img", run_id: "run-synthetic",
+            invocation_id: "invocation-synthetic", source_path: "normal\n[FAIL] private-filename.jpg",
+            absolute_path: "/synthetic/private-filename.jpg", reason_code: "outside_current_policy_scope",
+            message: "Synthetic scope observation", ordinal: 1, total: 1)
+        appendLog(HistoryIgnoredSource.prefix + String(decoding: try JSONEncoder().encode(ignored), as: UTF8.self))
+        logDetailsExpanded = true
+        toggleDisplayPrivacy()
+        guard privacyEnabled, targetField.isHidden, !targetPrivacyLabel.isHidden,
+              !logView.string.contains("error_failed"), !logView.string.contains("private-filename"),
+              logView.string.contains(failure), logView.string.contains(warning),
+              visibleLogText == logView.string, fileProgress.event?.processed == 1,
+              historyButton.toolTip == localized("button.history"), commandField.isHidden, copyButton.isHidden else {
+            throw HostError(message: "Privacy display leaked ordinary paths or hid actual problems and progress")
+        }
+        toggleDisplayPrivacy()
+        guard !privacyEnabled, logView.string.contains(ordinary), !targetField.isHidden else {
+            throw HostError(message: "Turning display privacy off lost the retained original presentation")
         }
     }
 
@@ -10251,7 +10521,9 @@ private func runSelfTest() -> Int32 {
             try MediaSettings().save(to: preferences)
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
+            try AppController(preferences: preferences).validatePrivacyForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
+            try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()
             let preflightFailures = PreflightInspectorPanel.selfTest()
             guard preflightFailures.isEmpty else {
                 throw HostError(message: preflightFailures.joined(separator: "\n"))
@@ -10313,6 +10585,22 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         catch { fputs("Native fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
         application.activate(ignoringOtherApps: true)
         withExtendedLifetime(controller) { application.run() }
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--history-removal-ui-fixture") {
+    MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let suite = "MFBHistoryRemovalFixture.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(CommandLine.arguments.contains("--display-privacy"), forKey: "MFBGuiDisplayPrivacy")
+        let panel = ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/private/tmp/mfb-synthetic-history-removal"), preferences: preferences)
+        panel.showRemovalFixture()
+        application.activate(ignoringOtherApps: true)
+        withExtendedLifetime(panel) { application.run() }
     }
     exit(0)
 }

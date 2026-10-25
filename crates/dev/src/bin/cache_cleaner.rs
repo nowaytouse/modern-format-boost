@@ -58,10 +58,15 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     version,
     about = "Modern Format Boost Cache Cleaner",
     group(clap::ArgGroup::new("inspection").args(["stats", "history_stats"])),
-    group(clap::ArgGroup::new("history_operation").args(["history_stats", "history_backup"])),
+    group(clap::ArgGroup::new("history_operation").args(["history_stats", "history_backup", "history_cleanup_preview", "history_cleanup"])),
     group(clap::ArgGroup::new("pruning_action").args(["prune", "preview_prune"]))
 )]
 struct Args {
+    #[arg(long, requires_all = ["history_directory", "json"], conflicts_with_all = ["local_backup", "stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Preview exact selected History runs and proven log artifacts using a versioned JSON request; no history rows are changed")]
+    history_cleanup_preview: Option<String>,
+
+    #[arg(long, requires_all = ["history_directory", "json", "yes"], conflicts_with_all = ["local_backup", "stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "config", "no_config"], help = "Clean only the previewed History run identities and snapshot token; media, recovery state and unproven external logs are retained")]
+    history_cleanup: Option<String>,
     #[arg(long, requires = "history_directory", conflicts_with_all = ["local_backup", "stats", "history_stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Create a verified snapshot of the explicitly selected History SQLite database at a new local destination; no source creation or migration")]
     history_backup: Option<PathBuf>,
 
@@ -1486,9 +1491,38 @@ fn main() -> Result<()> {
         "cache policy flags require --prune or --preview-prune; no action taken"
     );
     anyhow::ensure!(
-        args.history_directory.is_none() || args.history_stats || args.history_backup.is_some(),
-        "--history-directory requires --history-stats or --history-backup; no action taken"
+        args.history_directory.is_none()
+            || args.history_stats
+            || args.history_backup.is_some()
+            || args.history_cleanup_preview.is_some()
+            || args.history_cleanup.is_some(),
+        "--history-directory requires an explicit History operation; no action taken"
     );
+    if let Some(encoded) = args
+        .history_cleanup_preview
+        .as_ref()
+        .or(args.history_cleanup.as_ref())
+    {
+        anyhow::ensure!(
+            encoded.len() <= 64 * 1024,
+            "History cleanup JSON exceeds 64 KiB; nothing removed"
+        );
+        let request: dev::infra::history_store::HistoryCleanupRequest =
+            serde_json::from_str(encoded).context("invalid History cleanup request")?;
+        let directory = args
+            .history_directory
+            .as_deref()
+            .context("History cleanup requires its explicit directory")?;
+        if args.history_cleanup_preview.is_some() {
+            let preview = dev::infra::history_store::preview_history_cleanup(directory, &request)?;
+            println!("{}", serde_json::to_string(&preview)?);
+        } else {
+            let receipt = dev::infra::history_store::execute_history_cleanup(directory, &request)?;
+            println!("{}", serde_json::to_string(&receipt)?);
+        }
+        io::stdout().flush()?;
+        return Ok(());
+    }
     if args.history_stats {
         let directory = args
             .history_directory
