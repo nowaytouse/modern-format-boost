@@ -1682,9 +1682,12 @@ fn bind_scanned_sources(
         image_sources.len() == scan.img_count && video_sources.len() == scan.vid_count,
         "scanned media source identities do not cover the routed inventory"
     );
+    if image_sources.is_empty() && video_sources.is_empty() {
+        return Ok(Vec::new());
+    }
     commands
         .into_iter()
-        .map(|command| {
+        .map(|mut command| {
             let sources = match command.pipeline_label() {
                 "IMG" => &image_sources,
                 "VID" => &video_sources,
@@ -1695,21 +1698,20 @@ fn bind_scanned_sources(
                 .get(1)
                 .context("media worker command omitted its input")?;
             let input = Path::new(input);
-            let selected = if input.is_dir() {
-                sources.clone()
-            } else {
-                let selected = sources
-                    .iter()
-                    .filter(|source| source.path() == input)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                anyhow::ensure!(
-                    selected.len() == 1,
-                    "media worker source was not uniquely observed during preflight: {}",
-                    input.display()
-                );
-                selected
-            };
+            let selected = sources
+                .iter()
+                .filter(|source| source.path() == input)
+                .cloned()
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                selected.len() == 1,
+                "media worker source was not uniquely observed during preflight: {}",
+                input.display()
+            );
+            command.args.extend([
+                "--planned-source".to_owned(),
+                foundation::batch::planned_source::PlannedSource::encode(&selected[0])?,
+            ]);
             Ok(command.with_sources(selected))
         })
         .collect()
@@ -1719,11 +1721,8 @@ fn plan_routed_pipeline_commands_unbound(
     args: &Args,
     project_root: &Path,
     scan: &ContentScan,
-    fail_fast: bool,
+    _fail_fast: bool,
 ) -> Result<Vec<LaunchCommand>> {
-    if fail_fast {
-        return plan_cli_invocations(args, project_root, None);
-    }
     let target = args.inputs.first().context("input required")?;
     if fs::metadata(target)?.is_file() {
         return plan_cli_invocations(args, project_root, None);
@@ -1766,9 +1765,6 @@ fn plan_routed_pipeline_commands_unbound(
                 &file_args.inputs[0],
             )?);
         }
-    }
-    if commands.is_empty() {
-        return plan_cli_invocations(args, project_root, None);
     }
     Ok(commands)
 }
@@ -4414,7 +4410,7 @@ mod tests {
         for fail_fast in [false, true] {
             let commands =
                 plan_routed_pipeline_commands(&args, Path::new("/repo"), &scan, fail_fast).unwrap();
-            assert_eq!(commands.len(), if fail_fast { 1 } else { 2 });
+            assert_eq!(commands.len(), 2);
             assert_eq!(
                 commands
                     .iter()
@@ -4422,7 +4418,20 @@ mod tests {
                     .sum::<usize>(),
                 2
             );
+            fs::write(temp.path().join("late.bin"), b"\xff\xd8\xff\xe0late").unwrap();
             for command in commands {
+                assert_ne!(Path::new(&command.args[1]), temp.path());
+                assert!(!command.args[1].ends_with("late.bin"));
+                let encoded = command
+                    .args
+                    .windows(2)
+                    .find(|pair| pair[0] == "--planned-source")
+                    .unwrap();
+                foundation::batch::planned_source::PlannedSource::verify(
+                    &encoded[1],
+                    Path::new(&command.args[1]),
+                )
+                .unwrap();
                 for source in command.sources {
                     source.verify_unchanged().unwrap();
                 }
@@ -4434,6 +4443,11 @@ mod tests {
         };
         assert!(
             plan_routed_pipeline_commands(&args, Path::new("/repo"), &incomplete, true).is_err()
+        );
+        assert!(
+            plan_routed_pipeline_commands(&args, Path::new("/repo"), &ContentScan::default(), true)
+                .unwrap()
+                .is_empty()
         );
         fs::write(temp.path().join("first.bin"), b"changed").unwrap();
         let commands =
@@ -6529,7 +6543,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(commands.len(), 3);
             for (index, command) in commands.iter().enumerate() {
-                let input = if fail_fast || index == 2 {
+                let input = if index == 2 {
                     plans[index].inputs[0].clone()
                 } else {
                     plans[index].inputs[0].join(["one.bin", "two.bin"][index])

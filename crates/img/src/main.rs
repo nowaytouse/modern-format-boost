@@ -56,6 +56,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
 struct Cli {
     #[command(flatten)]
+    planned_source: foundation::batch::planned_source::PlannedSourceArgs,
+    #[command(flatten)]
     policy: runtime_cli::RuntimeArgs,
     #[command(subcommand)]
     command: Commands,
@@ -675,6 +677,10 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
+    cli.planned_source.verify_for_input(match &cli.command {
+        Commands::Run { input, .. } => Some(input.as_path()),
+        _ => None,
+    })?;
     cli.policy
         .validate_avif_settings_scope(match &cli.command {
             Commands::Config { .. } => true,

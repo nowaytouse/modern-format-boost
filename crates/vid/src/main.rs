@@ -17,6 +17,8 @@ use vid::{
 #[command(name = "vid")]
 #[command(version, about = "High-performance video and animated media converter", long_about = None)]
 struct Cli {
+    #[command(flatten)]
+    planned_source: foundation::batch::planned_source::PlannedSourceArgs,
     /// Overlay an explicit JSON configuration after user and project preferences.
     #[arg(long, global = true, conflicts_with = "no_config")]
     config: Option<PathBuf>,
@@ -936,6 +938,10 @@ fn run_fast_gif(
 fn main() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("vid").context("vid entry guard")?;
     let cli = Cli::parse();
+    cli.planned_source.verify_for_input(match &cli.command {
+        Commands::Run { input, .. } => Some(input.as_path()),
+        _ => None,
+    })?;
     if let Commands::Config { command } = &cli.command {
         return inspect_config(&cli, command);
     }

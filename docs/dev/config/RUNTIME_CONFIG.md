@@ -820,3 +820,30 @@ Automation uses `--history-directory`, `--history-cleanup-preview` and
 `--history-cleanup` with schema-1 JSON containing authoritative `session_id` and
 `run_id` pairs. Execution additionally requires the exact preview
 `snapshot_token` and `--yes`; `--json` returns the verified preview or receipt.
+
+## Standard Worker Preflight Admission
+
+Standard launcher runs submit one selected media file per IMG/VID invocation in
+both record-and-continue and fail-fast modes. They do not send the source
+directory to a worker for a second recursive media scan. Files added after the
+inventory are therefore outside those invocations. An empty selected inventory
+does not fall back to an unplanned directory run.
+
+The launcher passes the original source observation as a bounded, versioned
+internal `--planned-source` claim. Before configuration, ghost-mode, logging or
+database initialization, each worker checks the actual input path, resolved
+target, native file identity and complete BLAKE3. A changed, missing, retargeted
+or unreadable source refuses that invocation. A claim on a directory or a command
+other than standard `run` is rejected. The claim is invocation evidence, not a
+persistent preference or an authorization to convert, import or delete media.
+
+This adds a full source read at worker admission, in addition to discovery and
+the launcher's pre-spawn check. No intermediate media or manifest file is written
+for transport. Fail-fast still stops subsequent invocations after failure, but
+uses the same per-file launch boundary as record mode; it no longer obtains
+directory-worker batching throughput. No general throughput improvement is claimed.
+
+The check is not a file lock or immutable snapshot. Inputs can still change after
+admission, so actual conversion, associated metadata, final-artifact and deletion
+checks remain required. This does not implement the Fast IMG inventory handoff,
+verified sidecar relationships, a persistent execution plan, or failed-only retry.

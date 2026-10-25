@@ -23,6 +23,17 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Bind Standard Workers To Preflight Sources (2026-10-25)
+
+- Standard record and fail-fast runs now submit only inventoried single files;
+  newly added directory media are not recursively included by a worker.
+- Send a bounded versioned input claim and verify complete bytes, native identity
+  and resolved path inside both IMG and VID before runtime side effects. Reject
+  stale, unavailable, retargeted, malformed or unsupported claims explicitly.
+- Keep final media and deletion verification independent. This admission read
+  writes no media/manifest temporary file and does not claim an immutable input,
+  full Fast IMG handoff, failed-only retry or increased throughput.
+
 ### Strict Restoration And Native Privacy Controls (2026-10-25)
 
 - Correct the independent JPEG reconstructor's rejection of adaptive LF
