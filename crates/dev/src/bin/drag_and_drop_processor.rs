@@ -4751,6 +4751,9 @@ mod tests {
         let database = session
             .log_dir
             .join(dev::infra::history_store::HISTORY_DATABASE);
+        // Session startup already registered artifacts in this disposable DB.
+        // Replace that file with a directory to reach the intended write failure.
+        fs::remove_file(&database).unwrap();
         fs::create_dir(&database).unwrap();
         assert!(
             run_with_history(&args, Some(&session), || {

@@ -598,11 +598,24 @@ fn build_plan(
             |row| row.get(0),
         )
         .optional()?;
-    let output_high_water = output_high_water.unwrap_or(0);
-    ensure!(
-        output_high_water >= 0,
-        "History output high-water sequence is invalid"
-    );
+    if let Some(sequence) = output_high_water {
+        ensure!(
+            sequence >= 0,
+            "History output high-water sequence is invalid"
+        );
+    } else {
+        // AUTOINCREMENT has no sqlite_sequence row before the first output
+        // insertion. Keep that state distinct from an allocated sequence of zero;
+        // absence is valid only when no output rows require sequence custody.
+        let has_output: bool =
+            snapshot.query_row("SELECT EXISTS(SELECT 1 FROM history_output)", [], |row| {
+                row.get(0)
+            })?;
+        ensure!(
+            !has_output,
+            "History output high-water sequence is missing despite persisted output rows"
+        );
+    }
     let database = fs::symlink_metadata(root.join(HISTORY_DATABASE))?;
     ensure!(
         database.is_file() && !database.file_type().is_symlink(),
@@ -853,7 +866,10 @@ fn build_plan(
             }
         }
         ensure!(
-            previous_output <= output_high_water,
+            match output_high_water {
+                Some(sequence) => previous_output <= sequence,
+                None => previous_output == 0,
+            },
             "History output boundary exceeds captured output high-water sequence"
         );
         let entire_session =
@@ -1322,6 +1338,118 @@ mod tests {
         );
         let next = preview_history_cleanup(&logs, &request("session", "run-two"))?;
         assert_eq!(next.output_rows, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn history_cleanup_accepts_unallocated_output_sequence_only_for_zero_boundaries() -> Result<()>
+    {
+        let (_root, _guard, logs) = fixture()?;
+        append_history_event(
+            &logs,
+            "session",
+            &format!(
+                "MFB_HISTORY_CONTEXT={}",
+                serde_json::json!({"schema_version":1,"run_id":"run-empty","output_sequence":0})
+            ),
+        )?;
+        let terminal = |cursor| {
+            format!(
+                "MFB_HISTORY_FINISHED={}",
+                serde_json::json!({"schema_version":1,"run_id":"run-empty","output_sequence":cursor,"outcome":"completed"})
+            )
+        };
+        append_history_event(&logs, "session", &terminal(0))?;
+        let connection = open_history_write(&logs)?;
+        let sequence: Option<i64> = connection
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name='history_output'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        assert_eq!(sequence, None, "the output table has never allocated a row");
+        let preview = preview_history_cleanup(&logs, &request("session", "run-empty"))?;
+        assert_eq!((preview.event_rows, preview.output_rows), (2, 0));
+
+        connection.execute(
+            "UPDATE history_events SET event=?1 WHERE event LIKE 'MFB_HISTORY_FINISHED=%'",
+            [terminal(1)],
+        )?;
+        let error = preview_history_cleanup(&logs, &request("session", "run-empty"))
+            .expect_err("an absent sequence cannot prove a positive output boundary");
+        assert!(error.to_string().contains("high-water"), "{error}");
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM history_events", [], |row| row
+                .get::<_, i64>(0))?,
+            2
+        );
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM history_output", [], |row| row
+                .get::<_, i64>(0))?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn history_cleanup_rejects_missing_output_sequence_with_persisted_rows() -> Result<()> {
+        let (_root, _guard, logs) = fixture()?;
+        run(&logs, "session", "run-one", "retained output")?;
+        let connection = open_history_write(&logs)?;
+        connection.execute(
+            "DELETE FROM sqlite_sequence WHERE name='history_output'",
+            [],
+        )?;
+        connection.execute(
+            "UPDATE history_events SET event=?1 WHERE event LIKE 'MFB_HISTORY_FINISHED=%'",
+            [format!(
+                "MFB_HISTORY_FINISHED={}",
+                serde_json::json!({"schema_version":1,"run_id":"run-one","output_sequence":0,"outcome":"completed"})
+            )],
+        )?;
+
+        let error = preview_history_cleanup(&logs, &request("session", "run-one"))
+            .expect_err("existing output rows require their allocated high-water sequence");
+
+        assert!(error.to_string().contains("high-water"), "{error}");
+        assert_eq!(
+            read_session_output_since(&logs, "session", 0)?,
+            "retained output\n"
+        );
+        assert_eq!(
+            connection.query_row("SELECT COUNT(*) FROM history_events", [], |row| row
+                .get::<_, i64>(0))?,
+            2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn history_cleanup_keeps_allocated_output_boundary_after_rows_are_deleted() -> Result<()> {
+        let (_root, _guard, logs) = fixture()?;
+        run(&logs, "session", "run-one", "removed output")?;
+        let connection = open_history_write(&logs)?;
+        connection.execute("DELETE FROM history_output", [])?;
+        let sequence: i64 = connection.query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name='history_output'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(sequence > 0);
+        let mut selected = request("session", "run-one");
+        let preview = preview_history_cleanup(&logs, &selected)?;
+        assert_eq!((preview.event_rows, preview.output_rows), (2, 0));
+        selected.snapshot_token = Some(preview.snapshot_token);
+        let receipt = execute_history_cleanup(&logs, &selected)?;
+        assert_eq!(
+            (
+                receipt.removed_runs,
+                receipt.event_rows,
+                receipt.output_rows
+            ),
+            (1, 2, 0)
+        );
         Ok(())
     }
 

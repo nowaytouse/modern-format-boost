@@ -13805,6 +13805,8 @@ mod fast_img_hardening_tests {
     #[test]
     #[cfg(unix)]
     fn saved_fast_img_choice_precedes_recursive_source_scan() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
         if std::env::var_os("MFB_EARLY_RESUME_TEST_CHILD").is_none() {
             let output = std::process::Command::new(std::env::current_exe()?)
                 .args(["--exact", "fast_img_hardening_tests::saved_fast_img_choice_precedes_recursive_source_scan", "--nocapture"])
@@ -13819,7 +13821,6 @@ mod fast_img_hardening_tests {
             );
             return Ok(());
         }
-        use std::os::unix::fs::PermissionsExt;
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input = root.path().join("input");

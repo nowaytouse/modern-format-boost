@@ -1914,5 +1914,4 @@ mod tests {
     fn verify_jxl_has_icc_returns_result_contract() {
         let _: anyhow::Result<bool> = verify_jxl_has_icc(Path::new("missing.jxl"));
     }
-
 }

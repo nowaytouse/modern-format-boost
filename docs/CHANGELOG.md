@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### CI Contracts And History Cleanup Boundaries (2026-10-27)
+
+- Keep unallocated history output sequences distinct from an allocated high-water
+  mark. Missing sequence custody with existing output rows blocks cleanup; deleted
+  rows still retain their allocated sequence boundary.
+- Align the SQLite dependency contract with the approved bundled 0.41 release and
+  the XMP contract with strict shared discovery and validation.
+- Route relative XMP parent resolution through the shared path rule, and repair
+  the launcher's database-failure fixture so it reaches its write-error assertions.
+- Correct formatting and test-target lint failures reported by CI without changing
+  encoder search, metadata validation or delivery gates.
+
 ### Passthrough Metadata Proof And Interrupted Scans (2026-10-27)
 
 - Verify supported filesystem metadata and XMP before skipping a byte-identical

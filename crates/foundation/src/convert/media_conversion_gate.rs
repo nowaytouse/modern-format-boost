@@ -4358,20 +4358,22 @@ pub fn path_stem_root_segment(stem: &str) -> &str {
     stem.split('.').next().unwrap_or(stem)
 }
 
-/// Parent directory for metadata/XMP sidecar resolution (audited `.` when at
-/// filesystem root).
+/// Parent directory for metadata/XMP sidecar resolution (audited `.` for a
+/// missing or empty parent, including a bare relative filename).
 #[must_use]
 pub fn path_parent_or_dot(path: &Path) -> &Path {
-    path.parent().unwrap_or_else(|| {
-        delivery_metadata_batch_audit(
-            "path_parent",
-            format!(
-                "{}: missing parent directory; using \".\" for path resolution",
-                path.display()
-            ),
-        );
-        Path::new(".")
-    })
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            delivery_metadata_batch_audit(
+                "path_parent",
+                format!(
+                    "{}: missing or empty parent directory; using \".\" for path resolution",
+                    path.display()
+                ),
+            );
+            Path::new(".")
+        })
 }
 
 /// Gate-owned placeholder for audit calls that have no stable asset path.

@@ -2411,10 +2411,10 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
         // writer's own container proof. Keep those checks before publication,
         // including for generic writers which may modify their target in place.
         let parent = crate::media_conversion_gate::path_parent_or_dot(dest);
-        let suffix = format!(
-            ".{}",
-            dest.extension().unwrap_or_default().to_string_lossy()
-        );
+        let suffix = match dest.extension() {
+            Some(extension) => format!(".{}", extension.to_string_lossy()),
+            None => String::new(),
+        };
         let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
             "copied_file_xmp",
             parent,

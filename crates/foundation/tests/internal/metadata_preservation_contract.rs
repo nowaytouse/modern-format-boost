@@ -488,6 +488,20 @@ fn contract_find_xmp_sidecar_missing_returns_none() {
 }
 
 #[test]
+fn contract_xmp_relative_parent_uses_shared_path_rule() {
+    use std::path::Path;
+
+    assert_eq!(
+        crate::media_conversion_gate::path_parent_or_dot(Path::new("photo.jpg")),
+        Path::new(".")
+    );
+    assert_eq!(
+        crate::media_conversion_gate::path_parent_or_dot(Path::new("album/photo.jpg")),
+        Path::new("album")
+    );
+}
+
+#[test]
 fn contract_find_xmp_sidecar_refuses_ambiguous() {
     let temp = TempDir::new().expect("tempdir");
     let src = temp.path().join("photo.jpg");

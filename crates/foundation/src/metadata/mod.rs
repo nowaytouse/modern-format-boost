@@ -3214,10 +3214,7 @@ fn xmp_candidate_matches_source(path: &Path, stem: &str, full_name: &str) -> boo
 /// Refuses ambiguous matches, non-regular sidecars and incomplete directory reads.
 /// A failed discovery must never be interpreted as proof that no sidecar exists.
 pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
-    let parent = src
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let parent = crate::media_conversion_gate::path_parent_or_dot(src);
     let stem = src
         .file_stem()
         .and_then(|value| value.to_str())

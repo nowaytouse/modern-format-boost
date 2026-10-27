@@ -6632,8 +6632,9 @@ fn media_conversion_metadata_encode_unwrap_or_strict_defaults() {
             "crates/foundation/src/xmp_merger.rs",
             &[
                 "path_stem_root_segment",
-                "path_file_stem_or_empty",
                 "path_parent_or_dot",
+                "metadata::find_xmp_sidecar(input)?",
+                "metadata::validate_xmp_sidecar(&xmp_path)?",
             ][..],
             &["file_stem().and_then(|s| s.to_str()).unwrap_or(\"\")"][..],
         ),
@@ -9153,8 +9154,8 @@ fn media_conversion_path_tree_cache_sqlite_m213() {
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
-        cargo.contains("rusqlite = { version = \"0.40"),
-        "workspace rusqlite must be 0.40.x (M214)"
+        cargo.contains("rusqlite = { version = \"0.41\", features = [\"bundled\"] }"),
+        "workspace rusqlite must use the approved 0.41.x release with bundled SQLite (M214)"
     );
 }
 
@@ -9222,7 +9223,7 @@ fn media_conversion_m214_sqlite_store_ssot() {
     let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
     assert!(
         !cargo.contains("github.com/rusqlite/rusqlite"),
-        "rusqlite git patch must not override crates.io 0.40 (M214)"
+        "rusqlite git patch must not override the approved crates.io workspace release (M214)"
     );
 }
 

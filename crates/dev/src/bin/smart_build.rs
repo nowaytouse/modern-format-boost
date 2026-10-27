@@ -1488,7 +1488,9 @@ fn sync_bundle_branding(
     let icon = string("CFBundleIconFile")?;
     let icon_path = Path::new(icon);
     anyhow::ensure!(
-        icon_path.file_name().is_some_and(|file| file == icon_path.as_os_str()),
+        icon_path
+            .file_name()
+            .is_some_and(|file| file == icon_path.as_os_str()),
         "CFBundleIconFile must name a resource file"
     );
     let icon_file = if icon_path.extension().is_some() {
@@ -1498,7 +1500,10 @@ fn sync_bundle_branding(
     };
     let helper_resources = helper_contents.join("Resources");
     fs::create_dir_all(&helper_resources).context("create Photos helper Resources dir")?;
-    for destination in [resources_dir.join(&icon_file), helper_resources.join(&icon_file)] {
+    for destination in [
+        resources_dir.join(&icon_file),
+        helper_resources.join(&icon_file),
+    ] {
         fs::copy(native_dir.join(&icon_file), &destination)
             .with_context(|| format!("copy app icon to {}", destination.display()))?;
     }
@@ -2434,9 +2439,15 @@ mod tests {
             assert!(output.status.success());
             let helper_info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(helper_info["CFBundleName"], name);
-            assert_eq!(helper_info["CFBundleDisplayName"], display_name.unwrap_or(name));
+            assert_eq!(
+                helper_info["CFBundleDisplayName"],
+                display_name.unwrap_or(name)
+            );
             assert_eq!(helper_info["CFBundleIconFile"], icon);
-            assert_eq!(helper_info["CFBundleIdentifier"], "com.modernformatboost.photos-import");
+            assert_eq!(
+                helper_info["CFBundleIdentifier"],
+                "com.modernformatboost.photos-import"
+            );
             assert_eq!(helper_info["CFBundleExecutable"], "mfb-photos-import");
             assert_eq!(fs::read(native_dir.join("Info.plist"))?, parent_bytes);
             for directory in [&resources, &helper.join("Resources")] {

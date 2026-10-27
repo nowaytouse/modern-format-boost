@@ -510,7 +510,8 @@ mod tests {
         let bytes = b"RIFF\x0c\0\0\0WEBPVP8 \0\0\0\0";
         std::fs::write(&path, bytes)?;
         assert!(::webp::BitstreamFeatures::new(bytes).is_none());
-        let scan = scan_modern_lossy_static_candidates(directory.path(), &[path.clone()])?;
+        let scan =
+            scan_modern_lossy_static_candidates(directory.path(), std::slice::from_ref(&path))?;
         assert_eq!(scan.candidates.len(), 0);
         assert_eq!(scan.probe_failures.len(), 1);
         assert_eq!(scan.probe_failures[0].0, path);
@@ -629,7 +630,7 @@ mod tests {
         assert_eq!(first["processed"], 0);
         assert_eq!(first["state"], "running");
         let stage_id = first["stage_id"].as_str().expect("stage identity");
-        assert!(!stage_id.is_empty());
+        assert_ne!(stage_id, "");
         let mut previous = 0;
         for event in &events {
             assert_eq!(event["schema_version"], 1);
