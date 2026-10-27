@@ -470,6 +470,10 @@
 "log.details.show" = "処理の詳細を表示";
 "log.details.hide" = "処理の詳細を隠す";
 "result.unconfirmed" = "結果を完全に確認できません · 処理履歴を確認してください";
+"result.process_terminated" = "処理プロセスが終了しました";
+"result.files_not_summarized" = "ファイルの結果は集計されていません。処理履歴を確認してください。";
+"process.signal" = "%@ 処理プロセスが終了しました · %@";
+"process.observation_invalid" = "プロセス終了の詳細を確認できません。処理履歴を確認してください。";
 "result.integrity_issues" = "整合性チェックで %@ 件の問題 · 処理履歴を確認してください";
 "result.delivery_deferred" = "Photos への引き渡しを保留";
 "result.delivery_record_title" = "Photos への引き渡し記録";
@@ -608,6 +612,8 @@
 "progress.stage.image_processing" = "画像処理";
 "progress.stage.video_processing" = "動画処理";
 "progress.stage.fast_img_encode" = "Fast IMG エンコード";
+"progress.stage.modern_source_inspection" = "元の形式の画像を確認";
+"progress.inspection" = "%@ · 確認 %@ / %@ · この段階 %.2f%%";
 "progress.files" = "%@ · ファイル %@ / %@ · %.2f%%";
 "progress.stage_finished" = "%@段階終了 · %@ / %@ ファイル";
 "progress.empty" = "%@ · この段階のファイルなし";
@@ -790,7 +796,7 @@
 "helpguide.metadata.1.title" = "JPEG のバイト復元とメタデータ表示は別です";
 "helpguide.metadata.1.body" = "JPEG → JXL の可逆経路では、再構築した JPEG 全体が原本とバイト単位で一致する必要があります。元 JPEG 内のメーカー固有データや解釈できないデータも、この再構築によって保持できます。ただし、すべてのアプリが JXL から直接読み取って表示できるとは限りません。独立表示時の向き、色、追加の XMP は個別に検証します。画素の無損失だけでは代わりになりません。";
 "helpguide.metadata.2.title" = "個別に検証する情報";
-"helpguide.metadata.2.body" = "保持方針を使う経路では、対応する EXIF、XMP、IPTC などの移せる情報を比較します。読み取り可能な撮影日時、説明、メーカー項目などが含まれます。ICC 色プロファイル、向き、画素、コンテナ構造は別の検証対象です。変換によって構造項目が変わる場合があります。認識できない情報、表現できない情報、未検証の情報まで、タスク成功だけで完全保持と判断することはできません。";
+"helpguide.metadata.2.body" = "保持方針を使う経路では、対応する EXIF、XMP、IPTC などの移せる情報を比較します。読み取り可能な撮影日時、説明、メーカー項目などが含まれます。ICC 色プロファイル、向き、画素、コンテナ構造は別の検証対象です。変換によって構造項目が変わる場合があります。認識できない情報、表現できない情報、未検証の情報まで、タスク成功だけで完全保持と判断することはできません。変換せずにコピーする場合も、内容の一致だけで完全とは判断できません。既存ファイルを再利用する場合も、その経路が対応するファイル属性と XMP の確認が必要です。";
 "helpguide.metadata.3.title" = "XMP の別ファイルを任意に選びません";
 "helpguide.metadata.3.body" = "XMP は画像の隣に別ファイルとしてメタデータを保存できます。MFB は対応する命名で候補を探し、結合や交付に必要な内容を検証します。名前だけで過去の所属を証明することはできません。候補が複数ある、不正な種類のファイルがある、読み取りに失敗する場合は、問題を記録して原本を保持する必要があります。XMP がないと扱ったり、任意の候補を完全保持の証拠にしたりしません。";
 "helpguide.metadata.4.title" = "Fast AVIF は意図的にメタデータを削除します";

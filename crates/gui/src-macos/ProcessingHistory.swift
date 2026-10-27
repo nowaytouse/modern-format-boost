@@ -486,7 +486,7 @@ private struct HistoryInvocation: Codable {
     }
 }
 
-private struct HistoryWorkerExecution: Codable, Equatable {
+struct HistoryWorkerExecution: Codable, Equatable {
     let schema_version: Int
     let scope: String
     let invocation_id: String

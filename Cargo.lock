@@ -521,7 +521,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "console"
 version = "0.16.6"
-source = "git+https://github.com/console-rs/console#219c8418c03edf5bc387acb8a18e51299370fa4d"
+source = "git+https://github.com/console-rs/console#3271250d3fdd2ccabbb3d590b193c6ef15fd84a5"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -622,7 +622,7 @@ dependencies = [
 [[package]]
 name = "ctrlc"
 version = "3.5.2"
-source = "git+https://github.com/Detegr/rust-ctrlc#3c7098cc637ddd381b8d888560eb5c11c60aa6b1"
+source = "git+https://github.com/Detegr/rust-ctrlc#c9bb0c6b994003d2564c399fbb08b053d323bf5d"
 dependencies = [
  "dispatch2",
  "nix",
@@ -631,9 +631,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
 dependencies = [
  "cmov",
 ]
@@ -803,7 +803,7 @@ dependencies = [
 [[package]]
 name = "exr"
 version = "1.74.2"
-source = "git+https://github.com/johannesvollmer/exrs#994c5416eb7a08a9e0f81e9961221c0588e48b40"
+source = "git+https://github.com/johannesvollmer/exrs#d30fac43653b9064f4135a0b51b3579c8128c711"
 dependencies = [
  "bit_field",
  "half",
@@ -1200,7 +1200,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#1eeeedfd4426ca967ff95513c80a634e8d5e9a31"
+source = "git+https://github.com/console-rs/indicatif#4925bce2ec5ffc8deaccc5658585d3fa30f23ec6"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1241,7 +1241,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.49.0"
-source = "git+https://github.com/mitsuhiko/insta#4b270ba4349f1f7b9d674852fb415d20bd8f205d"
+source = "git+https://github.com/mitsuhiko/insta#0e17c7a6ed65b73def1101813987a053269ef4a5"
 dependencies = [
  "console",
  "once_cell",
@@ -2232,7 +2232,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#f75b78de124efda3fe795d21ec4067efc7c92c95"
+source = "git+https://github.com/tafia/quick-xml#ef4ad8a33914500dbe4ce1f1c5f8b21b7cfd07f7"
 dependencies = [
  "memchr",
 ]
@@ -2468,9 +2468,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -2771,7 +2771,7 @@ version = "3.27.0"
 source = "git+https://github.com/Stebalien/tempfile#1c294cc29d2a48746637252a0e30b1bebc05b3e6"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",

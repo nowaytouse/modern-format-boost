@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -534,6 +534,7 @@ impl LaunchCommand {
             cmd.env(foundation::constants::ENV_MFB_PERF_TIER, mode.get_name());
         }
         let mut collected_error = None;
+        let mut child_status: Option<ExitStatus> = None;
         let stats = if let Some(session) = session {
             let mut output = HistoryOutputWriter::open(session.log_dir(), session.stamp())?;
             let heartbeat = session.session_audit().to_path_buf();
@@ -623,6 +624,9 @@ impl LaunchCommand {
                     }
                 },
                 |observation| {
+                    if let ChildProcessObservation::Exited { status, .. } = observation {
+                        child_status = Some(status);
+                    }
                     if let Some(invocation) = invocation.as_ref() {
                         let result = serde_json::to_value(WorkerExecution::observed(
                             invocation,
@@ -630,7 +634,16 @@ impl LaunchCommand {
                         ))
                         .context("serialize worker execution observation")
                         .and_then(|payload| {
-                            session.append_history_event("MFB_HISTORY_WORKER_EXECUTION", payload)
+                            let marker = serde_json::to_string(&payload)
+                                .context("serialize live worker execution observation")?;
+                            session
+                                .append_history_event("MFB_HISTORY_WORKER_EXECUTION", payload)?;
+                            let mut stdout = io::stdout().lock();
+                            writeln!(stdout, "MFB_HISTORY_WORKER_EXECUTION={marker}")
+                                .context("write live worker execution observation")?;
+                            stdout
+                                .flush()
+                                .context("flush live worker execution observation")
                         })
                         .context("worker execution history write failed");
                         if let Err(error) = result
@@ -728,6 +741,7 @@ impl LaunchCommand {
             let status = child
                 .wait()
                 .with_context(|| format!("wait {}", self.display()))?;
+            child_status = Some(status);
             ProcessorStats {
                 exit_code: delegated_exit_code(
                     status,
@@ -743,6 +757,25 @@ impl LaunchCommand {
                 None => error,
             });
         }
+        let os_exit_code = child_status.and_then(|status| status.code());
+        #[cfg(unix)]
+        let signal = {
+            use std::os::unix::process::ExitStatusExt;
+            child_status.and_then(|status| status.signal())
+        };
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+        let termination = if signal.is_some() {
+            "signal"
+        } else if os_exit_code.is_some() {
+            "exit"
+        } else {
+            "unknown"
+        };
+        let failure_description = signal.map_or_else(
+            || format!("failed with exit {}", stats.exit_code),
+            |signal| format!("terminated by signal {signal}"),
+        );
         if let Some(session) = session {
             let count = |index: usize, value: usize| {
                 stats.reported[index]
@@ -750,9 +783,12 @@ impl LaunchCommand {
                     .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
             };
             let event = format!(
-                "{}_PIPELINE_EXIT code={} succeeded={} skipped={} ignored={} failed={} unprocessed={}",
+                "{}_PIPELINE_EXIT code={} termination={} exit_code={} signal={} succeeded={} skipped={} ignored={} failed={} unprocessed={}",
                 self.pipeline_label(),
                 stats.exit_code,
+                termination,
+                os_exit_code.map_or_else(|| "none".to_owned(), |code| code.to_string()),
+                signal.map_or_else(|| "none".to_owned(), |signal| signal.to_string()),
                 count(0, stats.succeeded),
                 count(1, stats.skipped),
                 count(2, stats.ignored),
@@ -774,9 +810,9 @@ impl LaunchCommand {
             }
             if stats.exit_code != 0 {
                 let error_event = format!(
-                    "{}_PIPELINE_ERROR command failed with exit {}: {}",
+                    "{}_PIPELINE_ERROR command {}: {}",
                     self.pipeline_label(),
-                    stats.exit_code,
+                    failure_description,
                     self.display()
                 );
                 for result in [
@@ -796,11 +832,7 @@ impl LaunchCommand {
         }
         foundation::batch_control::checkpoint()?;
         if stats.exit_code != 0 && bail_on_failure {
-            bail!(
-                "command failed with exit {}: {}",
-                stats.exit_code,
-                self.display()
-            );
+            bail!("command {}: {}", failure_description, self.display());
         }
         Ok(stats)
     }
@@ -1061,7 +1093,7 @@ mod tests {
         let command =
             LaunchCommand::from_argv(vec!["/bin/sh".into(), "-c".into(), "kill -TERM $$".into()])
                 .unwrap();
-        command
+        let stats = command
             .run_collecting(false, Some(&session), false)
             .unwrap();
         let events = session.events.lock().unwrap();
@@ -1072,6 +1104,14 @@ mod tests {
         assert_eq!(last.1["signal"], libc::SIGTERM);
         assert!(last.1["exit_code"].is_null());
         drop(events);
+        assert!(!stats.counts_complete());
+        assert_eq!(stats.reported, [false; 4]);
+        let audit = fs::read_to_string(&session.lines).unwrap();
+        assert!(
+            audit.contains("termination=signal exit_code=none signal=15"),
+            "session logs must preserve the observed OS termination: {audit}"
+        );
+        assert!(!audit.contains("command failed with exit -1"));
         let failed = test_session(directory.path(), None);
         let command =
             LaunchCommand::from_argv(vec![directory.path().to_string_lossy().into_owned()])

@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Passthrough Metadata Proof And Interrupted Scans (2026-10-27)
+
+- Verify supported filesystem metadata and XMP before skipping a byte-identical
+  passthrough destination; repair missing/stale metadata or report a file failure.
+- Use strict shared XMP discovery for copied files. Stage and verify embedding,
+  preserve fallback packet bytes exactly, and refuse conflicting existing sidecars.
+- Retain worker OS signals in session diagnostics and live process observations.
+  Show a bound SIGTERM/SIGINT without file summaries as a concise interruption,
+  while preserving failed exits, unknown outcomes and integrity warnings.
+- Report actual modern-source inspection progress with stage-specific counts;
+  inspection completion does not count as conversion or Photos delivery.
+
 ### Early Recovery Choices And Metadata Evidence (2026-10-27)
 
 - Ask how to handle saved Fast IMG state before recursive media scanning. GUI

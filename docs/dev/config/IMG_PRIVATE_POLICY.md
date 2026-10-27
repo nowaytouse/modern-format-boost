@@ -155,6 +155,24 @@ identity checks remain necessary. Filename agreement does not prove historical
 ownership. Tier-2 delivery isolates a failed association to the affected asset
 and retains its source and sidecars; it does not silently import it without XMP.
 
+Passthrough copies obey the same discovery rule. Matching media bytes alone do
+not authorize a clean skip: the supported filesystem metadata and any companion
+XMP must also verify. Stale or missing metadata uses the existing preservation
+path rather than copying source media over an already identical destination;
+a failed repair remains a file failure. Ambiguous, malformed or conflicting XMP
+is not absence.
+
+Copied-file XMP embedding runs on staging. Source, selected packet and previous
+destination identities/bytes, paired embedded metadata and supported filesystem
+attributes are checked before publication. The explicit sidecar fallback copies
+the original packet bytes, rather than running a metadata writer over the packet
+itself. It verifies bytes and filesystem metadata, refuses a differing existing
+companion and publishes a new companion without clobbering concurrent output.
+This adds bounded staging work to copied-file XMP embedding. An unproved
+container is refused before that staging work, allowing the verified companion
+fallback without a redundant media copy. Ordinary encoding routes are unchanged;
+these checks do not establish a general performance improvement.
+
 The reconstructible JXL commit uses the full existing final integrity proof on
 the metadata-enriched staging file, including exact JPEG bytes, native gain maps
 and explicit stream orientation, before atomic publication. Later batch,
@@ -189,6 +207,22 @@ entry is recorded can still leave an unregistered complete artifact. Its suffix
 does not authorize reuse, import or deletion. Recovery must retain unknown
 ownership and can stop on extra outputs; this change does not implement atomic
 filesystem/checkpoint journaling or complete failed-only retry.
+
+## Inspection Progress And Process Interruption
+
+Modern-source inspection reports actual completed probes against that stage's
+known inventory. Eligible, ineligible and failed probes all count as inspected;
+none is thereby a successful conversion or Photos delivery. Stage completion is
+not batch completion, and progress is not a substitute for the admission proof.
+
+Worker OS observations are shared by live presentation and persisted history.
+Session exit diagnostics retain normal exit codes and termination signals as
+separate facts. A final bound SIGTERM/SIGINT without file results or conflicting
+evidence can be shown as a process termination with unsummarized file outcomes.
+The failed process result remains recorded. This does not identify the sender of
+the signal, certify retained originals or invent missing file counts. Other
+signals, mismatched observations and integrity conflicts keep their serious or
+unconfirmed presentation.
 
 ## Search Semantics
 

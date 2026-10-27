@@ -197,10 +197,17 @@ pub fn scan_modern_lossy_static_candidates(
     src_root: &Path,
     file_paths: &[PathBuf],
 ) -> Result<ModernLossyStaticScan> {
+    let progress = crate::progress::FileStageProgress::new(
+        file_paths.len() as u64,
+        crate::progress::FileProgressStage::ModernSourceInspection,
+    );
     let mut scan = ModernLossyStaticScan::default();
     let mut relative_paths = BTreeSet::new();
-    for path in file_paths {
-        match probe_modern_lossy_static(path) {
+    for (index, path) in file_paths.iter().enumerate() {
+        let result = probe_modern_lossy_static(path);
+        // Inspection counts every completed probe, including skips and failures.
+        progress.set((index + 1) as u64);
+        match result {
             Ok(Some(candidate)) => {
                 let rel = crate::media_conversion_gate::strip_prefix_or_self(
                     path,
@@ -232,6 +239,7 @@ pub fn scan_modern_lossy_static_candidates(
     }
     scan.candidates.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     scan.probe_failures.sort();
+    progress.finish();
     Ok(scan)
 }
 
@@ -558,6 +566,91 @@ mod tests {
         assert!(
             scan.probe_failures.is_empty(),
             "non-modern media is a skip, never a probe failure"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn modern_source_inspection_reports_classified_inventory_without_admitting_nonmodern_files()
+    -> anyhow::Result<()> {
+        const CHILD: &str = "MFB_MODERN_SOURCE_INSPECTION_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let directory = tempfile::tempdir()?;
+            let jpeg_bytes = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46];
+            let paths = [
+                directory.path().join("first.jpg"),
+                directory.path().join("second.jpg"),
+            ];
+            for path in &paths {
+                std::fs::write(path, jpeg_bytes)?;
+            }
+            let scan = scan_modern_lossy_static_candidates(directory.path(), &paths)?;
+            assert!(
+                scan.candidates.is_empty(),
+                "inspection must preserve admission"
+            );
+            assert!(
+                scan.probe_failures.is_empty(),
+                "non-modern files remain skips"
+            );
+            for path in &paths {
+                assert_eq!(std::fs::read(path)?, jpeg_bytes);
+            }
+            return Ok(());
+        }
+
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "image::modern_lossy_static::tests::modern_source_inspection_reports_classified_inventory_without_admitting_nonmodern_files",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("MFB_SESSION_ID", "synthetic-modern-source-inspection")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "child scan failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        let events = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("MFB_PROGRESS="))
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert!(
+            (2..=4).contains(&events.len()),
+            "two inspected files need bounded start/update/finish events: {stdout}"
+        );
+        let first = events.first().expect("start progress event");
+        assert_eq!(first["stage"], "modern_source_inspection");
+        assert_eq!(first["processed"], 0);
+        assert_eq!(first["state"], "running");
+        let stage_id = first["stage_id"].as_str().expect("stage identity");
+        assert!(!stage_id.is_empty());
+        let mut previous = 0;
+        for event in &events {
+            assert_eq!(event["schema_version"], 1);
+            assert_eq!(event["stage_id"], stage_id);
+            assert_eq!(event["stage"], "modern_source_inspection");
+            assert_eq!(event["total"], 2);
+            let processed = event["processed"].as_u64().expect("inspected file count");
+            assert!((previous..=2).contains(&processed));
+            previous = processed;
+            assert!(event.get("success").is_none());
+            assert!(event.get("path").is_none());
+        }
+        let last = events.last().expect("finished progress event");
+        assert_eq!(last["processed"], 2, "skipped files are still inspected");
+        assert_eq!(last["state"], "finished");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["state"] == "finished")
+                .count(),
+            1
         );
         Ok(())
     }

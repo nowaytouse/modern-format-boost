@@ -110,28 +110,28 @@ fn record_walkdir_failure(input_dir: &Path, err: &walkdir::Error, result: &mut C
 }
 
 fn destination_matches_source(path: &Path, dest: &Path) -> Result<bool, String> {
-    match dest.try_exists() {
-        Ok(false) => return Ok(false),
-        Ok(true) => {}
+    let dst_meta = match std::fs::symlink_metadata(dest) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Ok(metadata) => metadata,
         Err(err) => {
             return Err(format!(
                 "failed to inspect destination existence for {}: {err}",
                 dest.display()
             ));
         }
-    }
+    };
     let src_meta = std::fs::metadata(path).map_err(|err| {
         format!(
             "failed to read source metadata for {}: {err}",
             path.display()
         )
     })?;
-    let dst_meta = std::fs::metadata(dest).map_err(|err| {
-        format!(
-            "failed to read destination metadata for {}: {err}",
+    if !dst_meta.is_file() {
+        return Err(format!(
+            "copy destination is not a regular file: {}",
             dest.display()
-        )
-    })?;
+        ));
+    }
     if src_meta.len() != dst_meta.len() {
         return Ok(false);
     }
@@ -140,6 +140,53 @@ fn destination_matches_source(path: &Path, dest: &Path) -> Result<bool, String> 
     let destination_hash = crate::common_utils::calculate_blake3_hash(dest)
         .map_err(|err| format!("failed to hash destination {}: {err}", dest.display()))?;
     Ok(source_hash == destination_hash)
+}
+
+fn inspect_copy_xmp(
+    source: &Path,
+    dest: &Path,
+) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
+    let source_xmp =
+        crate::metadata::find_xmp_sidecar(source).map_err(|error| error.to_string())?;
+    if let Some(sidecar) = &source_xmp {
+        crate::metadata::validate_xmp_sidecar(sidecar).map_err(|error| error.to_string())?;
+    }
+    let parent = crate::media_conversion_gate::path_parent_or_dot(dest);
+    let destination_xmp = match std::fs::metadata(parent) {
+        Ok(_) => crate::metadata::find_xmp_sidecar(dest).map_err(|error| error.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("cannot inspect XMP destination parent: {error}")),
+    };
+    match (&source_xmp, &destination_xmp) {
+        (Some(source), Some(destination)) => {
+            if crate::common_utils::calculate_blake3_hash(source)
+                .map_err(|error| error.to_string())?
+                != crate::common_utils::calculate_blake3_hash(destination)
+                    .map_err(|error| error.to_string())?
+            {
+                return Err(format!(
+                    "refusing to overwrite existing XMP sidecar with different content: {}",
+                    destination.display()
+                ));
+            }
+        }
+        (None, Some(destination)) => {
+            return Err(format!(
+                "unexpected XMP sidecar on copy destination: {}",
+                destination.display()
+            ));
+        }
+        _ => {}
+    }
+    Ok((source_xmp, destination_xmp))
+}
+
+fn filesystem_metadata_matches(source: &Path, dest: &Path) -> Result<bool, String> {
+    match crate::metadata::verify_exact_metadata_copy(source, dest) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn resolve_copy_destination(path: &Path, input_dir: &Path, output_dir: &Path) -> Option<PathBuf> {
@@ -231,6 +278,10 @@ fn handle_copied_file_success(path: &Path, dest: &Path, result: &mut CopyResult)
         push_copy_error(result, path, error_msg, "preserve_metadata");
         return;
     }
+    if let Err(error) = crate::metadata::verify_exact_metadata_copy(path, dest) {
+        push_copy_error(result, path, error.to_string(), "verify_metadata");
+        return;
+    }
 
     result.copied += 1;
     let ext = crate::media_conversion_gate::path_extension_label(path);
@@ -249,14 +300,46 @@ fn handle_copied_file_success(path: &Path, dest: &Path, result: &mut CopyResult)
 }
 
 fn handle_copied_file_xmp(path: &Path, dest: &Path) -> Result<(), String> {
+    let Some(sidecar) =
+        crate::metadata::find_xmp_sidecar(path).map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    crate::metadata::validate_xmp_sidecar(&sidecar).map_err(|error| error.to_string())?;
+    let sidecar_hash =
+        crate::common_utils::calculate_blake3_hash(&sidecar).map_err(|error| error.to_string())?;
+    let destination_hash =
+        crate::common_utils::calculate_blake3_hash(dest).map_err(|error| error.to_string())?;
     match crate::merge_xmp_for_copied_file(path, dest) {
         Ok(true) => {
+            let (selected, existing) = inspect_copy_xmp(path, dest)?;
+            if selected.as_deref() != Some(sidecar.as_path())
+                || crate::common_utils::calculate_blake3_hash(&sidecar)
+                    .map_err(|error| error.to_string())?
+                    != sidecar_hash
+            {
+                return Err("source XMP changed after merge selection".to_owned());
+            }
+            if let Some(existing) = existing {
+                if !filesystem_metadata_matches(&sidecar, &existing)? {
+                    preserve_xmp_filesystem(&sidecar, &existing)?;
+                }
+                verify_xmp_copy(&sidecar, &existing, &sidecar_hash)?;
+            }
             debug!(file = %path.display(), "XMP merged successfully");
         }
         Ok(false) => {
-            debug!(file = %path.display(), "No XMP sidecar found");
+            return Err("source XMP disappeared before copied-file merge".to_owned());
         }
         Err(err) => {
+            if crate::common_utils::calculate_blake3_hash(dest)
+                .map_err(|error| error.to_string())?
+                != destination_hash
+            {
+                return Err(format!(
+                    "XMP merge failed after changing destination; refusing to conceal failed proof with a sidecar fallback: {err}"
+                ));
+            }
             crate::media_conversion_gate::delivery_io_path_audit(
                 "delivery_io_copy",
                 path,
@@ -271,9 +354,11 @@ fn handle_copied_file_xmp(path: &Path, dest: &Path) -> Result<(), String> {
                 "delivery_io_copy",
                 format!("XMP merge failed ({err}), trying to copy sidecar..."),
             );
-            copy_xmp_sidecar_if_exists(path, dest).map_err(|fallback| {
-                format!("XMP merge failed ({err}); sidecar preservation failed ({fallback})")
-            })?;
+            copy_xmp_sidecar_if_exists(path, dest, Some((&sidecar, &sidecar_hash))).map_err(
+                |fallback| {
+                    format!("XMP merge failed ({err}); sidecar preservation failed ({fallback})")
+                },
+            )?;
         }
     }
     Ok(())
@@ -302,13 +387,43 @@ fn copy_candidate_file(path: &Path, input_dir: &Path, output_dir: &Path, result:
         return;
     };
 
+    let (source_xmp, destination_xmp) = match inspect_copy_xmp(path, &dest) {
+        Ok(sidecars) => sidecars,
+        Err(error) => {
+            push_copy_error(result, path, error, "preserve_xmp");
+            return;
+        }
+    };
     match destination_matches_source(path, &dest) {
         Ok(true) => {
-            debug!(
-                file = %path.display(),
-                "Skipping unsupported file copy (destination content matches source)"
-            );
-            result.skipped += 1;
+            let metadata_valid = filesystem_metadata_matches(path, &dest).and_then(|matches| {
+                if !matches {
+                    return Ok(false);
+                }
+                match (&source_xmp, &destination_xmp) {
+                    (Some(source), Some(destination)) => {
+                        filesystem_metadata_matches(source, destination)
+                    }
+                    (Some(_), None) => Ok(false),
+                    _ => Ok(true),
+                }
+            });
+            match metadata_valid {
+                Ok(true) => result.skipped += 1,
+                Ok(false) => match crate::checkpoint::files_alias_same_inode(path, &dest) {
+                    Ok(false) => handle_copied_file_success(path, &dest, result),
+                    Ok(true) => push_copy_error(
+                        result,
+                        path,
+                        "refusing metadata repair through a source alias".to_owned(),
+                        "preserve_metadata",
+                    ),
+                    Err(error) => {
+                        push_copy_error(result, path, error.to_string(), "preserve_metadata");
+                    }
+                },
+                Err(error) => push_copy_error(result, path, error, "verify_metadata"),
+            }
             return;
         }
         Ok(false) => {}
@@ -438,83 +553,113 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
     result
 }
 
-fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) -> Result<(), String> {
-    let source_str = source.to_string_lossy();
-    let dest_str = dest.to_string_lossy();
-
-    let xmp_patterns = [
-        format!("{source_str}.xmp"),
-        format!("{source_str}.XMP"),
-        source.with_extension("xmp").to_string_lossy().to_string(),
-    ];
-
-    for xmp_source in &xmp_patterns {
-        let xmp_path = Path::new(xmp_source);
-        if xmp_path.try_exists().map_err(|err| {
-            format!(
-                "Failed to inspect XMP sidecar {}: {err}",
-                xmp_path.display()
-            )
-        })? {
-            let xmp_dest = format!("{dest_str}.xmp");
-
-            match std::fs::copy(xmp_path, &xmp_dest) {
-                Ok(_) => match crate::copy(xmp_path, Path::new(&xmp_dest)) {
-                    Ok(()) => {
-                        crate::log_info!(
-                            crate::infra::static_logs::messages::LABEL_XMP,
-                            &format!("Copied XMP sidecar: {}", xmp_path.display())
-                        );
-
-                        debug!(
-                            source = %xmp_path.display(),
-                            dest = %xmp_dest,
-                            "XMP sidecar copied successfully"
-                        );
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        crate::media_conversion_gate::delivery_io_path_audit(
-                            "delivery_io_copy",
-                            xmp_path,
-                            format!(
-                                "Copied XMP sidecar bytes but failed to preserve metadata {} -> \
-                                 {}: {e}",
-                                xmp_path.display(),
-                                xmp_dest,
-                            ),
-                        );
-                        return Err(format!(
-                            "Copied XMP sidecar bytes but failed to preserve metadata: {e}"
-                        ));
-                    }
-                },
-                Err(e) => {
-                    error!(
-                        source = %xmp_path.display(),
-                        dest = %xmp_dest,
-                        error = %e,
-                        error_kind = ?e.kind(),
-                        "Failed to copy XMP sidecar"
-                    );
-                    crate::media_conversion_gate::delivery_io_path_audit(
-                        "delivery_io_copy",
-                        xmp_path,
-                        format!("Failed to copy XMP sidecar {}: {e}", xmp_path.display()),
-                    );
-                    return Err(format!(
-                        "Failed to copy XMP sidecar {}: {e}",
-                        xmp_path.display()
-                    ));
-                }
-            }
-        }
+fn verify_xmp_copy(source: &Path, dest: &Path, expected_hash: &str) -> Result<(), String> {
+    if !std::fs::symlink_metadata(dest)
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err(format!(
+            "XMP destination is not a regular file: {}",
+            dest.display()
+        ));
     }
+    if crate::common_utils::calculate_blake3_hash(source).map_err(|error| error.to_string())?
+        != expected_hash
+        || crate::common_utils::calculate_blake3_hash(dest).map_err(|error| error.to_string())?
+            != expected_hash
+    {
+        return Err(format!(
+            "XMP source changed or destination contains different bytes: {}",
+            dest.display()
+        ));
+    }
+    crate::metadata::verify_exact_metadata_copy(source, dest)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
 
-    Err(format!(
-        "No XMP sidecar available to preserve after merge failure: {}",
-        source.display()
-    ))
+fn preserve_xmp_filesystem(source: &Path, dest: &Path) -> Result<(), String> {
+    let report = crate::metadata::preserve_filesystem_for_delivery(source, dest)
+        .map_err(|error| error.to_string())?;
+    if [report.xattr, report.timestamps]
+        .contains(&crate::metadata::MetadataLayerOutcome::PartialAudit)
+    {
+        return Err("XMP filesystem metadata preservation was partial".to_owned());
+    }
+    Ok(())
+}
+
+fn copy_xmp_sidecar_if_exists(
+    source: &Path,
+    dest: &Path,
+    expected: Option<(&Path, &str)>,
+) -> Result<(), String> {
+    let copy = || -> Result<(), String> {
+        let (sidecar, existing) = inspect_copy_xmp(source, dest)?;
+        let sidecar =
+            sidecar.ok_or_else(|| format!("no source XMP sidecar for {}", source.display()))?;
+        let hash = crate::common_utils::calculate_blake3_hash(&sidecar)
+            .map_err(|error| error.to_string())?;
+        if let Some((expected_path, expected_hash)) = expected
+            && (sidecar != expected_path || hash != expected_hash)
+        {
+            return Err("source XMP changed after merge selection".to_owned());
+        }
+        if let Some(existing) = existing {
+            // inspect_copy_xmp already refused differing bytes; repair only the
+            // filesystem surface of an identical, regular companion.
+            if !filesystem_metadata_matches(&sidecar, &existing)? {
+                preserve_xmp_filesystem(&sidecar, &existing)?;
+            }
+            return verify_xmp_copy(&sidecar, &existing, &hash);
+        }
+        let mut name = dest
+            .file_name()
+            .ok_or("XMP destination has no file name")?
+            .to_os_string();
+        name.push(".xmp");
+        let destination = dest.with_file_name(name);
+        let parent = crate::media_conversion_gate::path_parent_or_dot(&destination);
+        let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "copied_file_xmp",
+            parent,
+            ".mfb-xmp-",
+            ".tmp",
+        )
+        .map_err(|error| error.to_string())?;
+        std::fs::copy(&sidecar, staged.path()).map_err(|error| error.to_string())?;
+        preserve_xmp_filesystem(&sidecar, staged.path())?;
+        verify_xmp_copy(&sidecar, staged.path(), &hash)?;
+        if crate::metadata::find_xmp_sidecar(source)
+            .map_err(|error| error.to_string())?
+            .as_deref()
+            != Some(sidecar.as_path())
+        {
+            return Err("source XMP selection changed before publication".to_owned());
+        }
+        crate::io_utils::sync_committed_file_and_parent(staged.path())
+            .map_err(|error| error.to_string())?;
+        if let Err(error) = staged.persist_noclobber(&destination) {
+            if error.error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(error.error.to_string());
+            }
+            // A concurrent writer is reusable only with the same packet and
+            // filesystem metadata; it is never overwritten by this fallback.
+            verify_xmp_copy(&sidecar, &destination, &hash)?;
+        }
+        verify_xmp_copy(&sidecar, &destination, &hash)?;
+        crate::io_utils::sync_committed_file_and_parent(&destination)
+            .map_err(|error| error.to_string())?;
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_XMP,
+            &format!(
+                "Copied and verified exact XMP sidecar: {}",
+                sidecar.display()
+            )
+        );
+        Ok(())
+    };
+    copy().map_err(|error| format!("Failed to copy XMP sidecar: {error}"))
 }
 
 #[derive(Debug, Clone)]
@@ -815,10 +960,64 @@ mod tests {
         let output = TempDir::new().expect("output dir");
         let source = input.path().join("notes.txt");
         let dest = output.path().join("notes.txt");
-        assert!(copy_xmp_sidecar_if_exists(&source, &dest).is_err());
+        assert!(copy_xmp_sidecar_if_exists(&source, &dest, None).is_err());
         std::fs::create_dir(input.path().join("notes.txt.xmp")).expect("invalid sidecar directory");
-        let error = copy_xmp_sidecar_if_exists(&source, &dest).expect_err("sidecar copy must fail");
+        let error =
+            copy_xmp_sidecar_if_exists(&source, &dest, None).expect_err("sidecar copy must fail");
         assert!(error.contains("Failed to copy XMP sidecar"));
+        std::fs::remove_dir(input.path().join("notes.txt.xmp")).expect("remove invalid directory");
+        let malformed = input.path().join("notes.txt.xmp");
+        std::fs::write(&malformed, b"<x:xmpmeta><rdf:Description></x:xmpmeta>")
+            .expect("malformed packet");
+        assert!(copy_xmp_sidecar_if_exists(&source, &dest, None).is_err());
+        assert!(
+            !output.path().join("notes.txt.xmp").exists(),
+            "malformed XMP must never be published by the copy fallback"
+        );
+        assert_eq!(
+            std::fs::read(&malformed).unwrap(),
+            b"<x:xmpmeta><rdf:Description></x:xmpmeta>"
+        );
+    }
+
+    #[test]
+    fn xmp_fallback_refuses_conflicting_destination_without_mutation() {
+        let input = TempDir::new().expect("input dir");
+        let output = TempDir::new().expect("output dir");
+        let source = input.path().join("notes.txt");
+        let destination = output.path().join("notes.txt");
+        let sidecar = input.path().join("notes.txt.xmp");
+        let existing = output.path().join("notes.txt.xmp");
+        std::fs::write(&source, b"source payload").expect("source payload");
+        std::fs::write(&destination, b"previous destination").expect("destination payload");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:format="text/plain"/></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(&sidecar, xmp).expect("source XMP");
+        std::fs::write(&existing, b"unrelated existing XMP").expect("destination XMP");
+
+        assert!(copy_xmp_sidecar_if_exists(&source, &destination, None).is_err());
+
+        assert_eq!(std::fs::read(&source).unwrap(), b"source payload");
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"previous destination"
+        );
+        assert_eq!(std::fs::read(&sidecar).unwrap(), xmp);
+        assert_eq!(std::fs::read(&existing).unwrap(), b"unrelated existing XMP");
+
+        std::fs::remove_file(&existing).expect("remove fixture collision");
+        copy_xmp_sidecar_if_exists(&source, &destination, None)
+            .expect("a unique valid sidecar must still be copied");
+        assert_eq!(std::fs::read(&existing).unwrap(), xmp);
+        crate::metadata::verify_exact_metadata_copy(&sidecar, &existing)
+            .expect("fallback must preserve filesystem metadata as well as packet bytes");
+        copy_xmp_sidecar_if_exists(&source, &destination, None)
+            .expect("an already verified identical companion is reusable");
+        assert_eq!(std::fs::read(&source).unwrap(), b"source payload");
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"previous destination"
+        );
+        assert_eq!(std::fs::read(&sidecar).unwrap(), xmp);
     }
 
     #[test]
@@ -834,6 +1033,10 @@ mod tests {
         let destination = output.path().join("notes.txt");
         std::fs::write(&destination, b"same content")
             .unwrap_or_else(|e| panic!("write failed: {e}"));
+        crate::metadata::preserve_filesystem_for_delivery(&source, &destination)
+            .expect("matching fixture filesystem metadata");
+        crate::metadata::verify_exact_metadata_copy(&source, &destination)
+            .expect("clean skip fixture must already have matching metadata");
 
         let result = copy_unsupported_files(input.path(), output.path(), false);
 
@@ -848,6 +1051,130 @@ mod tests {
             result.copied + result.skipped + result.failed
         );
         assert!(!result.has_errors());
+    }
+
+    #[test]
+    fn matching_payload_does_not_skip_stale_metadata_and_missing_xmp() {
+        let input = TempDir::new().expect("input dir");
+        let output = TempDir::new().expect("output dir");
+        let source = input.path().join("notes.txt");
+        let destination = output.path().join("notes.txt");
+        let sidecar = input.path().join("notes.txt.xmp");
+        let output_sidecar = output.path().join("notes.txt.xmp");
+        let payload = b"unchanged payload";
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:format="text/plain"/></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(&source, payload).expect("source payload");
+        std::fs::write(&destination, payload).expect("existing payload");
+        std::fs::write(&sidecar, xmp).expect("source XMP");
+        filetime::set_file_mtime(
+            &source,
+            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .expect("source time");
+        filetime::set_file_mtime(
+            &destination,
+            filetime::FileTime::from_unix_time(1_700_000_000, 0),
+        )
+        .expect("stale destination time");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640))
+                .expect("source permissions");
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600))
+                .expect("stale destination permissions");
+        }
+
+        let result = copy_unsupported_files(input.path(), output.path(), false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.skipped, 0, "payload equality is not metadata proof");
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(
+            !result.has_errors(),
+            "positive metadata repair must succeed"
+        );
+        assert_eq!(result.failed, 0);
+        assert_eq!(
+            result.copied, 1,
+            "metadata repair is an update, not a clean skip"
+        );
+        crate::metadata::verify_exact_metadata_copy(&source, &destination)
+            .expect("repaired filesystem metadata must verify");
+        assert_eq!(std::fs::read(&output_sidecar).expect("preserved XMP"), xmp);
+        assert_eq!(std::fs::read(&source).unwrap(), payload);
+        assert_eq!(std::fs::read(&destination).unwrap(), payload);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), xmp);
+    }
+
+    #[test]
+    fn matching_payload_embedding_repairs_existing_companion_metadata() {
+        if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
+            return;
+        }
+        let input = TempDir::new().expect("input dir");
+        let output = TempDir::new().expect("output dir");
+        let fixture = input.path().join("fixture.jpg");
+        let source = input.path().join("notes.txt");
+        let destination = output.path().join("notes.txt");
+        let sidecar = input.path().join("notes.txt.xmp");
+        let existing = output.path().join("notes.txt.xmp");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([18, 52, 86]))
+            .save(&fixture)
+            .expect("synthetic JPEG");
+        std::fs::rename(&fixture, &source).expect("JPEG in passthrough extension");
+        std::fs::copy(&source, &destination).expect("identical media payload");
+        crate::metadata::preserve_filesystem_for_delivery(&source, &destination)
+            .expect("matching main filesystem metadata");
+        crate::metadata::verify_exact_metadata_copy(&source, &destination)
+            .expect("only companion metadata starts stale");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">preserve existing companion</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(&sidecar, xmp).expect("source XMP");
+        std::fs::write(&existing, xmp).expect("identical existing XMP");
+        filetime::set_file_mtime(
+            &sidecar,
+            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .expect("source XMP time");
+        filetime::set_file_mtime(
+            &existing,
+            filetime::FileTime::from_unix_time(1_700_000_000, 0),
+        )
+        .expect("stale existing XMP time");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o640))
+                .expect("source XMP permissions");
+            std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o600))
+                .expect("stale existing XMP permissions");
+        }
+        let source_before = std::fs::read(&source).unwrap();
+
+        let result = copy_unsupported_files(input.path(), output.path(), false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(
+            result.skipped, 0,
+            "existing companion metadata needs repair"
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert!(!result.has_errors(), "positive embedding must succeed");
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.copied, 1);
+        crate::metadata::verify_exact_metadata_copy(&source, &destination)
+            .expect("main filesystem metadata must verify after embedding");
+        crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+            &source,
+            &sidecar,
+            &destination,
+        )
+        .expect("native embedding must retain the selected XMP");
+        crate::metadata::verify_exact_metadata_copy(&sidecar, &existing)
+            .expect("embedding success must also verify the existing companion");
+        assert_eq!(std::fs::read(&source).unwrap(), source_before);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), xmp);
+        assert_eq!(std::fs::read(&existing).unwrap(), xmp);
     }
 
     #[test]
@@ -869,6 +1196,38 @@ mod tests {
             std::fs::read(destination).unwrap_or_else(|e| panic!("read failed: {e}")),
             b"source"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copier_refuses_dangling_destination_symlink_without_creating_target() {
+        let root = TempDir::new().expect("fixture root");
+        let input = root.path().join("input");
+        let output = root.path().join("output");
+        std::fs::create_dir_all(&input).expect("input dir");
+        std::fs::create_dir_all(&output).expect("output dir");
+        let source = input.join("notes.txt");
+        let destination = output.join("notes.txt");
+        let outside = root.path().join("outside-output.txt");
+        std::fs::write(&source, b"preserve source payload").expect("source payload");
+        std::os::unix::fs::symlink(&outside, &destination).expect("dangling destination");
+
+        let result = copy_unsupported_files(&input, &output, false);
+
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.skipped, 0);
+        assert!(result.has_errors());
+        assert!(
+            std::fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_link(&destination).unwrap(), outside);
+        assert!(!outside.exists(), "copy must not follow the dangling link");
+        assert_eq!(std::fs::read(&source).unwrap(), b"preserve source payload");
     }
 
     #[test]

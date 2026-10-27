@@ -4412,7 +4412,7 @@ private struct FileStageProgress {
 
         var valid: Bool {
             schema_version == 1 && !stage_id.isEmpty && stage_id.utf8.count <= 64
-                && ["image_processing", "video_processing", "fast_img_encode"].contains(stage)
+                && ["image_processing", "video_processing", "fast_img_encode", "modern_source_inspection"].contains(stage)
                 && ["running", "finished"].contains(state)
                 && processed <= total && total <= UInt64(Int64.max)
         }
@@ -4462,7 +4462,78 @@ private struct FileStageProgress {
             return localized("progress.stage_finished", stage, String(event.processed), String(event.total))
         }
         guard let percentage = event.percentage else { return localized("progress.empty", stage) }
+        if event.stage == "modern_source_inspection" {
+            return localized("progress.inspection", stage, String(event.processed), String(event.total), percentage)
+        }
         return localized("progress.files", stage, String(event.processed), String(event.total), percentage)
+    }
+}
+
+private struct LiveWorkerExecution {
+    static let prefix = "MFB_HISTORY_WORKER_EXECUTION="
+    private var active: [String: HistoryWorkerExecution] = [:]
+    // This is a live presenter, not another history store: normal sequential work has no lifetime limit.
+    private var recentlyClosed: [String] = []
+    private var runID: String?
+    private var hasRunIdentity = false
+    private var sawOtherFailure = false
+    private(set) var latest: HistoryWorkerExecution?
+    private(set) var invalid = false
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        latest = nil
+        guard !invalid, raw.utf8.count <= 4_096,
+              let next = try? JSONDecoder().decode(HistoryWorkerExecution.self,
+                  from: Data(raw.dropFirst(Self.prefix.count).utf8)), next.valid,
+              !hasRunIdentity || runID == next.run_id else {
+            invalid = true
+            return true
+        }
+        hasRunIdentity = true
+        runID = next.run_id
+        if next.state == "spawned" {
+            guard active.count < 64, active[next.invocation_id] == nil,
+                  !recentlyClosed.contains(next.invocation_id) else {
+                invalid = true
+                return true
+            }
+            active[next.invocation_id] = next
+        } else {
+            guard let spawn = active[next.invocation_id], spawn.pid == next.pid,
+                  spawn.run_id == next.run_id, spawn.pipeline == next.pipeline else {
+                invalid = true
+                return true
+            }
+            active.removeValue(forKey: next.invocation_id)
+            recentlyClosed.append(next.invocation_id)
+            if recentlyClosed.count > 64 { recentlyClosed.removeFirst() }
+            if let code = next.exit_code, code != 0 { sawOtherFailure = true }
+            if let signal = next.signal, ![2, 15].contains(signal) { sawOtherFailure = true }
+        }
+        latest = next
+        return true
+    }
+
+    var interruptionSignal: Int32? {
+        guard !invalid, !sawOtherFailure, active.isEmpty,
+              let latest, latest.state == "exited", let signal = latest.signal,
+              [2, 15].contains(signal) else { return nil }
+        return signal
+    }
+
+    static func signalDescription(_ signal: Int32) -> String {
+        let name: String?
+        switch signal {
+        case SIGINT: name = "SIGINT"
+        case SIGTERM: name = "SIGTERM"
+        case SIGKILL: name = "SIGKILL"
+        case SIGABRT: name = "SIGABRT"
+        case SIGSEGV: name = "SIGSEGV"
+        default: name = nil
+        }
+        return name.map { "\($0) (\(signal))" } ?? String(signal)
     }
 }
 
@@ -6295,6 +6366,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var workerExecution = LiveWorkerExecution()
     private var photosImportProgress = PhotosImportProgress()
     private var photosProgressFixture = false
     private var gateActivity = GateCheckActivity()
@@ -7011,6 +7083,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         logPhase = PhaseLogPresentation()
         diagnosticLogFolder.reset()
         batchResults = BatchResults()
+        workerExecution = LiveWorkerExecution()
         batchOverview.isHidden = true
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
@@ -7406,6 +7479,24 @@ private final class AppController: NSObject, NSWindowDelegate {
         var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
+            let processEvidenceWasInvalid = workerExecution.invalid
+            if workerExecution.ingest(line) {
+                diagnosticLogFolder.reset()
+                lastBufferedDiagnostic = nil
+                if developerMode { displayLines.append(line) }
+                if workerExecution.invalid && !processEvidenceWasInvalid {
+                    let warning = "[WARN] " + localized("process.observation_invalid")
+                    displayLines.append(warning)
+                    privateLines.append(warning)
+                    if captureDiagnostics && latestDiagnostics.ingest(warning) { latestChanged = true }
+                } else if let observation = workerExecution.latest, let signal = observation.signal {
+                    let detail = localized("process.signal", observation.pipeline.uppercased(),
+                        LiveWorkerExecution.signalDescription(signal))
+                    displayLines.append(detail)
+                    privateLines.append(detail)
+                }
+                continue
+            }
             if batchResults.ingestTransportGap(line) {
                 let warning = "[WARN] " + (batchResults.transportGapNotice ?? localized("result.control_records_missing"))
                 displayLines.append(warning)
@@ -7812,6 +7903,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 lastRequest = retry
                 sawResumeDecision = false
                 batchResults = BatchResults()
+                workerExecution = LiveWorkerExecution()
                 batchOverview.isHidden = true
                 logPhase = PhaseLogPresentation()
                 diagnosticLogFolder.reset()
@@ -7836,17 +7928,28 @@ private final class AppController: NSObject, NSWindowDelegate {
                 photosDiagnostics.markFailed()
             }
             refreshDiagnostics()
-            let failureMessage = batchResults.hasPartialSuccess
+            let interrupted = interruptedWithoutFileSummary
+            let failureMessage = interrupted
+                ? localized("result.process_terminated") + " · " + localized("result.files_not_summarized")
+                    + "\n" + error.localizedDescription
+                : batchResults.hasPartialSuccess
                 ? localized("result.partially_completed") + " · " + error.localizedDescription
                 : error.localizedDescription
-            let tag = deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
+            let tag = interrupted || deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
             appendLog("[\(tag)] \(failureMessage)" + countSummary,
                       captureDiagnostics: latestDiagnostics.failure == nil)
             setProcessing(false)
-            if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
+            if interrupted { setLocalizedStatus("result.process_terminated") }
+            else if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
             else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
             else { setStatus(error.localizedDescription) }
         }
+    }
+
+    private var interruptedWithoutFileSummary: Bool {
+        processEndedWithError && host.controlState != "cancelled" && workerExecution.interruptionSignal != nil
+            && batchResults.totals.isEmpty && batchResults.pendingTotals.isEmpty && !batchResults.hasFastDelivery
+            && !batchResults.isIncomplete && !batchResults.mandatoryEvidenceConflict && !batchResults.outputCleanupInvalid
     }
 
     private func refreshBatchOverview(processExit: Int32? = nil, exitedNormally: Bool? = nil) {
@@ -7858,6 +7961,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             return
         }
         let photos = lastRequest?.shortestPath ?? false
+        let interrupted = interruptedWithoutFileSummary
         let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
         let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
@@ -7888,6 +7992,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let title: String
         if batchResults.mandatoryEvidenceConflict { title = batchResults.integritySummary ?? localized("result.unconfirmed") }
         else if host.controlState == "cancelled" { title = localized("status.stopped") }
+        else if interrupted { title = localized("result.process_terminated") }
         else if countsNeedReview { title = localized("result.counts_need_review") }
         else if uncertain { title = localized("result.unconfirmed") }
         else if deferred { title = localized("result.delivery_deferred") }
@@ -7899,13 +8004,20 @@ private final class AppController: NSObject, NSWindowDelegate {
         batchOverviewTitle.stringValue = title
         batchOverviewTitle.textColor = batchResults.mandatoryEvidenceConflict ? .systemRed
             : host.controlState == "cancelled" ? .secondaryLabelColor
+            : interrupted ? .systemOrange
             : countsNeedReview ? .systemOrange
             : uncertain ? .systemRed : deferred ? .systemOrange : verifiedPartialFailure ? .secondaryLabelColor
             : batchResults.hasFailure ? (hasConfirmedFileFailures ? .systemOrange : .systemRed) : .labelColor
-        batchOverviewCounts.stringValue = logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
+        batchOverviewCounts.stringValue = interrupted ? localized("result.files_not_summarized")
+            : logDetailsExpanded ? batchResults.summary ?? localized("result.incomplete")
             : batchResults.compactSummary
         let value = { (number: Int?) in number.map(String.init) ?? localized("result.unknown") }
         batchOverviewDelivery.isHidden = !batchResults.hasFastDelivery
+        if interrupted, let observation = workerExecution.latest, let signal = observation.signal {
+            batchOverviewDelivery.stringValue = localized("process.signal", observation.pipeline.uppercased(),
+                LiveWorkerExecution.signalDescription(signal))
+            batchOverviewDelivery.isHidden = false
+        }
         let cleanupNeedsAttention = batchResults.outputCleanupInvalid
             || batchResults.outputCleanups.contains(where: \.needsAttention)
             || (photos && batchResults.outputCleanups.isEmpty)
@@ -7950,6 +8062,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressRow.isHidden = true
         if batchResults.mandatoryEvidenceConflict { setStatus(title) }
         else if host.controlState == "cancelled" { setLocalizedStatus("status.stopped") }
+        else if interrupted { setLocalizedStatus("result.process_terminated") }
         else if countsNeedReview { setLocalizedStatus("result.counts_need_review") }
         else if uncertain { setLocalizedStatus("result.unconfirmed") }
         else if deferred { setLocalizedStatus("result.delivery_deferred") }
@@ -8671,6 +8784,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    func showProcessInterruptionFixture() {
+        deliveryFixture = true
+        restoreFixture = true // Reuse the existing fixture guard against execution and live Photos queries.
+        operationPopup.select(operationPopup.itemArray.first {
+            ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+        })
+        targetField.stringValue = "/synthetic/interrupted-scan"
+        operationChanged()
+        clearBatchLog()
+        lastRequest = ProcessorRequest(targetPath: targetField.stringValue, processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl)
+        appendLog(#"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-fixture-1","run_id":"scan-fixture-run","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#)
+        appendLog(#"MFB_PROGRESS={"schema_version":1,"stage_id":"scan-fixture","stage":"modern_source_inspection","processed":1,"total":2,"state":"running"}"#)
+        appendLog(#"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-fixture-1","run_id":"scan-fixture-run","pipeline":"img","state":"exited","pid":1234,"exit_code":null,"signal":15}"#)
+        processingCompleted(.failure(HostError(message: "synthetic launcher exit=1; worker signal=15")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
     func showRestoreFixture(photosAudit: Bool, integrityIssues: Bool = false) {
         deliveryFixture = true
         restoreFixture = true
@@ -9195,6 +9328,98 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard !privacyEnabled, logView.string.contains(ordinary), !targetField.isHidden else {
             throw HostError(message: "Turning display privacy off lost the retained original presentation")
         }
+    }
+
+    func validateProcessInterruptionForSelfTest() throws {
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/interrupted-scan", processingMode: .imagesOnly,
+                                       operationMode: .fastImgJxl)
+        let spawn = #"MFB_HISTORY_WORKER_EXECUTION={"schema_version":1,"scope":"os_child_process","invocation_id":"scan-call-1","run_id":"scan-run-1","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#
+        let terminated = spawn.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+            .replacingOccurrences(of: #""signal":null"#, with: #""signal":15"#)
+        func finish(_ observations: [String]) {
+            clearBatchLog()
+            appendLog(observations.joined(separator: "\n"))
+            processingCompleted(.failure(HostError(message: "synthetic launcher exit=1")))
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+        }
+        finish([spawn, terminated])
+        guard batchOverviewTitle.stringValue == localized("result.process_terminated"),
+              batchOverviewTitle.textColor?.isEqual(NSColor.systemOrange) == true,
+              batchOverviewCounts.stringValue == localized("result.files_not_summarized"),
+              !batchOverviewDelivery.isHidden, batchOverviewDelivery.stringValue.contains("SIGTERM"),
+              statusLabel.stringValue == localized("result.process_terminated"),
+              logView.string.contains("SIGTERM"), !logView.string.contains("MFB_HISTORY_WORKER_EXECUTION="),
+              batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty, processEndedWithError else {
+            throw HostError(message: "Bound SIGTERM without file results remained an all-unknown batch failure or invented file outcomes")
+        }
+        for invalid in [[terminated], [spawn, terminated.replacingOccurrences(of: "1234", with: "1235")],
+                        [spawn, terminated.replacingOccurrences(of: "scan-run-1", with: "another-run")],
+                        [spawn, terminated.replacingOccurrences(of: #""pipeline":"img""#, with: #""pipeline":"vid""#)],
+                        [spawn, spawn, terminated], [spawn, terminated, terminated],
+                        [spawn, terminated, spawn.replacingOccurrences(of: "scan-call-1", with: "still-active")],
+                        [spawn, terminated, "MFB_HISTORY_WORKER_EXECUTION={}"]] {
+            finish(invalid)
+            guard batchOverviewTitle.stringValue == localized("result.unconfirmed"),
+                  batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+                throw HostError(message: "Malformed or mismatched process observations became a trusted termination classification")
+            }
+        }
+        finish([spawn, terminated.replacingOccurrences(of: #""signal":15"#, with: #""signal":2"#)])
+        guard batchOverviewTitle.stringValue == localized("result.process_terminated"), logView.string.contains("SIGINT") else {
+            throw HostError(message: "Bound SIGINT was misclassified or attributed to a user cancellation")
+        }
+        var sequential: [String] = []
+        for index in 0..<96 {
+            let normalSpawn = spawn.replacingOccurrences(of: "scan-call-1", with: "normal-call-\(index)")
+            sequential.append(normalSpawn)
+            sequential.append(normalSpawn.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+                .replacingOccurrences(of: #""exit_code":null"#, with: #""exit_code":0"#))
+        }
+        finish(sequential + [spawn, terminated])
+        guard !workerExecution.invalid, batchOverviewTitle.stringValue == localized("result.process_terminated") else {
+            throw HostError(message: "Sequential normal workers exhausted live process tracking before a bound final SIGTERM")
+        }
+        finish([spawn, terminated.replacingOccurrences(of: #""signal":15"#, with: #""signal":9"#)])
+        guard batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+            throw HostError(message: "A serious process signal inherited the softer SIGTERM presentation")
+        }
+        finish([spawn, terminated, "Integrity Issues: 1"])
+        guard batchResults.mandatoryEvidenceConflict,
+              batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true,
+              batchOverviewTitle.stringValue != localized("result.process_terminated") else {
+            throw HostError(message: "A known integrity conflict was softened by the process termination presentation")
+        }
+        for evidence in [#"MFB_GATE_ACTIVITY={"schema_version":1,"stage_id":"failed-gate","gate":"local","check":"inventory","completed":0,"total":6,"state":"failed"}"#,
+                         "MFB_BATCH_RESULT={}", "MFB_FAST_IMG_RESULT={}",
+                         #"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":1,"ignored":0,"unprocessed":0,"exit_code":1}"#] {
+            finish([spawn, terminated, evidence])
+            guard batchOverviewTitle.stringValue != localized("result.process_terminated"),
+                  batchOverviewTitle.textColor?.isEqual(NSColor.systemRed) == true else {
+                throw HostError(message: "Process interruption hid a Gate failure, incomplete record or actual terminal file count")
+            }
+        }
+        clearBatchLog()
+        processingCompleted(.failure(HostError(message: "next batch synthetic launcher exit=1")))
+        refreshBatchOverview(processExit: 1, exitedNormally: true)
+        guard batchOverviewTitle.stringValue == localized("result.unconfirmed"), !logView.string.contains("SIGTERM") else {
+            throw HostError(message: "A prior process termination leaked into the next batch")
+        }
+        clearBatchLog()
+        let scan = #"MFB_PROGRESS={"schema_version":1,"stage_id":"inspection-1","stage":"modern_source_inspection","processed":0,"total":2,"state":"running"}"#
+        appendLog(scan)
+        guard fileProgress.event?.stage == "modern_source_inspection", fileProgress.event?.processed == 0,
+              fileProgress.event?.percentage == 0, !fileProgressRow.isHidden,
+              fileProgressLabel.stringValue.contains(localized("progress.stage.modern_source_inspection")),
+              !logView.string.contains("MFB_PROGRESS="), batchResults.totals.isEmpty else {
+            throw HostError(message: "Original-format inspection progress 0/2 was rejected or became a batch outcome")
+        }
+        appendLog(scan.replacingOccurrences(of: #""processed":0"#, with: #""processed":2"#)
+            .replacingOccurrences(of: #""state":"running""#, with: #""state":"finished""#))
+        guard fileProgress.event?.processed == 2, fileProgress.event?.state == "finished",
+              batchResults.totals.isEmpty, batchResults.pendingTotals.isEmpty else {
+            throw HostError(message: "Completed inspection progress fabricated final file results")
+        }
+        clearBatchLog()
     }
 
     func validateInterfaceForSelfTest() throws {
@@ -10213,7 +10438,11 @@ private func runSelfTest() -> Int32 {
                   bundle.localizedString(forKey: "button.run", value: "button.run", table: nil)
                       != "button.run",
                   bundle.localizedString(forKey: "status.count", value: "status.count", table: nil)
-                      .contains("%@")
+                      .contains("%@"),
+                  ["result.process_terminated", "result.files_not_summarized", "process.signal", "process.observation_invalid",
+                   "progress.stage.modern_source_inspection", "progress.inspection"].allSatisfy({
+                      bundle.localizedString(forKey: $0, value: $0, table: nil) != $0
+                  })
             else {
                 fputs("native-host self-test missing localization: \(localization)\n", stderr)
                 return 1
@@ -10545,6 +10774,7 @@ private func runSelfTest() -> Int32 {
             try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validatePrivacyForSelfTest()
             try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
+            try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()
             let preflightFailures = PreflightInspectorPanel.selfTest()
@@ -10581,7 +10811,7 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
     || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
     || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
     || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
-    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
+    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") || CommandLine.arguments.contains("--interrupted-scan-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -10590,7 +10820,8 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
+            if CommandLine.arguments.contains("--interrupted-scan-ui-fixture") { controller.showProcessInterruptionFixture() }
+            else if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
                 || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
                 controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"),
                     integrityIssues: CommandLine.arguments.contains("--restore-integrity-ui-fixture"))

@@ -1,7 +1,7 @@
 use crate::ExiftoolBuilder;
 use crate::builder_base::ToolBuilder;
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use quick_xml::events::Event;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -2371,52 +2371,103 @@ impl MergeSummary {
 /// # Errors
 /// Returns an error if merging fails.
 pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
-    let stem = crate::media_conversion_gate::path_file_stem_or_empty(input, "xmp_merger:copied");
-    let ext = crate::media_conversion_gate::path_extension_lowercase_or_empty_unchecked(input);
-    let parent = crate::media_conversion_gate::path_parent_or_dot(input);
-
-    let ext_lower = ext.to_lowercase();
-    let xmp_candidates = [
-        parent.join(format!("{stem}.xmp")),
-        parent.join(format!("{stem}.{ext}.xmp")),
-        parent.join(format!("{stem}.{ext_lower}.xmp")),
-        parent.join(format!("{stem}.XMP")),
-    ];
-
-    for xmp_path in &xmp_candidates {
-        if is_regular_non_symlink(xmp_path) {
-            if crate::progress_mode::is_verbose_mode() {
-                crate::log_info!(
-                    crate::infra::static_logs::messages::LABEL_XMP,
-                    &format!("Found XMP sidecar: {path}", path = xmp_path.display())
-                );
-            }
-
-            let config = Config {
-                delete_xmp_after_merge: false,
-                overwrite_mode: OverwriteMode::Original,
-                // file_copier applies timestamps once after merge via apply_file_timestamps.
-                preserve_timestamps: false,
-                log_level: LogLevel::Quiet,
-            };
-
-            let merger = XmpMerger::new(config);
-
-            crate::progress_mode::xmp_merge_attempt();
-            match merger.merge_xmp(xmp_path, dest) {
-                Ok(()) => {
-                    crate::progress_mode::xmp_merge_success();
-                }
-                Err(e) => {
-                    crate::progress_mode::xmp_merge_failure(&e.to_string());
-                    bail!("Failed to merge XMP: {e}");
-                }
-            }
-            return Ok(true);
+    let Some(xmp_path) = crate::metadata::find_xmp_sidecar(input)? else {
+        return Ok(false);
+    };
+    crate::metadata::validate_xmp_sidecar(&xmp_path)?;
+    ensure!(
+        !crate::checkpoint::files_alias_same_inode(input, dest)?,
+        "refusing copied-file XMP merge into its source or an alias: {}",
+        dest.display()
+    );
+    // The writer already refuses Unknown containers. Check that same admission
+    // before hashing/copying a possibly large passthrough file into staging.
+    ensure!(
+        crate::image::format_detect::detect_true_format(dest)?
+            != crate::image::format_detect::FormatKind::Unknown,
+        "copied-file XMP embedding requires a proved container; preserve the valid packet as a sidecar instead"
+    );
+    let input_identity = source_file_identity(input)?;
+    let input_hash = crate::common_utils::calculate_blake3_hash(input)?;
+    let destination_identity = source_file_identity(dest)?;
+    let destination_hash = crate::common_utils::calculate_blake3_hash(dest)?;
+    let xmp_hash = crate::common_utils::calculate_blake3_hash(&xmp_path)?;
+    if crate::progress_mode::is_verbose_mode() {
+        crate::log_info!(
+            crate::infra::static_logs::messages::LABEL_XMP,
+            &format!("Found XMP sidecar: {}", xmp_path.display())
+        );
+    }
+    let merger = XmpMerger::new(Config {
+        delete_xmp_after_merge: false,
+        overwrite_mode: OverwriteMode::Original,
+        // file_copier applies timestamps once after merge via apply_file_timestamps.
+        preserve_timestamps: false,
+        log_level: LogLevel::Quiet,
+    });
+    crate::progress_mode::xmp_merge_attempt();
+    let publication_result = (|| -> Result<()> {
+        // This copied-file wrapper adds pairing/selection proof beyond the
+        // writer's own container proof. Keep those checks before publication,
+        // including for generic writers which may modify their target in place.
+        let parent = crate::media_conversion_gate::path_parent_or_dot(dest);
+        let suffix = format!(
+            ".{}",
+            dest.extension().unwrap_or_default().to_string_lossy()
+        );
+        let staged = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+            "copied_file_xmp",
+            parent,
+            ".mfb-copy-xmp-",
+            &suffix,
+        )?
+        .into_temp_path();
+        std::fs::copy(dest, &staged)?;
+        ensure!(
+            crate::common_utils::calculate_blake3_hash(&staged)? == destination_hash,
+            "copied-file destination changed while staging XMP merge"
+        );
+        merger.merge_xmp(&xmp_path, &staged)?;
+        crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+            input, &xmp_path, &staged,
+        )?;
+        let report = crate::metadata::preserve_filesystem_for_delivery(dest, &staged)?;
+        ensure!(
+            ![report.xattr, report.timestamps]
+                .contains(&crate::metadata::MetadataLayerOutcome::PartialAudit),
+            "copied-file XMP filesystem metadata proof was partial"
+        );
+        crate::metadata::verify_exact_metadata_copy(dest, &staged)?;
+        ensure!(
+            crate::metadata::find_xmp_sidecar(input)?.as_deref() == Some(xmp_path.as_path())
+                && crate::common_utils::calculate_blake3_hash(&xmp_path)? == xmp_hash,
+            "source XMP changed during copied-file merge"
+        );
+        ensure!(
+            source_file_identity(input)? == input_identity
+                && crate::common_utils::calculate_blake3_hash(input)? == input_hash,
+            "copied-file source changed during XMP merge"
+        );
+        ensure!(
+            source_file_identity(dest)? == destination_identity
+                && crate::common_utils::calculate_blake3_hash(dest)? == destination_hash,
+            "copied-file destination changed before XMP publication"
+        );
+        crate::io_utils::sync_committed_file_and_parent(&staged)?;
+        staged.persist(dest).map_err(|error| error.error)?;
+        crate::io_utils::sync_committed_file_and_parent(dest)?;
+        Ok(())
+    })();
+    match publication_result {
+        Ok(()) => {
+            crate::progress_mode::xmp_merge_success();
+            Ok(true)
+        }
+        Err(error) => {
+            crate::progress_mode::xmp_merge_failure(&error.to_string());
+            bail!("Failed to merge XMP: {error}");
         }
     }
-
-    Ok(false)
 }
 
 #[cfg(test)]
@@ -3263,18 +3314,127 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_xmp_for_copied_file_ignores_directory_sidecar() {
-        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
-        let input = temp_dir.path().join("photo.jpg");
-        let dest = temp_dir.path().join("copy.jpg");
-        let xmp_dir = temp_dir.path().join("photo.xmp");
+    fn copied_file_xmp_refuses_invalid_or_ambiguous_candidates_without_mutation() {
+        for ambiguous in [false, true] {
+            let temp_dir = TempDir::new().expect("candidate root");
+            let input = temp_dir.path().join("photo.jpg");
+            let dest = temp_dir.path().join("copy.jpg");
+            let sidecar = temp_dir.path().join("photo.xmp");
+            let compound = temp_dir.path().join("photo.jpg.xmp");
+            fs::write(&input, b"original source").expect("source bytes");
+            fs::write(&dest, b"previous destination").expect("destination bytes");
+            if ambiguous {
+                fs::write(&sidecar, b"first sidecar").expect("first candidate");
+                fs::write(&compound, b"conflicting sidecar").expect("second candidate");
+            } else {
+                fs::create_dir(&sidecar).expect("non-regular candidate");
+            }
 
-        fs::write(&input, "fake jpg").unwrap_or_else(|_| panic!("error"));
-        fs::write(&dest, "fake jpg").unwrap_or_else(|_| panic!("error"));
-        fs::create_dir(&xmp_dir).unwrap_or_else(|_| panic!("error"));
+            let error = merge_xmp_for_copied_file(&input, &dest)
+                .expect_err("uncertain XMP discovery must be refused before merging");
+            assert!(
+                error.to_string().contains(if ambiguous {
+                    "ambiguous XMP"
+                } else {
+                    "regular"
+                }),
+                "{error}"
+            );
+            assert_eq!(fs::read(&input).unwrap(), b"original source");
+            assert_eq!(fs::read(&dest).unwrap(), b"previous destination");
+            if ambiguous {
+                assert_eq!(fs::read(&sidecar).unwrap(), b"first sidecar");
+                assert_eq!(fs::read(&compound).unwrap(), b"conflicting sidecar");
+            } else {
+                assert!(sidecar.is_dir());
+            }
+        }
+    }
 
-        let merged = merge_xmp_for_copied_file(&input, &dest).unwrap_or_else(|_| panic!("error"));
-        assert!(!merged);
+    #[test]
+    fn copied_file_xmp_keeps_unique_sidecar_merge_and_payload_proof() -> Result<()> {
+        if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let input = root.path().join("photo.jpg");
+        let dest = root.path().join("copy.jpg");
+        let sidecar = root.path().join("photo.jpg.xmp");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([18, 52, 86])).save(&input)?;
+        fs::copy(&input, &dest)?;
+        let original = fs::read(&input)?;
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">unique copied sidecar</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        fs::write(&sidecar, xmp)?;
+        let before = XmpMerger::capture_modern_container_proof(
+            &dest,
+            crate::image::format_detect::FormatKind::Jpeg,
+        )?;
+
+        assert!(merge_xmp_for_copied_file(&input, &dest)?);
+
+        let after = XmpMerger::capture_modern_container_proof(
+            &dest,
+            crate::image::format_detect::FormatKind::Jpeg,
+        )?;
+        assert_eq!(after.image_data_hash, before.image_data_hash);
+        assert_eq!(after.payload_size, before.payload_size);
+        assert_eq!(after.codec_feature_hash, before.codec_feature_hash);
+        assert!(after.has_xmp);
+        crate::metadata::verify_output_embedded_metadata_with_explicit_xmp(
+            &input, &sidecar, &dest,
+        )?;
+        assert_eq!(fs::read(&input)?, original);
+        assert_eq!(fs::read(&sidecar)?, xmp);
+        Ok(())
+    }
+
+    #[test]
+    fn copied_file_xmp_pairing_proof_fails_before_publication() -> Result<()> {
+        if !crate::test_ci_contract::exiftool_available_or_ci_panic() {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let input = root.path().join("photo.jpg");
+        let dest = root.path().join("copy.jpg");
+        let sidecar = root.path().join("photo.jpg.xmp");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([18, 52, 86])).save(&input)?;
+        fs::copy(&input, &dest)?;
+        let result = ExiftoolBuilder::new()
+            .overwrite_original()
+            .arg("-IFD0:Artist=required paired-source artist")
+            .input(&input)
+            .build()
+            .output()?;
+        ensure!(
+            result.status.success(),
+            "failed to prepare synthetic Artist tag"
+        );
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:description><rdf:Alt><rdf:li xml:lang="x-default">valid overlay</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        fs::write(&sidecar, xmp)?;
+        let input_before = fs::read(&input)?;
+        let destination_before = fs::read(&dest)?;
+        let names = || -> std::io::Result<Vec<std::ffi::OsString>> {
+            let mut entries = fs::read_dir(root.path())?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort();
+            Ok(entries)
+        };
+        let names_before = names()?;
+
+        let error = merge_xmp_for_copied_file(&input, &dest)
+            .expect_err("the valid overlay cannot substitute for missing paired-source metadata");
+
+        assert!(error.to_string().contains("Artist"), "{error}");
+        assert_eq!(fs::read(&dest)?, destination_before);
+        assert_eq!(fs::read(&input)?, input_before);
+        assert_eq!(fs::read(&sidecar)?, xmp);
+        assert_eq!(
+            names()?,
+            names_before,
+            "failed staging must leave no residue"
+        );
+        Ok(())
     }
 
     #[test]

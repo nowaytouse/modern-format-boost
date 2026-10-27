@@ -470,6 +470,10 @@
 "log.details.show" = "Show processing details";
 "log.details.hide" = "Hide processing details";
 "result.unconfirmed" = "Results not fully confirmed · Review processing history";
+"result.process_terminated" = "Processing terminated";
+"result.files_not_summarized" = "File results were not summarized. Review processing history.";
+"process.signal" = "%@ process terminated · %@";
+"process.observation_invalid" = "Process termination details could not be confirmed. Review processing history.";
 "result.integrity_issues" = "Integrity check found %@ issues · Review processing history";
 "result.delivery_deferred" = "Photos Delivery Deferred";
 "result.delivery_record_title" = "Photos Delivery Record";
@@ -608,6 +612,8 @@
 "progress.stage.image_processing" = "Image processing";
 "progress.stage.video_processing" = "Video processing";
 "progress.stage.fast_img_encode" = "Fast IMG encoding";
+"progress.stage.modern_source_inspection" = "Original-format image inspection";
+"progress.inspection" = "%@ · Inspected %@ / %@ · Stage %.2f%%";
 "progress.files" = "%@ · Files %@ / %@ · %.2f%%";
 "progress.stage_finished" = "%@ stage ended · %@ / %@ files";
 "progress.empty" = "%@ · No files in this stage";
@@ -790,7 +796,7 @@
 "helpguide.metadata.1.title" = "Recovering JPEG bytes and displaying metadata differ";
 "helpguide.metadata.1.body" = "Reversible JPEG → JXL requires the complete reconstructed JPEG to match the original byte for byte. This can retain vendor and opaque data inside the original JPEG through reconstruction. It does not mean every app can read or display that information directly from JXL. Independent display orientation, color and additional XMP require their own checks. Lossless pixels cannot replace these proofs.";
 "helpguide.metadata.2.title" = "What is checked separately";
-"helpguide.metadata.2.body" = "On preservation routes, MFB compares supported, portable EXIF, XMP, IPTC and other metadata, including readable capture times, descriptions and vendor fields. Separate checks cover ICC color profiles, orientation, pixels and container structure. Some structural fields change during conversion. A successful task alone cannot establish complete preservation of unrecognized, unrepresentable or unchecked information.";
+"helpguide.metadata.2.body" = "On preservation routes, MFB compares supported, portable EXIF, XMP, IPTC and other metadata, including readable capture times, descriptions and vendor fields. Separate checks cover ICC color profiles, orientation, pixels and container structure. Some structural fields change during conversion. A successful task alone cannot establish complete preservation of unrecognized, unrepresentable or unchecked information. For passthrough copies, matching file contents alone is also insufficient: reusing an existing file still requires checking the file attributes and XMP supported by that route.";
 "helpguide.metadata.3.title" = "XMP companion files must not be selected arbitrarily";
 "helpguide.metadata.3.body" = "XMP can store metadata in a separate file beside an image. MFB discovers supported companion names and checks the content needed for merging or delivery; a name alone does not prove historical ownership. Multiple candidates, an invalid file type or a read failure must be reported with the original retained. They must not be treated as no XMP or resolved by choosing an arbitrary candidate as preservation evidence.";
 "helpguide.metadata.4.title" = "Fast AVIF deliberately clears metadata";
