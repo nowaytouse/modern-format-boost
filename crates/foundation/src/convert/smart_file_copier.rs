@@ -304,7 +304,7 @@ pub fn smart_copy_with_structure(
         if !source
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
-            && let Some(sidecar) = crate::metadata::find_xmp_sidecar(source)
+            && let Some(sidecar) = crate::metadata::find_xmp_sidecar(source)?
             && !paths_alias(source, &sidecar)?
         {
             smart_copy_with_structure(&sidecar, output_dir, base_dir, verbose)?;

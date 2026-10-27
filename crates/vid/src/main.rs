@@ -686,7 +686,7 @@ fn fast_gif_move_original(
         );
     }
 
-    let xmp_sidecar = fast_gif_find_xmp_sidecar(input);
+    let xmp_sidecar = foundation::metadata::find_xmp_sidecar(input)?;
     foundation::io_utils::robust_move(input, &dest).with_context(|| {
         format!(
             "fast-gif failed to move original {} to {}",
@@ -711,25 +711,6 @@ fn fast_gif_move_original(
         })?;
     }
     Ok(dest)
-}
-
-fn fast_gif_find_xmp_sidecar(input: &Path) -> Option<PathBuf> {
-    if let Some(ext) = input.extension().and_then(|ext| ext.to_str()) {
-        let sidecar = input.with_extension(format!("{ext}.xmp"));
-        if sidecar.exists() {
-            return Some(sidecar);
-        }
-        let sidecar = input.with_extension(format!("{ext}.XMP"));
-        if sidecar.exists() {
-            return Some(sidecar);
-        }
-    }
-    let sidecar = input.with_extension("xmp");
-    if sidecar.exists() {
-        return Some(sidecar);
-    }
-    let sidecar = input.with_extension("XMP");
-    sidecar.exists().then_some(sidecar)
 }
 
 #[allow(clippy::fn_params_excessive_bools)]
@@ -1614,6 +1595,24 @@ mod fast_gif_tests {
                 0x00, 0x00, b'a', b'v', b'i', b's',
             ],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn fast_gif_retains_original_when_xmp_association_is_ambiguous() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("original.gif");
+        let full = root.path().join("original.gif.xmp");
+        let stem = root.path().join("original.xmp");
+        std::fs::write(&source, b"original media bytes")?;
+        std::fs::write(&full, b"first metadata")?;
+        std::fs::write(&stem, b"second metadata")?;
+        let error = super::fast_gif_move_original(&source, root.path(), &root.path().join("saved"))
+            .expect_err("ambiguous metadata must block moving the source");
+        assert!(error.to_string().contains("ambiguous XMP"));
+        assert_eq!(std::fs::read(source)?, b"original media bytes");
+        assert_eq!(std::fs::read(full)?, b"first metadata");
+        assert_eq!(std::fs::read(stem)?, b"second metadata");
         Ok(())
     }
 

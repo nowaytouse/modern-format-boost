@@ -23,6 +23,20 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Early Recovery Choices And Metadata Evidence (2026-10-27)
+
+- Ask how to handle saved Fast IMG state before recursive media scanning. GUI
+  choices no longer wait on terminal input or become a failed-media overview.
+  Continue still revalidates the existing task; no filename-based reuse is added.
+- Require unique, regular XMP companion discovery with explicit read errors
+  across conversion, restoration, output auditing and cleanup. Keep Tier-2
+  metadata failures isolated to their affected assets.
+- Verify reconstructible JXL display orientation before atomic publication,
+  alongside the existing exact-byte and gain-map proof. Keep later delivery gates.
+- Replace predictable checkpoint temporary writes with synced private temporary
+  files and atomic persistence. Add native help explaining metadata preservation,
+  deliberate Meme Mode clearing and Photos/iCloud boundaries.
+
 ### Bind Standard Workers To Preflight Sources (2026-10-25)
 
 - Standard record and fail-fast runs now submit only inventoried single files;

@@ -138,8 +138,8 @@ pub fn verify_output_embedded_metadata(
 
     let mismatches = match policy {
         MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => {
-            let src_sidecar = super::find_xmp_sidecar(src);
-            let dst_sidecar = super::find_xmp_sidecar(dst);
+            let src_sidecar = super::find_xmp_sidecar(src)?;
+            let dst_sidecar = super::find_xmp_sidecar(dst)?;
             let jpeg_archive = is_jpeg_archive_pair(src, dst)?;
             let [mut src_tags, mut dst_tags, mut source_xmp, output_xmp] =
                 preservable_delivery_tag_maps(
@@ -941,7 +941,7 @@ fn removable_payload_bytes(path: &Path) -> io::Result<u64> {
             logical_bytes
         }
     };
-    if let Some(sidecar) = super::find_xmp_sidecar(path) {
+    if let Some(sidecar) = super::find_xmp_sidecar(path)? {
         total = total.saturating_add(std::fs::metadata(&sidecar)?.len());
     }
     Ok(total)

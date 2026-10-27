@@ -1927,7 +1927,7 @@ pub(crate) fn merge_xmp_sidecar_into_reconstructible_jxl(
     src: &Path,
     dst: &Path,
 ) -> io::Result<bool> {
-    let Some(xmp_path) = find_xmp_sidecar(src) else {
+    let Some(xmp_path) = find_xmp_sidecar(src)? else {
         return Ok(false);
     };
     append_xmp_overlay_to_jxl(&xmp_path, dst)?;
@@ -3091,7 +3091,7 @@ fn exiv2_xmp_fallback_allowed(dst: &Path) -> io::Result<bool> {
 }
 
 fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
-    let xmp_path = find_xmp_sidecar(src);
+    let xmp_path = find_xmp_sidecar(src)?;
 
     if let Some(xmp) = xmp_path {
         let dst_meta = std::fs::metadata(dst).map_err(|e| {
@@ -3191,118 +3191,79 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
     }
 }
 
-/// Find the existing XMP sidecar associated with `src`, accepting common
-/// stem-only, compound-extension, and case variants.
-#[must_use]
-pub fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
-    if let Some(ext) = src.extension() {
-        let ext_str = ext.to_str()?;
-        let xmp_full = src.with_extension(format!("{ext_str}.xmp"));
-        if let Some(path) = existing_path_with_exact_name(&xmp_full) {
-            return Some(path);
-        }
-        let xmp_full_upper = src.with_extension(format!("{ext_str}.XMP"));
-        if let Some(path) = existing_path_with_exact_name(&xmp_full_upper) {
-            return Some(path);
-        }
-    }
-
-    let xmp_stem = src.with_extension("xmp");
-    if let Some(path) = existing_path_with_exact_name(&xmp_stem) {
-        return Some(path);
-    }
-    let xmp_stem_upper = src.with_extension("XMP");
-    if let Some(path) = existing_path_with_exact_name(&xmp_stem_upper) {
-        return Some(path);
-    }
-
-    if let Some(parent) = src.parent()
-        && let Some(src_stem_raw) = src.file_stem()
+fn xmp_candidate_matches_source(path: &Path, stem: &str, full_name: &str) -> bool {
+    if !path
+        .extension()
+        .is_some_and(|value| value.eq_ignore_ascii_case("xmp"))
     {
-        let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
-        let src_ext = src.extension().map(|e| e.to_string_lossy().to_lowercase());
-        let src_compound = if let Some(ref ext) = src_ext
-            && !ext.is_empty()
-        {
-            format!("{src_stem}.{ext}")
-        } else {
-            src_stem.clone()
-        };
-
-        match std::fs::read_dir(parent) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = match entry {
-                        Ok(entry) => entry,
-                        Err(err) => {
-                            crate::media_conversion_gate::delivery_metadata_path_audit(
-                                "delivery_metadata",
-                                parent,
-                                crate::infra::static_logs::messages::MSG_METADATA_RESTORE_INSPECT_FAIL
-                                    .replacen("{}", &parent.display().to_string(), 1)
-                                    .replacen("{}", &err.to_string(), 1),
-                            );
-                            continue;
-                        }
-                    };
-                    let path = entry.path();
-
-                    if !path.is_file() {
-                        continue;
-                    }
-
-                    if !path
-                        .extension()
-                        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
-                    {
-                        continue;
-                    }
-
-                    if let Some(xmp_stem_raw) = path.file_stem() {
-                        let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
-
-                        if xmp_stem == src_stem || xmp_stem == src_compound {
-                            return Some(path);
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                crate::media_conversion_gate::delivery_metadata_path_audit(
-                    "delivery_metadata",
-                    parent,
-                    crate::infra::static_logs::messages::MSG_METADATA_RESTORE_INSPECT_FAIL
-                        .replacen("{}", &parent.display().to_string(), 1)
-                        .replacen("{}", &err.to_string(), 1),
-                );
-            }
-        }
+        return false;
     }
-
-    None
+    let Some(candidate_stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        // A valid UTF-8 source name cannot match this stem. Do not guess by
+        // replacing invalid bytes with a visible Unicode character.
+        return false;
+    };
+    let candidate_stem = candidate_stem.to_lowercase();
+    candidate_stem == stem || candidate_stem == full_name
 }
 
-fn existing_path_with_exact_name(path: &Path) -> Option<std::path::PathBuf> {
-    let file_name = path.file_name()?;
-    let parent = path.parent()?;
-    let mut entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(err) => {
-            eprintln!("[METADATA] read_dir failed ({}): {err}", parent.display());
-            return None;
+/// Find a unique adjacent XMP candidate using supported stem or compound names.
+/// Names identify candidates, not historical ownership or valid XMP content.
+///
+/// # Errors
+/// Refuses ambiguous matches, non-regular sidecars and incomplete directory reads.
+/// A failed discovery must never be interpreted as proof that no sidecar exists.
+pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
+    let parent = src
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let stem = src
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "XMP source has no supported file stem",
+            )
+        })?
+        .to_lowercase();
+    let full_name = src
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "XMP source has no supported file name",
+            )
+        })?
+        .to_lowercase();
+    let mut selected: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(parent).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("scan XMP candidates under {}: {error}", parent.display()),
+        )
+    })? {
+        let path = entry?.path();
+        if !xmp_candidate_matches_source(&path, &stem, &full_name) {
+            continue;
         }
-    };
-    entries.find_map(|entry| match entry {
-        Ok(entry) if entry.file_name() == file_name => Some(entry.path()),
-        Ok(_) => None,
-        Err(err) => {
-            eprintln!(
-                "[METADATA] dir entry probe failed under {}: {err}",
-                parent.display()
-            );
-            None
+        let path = require_regular_sidecar(path, "XMP")?;
+        if let Some(previous) = selected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "ambiguous XMP sidecars for {}: {} and {}; originals retained",
+                    src.display(),
+                    previous.display(),
+                    path.display()
+                ),
+            ));
         }
-    })
+        selected = Some(path);
+    }
+    Ok(selected)
 }
 
 /// CONTRACT: ordered Pro metadata delivery layers (`preserve_pro`); timestamps

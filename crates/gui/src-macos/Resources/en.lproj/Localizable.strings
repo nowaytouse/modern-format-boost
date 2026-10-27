@@ -70,7 +70,7 @@
 "button.audit_restore_jpeg" = "Check Recoverability";
 "button.preview_restore_jpeg" = "Preview Restore";
 "button.preview_audit_restore_jpeg" = "Preview Check";
-"helpguide.restore.title" = "7. Restore Original JPEG";
+"helpguide.restore.title" = "8. Restore Original JPEG";
 "helpguide.restore.intro" = "This does not convert arbitrary images to JPEG. Restoration requires original-JPEG reconstruction data inside the JXL. Lossless image pixels do not imply that the original JPEG data was saved.";
 "helpguide.restore.1.title" = "File or folder: restore JPEG files";
 "helpguide.restore.1.body" = "The operation extracts JPEG data from reconstructible JXLs without selecting a new quality or applying lossy re-encoding. By default, output goes into a separate _restored_jpeg folder; successfully verified source JXLs are then removed. Unrestorable items are retained and reported. The CLI --keep-source option also retains restored JXLs; the interface currently uses the default behavior.";
@@ -203,9 +203,10 @@
 "log.diagnostics_omitted" = "The interface omitted %llu diagnostic details; result counts are unaffected. Review saved details in processing history.";
 "log.visible_tail" = "[MFB UI] Earlier content is no longer shown here; check saved content in processing history.";
 "status.processor_diagnostic_truncated" = "Startup check output was too long. Only the beginning is shown; later diagnostics were not retained. This is not a batch log.";
-"alert.resume.title" = "Unfinished task found";
-"alert.resume.info" = "Resume its verified progress or start a separate fresh run?";
-"alert.resume.resume" = "Resume";
+"alert.resume.title" = "Previous processing record found";
+"status.resume_choice_cancelled" = "Processing has not started · Choice cancelled; previous records are unchanged.";
+"alert.resume.info" = "Continuing first rechecks the originals, existing outputs and recovery evidence. Choosing to continue does not mean old outputs have passed verification. You can instead start again in a separate output folder.";
+"alert.resume.resume" = "Verify and continue";
 "alert.resume.fresh" = "Start Fresh";
 "alert.cancel" = "Cancel";
 "menu.about" = "About Modern Format Boost";
@@ -784,7 +785,19 @@
 "history.batch_issues.phase_unknown" = "Stage not recorded";
 
 "helpguide.title" = "How MFB Processes Your Media";
-"helpguide.tools.title" = "6. Retries, repair and tools";
+"helpguide.metadata.title" = "2. Metadata preservation";
+"helpguide.metadata.intro" = "Preserving as much as possible is MFB's archival goal. It is not an unconditional guarantee for every mode, format or field. Check what the selected route retains and whether its required verification completed.";
+"helpguide.metadata.1.title" = "Recovering JPEG bytes and displaying metadata differ";
+"helpguide.metadata.1.body" = "Reversible JPEG → JXL requires the complete reconstructed JPEG to match the original byte for byte. This can retain vendor and opaque data inside the original JPEG through reconstruction. It does not mean every app can read or display that information directly from JXL. Independent display orientation, color and additional XMP require their own checks. Lossless pixels cannot replace these proofs.";
+"helpguide.metadata.2.title" = "What is checked separately";
+"helpguide.metadata.2.body" = "On preservation routes, MFB compares supported, portable EXIF, XMP, IPTC and other metadata, including readable capture times, descriptions and vendor fields. Separate checks cover ICC color profiles, orientation, pixels and container structure. Some structural fields change during conversion. A successful task alone cannot establish complete preservation of unrecognized, unrepresentable or unchecked information.";
+"helpguide.metadata.3.title" = "XMP companion files must not be selected arbitrarily";
+"helpguide.metadata.3.body" = "XMP can store metadata in a separate file beside an image. MFB discovers supported companion names and checks the content needed for merging or delivery; a name alone does not prove historical ownership. Multiple candidates, an invalid file type or a read failure must be reported with the original retained. They must not be treated as no XMP or resolved by choosing an arbitrary candidate as preservation evidence.";
+"helpguide.metadata.4.title" = "Fast AVIF deliberately clears metadata";
+"helpguide.metadata.4.body" = "Fast AVIF's Meme Mode clears removable embedded metadata, including EXIF, XMP and IPTC, and verifies that clearing. This differs from ordinary JXL archival preservation. If your goal is to retain as much original media information as possible, do not treat Meme Mode as a complete-preservation mode. A higher quality value does not disable its metadata clearing.";
+"helpguide.metadata.5.title" = "File attributes, Photos and iCloud have boundaries";
+"helpguide.metadata.5.body" = "File times, permissions and supported extended attributes are preserved and checked separately, subject to filesystem precision and system behavior. Quarantine flags, compression implementation attributes and some dynamic system attributes are outside the byte-for-byte copy guarantee. Verified local Photos delivery does not establish that the library reads or displays every original field, or that iCloud has synced. Failed metadata, relationship or delivery evidence requires retaining affected originals; settings, thumbnails and matching counts cannot replace proof.";
+"helpguide.tools.title" = "7. Retries, repair and tools";
 "helpguide.tools.intro" = "Separate what recovery may do from which encoding tools may do it. Permission is not evidence that an operation ran or that a tool is available.";
 "helpguide.tools.1.title" = "Encoding retries and repair: permitted operations";
 "helpguide.tools.1.body" = "No extra recovery disables the compatibility retries and repairs governed by this setting. Fidelity-preserving retries may adjust parameters after supported JPEG failures, such as eligible E11-to-E10 retries, while still requiring exact original-JPEG reconstruction. Guarded repair additionally permits implemented recovery, such as patching a temporary color profile after a specific ICC D50 error. It does not promise to repair arbitrary damaged media or govern every internal retry.";
@@ -800,7 +813,7 @@
 "helpguide.find" = "Find in this topic";
 "helpguide.boundary" = "This guide explains the current private policy. A setting or preview is not proof that an individual file has passed verification.";
 "helpguide.policy.title" = "1. Before Processing";
-"helpguide.policy.intro" = "MFB is a private archival tool: it follows an established preservation policy, not an unrestricted format-conversion request.";
+"helpguide.policy.intro" = "MFB is a private archival tool that aims to preserve media and metadata as completely as possible. Processing follows an established preservation policy; results depend on evidence for each file.";
 "helpguide.policy.1.title" = "The policy comes before the settings";
 "helpguide.policy.1.body" = "The policy decides which media may be converted, what must be retained and when an original may be removed. Settings adjust only the choices that policy permits. Choosing a quality value cannot unlock a forbidden conversion or disable required verification.";
 "helpguide.policy.2.title" = "Inspect the content, not just the extension";
@@ -809,7 +822,7 @@
 "helpguide.policy.3.body" = "A video container can enter IMG only after strict checks establish a single still frame and no audio, extra streams or timing meaning that must be preserved. Animation and video belong to the dynamic-media route. Uncertain or protected containers do not become ordinary images merely because one frame can be decoded.";
 "helpguide.policy.4.title" = "Work folders and source-folder dates";
 "helpguide.policy.4.body" = "MFB keeps formal processing state outside the source folder and checks matching recovery state before choosing a new output folder. It minimizes source-folder changes. It restores supported dates only when it can attribute the changes to its own work; concurrent changes and filesystem limits prevent an absolute zero-footprint guarantee.";
-"helpguide.routes.title" = "2. What Happens to Each Image";
+"helpguide.routes.title" = "3. What Happens to Each Image";
 "helpguide.routes.intro" = "Different sources have different preservation contracts. One global D, E or quality value does not describe every route.";
 "helpguide.routes.1.title" = "JPEG: preserve the original JPEG bytes";
 "helpguide.routes.1.body" = "The reversible route stores JPEG data in JXL and must reconstruct the original JPEG byte for byte. This is not a new lossy pixel encode, and pixel distance D does not control it. JPEG Effort comparison is available in both ordinary IMG and Fast JXL, with separate saved choices for each.";
@@ -819,7 +832,7 @@
 "helpguide.routes.3.body" = "Eligible older lossy stills may use the existing guarded JXL quality search. Modern lossy formats and existing JXL normally retain their native encoding. The actual source, container rules and size policy decide admission; enabling search does not override those decisions.";
 "helpguide.routes.4.title" = "Fast JXL and Fast AVIF are different workflows";
 "helpguide.routes.4.body" = "Fast JXL centers on reversible JPEG conversion and its native-media delivery rules. Fast AVIF has its own Q/Speed search and first attempts true lossless where required. Its Meme Mode metadata-cleanup policy differs from ordinary JXL archival preservation. Existing AVIF is not re-encoded just because a Q value was selected.";
-"helpguide.search.title" = "3. How the Searches Work";
+"helpguide.search.title" = "4. How the Searches Work";
 "helpguide.search.intro" = "Automatic search compares real candidates inside the selected route. Fixed values are manual alternatives. These searches do not give permission to weaken the preservation policy.";
 "helpguide.search.1.title" = "JPEG: compare every Effort and keep the smallest";
 "helpguide.search.1.body" = "Full comparison covers E1 through E11. It tries E9 as an initial size reference, then completes all ten other efforts; low efforts are not skipped and E9 is not a predetermined winner. It compares complete JXL files after the same metadata handling, preferring lower E on equal sizes. The first usable candidate and every possible replacement must pass exact JPEG reconstruction. Larger non-contenders need no repeated reconstruction, and the winning file is reused. Unsupported or failed efforts still make the comparison incomplete and preserve the source. This order aims to reduce repeated checks, not guarantee faster processing for every image.";
@@ -831,7 +844,7 @@
 "helpguide.search.4.body" = "Higher AVIF Q means higher requested quality. Automatic search uses the existing bounded quality search; a saved fixed Q stays inactive until fixed mode is chosen. The locator uses Speed6, but its file is discarded before confirmation at the selected final Speed. The final domain is also used for verification. A failed fixed quality is not secretly lowered to create success.";
 "helpguide.search.5.title" = "What automatic search does not mean";
 "helpguide.search.5.body" = "E selection followed by D exploration is sequential, not an exhaustive joint search. It does not yet use a new low-E shortcut to prove a high-E result. JPEG byte reconstruction, lossless pixels and perceptual quality checks are different guarantees; none substitutes for metadata or delivery verification. Logs record actual candidates and failures for diagnosis.";
-"helpguide.safety.title" = "4. Verification and Delivery";
+"helpguide.safety.title" = "5. Verification and Delivery";
 "helpguide.safety.intro" = "Encoded does not mean verified. Verified locally does not mean imported into Photos. These stages have separate evidence and separate failures.";
 "helpguide.safety.1.title" = "Validate the actual output";
 "helpguide.safety.1.body" = "A successful encoder exit and a smaller file are only observations. MFB applies the route's required payload, image or reconstruction checks and binds the evidence to the current source and output. Invalid, changed or incomplete evidence blocks the relevant delivery or cleanup step.";
@@ -841,7 +854,7 @@
 "helpguide.safety.3.body" = "When import is selected, MFB uses the configured Photos destination and backend, then checks delivery. Matching asset counts or a visible thumbnail alone do not prove the imported resource is correct. Photos or delivery failure is not reclassified as a harmless per-file conversion failure.";
 "helpguide.safety.4.title" = "Delete only with the owning route's proof";
 "helpguide.safety.4.body" = "Cleanup needs the owning workflow's completed verification and durable delivery evidence. Retained failures and intentionally skipped sources are not converted sources and must not be deleted as though they were. Unrecognized files in an output folder are not owned merely because the folder name ends in optimized.";
-"helpguide.results.title" = "5. Results and Recovery";
+"helpguide.results.title" = "6. Results and Recovery";
 "helpguide.results.intro" = "The summary stays short; the details and History preserve the evidence. A friendly message must not hide an incomplete or unsafe result.";
 "helpguide.results.1.title" = "Understand the counts";
 "helpguide.results.1.body" = "Processed files are divided into succeeded, failed, skipped and ignored. Discovered files also include anything not yet processed. A failed item is not a successful skip. Recovered or reused outputs are not counted as newly converted savings. Missing or inconsistent evidence must remain unknown, not become a guessed zero or MATCH.";

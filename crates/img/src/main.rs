@@ -4046,9 +4046,8 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     let output_format_name = if strategy == "avif" { "AVIF" } else { "JXL" };
     let mut retry_requested = retry.0;
 
-    let input_plan = FastImgInputPlan::from_input(input, recursive.0)?;
     let remove_selected_root = input.is_dir();
-    let src_dir = input_plan.src_root;
+    let src_dir = FastImgInputPlan::source_root(input)?;
     let _source_lock = foundation::acquire_dir_lock(&src_dir).with_context(|| {
         format!(
             "fast-img could not acquire exclusive lock for {}",
@@ -4073,6 +4072,26 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )
     };
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
+    if let Some(marker) = &existing_marker
+        && !dry_run.0
+        && !fresh.0
+        && !retry_requested
+    {
+        fast_img_require_interactive_confirmation(
+            "[RESUME  ] A saved fast-img task exists. Verify its sources, outputs and delivery evidence before continuing? [y/N] ",
+            "MFB_RESUME_DECISION_REQUIRED: saved task found before media scanning; no output was prepared. Rerun with --retry to verify and continue or --no-resume to use an isolated new output",
+        )?;
+        println!(
+            "[RESUME  ] selected saved task at {}; scanning and re-verifying current sources before any reuse",
+            marker.stage.as_str()
+        );
+        retry_requested = true;
+    }
+    let input_plan = FastImgInputPlan::from_input(input, recursive.0)?;
+    anyhow::ensure!(
+        input_plan.src_root == src_dir,
+        "fast-img source root changed before inventory"
+    );
     let FastImgSourceInventory {
         source_files: source_jpegs,
         scan_failures,
@@ -4442,6 +4461,11 @@ fn fast_img_requires_resume_decision(
 }
 
 fn fast_img_require_interactive_confirmation(prompt: &str, declined: &str) -> anyhow::Result<()> {
+    // The GUI owns the choice. Even if a launcher uses a PTY for output, do not
+    // block waiting for terminal input that the native window cannot provide.
+    if std::env::var_os("FROM_APP").is_some_and(|value| value == "1") {
+        anyhow::bail!("{declined}");
+    }
     if foundation::fast_img::prompt_user_confirm(prompt)? {
         Ok(())
     } else {
@@ -5652,7 +5676,7 @@ fn fast_img_run_encode_job_inner(
         .context("fast-img source identity at encode admission")?;
     let result = if strategy == "avif" {
         let format = foundation::image::format_detect::detect_true_format(&job.source)?;
-        if let Some(sidecar) = foundation::metadata::find_xmp_sidecar(&job.source) {
+        if let Some(sidecar) = foundation::metadata::find_xmp_sidecar(&job.source)? {
             foundation::metadata::validate_xmp_sidecar(&sidecar).with_context(|| {
                 format!(
                     "FastImg AVIF Meme Mode found an invalid XMP sidecar {}; source retained",
@@ -7020,6 +7044,23 @@ struct FastImgInputPlan {
 }
 
 impl FastImgInputPlan {
+    fn source_root(input: &Path) -> anyhow::Result<PathBuf> {
+        let canonical = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
+        let metadata = std::fs::metadata(&canonical)
+            .with_context(|| format!("inspect fast-img selected input {}", canonical.display()))?;
+        if metadata.is_file() {
+            return canonical
+                .parent()
+                .map(Path::to_path_buf)
+                .context("fast-img single-file input has no parent");
+        }
+        anyhow::ensure!(
+            metadata.is_dir(),
+            "fast-img selected input is not a file or directory"
+        );
+        Ok(canonical)
+    }
+
     fn from_input(input: &Path, recursive: bool) -> anyhow::Result<Self> {
         let canonical = foundation::media_conversion_gate::canonicalize_for_tool_input(input);
         if canonical.is_file() {
@@ -7638,7 +7679,7 @@ fn restore_jpeg_stage_xmp_sidecar(
         .map_err(|err| anyhow::anyhow!("restore-jpeg XMP temp path failed: {err}"))?;
     let guard = foundation::conversion::TempOutputGuard::new(temp_xmp.clone());
     let extracted = restore_jpeg_extract_xmp_to_temp(input, &temp_xmp)?;
-    let adjacent = foundation::metadata::find_xmp_sidecar(input);
+    let adjacent = foundation::metadata::find_xmp_sidecar(input)?;
     let expected_hash;
 
     if let Some(adjacent) = adjacent.as_deref() {
@@ -7721,7 +7762,7 @@ fn restore_jpeg_commit_xmp_sidecar(
         staged.source_hash == reconstruction_source_hash,
         "restore-jpeg source changed between XMP staging and JPEG reconstruction"
     );
-    let current_sidecar = foundation::metadata::find_xmp_sidecar(input);
+    let current_sidecar = foundation::metadata::find_xmp_sidecar(input)?;
     anyhow::ensure!(
         current_sidecar.as_deref()
             == staged
@@ -11525,7 +11566,7 @@ mod fast_img_hardening_tests {
         assert!(restored.committed);
         assert!(output.exists());
         assert_eq!(std::fs::read(&output)?, std::fs::read(&expected_jpeg)?);
-        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
+        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)?
             .context("restored XMP sidecar missing")?;
         assert_eq!(std::fs::read(restored_xmp)?, std::fs::read(&source_xmp)?);
         let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
@@ -11557,7 +11598,7 @@ mod fast_img_hardening_tests {
             super::restore_single_jpeg(&source_without_xmp, &input_root, &output_root, false)?;
         assert!(restored_without_xmp.committed);
         assert!(output_root.join("plain.jpg").exists());
-        assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg")).is_none());
+        assert!(foundation::metadata::find_xmp_sidecar(&output_root.join("plain.jpg"))?.is_none());
 
         let plain_output = output_root.join("plain.jpg");
         let plain_bytes = std::fs::read(&plain_output)?;
@@ -11847,7 +11888,7 @@ mod fast_img_hardening_tests {
         assert!(deleted);
         assert!(!source.exists());
         assert!(!source_xmp.exists());
-        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)
+        let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)?
             .context("verified restored XMP sidecar missing")?;
         assert_eq!(std::fs::read(restored_xmp)?, expected_xmp);
         assert!(unrelated_png.exists());
@@ -13759,6 +13800,77 @@ mod fast_img_hardening_tests {
         };
 
         super::validate_fast_img_options(&options);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn saved_fast_img_choice_precedes_recursive_source_scan() -> anyhow::Result<()> {
+        if std::env::var_os("MFB_EARLY_RESUME_TEST_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", "fast_img_hardening_tests::saved_fast_img_choice_precedes_recursive_source_scan", "--nocapture"])
+                .env("MFB_EARLY_RESUME_TEST_CHILD", "1")
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        let input = root.path().join("input");
+        let blocked = input.join("not-yet-scanned");
+        std::fs::create_dir_all(&blocked)?;
+        let input = input.canonicalize()?;
+        let output = root.path().join("input_optimized");
+        let marker = WorkingCopyMarker::new(input.clone(), output.clone(), 0);
+        foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        let marker_path = foundation::pipeline::verification::marker_path_for_working_copy(&output);
+        let saved = std::fs::read(&marker_path)?;
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
+        // The selected root is readable. This child directory proves that the
+        // real run path has not started recursive discovery before the choice.
+        assert!(std::fs::read_dir(&blocked).is_err());
+        let run = |retry| {
+            run_fast_img(FastImgRunOptions {
+                input: &input,
+                output_dir: Some(&output),
+                delete_source: DeleteSourceFlag(false),
+                dry_run: DryRunFlag(false),
+                recursive: RecursiveFlag(true),
+                shortest_path: ShortestPathFlag(false),
+                retry: RetryFlag(retry),
+                fresh: FreshFlag(false),
+                archive: false,
+                allow_expert_options: false,
+                strategy: "jxl",
+                extreme_precision: false,
+            })
+        };
+        let result = run(false);
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
+        let error = result.expect_err("a saved task requires a choice before recursive scanning");
+        assert!(
+            format!("{error:#}").contains("MFB_RESUME_DECISION_REQUIRED"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read(&marker_path)?, saved);
+        assert!(
+            !output.exists(),
+            "the choice must not prepare an output directory"
+        );
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
+        let continued = run(true);
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
+        let continued = continued.expect_err("continue must still perform source inventory");
+        assert!(format!("{continued:#}").contains("fast-img scan read dir"));
+        assert_eq!(std::fs::read(marker_path)?, saved);
+        assert!(!output.exists());
+        Ok(())
     }
 
     #[test]

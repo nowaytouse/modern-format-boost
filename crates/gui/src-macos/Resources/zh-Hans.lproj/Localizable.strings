@@ -70,7 +70,7 @@
 "button.audit_restore_jpeg" = "检查可恢复性";
 "button.preview_restore_jpeg" = "预览还原";
 "button.preview_audit_restore_jpeg" = "预览检查";
-"helpguide.restore.title" = "7. 还原原始 JPEG";
+"helpguide.restore.title" = "8. 还原原始 JPEG";
 "helpguide.restore.intro" = "这不是把任意图片转换成 JPEG。只有 JXL 保存了原 JPEG 的重建数据，才可能还原。图像像素无损，不代表保存了原 JPEG 数据。";
 "helpguide.restore.1.title" = "文件或文件夹：还原 JPEG 文件";
 "helpguide.restore.1.body" = "程序从可重建的 JXL 中提取 JPEG，不设置新画质、不进行有损重编码。默认输出到独立的 _restored_jpeg 文件夹，成功核验后移除对应源 JXL；无法还原的项目保留并报告。命令行的 --keep-source 可同时保留已还原的 JXL；当前界面使用默认行为。";
@@ -203,9 +203,10 @@
 "log.diagnostics_omitted" = "界面已省略 %llu 条诊断明细；结果计数不受影响。请到处理记录查看已保存的明细。";
 "log.visible_tail" = "[MFB 界面] 较早内容已移出此视图；可到处理记录核查已保存内容。";
 "status.processor_diagnostic_truncated" = "启动检查输出过长，仅显示开头；后续诊断未保留。这不是批次处理日志。";
-"alert.resume.title" = "发现未完成的任务";
-"alert.resume.info" = "继续已验证的进度，还是在独立目录中重新开始？";
-"alert.resume.resume" = "继续";
+"alert.resume.title" = "发现已有处理记录";
+"status.resume_choice_cancelled" = "尚未开始处理 · 已取消此次选择，已有处理记录未改动。";
+"alert.resume.info" = "继续之前，会重新核验原件、已有产物和恢复证据；选择继续，不代表旧产物已经通过核验。也可以在独立输出目录中重新开始。";
+"alert.resume.resume" = "核验并继续";
 "alert.resume.fresh" = "重新开始";
 "alert.cancel" = "取消";
 "menu.about" = "关于 Modern Format Boost";
@@ -784,7 +785,19 @@
 "settings.cache.preview_changed" = "设置或数据库选择已改变，请重新读取预览再继续。";
 
 "helpguide.title" = "MFB 如何处理你的媒体";
-"helpguide.tools.title" = "6. 重试、修复与换工具";
+"helpguide.metadata.title" = "2. 元数据保留的范围";
+"helpguide.metadata.intro" = "尽可能完整保留，是 MFB 的归档目标。“最完整”不代表所有模式、所有格式和所有字段都已得到无条件保证。要看本次处理路径保留了什么，以及相应核验是否完成。";
+"helpguide.metadata.1.title" = "JPEG 字节可逆与元数据展示是两回事";
+"helpguide.metadata.1.body" = "JPEG → JXL 可逆路径要求重建出的完整 JPEG 与原件逐字节一致。原 JPEG 内部的厂商数据和不透明数据，也可以通过这种重建保留；这不等于所有软件都能直接从 JXL 读取或显示这些信息。独立显示方向、颜色和额外 XMP 仍须分别核验。像素无损不能替代这些证明。";
+"helpguide.metadata.2.title" = "哪些信息会单独核验";
+"helpguide.metadata.2.body" = "在采用保留策略的路径中，MFB 比较受支持、可跨容器携带的 EXIF、XMP、IPTC 等信息，包括可读取的拍摄时间、描述和厂商字段。ICC 色彩配置、方向、像素与容器结构由各自门禁检查。转换后某些结构字段会改变；未被识别、无法表达或未被检查的信息，不能仅凭任务成功就宣称已完整保留。";
+"helpguide.metadata.3.title" = "XMP 旁车文件不能靠任选一个处理";
+"helpguide.metadata.3.body" = "XMP 是图片旁单独保存元数据的文件。MFB 按支持的配对命名查找，并检查需要合并或交付的内容；命名本身不证明历史归属。出现多个候选、文件类型异常或读取失败时，应报告具体问题并保留原件，不能当作没有 XMP，也不能任选一份作为完整保留的证据。";
+"helpguide.metadata.4.title" = "Fast AVIF 有明确的清理例外";
+"helpguide.metadata.4.body" = "Fast AVIF 的表情包策略会清理允许移除的内嵌元数据，包括 EXIF、XMP 和 IPTC，并核验清理结果。它不等同于普通 JXL 归档的元数据保留策略。若目标是尽可能保留原媒体信息，不要把表情包清理模式当作完整保留模式。质量数值更高也不会取消这项清理。";
+"helpguide.metadata.5.title" = "文件属性、照片图库与 iCloud 的边界";
+"helpguide.metadata.5.body" = "文件时间、权限和受支持的扩展属性另行保留与核验，受文件系统精度和系统行为限制。隔离标记、压缩实现属性及部分动态系统属性不属于逐字节复制保证。照片本地交付通过，不代表图库会识别或展示每个原始字段，也不证明 iCloud 已同步。元数据、关联或交付证据失败时，必须保留受影响原件；设置、缩略图和数量匹配都不能替代证明。";
+"helpguide.tools.title" = "7. 重试、修复与换工具";
 "helpguide.tools.intro" = "先区分两个问题：允许尝试什么恢复操作，以及允许哪些编码工具执行。这些是许可，不是已执行或已确认可用的证明。";
 "helpguide.tools.1.title" = "编码重试与修复：允许做什么";
 "helpguide.tools.1.body" = "不开启额外恢复时，不启用该设置管辖的兼容重试或修复。保真兼容重试可在支持的 JPEG 编码故障下调整参数，例如符合条件时由 E11 重试 E10，仍须完整重建原 JPEG。受控修复进一步允许已实现的异常处理，例如识别到特定 ICC D50 错误后修补临时色彩配置再重试。它不是任意损坏媒体的修复承诺，也不控制所有内部重试。";
@@ -800,7 +813,7 @@
 "helpguide.find" = "在当前主题中查找";
 "helpguide.boundary" = "这里说明当前的私人处理策略。设置或预检结果，不代表某个文件已经通过最终核验。";
 "helpguide.policy.title" = "1. 开始之前";
-"helpguide.policy.intro" = "MFB 是私人媒体归档工具：按既定的保留策略处理媒体，而不是不受限制的格式转换器。";
+"helpguide.policy.intro" = "MFB 是以尽可能完整保留媒体与元数据为目标的私人归档工具。处理遵守既定保留策略，结果以逐文件核验证据为准。";
 "helpguide.policy.1.title" = "先遵守策略，再应用设置";
 "helpguide.policy.1.body" = "策略决定哪些媒体可以转换、哪些信息必须保留，以及何时才允许移除原件。设置只能调整策略允许的参数。选择一个质量数值，不会解除禁止转换的限制，也不会关闭必要的核验。";
 "helpguide.policy.2.title" = "识别实际内容，不只看扩展名";
@@ -809,7 +822,7 @@
 "helpguide.policy.3.body" = "视频容器只有通过严格检查，确认实际只有一帧，且没有需要保留的音频、额外流或时间语义，才可以进入 IMG 静图处理。动图和视频属于动态媒体路径。不确定或受保护的复杂容器，不能因为能解码出一帧就当作普通图片处理。";
 "helpguide.policy.4.title" = "工作目录和原文件夹日期";
 "helpguide.policy.4.body" = "MFB 将正式处理状态保存在原文件夹之外，并在分配新输出文件夹前检查匹配的恢复记录。程序尽量减少对原文件夹的干扰；只有确认日期变化来自自身操作时，才恢复受支持的日期。并发修改和文件系统限制意味着无法承诺绝对零痕迹。";
-"helpguide.routes.title" = "2. 各类图片如何处理";
+"helpguide.routes.title" = "3. 各类图片如何处理";
 "helpguide.routes.intro" = "不同来源有不同的保留要求。一组全局 D、E 或质量数值，不能代表所有处理路径。";
 "helpguide.routes.1.title" = "JPEG：保留可逐字节恢复的原 JPEG";
 "helpguide.routes.1.body" = "可逆路径将 JPEG 数据存入 JXL，并要求重建后的 JPEG 与原件逐字节一致。这不是重新进行有损像素编码，不受像素距离 D 控制。普通 IMG 和 Fast JXL 都可以比较 JPEG Effort 档位，各自保存独立选择。";
@@ -819,7 +832,7 @@
 "helpguide.routes.3.body" = "符合条件的传统有损静图，可以使用既有的受限 JXL 质量搜索。现代有损格式和已有 JXL 通常保留原编码。实际内容、容器要求和体积策略决定能否进入转换；开启搜索不会覆盖这些判断。";
 "helpguide.routes.4.title" = "Fast JXL 和 Fast AVIF 不是同一种流程";
 "helpguide.routes.4.body" = "Fast JXL 以 JPEG 可逆转换及对应的原生媒体交付规则为主。Fast AVIF 有独立的 Q/Speed 搜索，并按要求优先尝试真正无损。它的表情包模式元数据清理规则，与普通 JXL 归档保留规则不同。已有 AVIF 不会仅因选择了 Q 数值而被重新编码。";
-"helpguide.search.title" = "3. 搜索算法如何工作";
+"helpguide.search.title" = "4. 搜索算法如何工作";
 "helpguide.search.intro" = "自动搜索在当前处理路径内比较真实候选。固定数值是手动替代选项。任何搜索都不能降低策略要求的保真和安全标准。";
 "helpguide.search.1.title" = "JPEG：比较全部 Effort，保留最小文件";
 "helpguide.search.1.body" = "默认完整比较 E1 至 E11。先试 E9 建立文件大小参考，再补齐其余 10 档；没有跳过低档，也不预定 E9 获胜。每档完成相同元数据处理后，按完整 JXL 文件大小择优，体积相同时选较低 E。首个可用候选和每个可能替代它的候选都须通过原 JPEG 逐字节重建验证；较大的非竞争候选无需重复重建，胜出文件直接复用。某档不受支持或执行失败，仍视为比较未完成并保留原件。此执行顺序旨在减少重复核验，不保证每张图片都更快。";
@@ -831,7 +844,7 @@
 "helpguide.search.4.body" = "AVIF 的 Q 越高，要求的质量越高。自动模式使用既有的有限质量搜索；保存的固定 Q 直到切换到固定模式才生效。前期定位使用 Speed6，但该文件会丢弃，随后在选定的最终 Speed 重新确认并核验。固定 Q 未通过时，不会暗中降低质量来制造成功。";
 "helpguide.search.5.title" = "自动搜索不代表什么";
 "helpguide.search.5.body" = "先选择 E、再探索 D，是顺序搜索，不是穷举联合搜索。目前也没有用新的低 E 捷径来证明高 E 的最终结果。JPEG 字节重建、无损像素和感知质量检查是不同保证，任何一种都不能替代元数据和交付核验。实际候选和失败原因会保留在日志中。";
-"helpguide.safety.title" = "4. 核验、导入与清理";
+"helpguide.safety.title" = "5. 核验、导入与清理";
 "helpguide.safety.intro" = "编码完成不等于核验完成；本地核验完成也不等于照片图库导入完成。各阶段有独立的证据和失败状态。";
 "helpguide.safety.1.title" = "检查真实产物";
 "helpguide.safety.1.body" = "编码器返回成功、文件变小，都只是一项观察。MFB 还会执行所属路径要求的载荷、图像或重建检查，并将证据绑定当前原件和产物。证据无效、发生变化或不完整时，相关交付或清理步骤必须停止。";
@@ -841,7 +854,7 @@
 "helpguide.safety.3.body" = "选中导入后，MFB 使用配置的照片图库目标和导入方式，再检查交付结果。资产数量相同或能看到缩略图，不足以证明导入的资源正确。图库或交付失败，不会被改称为无关紧要的单文件转换失败。";
 "helpguide.safety.4.title" = "只有完整证据才允许清理";
 "helpguide.safety.4.body" = "清理必须具备所属流程的完整核验和持久交付证据。保留的失败原件、按策略跳过的原件，都不是已转换成功的原件，不能按成功项删除。输出目录名称带有 optimized，也不代表程序拥有其中所有未知文件。";
-"helpguide.results.title" = "5. 结果、计数与恢复";
+"helpguide.results.title" = "6. 结果、计数与恢复";
 "helpguide.results.intro" = "结果摘要保持简洁，详细证据保留在详情和历史记录中。友好的提示不能掩盖不完整或不安全的结果。";
 "helpguide.results.1.title" = "理解各项数量";
 "helpguide.results.1.body" = "已处理分为成功、失败、跳过和忽略；发现的文件还包括尚未处理的内容。失败不等于正常跳过。恢复或复用已有产物，不计为本次新转换收益。证据缺失或矛盾时必须显示未知，不能猜成 0 或数量匹配。";

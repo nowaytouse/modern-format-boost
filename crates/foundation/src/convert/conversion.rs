@@ -1840,25 +1840,19 @@ pub fn enrich_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std
 
 fn prepare_reconstructible_jxl_candidate(source: &Path, output: &Path) -> std::io::Result<()> {
     enrich_reconstructible_jxl_candidate(source, output)?;
-    if let Err(error) = crate::image::gain_map::verify_jpeg_gain_map(source, output) {
+    // This shared proof includes exact JPEG reconstruction and native gain maps,
+    // and also requires explicit codestream orientation before publication.
+    if let Err(error) = crate::image::fast_img::verify_final_jxl_delivery_integrity(source, output)
+    {
         crate::media_conversion_gate::delivery_remove_file_or_audit(
-            "native gain-map proof failed after metadata commit",
+            "JXL delivery integrity failed before publication",
             output,
         );
         return Err(std::io::Error::other(format!(
-            "Native gain-map proof failed after metadata commit: {error:#}"
+            "JXL delivery integrity failed before publication: {error}"
         )));
     }
-    if let Err(error) = crate::image::fast_img::verify_jxl_roundtrip_integrity(source, output) {
-        crate::media_conversion_gate::delivery_remove_file_or_audit(
-            "JPEG reconstruction invalidated during metadata commit",
-            output,
-        );
-        return Err(std::io::Error::other(format!(
-            "JPEG reconstruction proof failed after metadata commit: {error}"
-        )));
-    }
-    if crate::metadata::find_xmp_sidecar(source).is_some() {
+    if crate::metadata::find_xmp_sidecar(source)?.is_some() {
         let reconstructed_jpeg_hash =
             crate::common_utils::calculate_blake3_hash(source).map_err(|error| {
                 std::io::Error::other(format!(
@@ -4115,6 +4109,59 @@ mod tests {
     }
 
     #[test]
+    fn reconstructible_commit_rejects_invalid_orientation_before_publication() {
+        if !generated_jxl_toolchain_available_or_skip("staged JXL orientation gate") {
+            return;
+        }
+        let root = tempfile::tempdir().expect("synthetic staging root");
+        let source = root.path().join("source.jpg");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([18, 52, 86]))
+            .save(&source)
+            .expect("synthetic JPEG");
+        command_status_success(
+            Command::new(crate::constants::TOOL_EXIFTOOL)
+                .args(["-overwrite_original", "-IFD0:Orientation#=0"])
+                .arg(&source),
+            "create invalid source orientation",
+        );
+        let original = fs::read(&source).unwrap();
+        for existing in [false, true] {
+            let candidate = root.path().join("candidate.JXL");
+            let output = root.path().join("final.JXL");
+            command_status_success(
+                Command::new(crate::constants::TOOL_CJXL)
+                    .arg(&source)
+                    .arg(&candidate)
+                    .args(["--lossless_jpeg=1", "--effort=1"]),
+                "encode byte-reconstructible candidate",
+            );
+            crate::image::fast_img::verify_jxl_roundtrip_integrity(&source, &candidate)
+                .expect("byte reconstruction alone succeeds");
+            if existing {
+                fs::write(&output, b"previous verified artifact").unwrap();
+            }
+            let error = commit_reconstructible_jxl_to_output_with_metadata(
+                &candidate,
+                &output,
+                existing,
+                Some(&source),
+            )
+            .expect_err("invalid orientation must never reach the published path");
+            assert!(
+                error.to_string().contains("orientation")
+                    || error.to_string().contains("Orientation"),
+                "{error}"
+            );
+            if existing {
+                assert_eq!(fs::read(&output).unwrap(), b"previous verified artifact");
+            } else {
+                assert!(!output.exists());
+            }
+            assert_eq!(fs::read(&source).unwrap(), original);
+        }
+    }
+
+    #[test]
     fn reconstructible_jxl_embeds_xmp_without_breaking_jpeg_reconstruction() {
         let contract_label = "JPEG-reconstructible JXL embedded XMP custody";
         if !generated_jxl_toolchain_available_or_skip(contract_label) {
@@ -4186,7 +4233,9 @@ mod tests {
             "the overlay must not hide reconstruction-owned embedded XMP",
         );
         assert!(
-            crate::metadata::find_xmp_sidecar(&output).is_none(),
+            crate::metadata::find_xmp_sidecar(&output)
+                .unwrap()
+                .is_none(),
             "JXL delivery must not depend on a copied output sidecar"
         );
         command_status_success(

@@ -3372,13 +3372,16 @@ pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
         ))
     })?;
     std::fs::create_dir_all(marker_dir)?;
-    let tmp = path.with_extension("json.tmp");
     let data = serde_json::to_vec(marker).map_err(std::io::Error::other)?;
-    let mut tmp_file = std::fs::File::create(&tmp)?;
+    let mut tmp_file = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
+        "fast_img_checkpoint_write",
+        marker_dir,
+        ".mfb-checkpoint-",
+        ".tmp",
+    )?;
     tmp_file.write_all(&data)?;
-    tmp_file.sync_all()?;
-    drop(tmp_file);
-    std::fs::rename(&tmp, &path)?;
+    tmp_file.as_file().sync_all()?;
+    tmp_file.persist(&path).map_err(|error| error.error)?;
     #[cfg(unix)]
     std::fs::File::open(marker_dir)?.sync_all()?;
     for legacy in [
@@ -3882,6 +3885,47 @@ mod working_copy_tests {
         assert_eq!(read, marker);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&marker.working_copy).exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial]
+    fn marker_write_preserves_stale_temporary_link_and_publishes_complete_updates() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = TempDir::new().unwrap();
+        let state = TempDir::new().unwrap();
+        let _home_guard = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().expect("utf-8 state path"),
+        );
+        let src = root.path().join("Photos");
+        let wc = root.path().join("Photos_optimized");
+        std::fs::create_dir_all(&wc).unwrap();
+        let mut marker = WorkingCopyMarker::new(src, wc, 1);
+        let path = marker_path_for_working_copy(&marker.working_copy);
+        let marker_dir = path.parent().unwrap();
+        std::fs::create_dir_all(marker_dir).unwrap();
+        let unrelated = root.path().join("unrelated-file");
+        std::fs::write(&unrelated, b"retain these bytes").unwrap();
+        let old_temp = path.with_extension("json.tmp");
+        std::os::unix::fs::symlink(&unrelated, &old_temp).unwrap();
+
+        write_marker_atomic(&marker).unwrap();
+        assert_eq!(read_marker(&marker.working_copy).unwrap(), marker);
+        marker.stage = FastImgStageName::OutputPrepared;
+        write_marker_atomic(&marker).unwrap();
+        assert_eq!(read_marker(&marker.working_copy).unwrap(), marker);
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"retain these bytes");
+        assert_eq!(std::fs::read_link(&old_temp).unwrap(), unrelated);
+        assert_eq!(std::fs::read_dir(marker_dir).unwrap().count(), 2);
+        assert!(
+            std::fs::read_dir(&marker.working_copy)
+                .unwrap()
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

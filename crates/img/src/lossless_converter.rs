@@ -1795,7 +1795,7 @@ fn jpeg_full_effort_search_enabled() -> bool {
 }
 
 fn jpeg_search_sidecar_identity(input: &Path) -> anyhow::Result<Option<(PathBuf, String)>> {
-    foundation::metadata::find_xmp_sidecar(input)
+    foundation::metadata::find_xmp_sidecar(input)?
         .map(|sidecar| {
             foundation::common_utils::calculate_blake3_hash(&sidecar).map(|hash| (sidecar, hash))
         })

@@ -168,7 +168,7 @@ fn contract_find_xmp_sidecar_adjacent_extension_locked() {
     fs::write(&src, b"jpg").expect("write src");
     fs::write(&sidecar, b"xmp").expect("write sidecar");
     assert_eq!(
-        find_xmp_sidecar(&src).as_deref(),
+        find_xmp_sidecar(&src).unwrap().as_deref(),
         Some(sidecar.as_path()),
         "CONTRACT: must resolve adjacent .ext.xmp sidecar"
     );
@@ -182,7 +182,7 @@ fn contract_find_xmp_sidecar_stem_only_locked() {
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"xmp").expect("write sidecar");
     assert_eq!(
-        find_xmp_sidecar(&src).as_deref(),
+        find_xmp_sidecar(&src).unwrap().as_deref(),
         Some(sidecar.as_path()),
         "CONTRACT: must resolve stem.xmp sidecar"
     );
@@ -195,7 +195,9 @@ fn contract_find_xmp_sidecar_compound_stem_locked() {
     let sidecar = temp.path().join("img_0001.heic.xmp");
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"xmp").expect("write sidecar");
-    let found = find_xmp_sidecar(&src).expect("CONTRACT: compound stem sidecar must resolve");
+    let found = find_xmp_sidecar(&src)
+        .unwrap()
+        .expect("CONTRACT: compound stem sidecar must resolve");
     assert_eq!(
         found
             .file_name()
@@ -214,7 +216,9 @@ fn contract_find_xmp_sidecar_uppercase_xmp_extension_locked() {
     let sidecar = temp.path().join("photo.XMP");
     fs::write(&src, b"heic").expect("write src");
     fs::write(&sidecar, b"xmp").expect("write sidecar");
-    let found = find_xmp_sidecar(&src).expect("CONTRACT: stem.XMP sidecar must resolve");
+    let found = find_xmp_sidecar(&src)
+        .unwrap()
+        .expect("CONTRACT: stem.XMP sidecar must resolve");
     assert_eq!(
         found
             .file_name()
@@ -235,10 +239,71 @@ fn contract_find_xmp_sidecar_dng_compound_extension_locked() {
     fs::write(&sidecar, b"xmp").expect("write sidecar");
 
     assert_eq!(
-        find_xmp_sidecar(&src).as_deref(),
+        find_xmp_sidecar(&src).unwrap().as_deref(),
         Some(sidecar.as_path()),
-        "CONTRACT: DNG full-extension XMP sidecars must resolve before stem-only fallbacks"
+        "CONTRACT: a unique DNG full-extension XMP sidecar must resolve"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_find_xmp_sidecar_name_matching_does_not_guess_non_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    // Exercise the actual selector without requiring the filesystem to accept
+    // invalid UTF-8 names; APFS rejects creating such files with EILSEQ.
+    let invalid_name = Path::new(std::ffi::OsStr::from_bytes(b"photo\xff.xmp"));
+    assert!(!super::xmp_candidate_matches_source(
+        invalid_name,
+        "photo",
+        "photo.jpg"
+    ));
+    for name in ["PHOTO.XMP", "photo.jpg.xmp"] {
+        assert!(super::xmp_candidate_matches_source(
+            Path::new(name),
+            "photo",
+            "photo.jpg"
+        ));
+    }
+    assert!(!super::xmp_candidate_matches_source(
+        Path::new("unrelated.xmp"),
+        "photo",
+        "photo.jpg"
+    ));
+}
+
+// Filesystem integration for Unix filesystems that can represent these names.
+// The matching predicate above remains exercised on macOS.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn contract_find_xmp_sidecar_ignores_unrelated_non_utf8_names() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("photo.jpg");
+    let unrelated = temp
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"photo\xff.xmp"));
+    fs::write(&src, b"source").expect("write source");
+    fs::write(&unrelated, b"unrelated metadata").expect("write unrelated sidecar");
+    assert!(find_xmp_sidecar(&src).unwrap().is_none());
+
+    let sidecar = temp.path().join("photo.xmp");
+    fs::write(&sidecar, b"matching metadata").expect("write matching sidecar");
+    assert_eq!(
+        find_xmp_sidecar(&src).unwrap().as_deref(),
+        Some(sidecar.as_path())
+    );
+
+    let compound = temp.path().join("photo.jpg.xmp");
+    fs::write(&compound, b"conflicting metadata").expect("write conflicting sidecar");
+    let error = find_xmp_sidecar(&src).expect_err("matching ambiguity must still be refused");
+    assert!(error.to_string().contains("ambiguous XMP"));
+    assert_eq!(fs::read(src).unwrap(), b"source");
+    assert_eq!(fs::read(unrelated).unwrap(), b"unrelated metadata");
+    assert_eq!(fs::read(sidecar).unwrap(), b"matching metadata");
+    assert_eq!(fs::read(compound).unwrap(), b"conflicting metadata");
 }
 
 #[test]
@@ -419,7 +484,43 @@ fn contract_find_xmp_sidecar_missing_returns_none() {
     let temp = TempDir::new().expect("tempdir");
     let src = temp.path().join("lonely.png");
     fs::write(&src, b"png").expect("write src");
-    assert_eq!(find_xmp_sidecar(&src), None);
+    assert_eq!(find_xmp_sidecar(&src).unwrap(), None);
+}
+
+#[test]
+fn contract_find_xmp_sidecar_refuses_ambiguous() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("photo.jpg");
+    let full = temp.path().join("photo.jpg.xmp");
+    let stem = temp.path().join("photo.xmp");
+    fs::write(&src, b"source").expect("write source");
+    fs::write(&full, b"<xmp>first</xmp>").expect("write full sidecar");
+    fs::write(&stem, b"<xmp>second</xmp>").expect("write stem sidecar");
+    assert!(
+        find_xmp_sidecar(&src).is_err(),
+        "conflicting sidecars must not be silently chosen by filename priority"
+    );
+    assert_eq!(fs::read(&full).unwrap(), b"<xmp>first</xmp>");
+    assert_eq!(fs::read(&stem).unwrap(), b"<xmp>second</xmp>");
+}
+
+#[test]
+fn contract_find_xmp_sidecar_refuses_non_files_and_incomplete_scan() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("photo.jpg");
+    fs::write(&src, b"source").unwrap();
+    let candidate = temp.path().join("photo.xmp");
+    fs::create_dir(&candidate).unwrap();
+    assert!(find_xmp_sidecar(&src).is_err());
+    fs::remove_dir(&candidate).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(temp.path().join("missing"), &candidate).unwrap();
+        assert!(find_xmp_sidecar(&src).is_err());
+        fs::remove_file(&candidate).unwrap();
+    }
+    assert!(find_xmp_sidecar(&src.join("unreadable-parent.jpg")).is_err());
+    assert_eq!(fs::read(&src).unwrap(), b"source");
 }
 
 #[test]

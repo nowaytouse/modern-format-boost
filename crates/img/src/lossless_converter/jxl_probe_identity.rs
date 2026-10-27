@@ -359,36 +359,7 @@ fn resolve_program(
 }
 
 fn selected_sidecar(source: &Path) -> io::Result<Option<BoundFile>> {
-    let parent = source
-        .parent()
-        .ok_or_else(|| invalid("JXL probe source has no parent"))?;
-    // The legacy selector audits I/O errors as absence; validate its directory before trusting a miss.
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("xmp"))
-        {
-            let stem = path
-                .file_stem()
-                .map(|value| value.to_string_lossy().to_lowercase());
-            if stem.is_some_and(|stem| {
-                source
-                    .file_stem()
-                    .is_some_and(|source_stem| stem == source_stem.to_string_lossy().to_lowercase())
-                    || source
-                        .file_name()
-                        .is_some_and(|name| stem == name.to_string_lossy().to_lowercase())
-            }) && !fs::metadata(&path)?.is_file()
-            {
-                return Err(invalid(
-                    "JXL probe source XMP association is not a regular file",
-                ));
-            }
-        }
-    }
-    foundation::metadata::find_xmp_sidecar(source)
+    foundation::metadata::find_xmp_sidecar(source)?
         .as_deref()
         .map(BoundFile::read)
         .transpose()

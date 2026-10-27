@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
-        ("policy", 4), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4), ("restore", 3),
+        ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4), ("restore", 3),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -218,6 +218,8 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
         keys += ["settings.imgFallback", "settings.imgFallback.note", "settings.imgToolPolicy",
                  "settings.imgToolPolicy.note", "settings.recovery.guide"]
         keys += ["photos.source.title", "photos.source.notice", "photos.source.detail"]
+        keys += ["alert.resume.title", "alert.resume.info", "alert.resume.resume", "alert.resume.fresh",
+                 "status.resume_choice_cancelled"]
         for (section, count) in sections {
             keys += ["helpguide.\(section).title", "helpguide.\(section).intro"]
             for index in 1...count {
@@ -276,6 +278,10 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             try require(controller.textView.string.contains(translate("photos.source.notice"))
                 && controller.textView.string.contains(translate("photos.source.detail")),
                 "Processing guide did not explain native import source attribution")
+            controller.show(relativeTo: nil, topic: "metadata")
+            try require(controller.textView.string.hasPrefix(translate("helpguide.metadata.title"))
+                && (1...5).allSatisfy { controller.textView.string.contains(translate("helpguide.metadata.\($0).body")) },
+                "Metadata guide did not explain reconstruction, XMP, policy exceptions and delivery boundaries")
             controller.close()
         }
     }

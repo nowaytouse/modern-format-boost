@@ -137,6 +137,59 @@ retained. Explicit frame counts must be exactly one, rather than zero or merely
 at most one. These corrections do not complete the review of every modern
 container, auxiliary-image relationship or final delivery path.
 
+## Metadata Preservation Evidence And Limits
+
+Maximal metadata retention is the archival goal, not an unconditional guarantee
+for every field in every container. Exact JPEG reconstruction retains the complete
+original JPEG bytes, including opaque/vendor data, but does not establish that
+all applications can read those fields directly from the JXL. Portable EXIF,
+XMP/IPTC, ICC, codestream orientation, gain maps, filesystem attributes and
+delivery custody have separate evidence requirements. Unsupported or unchecked
+fields cannot be certified from a successful exit or matching file counts.
+
+Shared XMP discovery scans the complete adjacent directory for supported stem
+and compound names. Exactly one regular, non-symlink candidate may be selected;
+multiple candidates, directory-entry failures and invalid file types are errors,
+not absence. Content validation, overlay/reconstruction custody and source/sidecar
+identity checks remain necessary. Filename agreement does not prove historical
+ownership. Tier-2 delivery isolates a failed association to the affected asset
+and retains its source and sidecars; it does not silently import it without XMP.
+
+The reconstructible JXL commit uses the full existing final integrity proof on
+the metadata-enriched staging file, including exact JPEG bytes, native gain maps
+and explicit stream orientation, before atomic publication. Later batch,
+delivery and deletion gates remain independent. Encoder partial bytes are not
+published merely because they have a final extension.
+
+Fast AVIF Meme Mode deliberately clears removable embedded metadata. It is not
+the maximal-preservation archival route. Filesystem precision/policy exclusions
+also remain explicit; verified Photos local resource custody does not certify
+every visible Photos field or iCloud synchronization. The native question-mark
+guide explains these distinctions in its metadata topic.
+
+## Fast IMG Saved-Task Choice And Recovery Boundaries
+
+Without an explicit resume/fresh selection, a saved Fast IMG task requires a
+choice before recursive inventory, codec probes or source hashing. The native
+host owns that choice; a GUI launch cannot wait for terminal input even if output
+uses a PTY. Continue means revalidate and continue, not trust an old success flag.
+Explicit resume still performs the complete existing source/output/hash and
+delivery reconciliation; fresh selects a separate output rather than overwriting
+the recorded task. Dry-run remains observational.
+
+Checkpoint updates use a private unpredictable temporary file in the state
+directory, sync its bytes and atomically persist it, then sync the directory.
+A stale predictable `.json.tmp` path is neither followed nor truncated. The
+source/output locks remain required; atomic persistence is not a replacement for
+writer serialization or per-asset evidence.
+
+`_optimized` remains a working directory until its applicable gates and delivery
+finish. A hard crash after a verified file is published but before its checkpoint
+entry is recorded can still leave an unregistered complete artifact. Its suffix
+does not authorize reuse, import or deletion. Recovery must retain unknown
+ownership and can stop on extra outputs; this change does not implement atomic
+filesystem/checkpoint journaling or complete failed-only retry.
+
 ## Search Semantics
 
 Fixed E passes one effort to the encoder. Optional E exploration compares

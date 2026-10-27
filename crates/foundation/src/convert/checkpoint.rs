@@ -1376,7 +1376,7 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
 
     verify_strict_delete_proof(input, output)?;
 
-    let companion_xmp = crate::metadata::find_xmp_sidecar(input);
+    let companion_xmp = crate::metadata::find_xmp_sidecar(input)?;
     if let Some(xmp) = &companion_xmp
         && crate::image::format_detect::detect_true_format(output)
             .map_err(|error| io::Error::other(error.to_string()))?

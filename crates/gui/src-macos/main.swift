@@ -7729,9 +7729,25 @@ private final class AppController: NSObject, NSWindowDelegate {
         for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
     }
 
+    func validateResumeChoiceForSelfTest() throws {
+        lastRequest = ProcessorRequest(targetPath: "/synthetic/saved-task", processingMode: .imagesOnly,
+            operationMode: .fastImgJxl)
+        sawResumeDecision = true
+        DispatchQueue.main.async { NSApp.stopModal(withCode: .alertThirdButtonReturn) }
+        processingCompleted(.failure(HostError(message: "MFB_RESUME_DECISION_REQUIRED: synthetic saved task")))
+        guard !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
+              statusLabel.stringValue == localized("status.resume_choice_cancelled"), !host.isRunning else {
+            throw HostError(message: "Cancelling a saved-task choice was presented as a media failure")
+        }
+    }
+
     private func processingCompleted(_ result: Result<String, Error>) {
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
-        defer { refreshBatchOverview() }
+        let resumeChoicePending: Bool
+        if case .failure = result, sawResumeDecision, let request = lastRequest {
+            resumeChoicePending = !request.resume && !request.fresh
+        } else { resumeChoicePending = false }
+        defer { if !resumeChoicePending { refreshBatchOverview() } }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
         if host.controlState == "cancelled", host.lastExitStatus == 130 {
             if !batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
@@ -7770,22 +7786,14 @@ private final class AppController: NSObject, NSWindowDelegate {
                 appendLog("[DONE] \(message)" + countSummary)
             }
         case let .failure(error):
-            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
-                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
-            let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
-                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
-                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
-            if !deliveryConfirmed && !deferred {
-                photosDiagnostics.markFailed()
-            }
-            refreshDiagnostics()
-            let failureMessage = batchResults.hasPartialSuccess
-                ? localized("result.partially_completed") + " · " + error.localizedDescription
-                : error.localizedDescription
-            let tag = deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
-            appendLog("[\(tag)] \(failureMessage)" + countSummary,
-                      captureDiagnostics: latestDiagnostics.failure == nil)
+            // A saved-task choice is a launch decision, not a media failure.
+            // Present it before recording failed delivery or a red error summary.
             if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
+                processEndedWithError = false
+                batchOverview.isHidden = true
+                latestDiagnostics = LatestDiagnostics()
+                refreshLatestDiagnostics()
+                setProcessing(false)
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
                 alert.informativeText = localized("alert.resume.info")
@@ -7798,8 +7806,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 case .alertSecondButtonReturn:
                     applyResumeDecision(fresh: true, to: &retry)
                 default:
-                    setProcessing(false)
-                    setStatus(error.localizedDescription)
+                    setLocalizedStatus("status.resume_choice_cancelled")
                     return
                 }
                 lastRequest = retry
@@ -7818,12 +7825,27 @@ private final class AppController: NSObject, NSWindowDelegate {
                 refreshDiagnostics()
                 setProcessing(true)
                 host.startProcessing(retry)
-            } else {
-                setProcessing(false)
-                if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
-                else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
-                else { setStatus(error.localizedDescription) }
+                return
             }
+            let deliveryConfirmed = batchResults.fastDeliveryIsConfirmed(photos: lastRequest?.shortestPath ?? false,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(
+                photos: lastRequest?.shortestPath ?? false, source: lastRequest?.targetPath,
+                processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal)
+            if !deliveryConfirmed && !deferred {
+                photosDiagnostics.markFailed()
+            }
+            refreshDiagnostics()
+            let failureMessage = batchResults.hasPartialSuccess
+                ? localized("result.partially_completed") + " · " + error.localizedDescription
+                : error.localizedDescription
+            let tag = deferred || (deliveryConfirmed && batchResults.hasPartialSuccess) ? "WARN" : "FAIL"
+            appendLog("[\(tag)] \(failureMessage)" + countSummary,
+                      captureDiagnostics: latestDiagnostics.failure == nil)
+            setProcessing(false)
+            if batchResults.hasPartialSuccess { setLocalizedStatus("result.partially_completed") }
+            else if batchResults.hasFileFailures { setLocalizedStatus("result.finished_with_failures") }
+            else { setStatus(error.localizedDescription) }
         }
     }
 
@@ -10522,6 +10544,7 @@ private func runSelfTest() -> Int32 {
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
             try AppController(preferences: preferences).validatePrivacyForSelfTest()
+            try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()
             let preflightFailures = PreflightInspectorPanel.selfTest()

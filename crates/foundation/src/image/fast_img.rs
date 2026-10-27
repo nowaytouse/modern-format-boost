@@ -725,7 +725,7 @@ fn xmp_sidecar_for_verified_output_cleanup(
     source: &Path,
     output: &Path,
 ) -> Result<Option<PathBuf>> {
-    let sidecar = crate::metadata::find_xmp_sidecar(source);
+    let sidecar = crate::metadata::find_xmp_sidecar(source)?;
     if let Some(path) = &sidecar
         && crate::image::format_detect::detect_true_format(output)?
             == crate::image::format_detect::FormatKind::Jxl
@@ -784,7 +784,7 @@ fn verified_tier2_sidecar_for_cleanup(
     expected_hash: Option<&str>,
     allow_proven_absent: bool,
 ) -> Result<Option<std::path::PathBuf>> {
-    let matching = crate::metadata::find_xmp_sidecar(source);
+    let matching = crate::metadata::find_xmp_sidecar(source)?;
     match (expected_hash, matching) {
         (Some(expected), Some(sidecar)) => {
             let metadata = std::fs::symlink_metadata(&sidecar).map_err(|error| {
@@ -2180,9 +2180,23 @@ fn import_modern_lossy_static_tier_with_checkpoint(
     let mut metadata_failures = 0usize;
 
     for candidate in base_candidates {
-        let Some(xmp_path) = crate::metadata::find_xmp_sidecar(&candidate.path) else {
-            import_candidates.push(candidate);
-            continue;
+        let xmp_path = match crate::metadata::find_xmp_sidecar(&candidate.path) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                import_candidates.push(candidate);
+                continue;
+            }
+            Err(error) => {
+                metadata_failures += 1;
+                tracing::error!(target: "photos_import", path = %candidate.path.display(), %error,
+                    "tier-2 XMP discovery failed; source and sidecars retained");
+                println!(
+                    "[FAIL    ]   {}: original-media XMP discovery failed: {}; source and sidecars retained",
+                    candidate.rel_path.replace(['\r', '\n'], " "),
+                    error.to_string().replace(['\r', '\n'], " ")
+                );
+                continue;
+            }
         };
         let relative = Path::new(&candidate.rel_path);
         if relative
