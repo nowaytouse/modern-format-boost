@@ -51,6 +51,125 @@ fn ci_health_reserves_cold_build_time_and_restores_cache_before_cargo() {
     assert!(!health.contains("--no-expensive"));
 }
 
+#[cfg(unix)]
+#[test]
+fn ci_scope_routes_commit_weekly_daily_and_manual_runs() {
+    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let script = source
+        .split_once("      - name: Select CI scope\n")
+        .unwrap()
+        .1
+        .split_once("\n      - name: Checkout\n")
+        .unwrap()
+        .0
+        .split_once("        run: |\n")
+        .unwrap()
+        .1
+        .lines()
+        .map(|line| line.strip_prefix("          ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (event, schedule, requested, full, code) in [
+        ("push", "", "", false, true),
+        ("pull_request", "", "", false, true),
+        ("workflow_dispatch", "", "false", false, true),
+        ("workflow_dispatch", "", "true", true, true),
+        ("schedule", "17 3 * * 0", "", true, true),
+        ("schedule", "17 3 * * 1-6", "", false, false),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("outputs");
+        let output = std::process::Command::new("bash")
+            .args(["-c", &script])
+            .env("EVENT_NAME", event)
+            .env("EVENT_SCHEDULE", schedule)
+            .env("FULL_AUDIT_REQUESTED", requested)
+            .env("GITHUB_OUTPUT", &output_path)
+            .env("GITHUB_STEP_SUMMARY", temp.path().join("summary"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{event}: {output:?}");
+        let outputs = std::fs::read_to_string(output_path).unwrap();
+        let values = outputs
+            .lines()
+            .map(|line| line.split_once('=').unwrap())
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(values["full_audit"], full.to_string());
+        assert_eq!(values["run_code"], code.to_string());
+        let groups: Vec<String> = serde_json::from_str(values["health_groups"]).unwrap();
+        assert_eq!(
+            groups,
+            if full {
+                vec!["compile", "clippy", "tests", "audit", "coverage"]
+            } else {
+                vec!["compile", "clippy", "tests"]
+            }
+        );
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let unknown = std::process::Command::new("bash")
+        .args(["-c", &script])
+        .env("EVENT_NAME", "schedule")
+        .env("EVENT_SCHEDULE", "unrecognized")
+        .env("FULL_AUDIT_REQUESTED", "")
+        .env("GITHUB_OUTPUT", temp.path().join("outputs"))
+        .env("GITHUB_STEP_SUMMARY", temp.path().join("summary"))
+        .output()
+        .unwrap();
+    assert!(!unknown.status.success());
+    assert!(!temp.path().join("outputs").exists());
+}
+
+#[test]
+fn ci_scheduled_audits_and_formatting_retain_separate_gates() {
+    let source = include_str!("../../../../.github/workflows/ci-quality.yml");
+    let format = source
+        .split_once("\n  format-check:\n")
+        .unwrap()
+        .1
+        .split_once("\n  health-check:\n")
+        .unwrap()
+        .0;
+    assert!(format.contains("run: cargo fmt --all --check"));
+    assert!(!format.contains("cargo run"));
+    assert!(!format.contains("install_media_dependencies"));
+    let security = source
+        .split_once("\n  security-audit:\n")
+        .unwrap()
+        .1
+        .split_once("\n  nightly-release:\n")
+        .unwrap()
+        .0;
+    assert!(security.contains("needs: validation"));
+    assert!(security.contains("run: cargo audit --deny warnings"));
+    let release = source
+        .split_once("\n  nightly-release:\n")
+        .unwrap()
+        .1
+        .split_once("\n  deep-audit:\n")
+        .unwrap()
+        .0;
+    for gate in [
+        "needs.validation.outputs.full_audit == 'true'",
+        "needs.format-check.result == 'success'",
+        "needs.health-check.result == 'success'",
+        "needs.package-quality.result == 'success'",
+        "needs.security-audit.result == 'success'",
+        "needs.deep-audit.result == 'success'",
+    ] {
+        assert!(release.contains(gate), "release lost gate: {gate}");
+    }
+    assert!(
+        source.contains("if: ${{ !cancelled() && needs.validation.outputs.full_audit == 'true' }}")
+    );
+    assert_eq!(
+        source
+            .matches("if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}")
+            .count(),
+        5
+    );
+}
+
 #[test]
 fn ci_and_installer_pin_libheif_required_by_the_rust_binding() {
     let workflow = include_str!("../../../../.github/workflows/ci-quality.yml");

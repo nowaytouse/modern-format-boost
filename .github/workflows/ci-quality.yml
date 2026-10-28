@@ -1,5 +1,6 @@
 name: Continuous Quality & Fuzzing
 
+# Execution scopes and release gates: docs/dev/CI.md.
 on:
   push:
     branches: [main, nightly]
@@ -9,8 +10,14 @@ on:
   pull_request:
     branches: [main, nightly]
   schedule:
-    - cron: "0 0 * * *" # Daily at midnight
+    - cron: "17 3 * * 1-6" # Daily dependency advisories; no repeated code build.
+    - cron: "17 3 * * 0" # Weekly full audit and gated nightly snapshot.
   workflow_dispatch:
+    inputs:
+      full_audit:
+        description: Run coverage, full audits and a gated nightly release
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -33,7 +40,43 @@ jobs:
     name: "1 · Configuration & Workflow Validation"
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      run_code: ${{ steps.scope.outputs.run_code }}
+      full_audit: ${{ steps.scope.outputs.full_audit }}
+      health_groups: ${{ steps.scope.outputs.health_groups }}
     steps:
+      - name: Select CI scope
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          FULL_AUDIT_REQUESTED: ${{ inputs.full_audit }}
+        run: |
+          set -euo pipefail
+          run_code=true
+          full_audit=false
+          if [[ "$EVENT_NAME" == schedule ]]; then
+            case "$EVENT_SCHEDULE" in
+              '17 3 * * 0') full_audit=true ;;
+              '17 3 * * 1-6') run_code=false ;;
+              *) echo '::error::Unknown CI schedule'; exit 1 ;;
+            esac
+          elif [[ "$EVENT_NAME" == workflow_dispatch && "$FULL_AUDIT_REQUESTED" == true ]]; then
+            full_audit=true
+          fi
+          health_groups='["compile","clippy","tests"]'
+          if [[ "$full_audit" == true ]]; then
+            health_groups='["compile","clippy","tests","audit","coverage"]'
+          fi
+          {
+            echo "run_code=$run_code"
+            echo "full_audit=$full_audit"
+            echo "health_groups=$health_groups"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Code checks: %s; full audit: %s. Skipped jobs are not audit or release proof.\n' \
+            "$run_code" "$full_audit" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -101,7 +144,7 @@ jobs:
   dispatch2-macos:
     name: "1b · dispatch2 (macOS / libdispatch)"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -120,7 +163,7 @@ jobs:
   dispatch2-linux:
     name: "1c · dispatch2 (Linux / swift-corelibs-libdispatch)"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -168,7 +211,7 @@ jobs:
   package-quality:
     name: "${{ matrix.name }}"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -401,15 +444,34 @@ jobs:
           fi
           exit $exit_code
 
+  format-check:
+    name: "2c · Shared format"
+    needs: validation
+    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust formatter
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly-2026-08-09
+          components: rustfmt
+
+      - name: Check workspace formatting without compiling
+        run: cargo fmt --all --check
+
   health-check:
     name: "2c · Shared ${{ matrix.group }}"
     needs: validation
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.validation.outputs.run_code == 'true' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        group: [format, compile, clippy, tests, audit, coverage]
+        group: ${{ fromJSON(needs.validation.outputs.health_groups) }}
     # Cold bench/fuzz builds reached coverage after 176 minutes. Leave time for
     # instrumented dependencies and final gates even when the cache is absent.
     timeout-minutes: 360
@@ -452,17 +514,6 @@ jobs:
           key: ${{ runner.os }}-cargo-health-sources-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-health-sources-v1-
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-        with:
-          just-version: "1.39.0"
-
-      - name: Just fmt check (early gate)
-        if: matrix.group == 'format'
-        id: fmt_check
-        continue-on-error: true
-        run: just fmt-check
 
       - name: Install MPC downloader bootstrap dependencies
         run: |
@@ -588,6 +639,7 @@ jobs:
           name: check-all-${{ matrix.group }}-logs
           path: ${{ runner.temp }}/mfb-check-${{ matrix.group }}
           if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify LCOV artifact (fail-closed)
         if: always() && matrix.group == 'coverage'
@@ -603,15 +655,12 @@ jobs:
           name: coverage-lcov-shared-utils
           path: lcov.info
           if-no-files-found: error
+          retention-days: 7
 
       - name: Check shared health-check outcomes
         if: always()
         run: |
           exit_code=0
-          if [ "${{ steps.fmt_check.outcome }}" = "failure" ]; then
-            echo "::error::just fmt-check failed"
-            exit_code=1
-          fi
           if [ "${{ steps.check_all.outcome }}" = "failure" ]; then
             echo "::error::check_all failed"
             exit_code=1
@@ -624,7 +673,7 @@ jobs:
 
   security-audit:
     name: "3 · Dependency Security Audit"
-    needs: health-check
+    needs: validation
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -647,7 +696,9 @@ jobs:
     name: Build & Publish Nightly
     if: >-
       github.ref == 'refs/heads/nightly' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.validation.outputs.full_audit == 'true' &&
+      needs.format-check.result == 'success' &&
       needs.health-check.result == 'success' && needs.package-quality.result == 'success' &&
       needs.security-audit.result == 'success' && needs.validation.result == 'success' &&
       needs.dispatch2-macos.result == 'success' && needs.dispatch2-linux.result == 'success' &&
@@ -655,6 +706,7 @@ jobs:
     needs:
       - validation
       - package-quality
+      - format-check
       - health-check
       - security-audit
       - dispatch2-macos
@@ -668,8 +720,8 @@ jobs:
 
   deep-audit:
     name: Deep Production Audit
-    needs: security-audit
-    if: ${{ !cancelled() }}
+    needs: [validation, security-audit]
+    if: ${{ !cancelled() && needs.validation.outputs.full_audit == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -791,3 +843,4 @@ jobs:
           name: check-all-deep-audit-logs
           path: ${{ runner.temp }}/mfb-check-deep-audit
           if-no-files-found: warn
+          retention-days: 14

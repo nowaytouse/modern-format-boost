@@ -18377,13 +18377,20 @@ fn ci_quality_workflow_runs_fail_loud_strict_clippy() {
         !workflow.contains("extractions/setup-just@v2"),
         "ci-quality must not pin setup-just@v2 (Node 20 deprecation on runners)"
     );
+    let format_job = workflow
+        .split_once("\n  format-check:\n")
+        .expect("format check must have a standalone job")
+        .1
+        .split_once("\n  health-check:\n")
+        .expect("shared health checks must follow the format job")
+        .0;
     assert!(
-        workflow.contains("just fmt-check"),
-        "ci-quality health-check must run early just fmt-check"
+        format_job.contains("run: cargo fmt --all --check") && !format_job.contains("cargo run"),
+        "formatting must run without compiling the workspace or a gate launcher"
     );
     assert!(
-        workflow.contains("just fix-gate"),
-        "ci-quality health-check must run just fix-gate before check_all --ci"
+        workflow.contains("cargo run --locked -p dev --bin check_all -- --allow-non-nightly --ci --fuzz-smoke --group"),
+        "shared checks must use the grouped strict check_all path without a duplicate gate build"
     );
     assert!(
         workflow.contains("just --list"),
