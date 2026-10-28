@@ -3469,8 +3469,8 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xattr"
-version = "1.6.1"
-source = "git+https://github.com/Stebalien/xattr#75d613830b8aee79800999660fa3a771e635523e"
+version = "1.7.0"
+source = "git+https://github.com/Stebalien/xattr#c0d3de0d4229e496584c4beb5882cbb1739f0632"
 dependencies = [
  "libc",
  "rustix",

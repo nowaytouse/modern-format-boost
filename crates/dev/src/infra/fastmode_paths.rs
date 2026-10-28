@@ -154,7 +154,26 @@ mod tests {
     #[test]
     #[serial]
     fn test_fastmode_state_root_defaults_to_user_home_for_app_launch() {
+        struct RestoreEnvironment([(&'static str, Option<std::ffi::OsString>); 3]);
+        impl Drop for RestoreEnvironment {
+            fn drop(&mut self) {
+                for (key, previous) in &self.0 {
+                    // SAFETY: This test holds the shared serial environment lock.
+                    unsafe {
+                        if let Some(previous) = previous {
+                            std::env::set_var(key, previous);
+                        } else {
+                            std::env::remove_var(key);
+                        }
+                    }
+                }
+            }
+        }
         let tmp = tempfile::tempdir().unwrap();
+        let _restore = RestoreEnvironment(
+            ["HOME", "FROM_APP", "MFB_HOME_ROOT"].map(|key| (key, std::env::var_os(key))),
+        );
+        // SAFETY: This test holds the shared serial environment lock.
         unsafe {
             std::env::set_var("HOME", tmp.path());
             std::env::set_var("FROM_APP", "1");
@@ -162,10 +181,6 @@ mod tests {
         }
         let root = default_mfb_state_root().unwrap();
         assert_eq!(root, tmp.path().join(".modern_format_boost"));
-        unsafe {
-            std::env::remove_var("FROM_APP");
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]

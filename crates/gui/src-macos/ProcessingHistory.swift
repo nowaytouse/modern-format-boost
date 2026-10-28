@@ -3798,6 +3798,51 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         failureDetailAlert = nil
     }
 
+    private static func failureWorkerDetails(for source: FailureSourceKey, entry: HistoryEntry?, privacy: Bool) throws -> [String] {
+        var lines = [localized("history.file_failure.worker.title"), localized("history.file_failure.worker.note")]
+        guard let entry, !entry.invocationEvidenceInvalid, entry.context?.run_id == source.runID else {
+            return lines + [localized("history.file_failure.worker.unavailable")]
+        }
+        let matches = entry.invocations.filter { $0.invocation_id == source.invocationID }
+        guard matches.count == 1, let invocation = matches.first, invocation.valid,
+              invocation.run_id == source.runID, invocation.pipeline == source.pipeline else {
+            return lines + [localized("history.file_failure.worker.unavailable")]
+        }
+        func row(_ key: String, _ value: String) -> String { localized("history.detail.\(key)") + ": " + value }
+        let unknown = localized("result.unknown")
+        if privacy {
+            // A worker can receive normal files alongside this failure; its paths and argv are not file-scoped.
+            lines.append(localized("history.file_failure.worker.private"))
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+            lines += [row("worker_program", invocation.program_requested), row("worker_path", invocation.program_path ?? unknown),
+                      row("worker_arguments", String(decoding: try encoder.encode(invocation.arguments), as: UTF8.self))]
+        }
+        if let bytes = invocation.binary.bytes, let hash = invocation.binary.blake3 {
+            lines.append(row("worker_binary", "\(bytes) B · \(hash)"))
+        } else {
+            lines.append(row("worker_observation_error", privacy ? localized("privacy.display.hidden") : invocation.binary.diagnostic ?? unknown))
+        }
+        let observations = entry.workerExecutions[source.invocationID] ?? []
+        guard !entry.workerExecutionEvidenceInvalid else {
+            return lines + [localized("history.worker.execution.invalid")]
+        }
+        guard !observations.isEmpty else { return lines + [localized("history.worker.execution.unknown")] }
+        guard observations.count <= 2, let first = observations.first, let last = observations.last,
+              first.state == "spawned", observations.allSatisfy({
+                  $0.valid && $0.run_id == source.runID && $0.invocation_id == source.invocationID
+                      && $0.pipeline == source.pipeline && $0.pid == first.pid
+              }), observations.count == 1 || last.state == "exited" else {
+            return lines + [localized("history.worker.execution.invalid")]
+        }
+        lines.append(localized("history.worker.execution.pid", String(last.pid)))
+        if last.state == "spawned" { lines.append(localized("history.worker.execution.spawned")) }
+        else if let signal = last.signal { lines.append(localized("history.worker.execution.signal", String(signal))) }
+        else { lines.append(localized("history.worker.execution.exited", last.exit_code.map(String.init) ?? unknown)) }
+        return lines
+    }
+
     private func failureDetailText(for row: FailureDisplayRow) throws -> String {
         guard let source = row.source, !row.observations.isEmpty else {
             throw HostError(message: localized("history.file_failure.not_recorded"))
@@ -3810,6 +3855,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                      localized("history.failed_files.path") + ": " + source.sourcePath,
                      localized("history.file_failure.detail.absolute_path") + ": " + (source.absolutePath ?? localized("result.unknown")),
                      localized("history.file_failure.detail.note"), ""]
+        lines += try Self.failureWorkerDetails(for: source, entry: selected, privacy: privacyEnabled)
+        lines.append("")
         for observation in row.observations {
             let json = try jsonEncoder.encode(observation.failure)
             lines += [observation.failure.userReason, observation.failure.message,
@@ -4254,6 +4301,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     fileprivate func validateFileReasonsForSelfTest(_ entry: HistoryEntry, issues: HistoryStore.BatchIssues) throws {
+        try validateFailureWorkerDetailsForSelfTest(entry, failure: issues.fileFailures[0])
         entries = [entry]
         filter.selectedSegment = 0
         applyFilter()
@@ -4271,6 +4319,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         let fullDetails = try failureDetailText(for: failureDisplayRows[0])
         guard fullDetails.contains("synthetic decoder failed\nno guessed root cause"),
               fullDetails.contains("synthetic metadata failure"), fullDetails.contains("decoder_failed"),
+              fullDetails.contains(localized("history.file_failure.worker.title")),
               fullDetails.contains(issues.fileFailures[0].source_path),
               fullDetails.contains(issues.fileFailures[0].invocation_id) else {
             throw HostError(message: "Grouped failure details lost original diagnostics, Unicode paths or invocation identity")
@@ -4313,6 +4362,108 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.selectedSegment = 0
         detailModeChanged()
         guard detail.string.contains(entry.context!.run_id!) else { throw HostError(message: "History overview lost run identity") }
+    }
+
+    private func validateFailureWorkerDetailsForSelfTest(_ original: HistoryEntry, failure: HistoryFileFailure) throws {
+        let source = FailureSourceKey(failure)
+        let arguments = ["--input", "/synthetic/routine.jpg", "line\n入力"]
+        func invocation(_ id: String, run: String? = nil, pipeline: String = "img", program: String = "synthetic-worker-one") -> HistoryInvocation {
+            HistoryInvocation(schema_version: 1, invocation_id: id, run_id: run ?? source.runID,
+                pipeline: pipeline, state: "launch_requested", program_requested: program,
+                program_path: "/synthetic/bin/" + program, arguments: arguments,
+                binary: .init(scope: "observed_before_launch", bytes: 42, blake3: String(repeating: "a", count: 64), diagnostic: nil))
+        }
+        func observation(_ state: String, pid: UInt32 = 73, run: String? = nil, pipeline: String = "img", exit: Int32? = nil, signal: Int32? = nil) -> HistoryWorkerExecution {
+            HistoryWorkerExecution(schema_version: 1, scope: "os_child_process", invocation_id: source.invocationID,
+                run_id: run ?? source.runID, pipeline: pipeline, state: state, pid: pid, exit_code: exit, signal: signal)
+        }
+        func text(_ entry: HistoryEntry?, privacy: Bool = false, source key: FailureSourceKey? = nil) throws -> String {
+            try Self.failureWorkerDetails(for: key ?? source, entry: entry, privacy: privacy).joined(separator: "\n")
+        }
+        var entry = original
+        entry.invocationEvidenceInvalid = false
+        entry.workerExecutionEvidenceInvalid = false
+        entry.invocations = [invocation(source.invocationID), invocation("another-call", program: "synthetic-worker-two")]
+        entry.workerExecutions = [source.invocationID: [observation("spawned"), observation("exited", exit: 7)]]
+        let complete = try text(entry)
+        guard complete.contains("synthetic-worker-one"), !complete.contains("synthetic-worker-two"),
+              complete.contains("line\\n入力"), complete.contains(String(repeating: "a", count: 64)),
+              complete.contains(localized("history.worker.execution.pid", "73")),
+              complete.contains(localized("history.worker.execution.exited", "7")) else {
+            throw HostError(message: "Failure worker details lost exact invocation, arguments, binary identity or process exit")
+        }
+        let anotherFailure = HistoryFileFailure(schema_version: failure.schema_version, pipeline: source.pipeline,
+            source_path: failure.source_path, absolute_path: failure.absolute_path, message: failure.message,
+            run_id: source.runID, invocation_id: "another-call", reason_code: failure.reason_code)
+        let another = try text(entry, source: FailureSourceKey(anotherFailure))
+        guard another.contains("synthetic-worker-two"), !another.contains("synthetic-worker-one"),
+              another.contains(localized("history.worker.execution.unknown")) else {
+            throw HostError(message: "Failure details borrowed the executable or process result of another invocation")
+        }
+        let hidden = try text(entry, privacy: true)
+        guard hidden.contains(localized("history.file_failure.worker.private")),
+              !hidden.contains(arguments[1]), !hidden.contains("line\\n入力"), !hidden.contains("/synthetic/bin/"),
+              hidden.contains(localized("history.worker.execution.exited", "7")) else {
+            throw HostError(message: "Failure worker privacy leaked routine arguments or lost the process result")
+        }
+        var diagnosticEntry = entry
+        let diagnostic = "Cannot observe /synthetic/bin/private-worker while reading " + arguments[1]
+        diagnosticEntry.invocations = [HistoryInvocation(schema_version: 1, invocation_id: source.invocationID,
+            run_id: source.runID, pipeline: source.pipeline, state: "launch_requested", program_requested: "private-worker",
+            program_path: "/synthetic/bin/private-worker", arguments: arguments,
+            binary: .init(scope: "observed_before_launch", bytes: nil, blake3: nil, diagnostic: diagnostic))]
+        let privateDiagnostic = try text(diagnosticEntry, privacy: true)
+        guard !privateDiagnostic.contains(arguments[1]), !privateDiagnostic.contains("/synthetic/bin/private-worker"),
+              privateDiagnostic.contains(localized("privacy.display.hidden")), try text(diagnosticEntry).contains(diagnostic) else {
+            throw HostError(message: "Failure worker observation diagnostics leaked routine paths or lost retained details")
+        }
+        var invalidEntries: [HistoryEntry] = []
+        for invocations in [[], [invocation(source.invocationID), invocation(source.invocationID)],
+                            [invocation(source.invocationID, run: "wrong-run")],
+                            [invocation(source.invocationID, pipeline: "vid")]] {
+            var invalid = entry
+            invalid.invocations = invocations
+            invalidEntries.append(invalid)
+        }
+        var invalid = entry
+        invalid.invocationEvidenceInvalid = true
+        invalidEntries.append(invalid)
+        for invalid in invalidEntries {
+            let unavailable = try text(invalid)
+            guard unavailable.contains(localized("history.file_failure.worker.unavailable")),
+                  !unavailable.contains("synthetic-worker-one"), !unavailable.contains(localized("history.worker.execution.pid", "73")) else {
+                throw HostError(message: "Failure details guessed an identity from missing, conflicting or mismatched invocation evidence")
+            }
+        }
+        for observations in [[observation("exited", exit: 7)],
+                             [observation("spawned"), observation("exited", pid: 74, exit: 7)],
+                             [observation("spawned"), observation("exited", run: "wrong-run", exit: 7)],
+                             [observation("spawned"), observation("exited", pipeline: "vid", exit: 7)]] {
+            invalid = entry
+            invalid.workerExecutions[source.invocationID] = observations
+            let unavailable = try text(invalid)
+            guard unavailable.contains(localized("history.worker.execution.invalid")),
+                  !unavailable.contains(localized("history.worker.execution.exited", "7")) else {
+                throw HostError(message: "Failure details displayed an unbound or conflicting process result")
+            }
+        }
+        invalid = entry
+        invalid.workerExecutionEvidenceInvalid = true
+        guard try text(invalid).contains(localized("history.worker.execution.invalid")),
+              try text(nil).contains(localized("history.file_failure.worker.unavailable")) else {
+            throw HostError(message: "Failure details hid invalid execution evidence or invented a missing batch")
+        }
+        invalid.workerExecutionEvidenceInvalid = false
+        invalid.workerExecutions[source.invocationID] = [observation("spawned"), observation("exited", signal: 15)]
+        guard try text(invalid).contains(localized("history.worker.execution.signal", "15")) else {
+            throw HostError(message: "Failure details lost the actual worker termination signal")
+        }
+        invalid.workerExecutions[source.invocationID] = [observation("spawned")]
+        let started = try text(invalid)
+        guard started.contains(localized("history.worker.execution.spawned")),
+              !started.contains(localized("history.worker.execution.exited", "7")) else {
+            throw HostError(message: "Failure details turned a start observation into a process exit")
+        }
     }
 
     fileprivate func validateFailureComparisonForSelfTest(_ entry: HistoryEntry, results: [HistoryStore.BatchIssues]) throws {
@@ -4397,6 +4548,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard !detail.string.contains(normalPath), detail.string.contains(problemPath), visibleCopyText == detail.string else {
             throw HostError(message: "History output privacy hid a failure or copied an ordinary path")
         }
+        let failure = HistoryFileFailure(schema_version: 1, pipeline: "img", source_path: problemPath, absolute_path: problemPath,
+            message: "decoder failed", run_id: "run-privacy", invocation_id: "invocation-privacy", reason_code: nil)
+        let failureRow = FailureDisplayRow(path: problemPath, absolutePath: problemPath, reason: "decoder failed",
+            source: FailureSourceKey(failure), observations: [FailureObservation(failure: failure, repetitions: 1)])
+        let privateFailureDetails = try failureDetailText(for: failureRow)
+        guard privateFailureDetails.contains(problemPath), !privateFailureDetails.contains(normalPath),
+              !privateFailureDetails.contains("/synthetic/bin/img"),
+              privateFailureDetails.contains(localized("history.file_failure.worker.private")) else {
+            throw HostError(message: "Failure detail privacy exposed the worker's routine inputs or hid the failed source")
+        }
         failureDisplayRows = [FailureDisplayRow(path: problemPath, absolutePath: nil, reason: "decoder failed", source: nil, observations: [])]
         failedContent.isHidden = false
         guard visibleCopyText.contains(problemPath), !visibleCopyText.contains(normalPath) else {
@@ -4405,7 +4566,8 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         preferences.set(false, forKey: DisplayPrivacy.preferenceKey)
         displayPrivacyChanged()
         let restored = tableView(table, viewFor: column, row: 0) as? NSTableCellView
-        guard restored?.textField?.toolTip == normalPath, Self.render(entry).contains(normalPath) else {
+        guard restored?.textField?.toolTip == normalPath, Self.render(entry).contains(normalPath),
+              try failureDetailText(for: failureRow).contains(normalPath) else {
             throw HostError(message: "History privacy changed or erased the retained original evidence")
         }
     }

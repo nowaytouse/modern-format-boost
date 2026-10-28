@@ -695,6 +695,10 @@
 "history.file_failure.detail.observations" = "记录次数：%d";
 "history.file_failure.detail.absolute_path" = "记录中的源文件绝对路径";
 "history.file_failure.detail.note" = "按运行、调用、处理类型和记录路径完全一致分组，不按文件内容去重。此处不核实失败阶段或当前原件安全；最终失败数量以批次结果为准。";
+"history.file_failure.worker.title" = "关联处理进程的启动与执行";
+"history.file_failure.worker.note" = "仅按运行、调用和处理类型完全一致关联。这里标识处理进程，不证明该文件实际使用了哪些编码或验证工具；启动前观察也不证明程序已启动。";
+"history.file_failure.worker.unavailable" = "关联处理进程的证据缺失、冲突或与该失败不符，无法确认其身份及执行情况。";
+"history.file_failure.worker.private" = "程序名、路径和参数已隐藏，因为该进程还可能接收正常文件。关闭显示隐私可查看保留的原始记录。";
 "history.file_failure.reason.multiple" = "%d 种已记录原因 · 查看详情";
 "history.file_failure.reason.jpeg_lossless_encode_unavailable" = "未能完整重建原始 JPEG，未接受可逆转换结果。";
 "history.file_failure.reason.jpeg_missing_eoi" = "JPEG 缺少结束标记（EOI），未启动可逆编码。";

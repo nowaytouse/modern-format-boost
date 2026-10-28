@@ -906,7 +906,8 @@ fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
         filetime::set_file_times(directory, timestamp, timestamp).expect("source timestamps");
     }
     super::preserve_directory(&src, &dst).expect("directory metadata mirror");
-    super::preserve_directory(&src, &src).expect("in-place directory metadata must remain supported");
+    super::preserve_directory(&src, &src)
+        .expect("in-place directory metadata must remain supported");
     for directory in &directories {
         let target = dst.join(directory.strip_prefix(&src).expect("source-relative path"));
         let actual = fs::metadata(target).expect("mirrored metadata");
@@ -1009,7 +1010,7 @@ fn contract_directory_mirror_preserves_acl_without_copying_media() {
         .expect("add a nonrestrictive destination-only ACL");
     assert!(target_acl.success());
     super::preserve_directory(&src, &dst).expect("absence of an ACL must also be preserved");
-    assert!(entries(&listing(&dst).stdout).is_empty());
+    assert_eq!(entries(&listing(&dst).stdout), Vec::<String>::new());
 }
 
 #[test]

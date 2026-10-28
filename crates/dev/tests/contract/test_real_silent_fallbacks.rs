@@ -6640,8 +6640,14 @@ fn media_conversion_metadata_encode_unwrap_or_strict_defaults() {
         ),
         (
             "crates/foundation/src/metadata/mod.rs",
-            &["strip_prefix_or_self", "path_file_stem_or_empty"][..],
-            &["strip_prefix(src_dir).unwrap_or(src_path)"][..],
+            &[
+                "src_path.strip_prefix(src_dir).map_err(io::Error::other)?",
+                "path_file_stem_or_empty",
+            ][..],
+            &[
+                "strip_prefix(src_dir).unwrap_or(src_path)",
+                "strip_prefix_or_self(",
+            ][..],
         ),
         (
             "crates/foundation/src/x265_encoder.rs",

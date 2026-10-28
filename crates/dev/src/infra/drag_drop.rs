@@ -1684,10 +1684,10 @@ mod tests {
         let output = root.path().join("source_optimized");
         fs::create_dir(&source).unwrap();
         fs::create_dir(&output).unwrap();
-        let previous = std::env::var_os("MFB_HOME_ROOT");
-        unsafe {
-            std::env::set_var("MFB_HOME_ROOT", root.path().join("state"));
-        }
+        let _state = foundation::common_utils::EnvGuard::set(
+            "MFB_HOME_ROOT",
+            root.path().join("state").to_str().unwrap(),
+        );
         let mut marker = WorkingCopyMarker::new(source.clone(), output.clone(), 0);
         marker.stage = FastImgStageName::CleanupComplete;
         write_marker_atomic(&marker).unwrap();
@@ -1727,13 +1727,6 @@ mod tests {
             prune_completed_fast_img_empty_outputs(&source, "jxl").unwrap(),
             0
         );
-        unsafe {
-            if let Some(previous) = previous {
-                std::env::set_var("MFB_HOME_ROOT", previous);
-            } else {
-                std::env::remove_var("MFB_HOME_ROOT");
-            }
-        }
     }
 
     #[test]
@@ -1744,10 +1737,10 @@ mod tests {
         };
 
         let root = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("MFB_HOME_ROOT");
-        unsafe {
-            std::env::set_var("MFB_HOME_ROOT", root.path().join("state"));
-        }
+        let _state = foundation::common_utils::EnvGuard::set(
+            "MFB_HOME_ROOT",
+            root.path().join("state").to_str().unwrap(),
+        );
         let missing = root.path().join("missing-output");
         let absent = delete_fast_img_shortest_path_output_dir(&missing);
         assert_eq!(absent.outcome, OutputCleanupOutcome::AlreadyAbsent);
@@ -1855,14 +1848,6 @@ mod tests {
         assert_eq!(removed.already_absent_files, Some(1));
         assert!(removed.pruned_directories.is_some());
         assert!(!output.exists());
-
-        unsafe {
-            if let Some(previous) = previous {
-                std::env::set_var("MFB_HOME_ROOT", previous);
-            } else {
-                std::env::remove_var("MFB_HOME_ROOT");
-            }
-        }
     }
 
     #[test]

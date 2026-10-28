@@ -695,6 +695,10 @@
 "history.file_failure.detail.observations" = "Recorded occurrences: %d";
 "history.file_failure.detail.absolute_path" = "Recorded absolute source path";
 "history.file_failure.detail.note" = "Groups use exact run, invocation, pipeline and recorded paths, not file contents. Stage and current source safety are not verified by this view. Final failed counts come from the batch result.";
+"history.file_failure.worker.title" = "Associated worker launch and execution";
+"history.file_failure.worker.note" = "Linked by exact run, invocation and pipeline. This identifies the worker process, not the encoder or verification tools used for this file. Pre-launch observations do not prove that a program started.";
+"history.file_failure.worker.unavailable" = "Associated worker evidence is missing, conflicting or does not match this failure; its identity and execution cannot be confirmed.";
+"history.file_failure.worker.private" = "Program names, paths and arguments are hidden because this worker may also receive routine files. Turn off display privacy to inspect the retained originals.";
 "history.file_failure.reason.multiple" = "%d different recorded reasons · view details";
 "history.file_failure.reason.jpeg_lossless_encode_unavailable" = "The original JPEG could not be reconstructed exactly; no reversible result was accepted.";
 "history.file_failure.reason.jpeg_missing_eoi" = "The JPEG end marker (EOI) is missing. Reversible encoding was not started.";

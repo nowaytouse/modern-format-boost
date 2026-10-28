@@ -647,7 +647,7 @@ mod tests {
         fs::write(root.join("retained/verified.jpeg"), b"synthetic")?;
         let old = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
         filetime::set_file_times(&root, old, old)?;
-        filetime::set_file_times(&root.join("retained"), old, old)?;
+        filetime::set_file_times(root.join("retained"), old, old)?;
         assert_eq!(prune_empty_directories_within(&root, &[empty])?, 1);
         for path in [&root, &root.join("retained")] {
             assert_eq!(

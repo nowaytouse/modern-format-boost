@@ -844,6 +844,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn storage_inspection_counts_committed_utf8_rows_without_creating_or_migrating() -> Result<()> {
         let root = tempfile::tempdir()?;
         let missing = root.path().join("missing");
@@ -896,6 +897,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn storage_integrity_reports_relationship_and_type_issues_without_payload_claims() -> Result<()>
     {
         let root = tempfile::tempdir()?;
@@ -938,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn storage_inspection_refuses_unknown_corrupt_and_linked_sources() -> Result<()> {
         let root = tempfile::tempdir()?;
         assert!(inspect_history_store(Path::new("relative"), false).is_err());
@@ -967,6 +970,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn storage_inspection_rejects_duplicate_sequence_schema_without_repair() -> Result<()> {
         let root = tempfile::tempdir()?;
         append_history_event(root.path(), "one", EVENT)?;
@@ -993,6 +997,7 @@ mod tests {
     const EVENT: &str = "MFB_HISTORY_FINISHED={\"schema_version\":1,\"outcome\":\"failed\",\"error\":\"synthetic\\nerror\"}";
 
     #[test]
+    #[serial_test::serial]
     fn closed_history_retains_wal_sidecars_for_read_only_readers() {
         let directory = tempfile::tempdir().unwrap();
         append_history_event(directory.path(), "cold-history", EVENT).unwrap();
@@ -1280,6 +1285,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn config_history_marker_is_allowed_without_changing_schema() {
         let directory = tempfile::tempdir().unwrap();
         let event = "MFB_HISTORY_CONFIG={\"schema_version\":1,\"pipeline\":\"img\"}";
@@ -1310,6 +1316,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_storage_history_marker_uses_current_schema() {
         let directory = tempfile::tempdir().unwrap();
         let event = "MFB_HISTORY_OUTPUT_STORAGE={\"schema_version\":1,\"pipeline\":\"img\"}";
@@ -1340,6 +1347,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_is_ordered_transactional_and_rejects_unknown_databases() {
         let directory = tempfile::tempdir().unwrap();
         for session in ["first", "second", "first"] {
@@ -1396,6 +1404,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn schema_one_migrates_without_changing_existing_history() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(HISTORY_DATABASE);
@@ -1444,6 +1453,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn failed_schema_migration_retains_original_database() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(HISTORY_DATABASE);
@@ -1480,6 +1490,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn fast_img_evidence_is_independent_of_verbose_log_size() {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = HistoryOutputWriter::open(directory.path(), "batch").unwrap();
@@ -1534,6 +1545,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_writer_batches_orders_and_scopes_lines() {
         let directory = tempfile::tempdir().unwrap();
         let mut first = HistoryOutputWriter::open(directory.path(), "first").unwrap();
@@ -1578,6 +1590,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_writer_counts_only_its_committed_records_and_utf8_line_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = HistoryOutputWriter::open(directory.path(), "session").unwrap();
@@ -1614,6 +1627,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_writer_rejects_counter_overflow_before_committing_rows() {
         for totals in [(u64::MAX, 0), (0, u64::MAX)] {
             let directory = tempfile::tempdir().unwrap();
@@ -1638,6 +1652,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_flush_rolls_back_and_keeps_buffer_on_failure() {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = HistoryOutputWriter::open(directory.path(), "session").unwrap();
@@ -1675,6 +1690,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_read_snapshot_does_not_block_events_or_captured_output() {
         let directory = tempfile::tempdir().unwrap();
         append_history_event(directory.path(), "original", EVENT).unwrap();
@@ -1722,6 +1738,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn concurrent_history_openers_preserve_all_sessions_and_output() {
         let directory = tempfile::tempdir().unwrap();
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
@@ -1780,6 +1797,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn output_reads_support_schema_one_and_reject_malformed_current_schema() {
         let directory = tempfile::tempdir().unwrap();
         assert_eq!(

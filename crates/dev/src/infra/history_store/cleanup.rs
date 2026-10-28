@@ -1275,6 +1275,7 @@ pub fn execute_history_cleanup(
 mod tests {
     use super::*;
 
+    // Fixture users share the default serial lock with other state-root tests.
     fn fixture() -> Result<(
         tempfile::TempDir,
         foundation::common_utils::EnvGuard,
@@ -1341,6 +1342,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_retains_cold_read_only_access_after_partial_and_full_removal() -> Result<()>
     {
         let (_root, _guard, logs) = fixture()?;
@@ -1397,6 +1399,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_preserves_unselected_runs_shared_logs_and_output_boundaries() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "one")?;
@@ -1449,6 +1452,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_accepts_unallocated_output_sequence_only_for_zero_boundaries() -> Result<()>
     {
         let (_root, _guard, logs) = fixture()?;
@@ -1500,6 +1504,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_rejects_missing_output_sequence_with_persisted_rows() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "retained output")?;
@@ -1533,6 +1538,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_keeps_allocated_output_boundary_after_rows_are_deleted() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "removed output")?;
@@ -1561,6 +1567,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_removes_only_registered_files_and_retains_unknown_artifacts() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "one")?;
@@ -1617,6 +1624,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_retires_rows_even_when_a_registered_log_requires_attention() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "one")?;
@@ -1659,6 +1667,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_rejects_live_leases_stale_tokens_unknown_ids_and_schema() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "session", "run-one", "one")?;
@@ -1692,6 +1701,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_legacy_activity_and_symlinks_fail_closed() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         let session = format!("fixture_{}_1", std::process::id());
@@ -1737,6 +1747,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_readonly_preparation_retains_rows_schema_and_main_database_bytes() -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
         run(&logs, "cold-session", "cold-run", "retained output")?;
@@ -1807,6 +1818,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_readonly_preparation_rejects_missing_corrupt_unknown_and_linked_sources()
     -> Result<()> {
         let (_root, _guard, logs) = fixture()?;
@@ -1836,6 +1848,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn history_cleanup_multiselect_keeps_other_sessions_and_rejects_unsafe_sidecars() -> Result<()>
     {
         let (_root, _guard, logs) = fixture()?;

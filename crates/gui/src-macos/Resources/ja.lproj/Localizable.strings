@@ -695,6 +695,10 @@
 "history.file_failure.detail.observations" = "記録回数：%d";
 "history.file_failure.detail.absolute_path" = "記録された元ファイルの絶対パス";
 "history.file_failure.detail.note" = "実行・呼び出し・処理種別・記録パスの完全一致でまとめます。内容による重複判定ではありません。この画面は段階や現在の元ファイルの安全性を検証しません。最終失敗件数はバッチ結果を参照してください。";
+"history.file_failure.worker.title" = "関連する処理プロセスの起動と実行";
+"history.file_failure.worker.note" = "実行・呼び出し・処理種別の完全一致で関連付けます。処理プロセスの情報であり、このファイルに使われたエンコーダーや検証ツールの証明ではありません。起動前の観測は起動済みの証明にもなりません。";
+"history.file_failure.worker.unavailable" = "関連する処理プロセスの証拠が未記録・矛盾・不一致のため、識別情報と実行状況を確認できません。";
+"history.file_failure.worker.private" = "同じプロセスが通常のファイルも受け取る可能性があるため、プログラム名・パス・引数は非表示です。表示プライバシーをオフにすると保存された元の記録を確認できます。";
 "history.file_failure.reason.multiple" = "異なる理由 %d 件・詳細を表示";
 "history.file_failure.reason.jpeg_lossless_encode_unavailable" = "元の JPEG を完全には復元できず、可逆変換の結果は採用されませんでした。";
 "history.file_failure.reason.jpeg_missing_eoi" = "JPEG の終端マーカー（EOI）がないため、可逆エンコードを開始しませんでした。";

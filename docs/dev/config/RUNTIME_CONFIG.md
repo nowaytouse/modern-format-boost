@@ -364,6 +364,21 @@ Neither receipt state changes independently established media counts or delivery
 proof. Storage or receipt-write failure remains an explicit launcher error after
 the child is drained, without discarding the child's reported counts or exit.
 
+History's file-failure details and their complete-detail copy include the
+associated worker launch and execution evidence. The recorded run, invocation
+and pipeline must match exactly, with one unique launch record; missing,
+conflicting or mismatched records remain explicitly unavailable. The details
+show the requested program, observed executable path, exact arguments and
+pre-launch binary identity, followed by independently recorded child PID and
+exit or termination signal when available. Missing process observations do not
+turn a launch request into an observed start or exit. Invalid process evidence
+does not hide a separately valid launch record. This identifies the processing
+worker; it does not prove which encoder or verification tools ran for that
+individual file, its failure stage, or current source safety. Under display
+privacy, program names, paths and arguments stay hidden because the same worker
+can receive routine files alongside a failed file; the explicit failure details
+and recorded numeric process outcome remain available.
+
 ### Optional Display Privacy
 
 The native **Hide routine file names and paths** preference is off by default.

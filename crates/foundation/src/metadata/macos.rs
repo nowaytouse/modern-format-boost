@@ -82,7 +82,8 @@ fn directory_acl(path: &Path) -> io::Result<Option<Vec<u8>>> {
                 return Err(io::Error::last_os_error());
             }
             let mut present = 0;
-            if filesec_query_property(security, FILESEC_ACL, &mut present) != 0 {
+            if filesec_query_property(security, FILESEC_ACL, std::ptr::from_mut(&mut present)) != 0
+            {
                 return Err(io::Error::last_os_error());
             }
             if present == 0 {

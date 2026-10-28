@@ -930,6 +930,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    #[serial_test::serial]
     fn worker_execution_records_os_pid_exit_and_preserves_failed_counts() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), Some("run-execution"));
@@ -1029,6 +1030,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    #[serial_test::serial]
     fn worker_output_storage_failure_records_only_committed_text_and_drains_child() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), Some("run-storage-failure"));
@@ -1087,6 +1089,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    #[serial_test::serial]
     fn worker_execution_separates_signal_from_exit_code_and_spawn_failure() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), None);
@@ -1174,6 +1177,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn child_reserved_identity_environment_uses_launch_observation() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), Some("run-123"));
@@ -1216,6 +1220,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn child_reserved_identity_environment_removes_stale_run_id() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), None);

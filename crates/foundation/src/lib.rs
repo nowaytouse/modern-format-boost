@@ -377,11 +377,11 @@ pub use ffprobe::{
 };
 pub use metadata::{
     MetadataCopyCheck, MetadataDeliveryReport, MetadataLayerOutcome, MetadataOutputPolicy,
-    OutputMetadataAudit, apply_file_timestamps_for_delivery, apply_saved_timestamps_to_dst, copy,
-    preserve, preserve_directory, preserve_directory_with_log, preserve_for_delivery, preserve_pro,
-    restore_delivery_directory_metadata, restore_directory_timestamps,
-    restore_timestamps_from_source_to_output, save_directory_timestamps,
-    verify_exact_metadata_copy, verify_output_embedded_metadata,
+    OutputMetadataAudit, apply_delivery_directory_metadata, apply_file_timestamps_for_delivery,
+    apply_saved_timestamps_to_dst, copy, preserve, preserve_directory, preserve_directory_with_log,
+    preserve_for_delivery, preserve_pro, restore_delivery_directory_metadata,
+    restore_directory_timestamps, restore_timestamps_from_source_to_output,
+    save_directory_timestamps, verify_exact_metadata_copy, verify_output_embedded_metadata,
 };
 pub use progress::{
     Batch, CoarseProgressBar, DetailedCoarseProgressBar, Explore, ExploreLogger, FixedBottom,
