@@ -167,6 +167,23 @@ fn ci_runners_and_homebrew_keep_explicit_supported_boundaries() {
             );
         }
     }
+    for source in [
+        include_str!("../../../../.github/workflows/cd-nightly.yml"),
+        include_str!("../../../../.github/workflows/cd-stable.yml"),
+    ] {
+        let dependencies = source
+            .split_once("      - name: Install dependencies (")
+            .expect("release must declare its dependency installation step")
+            .1
+            .split("\n      - name:")
+            .next()
+            .unwrap();
+        assert!(
+            dependencies.contains("\n        env:\n          HOMEBREW_NO_INSTALL_CLEANUP: \"1\"\n")
+        );
+        assert!(dependencies.contains("brew install --formula \"${MISSING[@]}\""));
+        assert!(dependencies.contains("brew upgrade --formula homebrew/core/libheif"));
+    }
 }
 
 #[cfg(unix)]

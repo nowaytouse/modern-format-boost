@@ -32,8 +32,11 @@ jobs:
 
       - name: Install dependencies (Homebrew)
         shell: bash
+        env:
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
           set -euo pipefail
+          # The disposable runner needs dependencies, not whole-image package cleanup.
           BREW_PREFIX=$(brew --prefix)
           # The hosted image installs an OpenSSL 1.1 shim outside brew link.
           # Preserve only that known shim before OpenSSL 3 claims the command.
@@ -57,14 +60,14 @@ jobs:
           done
           if ((${#MISSING[@]} > 0)); then
             brew update
-            brew install "${MISSING[@]}"
+            brew install --formula "${MISSING[@]}"
           else
             echo "All required Homebrew formulas already installed."
           fi
 
           if ! pkg-config --atleast-version=1.23.5 libheif; then
             brew update
-            brew upgrade homebrew/core/libheif
+            brew upgrade --formula homebrew/core/libheif
           fi
           pkg-config --atleast-version=1.23.5 libheif
 
