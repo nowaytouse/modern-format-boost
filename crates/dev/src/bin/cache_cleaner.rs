@@ -58,10 +58,13 @@ const ANIMATION_CACHE_EXTENSIONS: &[&str] =
     version,
     about = "Modern Format Boost Cache Cleaner",
     group(clap::ArgGroup::new("inspection").args(["stats", "history_stats"])),
-    group(clap::ArgGroup::new("history_operation").args(["history_stats", "history_backup", "history_cleanup_preview", "history_cleanup"])),
+    group(clap::ArgGroup::new("history_operation").args(["history_stats", "history_backup", "history_cleanup_preview", "history_cleanup", "history_prepare_readonly"])),
     group(clap::ArgGroup::new("pruning_action").args(["prune", "preview_prune"]))
 )]
 struct Args {
+    #[arg(long, requires_all = ["history_directory", "json"], conflicts_with_all = ["local_backup", "stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config", "cache_max_bytes", "cache_ttl_seconds"], help = "Prepare existing History WAL access files for read-only readers without creating a database, migrating its schema or changing history rows")]
+    history_prepare_readonly: bool,
+
     #[arg(long, requires_all = ["history_directory", "json"], conflicts_with_all = ["local_backup", "stats", "prune", "preview_prune", "check_integrity", "path", "postgres", "purge_animation_cache", "purge_session_state", "yes", "config", "no_config"], help = "Preview exact selected History runs and proven log artifacts using a versioned JSON request; no history rows are changed")]
     history_cleanup_preview: Option<String>,
 
@@ -1495,9 +1498,20 @@ fn main() -> Result<()> {
             || args.history_stats
             || args.history_backup.is_some()
             || args.history_cleanup_preview.is_some()
-            || args.history_cleanup.is_some(),
+            || args.history_cleanup.is_some()
+            || args.history_prepare_readonly,
         "--history-directory requires an explicit History operation; no action taken"
     );
+    if args.history_prepare_readonly {
+        let directory = args
+            .history_directory
+            .as_deref()
+            .context("History preparation requires its explicit directory")?;
+        let receipt = dev::infra::history_store::prepare_history_read_only_access(directory)?;
+        println!("{}", serde_json::to_string(&receipt)?);
+        io::stdout().flush()?;
+        return Ok(());
+    }
     if let Some(encoded) = args
         .history_cleanup_preview
         .as_ref()
@@ -2184,6 +2198,29 @@ mod tests {
             );
         }
         assert!(Args::try_parse_from(["cache_cleaner", "--local-backup"]).is_err());
+    }
+
+    #[test]
+    fn history_preparation_cli_is_explicit_and_excludes_other_actions() {
+        let arguments = [
+            "cache_cleaner",
+            "--history-prepare-readonly",
+            "--history-directory",
+            "/synthetic/history",
+            "--json",
+        ];
+        let args = Args::try_parse_from(arguments).unwrap();
+        assert!(args.history_prepare_readonly && args.json && !args.yes);
+        assert!(Args::try_parse_from(["cache_cleaner", "--history-prepare-readonly"]).is_err());
+        for flag in [
+            "--history-stats",
+            "--stats",
+            "--prune",
+            "--check-integrity",
+            "--yes",
+        ] {
+            assert!(Args::try_parse_from(arguments.into_iter().chain([flag])).is_err());
+        }
     }
 
     #[test]

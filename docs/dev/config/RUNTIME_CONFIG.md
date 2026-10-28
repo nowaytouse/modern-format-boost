@@ -810,6 +810,20 @@ names or paths, and a retired identity cannot be reused by a writer. The databas
 file remains available to other runs; removal is not a secure-erasure operation
 or an instruction to delete its live WAL/SHM files.
 
+Every history writer, including selected-record removal, retains the WAL/SHM
+access files when it closes. The native history window keeps its actual queries
+read-only. If system SQLite specifically cannot open a closed history database,
+the window first asks the backend to prepare read access, then verifies the
+returned database identity and supported schema before retrying the read.
+Other errors are reported without rebuilding or clearing history.
+
+For an existing affected database, `cache_cleaner --history-prepare-readonly
+--history-directory <existing-log-directory> --json` performs that same bounded
+preparation. It opens only an existing, privately owned regular database, sets
+query-only mode, validates its supported schema, retains SQLite's access files
+and proves a cold read. It does not create a database, migrate the schema, delete
+rows, or treat unreadable history as an empty history.
+
 Controlled errors attempt no-clobber log restoration and report any recovery
 path. A hard crash between renaming logs to `.pending` files and committing the
 database can leave those logs in place without an automatic recovery journal.

@@ -20,6 +20,111 @@ const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
 const COPYFILE_FLAGS: u32 = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR | COPYFILE_RECURSIVE;
 
 pub(super) fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+    copy_native_metadata_flags(src, dst, COPYFILE_FLAGS)
+}
+
+pub(super) fn copy_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {
+    const COPYFILE_NOFOLLOW: u32 = (1 << 18) | (1 << 19);
+    copy_native_metadata_flags(src, dst, COPYFILE_ACL | COPYFILE_NOFOLLOW)
+}
+
+pub(super) fn verify_directory_acl(src: &Path, dst: &Path) -> io::Result<()> {
+    if directory_acl(src)? != directory_acl(dst)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "directory ACL differs after native copy",
+        ));
+    }
+    Ok(())
+}
+
+fn directory_acl(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    unsafe extern "C" {
+        fn filesec_init() -> *mut std::ffi::c_void;
+        fn filesec_free(security: *mut std::ffi::c_void);
+        fn filesec_query_property(
+            security: *mut std::ffi::c_void,
+            property: i32,
+            present: *mut i32,
+        ) -> i32;
+        fn filesec_get_property(
+            security: *mut std::ffi::c_void,
+            property: i32,
+            value: *mut std::ffi::c_void,
+        ) -> i32;
+        #[cfg_attr(target_arch = "x86_64", link_name = "fstatx_np$INODE64")]
+        fn fstatx_np(fd: i32, metadata: *mut libc::stat, security: *mut std::ffi::c_void) -> i32;
+        fn acl_size(acl: *mut std::ffi::c_void) -> isize;
+        fn acl_copy_ext(
+            buffer: *mut std::ffi::c_void,
+            acl: *mut std::ffi::c_void,
+            size: isize,
+        ) -> isize;
+        fn acl_free(object: *mut std::ffi::c_void) -> i32;
+    }
+    const FILESEC_ACL: i32 = 5;
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)?;
+    // SAFETY: the open directory binds the native observation; every allocation is released below.
+    unsafe {
+        let security = filesec_init();
+        if security.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let result = (|| {
+            let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if fstatx_np(handle.as_raw_fd(), metadata.as_mut_ptr(), security) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut present = 0;
+            if filesec_query_property(security, FILESEC_ACL, &mut present) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if present == 0 {
+                return Ok(None);
+            }
+            let mut acl: *mut std::ffi::c_void = std::ptr::null_mut();
+            if filesec_get_property(security, FILESEC_ACL, std::ptr::from_mut(&mut acl).cast()) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if acl.is_null() {
+                return Err(io::Error::other("native ACL property has no value"));
+            }
+            let exported = (|| {
+                let size = acl_size(acl);
+                if size < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut bytes = vec![0_u8; usize::try_from(size).map_err(io::Error::other)?];
+                let written = acl_copy_ext(bytes.as_mut_ptr().cast(), acl, size);
+                if written < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if usize::try_from(written).map_err(io::Error::other)? != bytes.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "native ACL export length differs",
+                    ));
+                }
+                Ok(Some(bytes))
+            })();
+            if acl_free(acl) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            exported
+        })();
+        filesec_free(security);
+        result
+    }
+}
+
+fn copy_native_metadata_flags(src: &Path, dst: &Path, flags: u32) -> io::Result<()> {
     unsafe extern "C" {
         fn copyfile(
             from: *const i8,
@@ -32,14 +137,7 @@ pub(super) fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     let dst_c = CString::new(dst.as_os_str().as_bytes())?;
     // SAFETY: CStrings are valid until the end of the block; copyfile does not
     // capture pointers.
-    let ret = unsafe {
-        copyfile(
-            src_c.as_ptr(),
-            dst_c.as_ptr(),
-            std::ptr::null_mut(),
-            COPYFILE_FLAGS,
-        )
-    };
+    let ret = unsafe { copyfile(src_c.as_ptr(), dst_c.as_ptr(), std::ptr::null_mut(), flags) };
     if ret < 0_i32 {
         return Err(io::Error::last_os_error());
     }

@@ -495,6 +495,30 @@ cargo test -p vid cache_exact_hint --lib
 
 See also [`MEDIA_CONVERSION_DELIVERY_SEAL.md`](MEDIA_CONVERSION_DELIVERY_SEAL.md) for sealed scope and explicit exclusions.
 
+## Filesystem directory metadata
+
+Directory mirroring creates the entire target tree before restoring metadata,
+then finishes children before parents. It rejects source/destination directory
+links instead of writing through them. The retained xattr policy, Unix permission
+bits, access/modification times and, on macOS, creation time, Finder Date Added
+and extended ACL are checked after application. ACL comparison uses native
+security properties and binary export, preserving the distinction between an
+absent ACL and an explicitly empty ACL; access errors are not absence evidence.
+Restrictive ACLs are applied after other attributes.
+
+IMG, JPEG restoration, standard VID and Fast GIF capture initial directory times
+before scanning or changing their inputs. Existing partial IMG/VID outputs also
+receive metadata finalization; a processing error remains an error. Controlled
+empty-directory pruning records actual removals and uses the existing directory
+identity/entry snapshot to restore surviving parent times. Unrelated changes are
+reported and their observed times are left intact.
+
+These guarantees do not make a new filesystem object identical to its source:
+inode, ctime, ownership, volume-specific flags and filesystem features are not
+promised to be cloned. Unsupported attribute operations fail visibly. A Photos
+folder/album is not a filesystem directory and does not inherit this metadata
+contract.
+
 ## Relation to other layers
 
 | Layer                                  | Scope                                                         |

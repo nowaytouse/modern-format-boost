@@ -155,6 +155,8 @@ where
         }
     }
 
+    let saved_dir_timestamps = crate::metadata::save_directory_timestamps(input)
+        .context("snapshot video source directory metadata before processing")?;
     let files = crate::collect_video_files_for_perceived_speed(
         input,
         SUPPORTED_VIDEO_EXTENSIONS,
@@ -943,115 +945,109 @@ where
         &config.label,
     );
 
-    if let Some(error) = checkpoint_error {
-        anyhow::bail!(error);
-    }
-    if batch_result.paused {
-        return Ok(());
-    }
-    if let Some(reason) = abort_reason {
-        anyhow::bail!("Batch aborted by error policy after {reason}");
-    }
+    let finalization = (|| -> Result<()> {
+        if let Some(error) = checkpoint_error {
+            anyhow::bail!(error);
+        }
+        if batch_result.paused {
+            return Ok(());
+        }
+        if let Some(reason) = abort_reason {
+            anyhow::bail!("Batch aborted by error policy after {reason}");
+        }
 
-    if let Some(ref output_dir) = config.output {
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_BATCH,
-            crate::infra::static_logs::messages::MSG_COPY_UNSUPPORTED
-        );
-        let copy_result = copy_unsupported_files(input, output_dir, recursive);
-        if copy_result.copied > 0 {
+        if let Some(ref output_dir) = config.output {
             crate::log_info!(
-                crate::infra::static_logs::messages::LABEL_COPY,
-                &format!("Copied {} unsupported files", copy_result.copied)
+                crate::infra::static_logs::messages::LABEL_BATCH,
+                crate::infra::static_logs::messages::MSG_COPY_UNSUPPORTED
             );
-        }
-        if copy_result.has_errors() {
-            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                "delivery_pipeline_cli",
-                format!(
-                    "Failed to copy {} files to output directory; {} directory scan errors",
-                    copy_result.failed, copy_result.scan_errors
-                ),
-            );
-            let sample_errors = copy_result
-                .errors
-                .iter()
-                .take(3)
-                .map(|(path, message, category)| {
-                    format!("{category}: {} ({message})", path.display())
-                })
-                .collect::<Vec<_>>()
-                .join(" | ");
-            anyhow::bail!(
-                "Batch output is incomplete: {} unsupported file copies failed; {} scan errors{}",
-                copy_result.failed,
-                copy_result.scan_errors,
-                if sample_errors.is_empty() {
-                    String::new()
-                } else {
-                    format!("; sample failures: {sample_errors}")
-                }
-            );
-        }
-
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_VERIFY,
-            crate::infra::static_logs::messages::MSG_VERIFY_COMPLETENESS
-        );
-        let expected_output = batch_result
-            .succeeded
-            .checked_add(batch_result.skipped)
-            .and_then(|count| count.checked_add(copy_result.copied))
-            .and_then(|count| count.checked_add(copy_result.skipped))
-            .context("Output delivery count overflow")?;
-        let verify = verify_output_count(
-            expected_output,
-            output_dir,
-            recursive,
-            VerifyDomain::VideosAndPassthrough,
-        );
-        crate::log_info!(
-            crate::infra::static_logs::messages::LABEL_VERIFY,
-            &verify.message
-        );
-        if !verify.passed {
-            crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                "delivery_pipeline_cli",
-                crate::infra::static_logs::messages::MSG_VERIFY_MISMATCH,
-            );
-            anyhow::bail!("Batch output count verification failed: {}", verify.message);
-        }
-
-        if let Some(ref base_dir) = config.base_dir {
-            crate::log_info!(
-                crate::infra::static_logs::messages::LABEL_METADATA,
-                crate::infra::static_logs::messages::MSG_METADATA_DIR_SYNC
-            );
-            if let Err(e) = crate::metadata::preserve_directory(base_dir, output_dir) {
-                crate::media_conversion_gate::delivery_pipeline_batch_audit(
-                    "delivery_pipeline_cli",
-                    format!("Failed to sync directory timestamps/permissions: {e}"),
-                );
-                anyhow::bail!(
-                    "Batch directory metadata synchronization failed for {} -> {}: {e}",
-                    base_dir.display(),
-                    output_dir.display()
+            let copy_result = copy_unsupported_files(input, output_dir, recursive);
+            if copy_result.copied > 0 {
+                crate::log_info!(
+                    crate::infra::static_logs::messages::LABEL_COPY,
+                    &format!("Copied {} unsupported files", copy_result.copied)
                 );
             }
+            if copy_result.has_errors() {
+                crate::media_conversion_gate::delivery_pipeline_batch_audit(
+                    "delivery_pipeline_cli",
+                    format!(
+                        "Failed to copy {} files to output directory; {} directory scan errors",
+                        copy_result.failed, copy_result.scan_errors
+                    ),
+                );
+                let sample_errors = copy_result
+                    .errors
+                    .iter()
+                    .take(3)
+                    .map(|(path, message, category)| {
+                        format!("{category}: {} ({message})", path.display())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                anyhow::bail!(
+                    "Batch output is incomplete: {} unsupported file copies failed; {} scan errors{}",
+                    copy_result.failed,
+                    copy_result.scan_errors,
+                    if sample_errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; sample failures: {sample_errors}")
+                    }
+                );
+            }
+
             crate::log_info!(
-                crate::infra::static_logs::messages::LABEL_METADATA,
-                crate::infra::static_logs::messages::MSG_METADATA_DIR_DONE
+                crate::infra::static_logs::messages::LABEL_VERIFY,
+                crate::infra::static_logs::messages::MSG_VERIFY_COMPLETENESS
+            );
+            let expected_output = batch_result
+                .succeeded
+                .checked_add(batch_result.skipped)
+                .and_then(|count| count.checked_add(copy_result.copied))
+                .and_then(|count| count.checked_add(copy_result.skipped))
+                .context("Output delivery count overflow")?;
+            let verify = verify_output_count(
+                expected_output,
+                output_dir,
+                recursive,
+                VerifyDomain::VideosAndPassthrough,
+            );
+            crate::log_info!(
+                crate::infra::static_logs::messages::LABEL_VERIFY,
+                &verify.message
+            );
+            if !verify.passed {
+                crate::media_conversion_gate::delivery_pipeline_batch_audit(
+                    "delivery_pipeline_cli",
+                    crate::infra::static_logs::messages::MSG_VERIFY_MISMATCH,
+                );
+                anyhow::bail!("Batch output count verification failed: {}", verify.message);
+            }
+        }
+
+        if batch_result.failed > 0 {
+            anyhow::bail!(
+                "Batch completed with {} failed file(s)",
+                batch_result.failed
             );
         }
-    }
 
-    if batch_result.failed > 0 {
-        anyhow::bail!(
-            "Batch completed with {} failed file(s)",
-            batch_result.failed
-        );
+        Ok(())
+    })();
+    let metadata = if let Some(output_dir) = config.output.as_ref().filter(|path| path.exists()) {
+        crate::metadata::apply_delivery_directory_metadata(&saved_dir_timestamps, input, output_dir)
+            .context("preserve video output directory metadata after batch finalization")
+    } else {
+        Ok(())
+    };
+    match (finalization, metadata) {
+        (Err(primary), Err(metadata)) => {
+            anyhow::bail!("{primary:#}; directory metadata finalization failed: {metadata:#}")
+        }
+        (Err(error), _) | (_, Err(error)) => return Err(error),
+        (Ok(()), Ok(())) => {}
     }
-
     if config.prune_empty_source_dirs {
         let source_dirs = files
             .iter()
@@ -1066,7 +1062,6 @@ where
             },
         )?;
     }
-
     Ok(())
 }
 fn process_single_file<F, R>(config: &Config, converter: F) -> Result<()>
@@ -1371,6 +1366,43 @@ mod tests {
             calls.load(Ordering::SeqCst),
             total,
             "a per-file failure must not stop later files; result={result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fail_fast_preserves_initial_output_directory_times() -> anyhow::Result<()> {
+        let _lock = crate::conversion::TEST_PROCESSED_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _skip_disk_precheck =
+            crate::common_utils::EnvGuard::set(crate::constants::ENV_MFB_SKIP_DISK_PRECHECK, "1");
+        let temp = tempfile::tempdir()?;
+        let input = temp.path().join("source");
+        let output = temp.path().join("output");
+        std::fs::create_dir(&input)?;
+        std::fs::create_dir(&output)?;
+        std::fs::write(input.join("bad.mp4"), MINIMAL_MP4)?;
+        let initial = filetime::FileTime::from_unix_time(1_600_000_000, 0);
+        filetime::set_file_times(&input, initial, initial)?;
+        let mut config = test_config(input);
+        config.output = Some(output.clone());
+        config.error_mode = crate::BatchErrorMode::FailFast;
+        let result = process_directory(&config, |_| {
+            std::fs::create_dir(output.join("partial-work"))?;
+            Err::<crate::conversion::TaskResult, _>(
+                crate::UnifiedError::analysis_error("synthetic recoverable failure").into(),
+            )
+        });
+        assert!(
+            result.is_err(),
+            "the original batch error must remain visible"
+        );
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&std::fs::metadata(output)?),
+            initial,
+            "a partial run must finalize its existing output directory metadata"
         );
         Ok(())
     }

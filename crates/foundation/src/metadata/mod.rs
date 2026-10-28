@@ -230,7 +230,7 @@ pub(crate) fn should_copy_macos_extended_xattr(key: &str) -> bool {
 const TOKEN_DEBUG: &str = "{:?}";
 
 fn require_existing_directory(path: &Path, label: &str) -> io::Result<std::fs::Metadata> {
-    let metadata = std::fs::metadata(path).map_err(|e| {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| {
         crate::media_conversion_gate::delivery_metadata_path_audit(
             "delivery_metadata",
             path,
@@ -244,7 +244,7 @@ fn require_existing_directory(path: &Path, label: &str) -> io::Result<std::fs::M
             ),
         )
     })?;
-    if !metadata.is_dir() {
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
         crate::media_conversion_gate::delivery_metadata_path_audit(
             "delivery_metadata",
             path,
@@ -2288,31 +2288,37 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
 
     collect_dir_metadata(src_dir, &mut dir_metadata)?;
 
-    for (src_path, metadata) in &dir_metadata {
-        let rel_path = crate::media_conversion_gate::strip_prefix_or_self(
-            src_path,
-            src_dir,
-            "delivery_metadata",
-        );
-        let dst_path = dst_dir.join(rel_path);
+    let mut directories = dir_metadata.into_iter().collect::<Vec<_>>();
+    directories.sort_by_key(|(path, _)| path.components().count());
+    // Creating children changes parent times; finish the tree before applying any metadata.
+    for (src_path, _) in &directories {
+        let relative = src_path.strip_prefix(src_dir).map_err(io::Error::other)?;
+        let target = dst_dir.join(relative);
+        match std::fs::symlink_metadata(&target) {
+            Ok(_) => {
+                require_existing_directory(&target, "destination mirror")?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    for (src_path, _) in &directories {
+        let relative = src_path.strip_prefix(src_dir).map_err(io::Error::other)?;
+        let target = dst_dir.join(relative);
+        std::fs::create_dir_all(&target)?;
+        require_existing_directory(&target, "destination mirror")?;
+    }
 
-        if !dst_path.exists()
-            && let Err(e) = std::fs::create_dir_all(&dst_path)
-        {
-            crate::media_conversion_gate::delivery_metadata_path_audit(
-                "delivery_metadata",
-                &dst_path,
-                format!(
-                    "Metadata Audit: Failed to create target directory {dst_display}: {e}",
-                    dst_display = dst_path.display(),
-                ),
-            );
+    for (src_path, metadata) in directories.iter().rev() {
+        let rel_path = src_path.strip_prefix(src_dir).map_err(io::Error::other)?;
+        let dst_path = dst_dir.join(rel_path);
+        require_existing_directory(src_path, "source mirror")?;
+        require_existing_directory(&dst_path, "destination mirror")?;
+        if let Err(error) = copy_dir_xattrs(src_path, &dst_path) {
             failures.push(format!(
-                "failed to create directory {} while mirroring {}: {e}",
-                dst_path.display(),
-                src_path.display()
+                "failed to preserve directory xattrs on {}: {error}",
+                dst_path.display()
             ));
-            continue;
         }
 
         #[cfg(unix)]
@@ -2473,12 +2479,50 @@ pub fn preserve_directory(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
             }
         }
 
-        if let Err(e) = copy_dir_xattrs(src_path, &dst_path) {
+        // Copy restrictive ACLs last so they cannot block the preceding attribute restoration.
+        #[cfg(target_os = "macos")]
+        if let Err(error) = macos::copy_directory_acl(src_path, &dst_path) {
             failures.push(format!(
-                "failed to preserve directory xattrs from {} to {}: {e}",
+                "failed to preserve directory ACL on {}: {error}",
+                dst_path.display()
+            ));
+        }
+        if let Err(e) = verify_exact_metadata_copy(src_path, &dst_path) {
+            failures.push(format!(
+                "failed to verify directory metadata from {} to {}: {e}",
                 src_path.display(),
                 dst_path.display()
             ));
+        }
+        let actual = require_existing_directory(&dst_path, "verified destination mirror")?;
+        if filetime::FileTime::from_last_access_time(&actual) != atime
+            || filetime::FileTime::from_last_modification_time(&actual) != mtime
+        {
+            failures.push(format!(
+                "directory timestamps differ after preservation: {}",
+                dst_path.display()
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(error) = macos::verify_directory_acl(src_path, &dst_path) {
+                failures.push(format!(
+                    "failed to verify directory ACL on {}: {error}",
+                    dst_path.display()
+                ));
+            }
+            if actual.created()? != metadata.created()? {
+                failures.push(format!(
+                    "directory creation time differs: {}",
+                    dst_path.display()
+                ));
+            }
+            if macos::get_added_time(&dst_path)? != macos::get_added_time(src_path)? {
+                failures.push(format!(
+                    "directory Finder added time differs: {}",
+                    dst_path.display()
+                ));
+            }
         }
     }
 
@@ -2631,7 +2675,7 @@ where
             ))
         })?;
         let dst_path = dst_root.join(rel_path);
-        let dst_metadata = match std::fs::metadata(&dst_path) {
+        let dst_metadata = match std::fs::symlink_metadata(&dst_path) {
             Ok(metadata) => metadata,
             Err(e) => {
                 failed_count += 1_i32;
@@ -2871,8 +2915,17 @@ where
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            let meta = std::fs::metadata(&path)?;
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "directory timestamp snapshot refuses symlink: {}",
+                    path.display()
+                ),
+            ));
+        }
+        if meta.is_dir() {
             let atime = filetime::FileTime::from_last_access_time(&meta);
             let mtime = filetime::FileTime::from_last_modification_time(&meta);
             map.insert(path.clone(), (atime, mtime));
@@ -2893,8 +2946,17 @@ where
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            let meta = std::fs::metadata(&path)?;
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "directory metadata snapshot refuses symlink: {}",
+                    path.display()
+                ),
+            ));
+        }
+        if meta.is_dir() {
             map.insert(path.clone(), meta);
             collect_dir_metadata(&path, map)?;
         }

@@ -737,6 +737,8 @@ fn run_fast_gif(
 
     let input_root = fast_gif_input_root(input)?;
     foundation::check_dangerous_directory(&input_root).map_err(|err| anyhow::anyhow!(err))?;
+    let saved_dir_timestamps = foundation::save_directory_timestamps(&input_root)
+        .context("snapshot Fast GIF source directory metadata before scanning")?;
     let output_root = match output_dir {
         Some(path) => path.to_path_buf(),
         None => fast_gif_default_output_dir(input)?,
@@ -825,15 +827,18 @@ fn run_fast_gif(
         Err(error)
     } else {
         (|| -> anyhow::Result<()> {
-            foundation::preserve_directory_with_log(&input_root, &output_root).with_context(
-                || {
-                    format!(
-                        "fast-gif failed to preserve output directory metadata {} -> {}",
-                        input_root.display(),
-                        output_root.display()
-                    )
-                },
-            )?;
+            foundation::apply_delivery_directory_metadata(
+                &saved_dir_timestamps,
+                &input_root,
+                &output_root,
+            )
+            .with_context(|| {
+                format!(
+                    "fast-gif failed to preserve output directory metadata {} -> {}",
+                    input_root.display(),
+                    output_root.display()
+                )
+            })?;
             if shortest_path {
                 let candidates = fast_gif_photos_import_candidates(&deliveries, &output_root)?;
                 if !candidates.is_empty() {
@@ -870,15 +875,18 @@ fn run_fast_gif(
                     moved.display()
                 );
             }
-            foundation::preserve_directory_with_log(&input_root, &originals_root).with_context(
-                || {
-                    format!(
-                        "fast-gif failed to preserve originals directory metadata {} -> {}",
-                        input_root.display(),
-                        originals_root.display()
-                    )
-                },
-            )?;
+            foundation::apply_delivery_directory_metadata(
+                &saved_dir_timestamps,
+                &input_root,
+                &originals_root,
+            )
+            .with_context(|| {
+                format!(
+                    "fast-gif failed to preserve originals directory metadata {} -> {}",
+                    input_root.display(),
+                    originals_root.display()
+                )
+            })?;
             if input.is_dir() {
                 foundation::io_utils::prune_empty_directories_within(&input_root, &source_dirs)
                     .with_context(|| {

@@ -891,6 +891,128 @@ fn contract_directory_metadata_entry_points_reject_file_sources() {
 }
 
 #[test]
+fn contract_directory_mirror_finishes_parent_timestamps_after_children() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("src");
+    let dst = temp.path().join("dst");
+    let mut directories = vec![src.clone()];
+    for branch in 0..16 {
+        let child = src.join(format!("branch-{branch}/child/grandchild"));
+        fs::create_dir_all(&child).expect("source tree");
+        directories.extend(child.ancestors().take(3).map(std::path::Path::to_path_buf));
+    }
+    let timestamp = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
+    for directory in &directories {
+        filetime::set_file_times(directory, timestamp, timestamp).expect("source timestamps");
+    }
+    super::preserve_directory(&src, &dst).expect("directory metadata mirror");
+    super::preserve_directory(&src, &src).expect("in-place directory metadata must remain supported");
+    for directory in &directories {
+        let target = dst.join(directory.strip_prefix(&src).expect("source-relative path"));
+        let actual = fs::metadata(target).expect("mirrored metadata");
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&actual),
+            timestamp
+        );
+        assert_eq!(
+            filetime::FileTime::from_last_access_time(&actual),
+            timestamp
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn contract_directory_mirror_rejects_links_without_touching_target_metadata() {
+    use std::os::unix::fs::symlink;
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("src");
+    let dst = temp.path().join("dst");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(src.join("child")).expect("source tree");
+    fs::create_dir(&outside).expect("outside directory");
+    fs::create_dir(&dst).expect("destination root");
+    symlink(&outside, dst.join("child")).expect("destination link");
+    let timestamp = filetime::FileTime::from_unix_time(1_600_000_100, 0);
+    filetime::set_file_times(&outside, timestamp, timestamp).expect("outside timestamps");
+    super::preserve_directory(&src, &dst).expect_err("destination link must be rejected");
+    assert_eq!(
+        filetime::FileTime::from_last_modification_time(&fs::metadata(&outside).expect("outside")),
+        timestamp
+    );
+    fs::remove_file(dst.join("child")).expect("remove destination link");
+    symlink(&outside, src.join("linked")).expect("source link");
+    super::preserve_directory(&src, &dst).expect_err("source directory link must be rejected");
+    assert!(
+        !dst.join("linked").exists(),
+        "linked trees cannot be mirrored"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn contract_directory_mirror_preserves_acl_without_copying_media() {
+    let temp = TempDir::new().expect("tempdir");
+    let src = temp.path().join("src");
+    let dst = temp.path().join("dst");
+    fs::create_dir(&src).expect("source");
+    fs::write(src.join("private-media"), b"synthetic").expect("source media");
+    let status = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone deny writeattr,writeextattr"])
+        .arg(&src)
+        .status()
+        .expect("set synthetic directory ACL");
+    assert!(status.success(), "synthetic ACL fixture must be supported");
+    super::preserve_directory(&src, &dst).expect("directory metadata mirror");
+    let listing = |path: &std::path::Path| {
+        std::process::Command::new("/bin/ls")
+            .args(["-lde", "--"])
+            .arg(path)
+            .output()
+            .expect("read synthetic ACL")
+    };
+    let source = listing(&src);
+    let target = listing(&dst);
+    assert!(source.status.success() && target.status.success());
+    let entries = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .skip(1)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        !entries(&source.stdout).is_empty(),
+        "fixture must contain an ACL"
+    );
+    assert_eq!(entries(&source.stdout), entries(&target.stdout));
+    assert!(
+        !dst.join("private-media").exists(),
+        "metadata mirroring cannot copy media"
+    );
+    let cleared = std::process::Command::new("/bin/chmod")
+        .arg("-N")
+        .arg(&src)
+        .status()
+        .expect("remove the synthetic source ACL");
+    assert!(cleared.success());
+    let target_reset = std::process::Command::new("/bin/chmod")
+        .arg("-N")
+        .arg(&dst)
+        .status()
+        .expect("reset the restrictive destination fixture ACL");
+    assert!(target_reset.success());
+    let target_acl = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone allow readattr"])
+        .arg(&dst)
+        .status()
+        .expect("add a nonrestrictive destination-only ACL");
+    assert!(target_acl.success());
+    super::preserve_directory(&src, &dst).expect("absence of an ACL must also be preserved");
+    assert!(entries(&listing(&dst).stdout).is_empty());
+}
+
+#[test]
 fn contract_saved_directory_timestamps_reject_missing_destination_mirror() {
     let temp = TempDir::new().expect("tempdir");
     let src_dir = temp.path().join("src");

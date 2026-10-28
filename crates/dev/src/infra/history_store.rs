@@ -9,8 +9,9 @@ use std::time::Duration;
 mod cleanup;
 pub use cleanup::{
     HistoryArtifactDecision, HistoryCleanupPreview, HistoryCleanupReceipt, HistoryCleanupRequest,
-    HistoryRunSelection, HistorySessionLease, acquire_history_session_lease,
-    execute_history_cleanup, preview_history_cleanup, register_history_artifacts,
+    HistoryReadOnlyAccessReceipt, HistoryRunSelection, HistorySessionLease,
+    acquire_history_session_lease, execute_history_cleanup, prepare_history_read_only_access,
+    preview_history_cleanup, register_history_artifacts,
 };
 
 pub const HISTORY_DATABASE: &str = "history.sqlite3";

@@ -41,6 +41,13 @@ digest and timestamp checks, atomic migration rollback and empty-state migration
 
 ## Verification
 
+History record removal also preserves the closed database's WAL/SHM read-access
+files. `prepare_history_read_only_access` is a separate, existing-database-only
+maintenance operation: query-only, schema validation, no CREATE/migration/row
+changes, with a final cold read. Missing, unreadable-schema, unknown-schema,
+linked or unowned objects are rejected. Synthetic regressions compare the main database
+bytes and retained records, including reads through macOS system SQLite.
+
 ```bash
 cargo test -p foundation --lib --locked checkpoint::tests:: -- --test-threads=1
 cargo test -p dev --test test_real_silent_fallbacks database -- --test-threads=1

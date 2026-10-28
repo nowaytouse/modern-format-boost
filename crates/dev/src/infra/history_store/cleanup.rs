@@ -416,6 +416,56 @@ fn cleanup_root(directory: &Path) -> Result<PathBuf> {
     Ok(root)
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryReadOnlyAccessReceipt {
+    pub schema_version: u32,
+    pub kind: &'static str,
+    pub source: String,
+    pub history_schema_version: i64,
+}
+
+/// Re-establish SQLite's read-only access files without changing history rows or schema.
+pub fn prepare_history_read_only_access(directory: &Path) -> Result<HistoryReadOnlyAccessReceipt> {
+    let root = cleanup_root(directory)?;
+    let source = root.join(HISTORY_DATABASE);
+    let mut connection = Connection::open_with_flags(
+        &source,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .context("open existing History database to prepare read-only access")?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.execute_batch("PRAGMA query_only=ON;")?;
+    persist_history_wal_sidecars(&connection)?;
+    let snapshot = connection.transaction()?;
+    let version = schema_version(&snapshot)?;
+    let journal: String = snapshot.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    snapshot.commit()?;
+    connection.close().map_err(|(_, error)| error)?;
+    if journal.eq_ignore_ascii_case("wal") {
+        ensure!(
+            root.join(format!("{HISTORY_DATABASE}-wal")).is_file()
+                && root.join(format!("{HISTORY_DATABASE}-shm")).is_file(),
+            "History read-only access files were not retained"
+        );
+    }
+    let mut reader = open_history_read(&root)?.context("History database disappeared")?;
+    let snapshot = reader.transaction()?;
+    ensure!(
+        schema_version(&snapshot)? == version,
+        "History schema changed during preparation"
+    );
+    snapshot.commit()?;
+    Ok(HistoryReadOnlyAccessReceipt {
+        schema_version: 1,
+        kind: "history_readonly_access",
+        source: source
+            .to_str()
+            .context("History source path is not UTF-8")?
+            .to_owned(),
+        history_schema_version: version,
+    })
+}
+
 fn selections(request: &HistoryCleanupRequest) -> Result<BTreeSet<HistoryRunSelection>> {
     ensure!(
         request.schema_version == 1,
@@ -1018,6 +1068,7 @@ pub fn execute_history_cleanup(
     )?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")?;
+    persist_history_wal_sidecars(&connection)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let plan = build_plan(&root, &transaction, request)?;
     ensure!(
@@ -1287,6 +1338,62 @@ mod tests {
         }
         register_history_artifacts(logs, session, &paths)?;
         Ok(paths)
+    }
+
+    #[test]
+    fn history_cleanup_retains_cold_read_only_access_after_partial_and_full_removal() -> Result<()>
+    {
+        let (_root, _guard, logs) = fixture()?;
+        run(&logs, "first", "one", "first output")?;
+        run(&logs, "second", "two", "second output")?;
+        for (session, id, remaining) in [("first", "one", 1), ("second", "two", 0)] {
+            let mut selected = request(session, id);
+            selected.snapshot_token =
+                Some(preview_history_cleanup(&logs, &selected)?.snapshot_token);
+            let receipt = execute_history_cleanup(&logs, &selected)?;
+            assert_eq!(receipt.status, "completed");
+            let database = logs.join(HISTORY_DATABASE);
+            let wal = logs.join(format!("{HISTORY_DATABASE}-wal"));
+            let shm = logs.join(format!("{HISTORY_DATABASE}-shm"));
+            assert!(
+                wal.is_file() && shm.is_file(),
+                "cleanup must preserve cold read-only access"
+            );
+            let before = fs::read(&database)?;
+            let wal_before = fs::read(&wal)?;
+            let reader = open_history_read(&logs)?.context("history database disappeared")?;
+            assert_eq!(
+                reader.query_row("SELECT COUNT(*) FROM history_sessions", [], |row| row
+                    .get::<_, i64>(0))?,
+                remaining
+            );
+            assert_eq!(
+                reader.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))?,
+                "ok"
+            );
+            assert!(reader.execute("DELETE FROM history_sessions", []).is_err());
+            drop(reader);
+            #[cfg(target_os = "macos")]
+            {
+                let native = std::process::Command::new("/usr/bin/sqlite3")
+                    .arg("-readonly")
+                    .arg(database.canonicalize()?)
+                    .arg("SELECT COUNT(*) FROM history_sessions; PRAGMA quick_check;")
+                    .output()?;
+                assert!(
+                    native.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&native.stderr)
+                );
+                assert_eq!(
+                    String::from_utf8(native.stdout)?,
+                    format!("{remaining}\nok\n")
+                );
+            }
+            assert_eq!(fs::read(&database)?, before);
+            assert_eq!(fs::read(&wal)?, wal_before);
+        }
+        Ok(())
     }
 
     #[test]
@@ -1626,6 +1733,105 @@ mod tests {
         );
         assert_eq!(fs::read(&original)?, b"original diagnostic");
         assert!(!recovery.try_exists()?);
+        Ok(())
+    }
+
+    #[test]
+    fn history_readonly_preparation_retains_rows_schema_and_main_database_bytes() -> Result<()> {
+        let (_root, _guard, logs) = fixture()?;
+        run(&logs, "cold-session", "cold-run", "retained output")?;
+        let source = logs.join(HISTORY_DATABASE).canonicalize()?;
+        let writer = Connection::open_with_flags(
+            &source,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        writer.close().map_err(|(_, error)| error)?;
+        assert!(!logs.join(format!("{HISTORY_DATABASE}-wal")).exists());
+        assert!(!logs.join(format!("{HISTORY_DATABASE}-shm")).exists());
+        let before = fs::read(&source)?;
+        #[cfg(target_os = "macos")]
+        {
+            let native = std::process::Command::new("/usr/bin/sqlite3")
+                .arg("-readonly")
+                .arg(source.canonicalize()?)
+                .arg("PRAGMA user_version;")
+                .output()?;
+            eprintln!(
+                "cold system SQLite before preparation: {:?}: {}",
+                native.status.code(),
+                String::from_utf8_lossy(&native.stderr)
+            );
+        }
+        let receipt = prepare_history_read_only_access(&logs)?;
+        assert_eq!(receipt.kind, "history_readonly_access");
+        assert_eq!(receipt.history_schema_version, 2);
+        assert_eq!(fs::read(&source)?, before);
+        assert!(logs.join(format!("{HISTORY_DATABASE}-wal")).is_file());
+        assert!(logs.join(format!("{HISTORY_DATABASE}-shm")).is_file());
+        assert_eq!(
+            read_session_output_since(&logs, "cold-session", 0)?,
+            "retained output\n"
+        );
+        let reader = open_history_read(&logs)?.context("History test database absent")?;
+        assert_eq!(
+            reader.query_row(
+                "SELECT COUNT(*) FROM history_events WHERE session_id='cold-session'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            2
+        );
+        assert_eq!(
+            reader.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
+            2
+        );
+        assert!(reader.execute("DELETE FROM history_events", []).is_err());
+        drop(reader);
+        #[cfg(target_os = "macos")]
+        {
+            let native = std::process::Command::new("/usr/bin/sqlite3")
+                .arg("-readonly")
+                .arg(&source)
+                .arg("PRAGMA user_version; SELECT COUNT(*) FROM history_events;")
+                .output()?;
+            assert!(
+                native.status.success(),
+                "{}",
+                String::from_utf8_lossy(&native.stderr)
+            );
+            assert_eq!(native.stdout, b"2\n2\n");
+        }
+        assert_eq!(fs::read(&source)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn history_readonly_preparation_rejects_missing_corrupt_unknown_and_linked_sources()
+    -> Result<()> {
+        let (_root, _guard, logs) = fixture()?;
+        let source = logs.join(HISTORY_DATABASE);
+        assert!(prepare_history_read_only_access(&logs).is_err());
+        assert!(!source.exists());
+        fs::write(&source, b"not a History database")?;
+        assert!(prepare_history_read_only_access(&logs).is_err());
+        assert_eq!(fs::read(&source)?, b"not a History database");
+        fs::remove_file(&source)?;
+        run(&logs, "unknown", "unknown-run", "retained")?;
+        let writer = open_history_write(&logs)?;
+        writer.pragma_update(None, "user_version", 999)?;
+        writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        drop(writer);
+        let before = fs::read(&source)?;
+        assert!(prepare_history_read_only_access(&logs).is_err());
+        assert_eq!(fs::read(&source)?, before);
+        let linked = logs.parent().context("test parent")?.join("linked-history");
+        std::os::unix::fs::symlink(&logs, &linked)?;
+        assert!(prepare_history_read_only_access(&linked).is_err());
+        let sidecar = logs.join(format!("{HISTORY_DATABASE}-journal"));
+        std::os::unix::fs::symlink(&source, &sidecar)?;
+        assert!(prepare_history_read_only_access(&logs).is_err());
+        assert_eq!(fs::read(&source)?, before);
         Ok(())
     }
 

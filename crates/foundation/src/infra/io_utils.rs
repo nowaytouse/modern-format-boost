@@ -271,59 +271,93 @@ fn prune_empty_directory_candidates_within(
 
     let mut directories: Vec<_> = directories.into_iter().collect();
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    #[cfg(unix)]
+    let metadata =
+        crate::metadata::SourceDirectoryCleanupSnapshot::capture(&canonical_root, &directories)?;
     let mut removed = 0;
-    for directory in directories {
-        if remove_finder_metadata {
-            remove_finder_metadata_if_only_entry(&directory)?;
+    let mut removed_paths = Vec::new();
+    let cleanup = (|| -> std::io::Result<usize> {
+        for directory in directories {
+            if remove_finder_metadata
+                && let Some(path) = remove_finder_metadata_if_only_entry(&directory)?
+            {
+                removed_paths.push(path);
+            }
+            match fs::remove_dir(&directory) {
+                Ok(()) => {
+                    removed += 1;
+                    removed_paths.push(directory);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => return Err(error),
+            }
         }
-        match fs::remove_dir(&directory) {
-            Ok(()) => removed += 1,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-                ) => {}
-            Err(error) => return Err(error),
+        Ok(removed)
+    })();
+    #[cfg(unix)]
+    if !removed_paths.is_empty() {
+        let restore = metadata
+            .restore_after_cleanup(&removed_paths)
+            .and_then(|restored| {
+                if restored {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other(
+                        "directory cleanup observed unrelated changes; timestamps left intact",
+                    ))
+                }
+            });
+        if let Err(error) = restore {
+            return Err(std::io::Error::other(match cleanup {
+                Ok(_) => error.to_string(),
+                Err(primary) => {
+                    format!("{primary}; directory timestamp restoration failed: {error}")
+                }
+            }));
         }
     }
-    Ok(removed)
+    cleanup
 }
 
-fn remove_finder_metadata_if_only_entry(directory: &Path) -> std::io::Result<()> {
+fn remove_finder_metadata_if_only_entry(directory: &Path) -> std::io::Result<Option<PathBuf>> {
     const DS_STORE_MAGIC: [u8; 8] = [0, 0, 0, 1, b'B', b'u', b'd', b'1'];
 
     let mut entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     let Some(entry) = entries.next().transpose()? else {
-        return Ok(());
+        return Ok(None);
     };
     if entries.next().transpose()?.is_some()
         || entry.file_name().as_os_str() != std::ffi::OsStr::new(".DS_Store")
     {
-        return Ok(());
+        return Ok(None);
     }
 
     let path = entry.path();
     let metadata = fs::symlink_metadata(&path)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Ok(());
+        return Ok(None);
     }
     let mut magic = [0_u8; DS_STORE_MAGIC.len()];
     let mut file = fs::File::open(&path)?;
     match std::io::Read::read_exact(&mut file, &mut magic) {
         Ok(()) if magic == DS_STORE_MAGIC => {}
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+        Ok(()) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error),
     }
     drop(file);
 
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -600,6 +634,28 @@ mod tests {
         assert_eq!(fs::read(&legacy_fixed_staging)?, b"user payload");
         assert!(!src.exists());
 
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn empty_directory_pruning_preserves_surviving_parent_metadata() -> std::io::Result<()> {
+        let parent = tempfile::tempdir()?;
+        let root = parent.path().join("output");
+        let empty = root.join("retained/empty");
+        fs::create_dir_all(&empty)?;
+        fs::write(root.join("retained/verified.jpeg"), b"synthetic")?;
+        let old = filetime::FileTime::from_unix_time(1_600_000_000, 123_456_789);
+        filetime::set_file_times(&root, old, old)?;
+        filetime::set_file_times(&root.join("retained"), old, old)?;
+        assert_eq!(prune_empty_directories_within(&root, &[empty])?, 1);
+        for path in [&root, &root.join("retained")] {
+            assert_eq!(
+                filetime::FileTime::from_last_modification_time(&fs::metadata(path)?),
+                old
+            );
+        }
+        assert_eq!(fs::read(root.join("retained/verified.jpeg"))?, b"synthetic");
         Ok(())
     }
 

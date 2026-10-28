@@ -1365,6 +1365,22 @@ private enum HistoryStore {
         return parent + "/" + url.lastPathComponent
     }
 
+    static func needsReadOnlyPreparation(directory: URL) throws -> Bool {
+        let url = directory.appendingPathComponent("history.sqlite3")
+        guard regularFile(url) else { return false }
+        var database: OpaquePointer?
+        defer { if let database { sqlite3_close(database) } }
+        let opened = sqlite3_open_v2(try databasePath(url), &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW, nil)
+        if opened & 0xff == SQLITE_CANTOPEN { return true }
+        guard opened == SQLITE_OK, let database else { return false }
+        return sqlite3_exec(database, "PRAGMA user_version", nil, nil, nil) & 0xff == SQLITE_CANTOPEN
+    }
+
+    static func loadForDisplay(directory: URL, prepare: () throws -> Void) throws -> Result {
+        if try needsReadOnlyPreparation(directory: directory) { try prepare() }
+        return try load(directory: directory)
+    }
+
     static func output(for entry: HistoryEntry, cursor: Int64? = nil,
                        direction: OutputDirection = .older, upperSnapshot: Int64? = nil) throws -> Output {
         guard entry.hasStoredOutput, let start = entry.context?.output_sequence, start >= 0,
@@ -2407,6 +2423,30 @@ private func historyRemovalOutput(_ request: HistoryRemovalRequest, directory: U
     return try settingsToolOutput(binary, arguments: request.arguments(directory: directory), timeout: request.snapshot_token == nil ? 10 : nil)
 }
 
+private struct HistoryReadOnlyAccessReceipt: Decodable {
+    let schema_version: Int
+    let kind: String
+    let source: String
+    let history_schema_version: Int
+
+    static func validate(_ data: Data, directory: URL) throws {
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.schema_version == 1, value.kind == "history_readonly_access",
+              value.source == (try HistoryStore.databasePath(directory.appendingPathComponent("history.sqlite3"))),
+              value.history_schema_version == 1 || value.history_schema_version == 2 else {
+            throw HostError(message: localized("history.issue.read"))
+        }
+    }
+}
+
+private func prepareHistoryReadOnlyAccess(directory: URL) throws {
+    guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
+        throw HostError(message: localized("settings.cache.backend_missing"))
+    }
+    let output = try settingsToolOutput(binary, arguments: ["--history-prepare-readonly", "--history-directory", directory.path, "--json"], timeout: 10)
+    try HistoryReadOnlyAccessReceipt.validate(output, directory: directory)
+}
+
 private func historyRemovalFixtureOutput(_ request: HistoryRemovalRequest, directory: URL) throws -> Data {
     let retained = HistoryRemovalArtifact(path: directory.path, scope: "unregistered_external_logs", status: "retained",
         reason: "Synthetic example: older logs have no ownership record and are kept.")
@@ -2602,7 +2642,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         updateActions()
         let source = directory
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Swift.Result { try HistoryStore.load(directory: source) }
+            let result = Swift.Result {
+                try HistoryStore.loadForDisplay(directory: source) {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.generation == token else { return }
+                        self.status.stringValue = localized("history.preparing_read")
+                    }
+                    try prepareHistoryReadOnlyAccess(directory: source)
+                }
+            }
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
                 self.progress.stopAnimation(nil)
@@ -5902,6 +5950,39 @@ func runProcessingHistorySelfTests() throws {
             throw HostError(message: "Synthetic history commit failed")
         }
     }
+    do {
+    let coldDirectory = directory.appendingPathComponent("cold-history")
+    try FileManager.default.createDirectory(at: coldDirectory, withIntermediateDirectories: false)
+    let coldDatabase = coldDirectory.appendingPathComponent("history.sqlite3")
+    try writeDatabase([("cold", [context, summary, completed])], schema: 2, destination: coldDatabase)
+    func nativeReadAccess(_ persist: Int32, createWAL: Bool) throws {
+        var connection: OpaquePointer?
+        guard sqlite3_open_v2(try HistoryStore.databasePath(coldDatabase), &connection, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOFOLLOW, nil) == SQLITE_OK,
+              let connection else { throw HostError(message: "Open cold native fixture failed") }
+        defer { sqlite3_close(connection) }
+        var value = persist
+        try require(sqlite3_file_control(connection, "main", SQLITE_FCNTL_PERSIST_WAL, &value) == SQLITE_OK,
+                    "Set fixture WAL persistence failed")
+        try require(sqlite3_exec(connection, createWAL ? "PRAGMA journal_mode=WAL" : "PRAGMA query_only=ON; PRAGMA user_version", nil, nil, nil) == SQLITE_OK,
+                    "Read cold native fixture failed")
+    }
+    try nativeReadAccess(0, createWAL: true)
+    let coldBytes = try Data(contentsOf: coldDatabase)
+    try require(try HistoryStore.needsReadOnlyPreparation(directory: coldDirectory),
+                "Cold WAL history must request preparation rather than appear empty")
+    var preparations = 0
+    let coldLoaded = try HistoryStore.loadForDisplay(directory: coldDirectory) {
+        preparations += 1
+        try nativeReadAccess(1, createWAL: false)
+    }
+    try require(preparations == 1 && coldLoaded.entries.count == 1
+                && coldLoaded.entries.first?.succeededLabel == "2"
+                && (try Data(contentsOf: coldDatabase)) == coldBytes,
+                "Cold history preparation lost or rewrote records")
+    _ = try HistoryStore.loadForDisplay(directory: coldDirectory) {
+        throw HostError(message: "Readable history must not be reopened writable")
+    }
+    }
     var pendingMedia = media
     pendingMedia["unprocessed"] = 1
     var pendingSummary = summaryValue
@@ -5922,6 +6003,22 @@ func runProcessingHistorySelfTests() throws {
         ("empty", [])
     ])
     let databaseBytes = try Data(contentsOf: databaseURL)
+    try require(try !HistoryStore.needsReadOnlyPreparation(directory: directory),
+                "A readable database must not request writable preparation")
+    let readReceipt: [String: Any] = ["schema_version": 1, "kind": "history_readonly_access",
+        "source": try HistoryStore.databasePath(databaseURL), "history_schema_version": 1]
+    try HistoryReadOnlyAccessReceipt.validate(JSONSerialization.data(withJSONObject: readReceipt), directory: directory)
+    for override in [["source": databaseURL.path + ".other"], ["history_schema_version": 99]] as [[String: Any]] {
+        var invalid = readReceipt
+        invalid.merge(override) { _, new in new }
+        do {
+            try HistoryReadOnlyAccessReceipt.validate(JSONSerialization.data(withJSONObject: invalid), directory: directory)
+            throw HostError(message: "Unrelated or unsupported history preparation was accepted")
+        } catch let error as HostError {
+            try require(error.message != "Unrelated or unsupported history preparation was accepted",
+                        "Unrelated or unsupported history preparation was accepted")
+        }
+    }
     try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: databaseURL.path)
     let databaseLoaded = try HistoryStore.load(directory: directory)
     let expectedStatuses = ["history.status.completed", "history.status.failed", "history.status.cancelled",

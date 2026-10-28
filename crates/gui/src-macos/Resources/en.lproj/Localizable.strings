@@ -544,6 +544,7 @@
 "history.reveal" = "Reveal audit in Finder";
 "history.copy_sources" = "Copy source paths";
 "history.loading" = "Loading history…";
+"history.preparing_read" = "Restoring the history read connection; records will not be removed or rebuilt…";
 "history.empty" = "No processing history";
 "history.shown" = "%ld of %ld batches";
 "history.limited" = "Recent history limit reached";
@@ -802,7 +803,7 @@
 "helpguide.metadata.4.title" = "Fast AVIF deliberately clears metadata";
 "helpguide.metadata.4.body" = "Fast AVIF's Meme Mode clears removable embedded metadata, including EXIF, XMP and IPTC, and verifies that clearing. This differs from ordinary JXL archival preservation. If your goal is to retain as much original media information as possible, do not treat Meme Mode as a complete-preservation mode. A higher quality value does not disable its metadata clearing.";
 "helpguide.metadata.5.title" = "File attributes, Photos and iCloud have boundaries";
-"helpguide.metadata.5.body" = "File times, permissions and supported extended attributes are preserved and checked separately, subject to filesystem precision and system behavior. Quarantine flags, compression implementation attributes and some dynamic system attributes are outside the byte-for-byte copy guarantee. Verified local Photos delivery does not establish that the library reads or displays every original field, or that iCloud has synced. Failed metadata, relationship or delivery evidence requires retaining affected originals; settings, thumbnails and matching counts cannot replace proof.";
+"helpguide.metadata.5.body" = "Folders have metadata too. For filesystem output, MFB preserves and checks supported folder dates, permissions and extended attributes; on macOS this includes creation time, Finder Date Added and extended access rules. Initial folder times are saved before processing. Empty-folder cleanup restores surviving parent times only when directory identity and actual removals explain the changes. A new folder cannot retain the source inode or system change time (ctime); ownership and volume-specific flags are not promised to match. Quarantine flags, compression implementation attributes and some dynamic system attributes are outside the copy guarantee. Photos albums are not filesystem folders. Verified local Photos delivery does not prove that every original field is displayed or that iCloud has synced. Failed metadata or delivery evidence requires retaining affected originals.";
 "helpguide.tools.title" = "7. Retries, repair and tools";
 "helpguide.tools.intro" = "Separate what recovery may do from which encoding tools may do it. Permission is not evidence that an operation ran or that a tool is available.";
 "helpguide.tools.1.title" = "Encoding retries and repair: permitted operations";

@@ -1810,9 +1810,9 @@ dependencies = [
 
 [[package]]
 name = "notify-types"
-version = "2.1.0"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
+checksum = "0a437a9308232ce794b1e7fdf540d38ea37efc3c73492640c13b4c8568b8f108"
 dependencies = [
  "bitflags",
 ]
@@ -2768,7 +2768,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tempfile"
 version = "3.27.0"
-source = "git+https://github.com/Stebalien/tempfile#1c294cc29d2a48746637252a0e30b1bebc05b3e6"
+source = "git+https://github.com/Stebalien/tempfile#303aaa99f2e2a03ac48643c0486c709d5081d746"
 dependencies = [
  "fastrand",
  "getrandom 0.4.3",
@@ -3079,9 +3079,9 @@ checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "unit-prefix"
@@ -3470,7 +3470,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "xattr"
 version = "1.6.1"
-source = "git+https://github.com/Stebalien/xattr#dfbf01ee4f52df3ad48d1f7781a5c8b93289ca07"
+source = "git+https://github.com/Stebalien/xattr#75d613830b8aee79800999660fa3a771e635523e"
 dependencies = [
  "libc",
  "rustix",

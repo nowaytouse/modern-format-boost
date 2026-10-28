@@ -2921,17 +2921,19 @@ impl ImageBatchFinalization<'_> {
             });
         }
 
-        if !result.paused
-            && self.abort_reason.is_none()
-            && let Some(output_dir) = self.config.output_dir.as_ref()
+        if let Some(output_dir) = self.config.output_dir.as_ref()
+            && output_dir.exists()
             && let Some(base_dir) = self.config.base_dir.as_ref()
+            && let Some(saved) = self.saved_dir_timestamps
         {
             log_detail!("");
             foundation::log_static!(
                 info,
                 foundation::infra::static_logs::messages::METADATA_SYNC
             );
-            if let Err(e) = foundation::preserve_directory(base_dir, output_dir) {
+            if let Err(e) =
+                foundation::apply_delivery_directory_metadata(saved, base_dir, output_dir)
+            {
                 foundation::media_conversion_gate::delivery_jxl_batch_fallback_audit(
                     "metadata_tree_sync_failed",
                     foundation::infra::static_logs::messages::MSG_METADATA_TREE_FAIL
@@ -2943,19 +2945,6 @@ impl ImageBatchFinalization<'_> {
                     output_dir.display()
                 ));
             }
-        }
-
-        if let Some(saved) = self.saved_dir_timestamps
-            && !result.paused
-            && self.abort_reason.is_none()
-            && let Some(output_dir) = self.config.output_dir.as_ref()
-            && let Some(base_dir) = self.config.base_dir.as_ref()
-            && let Err(e) = foundation::apply_saved_timestamps_to_dst(saved, base_dir, output_dir)
-        {
-            post_run_errors.push(format!(
-                "Failed to apply saved directory timestamps to {}: {e}",
-                output_dir.display()
-            ));
         }
 
         foundation::infra::static_logs::log_batch_complete_audit(
@@ -3101,17 +3090,10 @@ fn auto_convert_directory(
 
     let start_time = Instant::now();
 
-    let saved_dir_timestamps = match foundation::save_directory_timestamps(input) {
-        Ok(saved) => Some(saved),
-        Err(e) => {
-            foundation::media_conversion_gate::delivery_api_path_fallback_audit(
-                "dir_timestamp_snapshot",
-                input,
-                format!("failed to snapshot directory timestamps: {e}"),
-            );
-            None
-        }
-    };
+    let saved_dir_timestamps = Some(
+        foundation::save_directory_timestamps(input)
+            .context("snapshot image source directory metadata before processing")?,
+    );
 
     let mut img_candidates = foundation::IMAGE_EXTENSIONS_FOR_CONVERT.to_vec();
     img_candidates.extend_from_slice(&["mp4", "m4v", "mov", "mkv", "webm"]);
@@ -8981,6 +8963,8 @@ fn run_restore_jpeg(
         None => restore_jpeg_default_output_dir(input)?,
     };
     restore_jpeg_validate_disjoint_roots(input, &output_root)?;
+    let saved_dir_timestamps = foundation::save_directory_timestamps(&input_root)
+        .context("snapshot JPEG restoration source directory metadata before scanning")?;
     let (candidates, probe_failures) = restore_jpeg_candidate_files(input, recursive)?;
     let candidate_count = candidates.len() + probe_failures.len();
     if candidates.is_empty() {
@@ -9110,6 +9094,8 @@ fn run_restore_jpeg(
                 output_root.display()
             )
         })?;
+        foundation::apply_saved_timestamps_to_dst(&saved_dir_timestamps, &input_root, &output_root)
+            .context("restore initial JPEG output directory timestamps")?;
     }
     if output_root.exists() {
         foundation::io_utils::prune_empty_directories_within(&output_root, &output_candidate_dirs)
