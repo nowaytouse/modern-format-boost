@@ -379,6 +379,14 @@ privacy, program names, paths and arguments stay hidden because the same worker
 can receive routine files alongside a failed file; the explicit failure details
 and recorded numeric process outcome remain available.
 
+History actions use visible text alongside native symbols. Output viewing,
+cleanup inspection and diagnostic export are grouped separately from record
+location, copying and removal; progress and status have their own line. Viewing
+cleanup details does not delete files. Record removal retains its existing
+selection checks, preview and confirmation. Under display privacy, the copy
+button reads **Copy visible content**, including after a language change, and
+raw export remains unavailable.
+
 ### Optional Display Privacy
 
 The native **Hide routine file names and paths** preference is off by default.

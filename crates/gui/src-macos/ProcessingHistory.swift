@@ -2606,6 +2606,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.reloadData()
         table.selectRowIndexes(IndexSet(displayed.indices.filter { selection.contains(displayed[$0].id) }), byExtendingSelection: false)
         copyButton.toolTip = localized(privacyEnabled ? "privacy.display.copy_visible" : "history.copy_sources")
+        copyButton.title = copyButton.toolTip ?? ""
         copyButton.setAccessibilityLabel(copyButton.toolTip)
         detailModeChanged()
     }
@@ -2797,12 +2798,19 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         split.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         split.heightAnchor.constraint(greaterThanOrEqualToConstant: 230).isActive = true
 
-        logButton = iconButton("doc.text", key: "history.open_log", action: #selector(openLog))
-        revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit))
-        copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources))
-        exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun))
-        cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails))
-        removeButton = iconButton("trash", key: "history.remove.title", action: #selector(removeSelectedHistory))
+        logButton = iconButton("doc.text", key: "history.open_log", action: #selector(openLog), showsTitle: true)
+        revealButton = iconButton("folder", key: "history.reveal", action: #selector(revealAudit), showsTitle: true)
+        copyButton = iconButton("doc.on.doc", key: "history.copy_sources", action: #selector(copySources), showsTitle: true)
+        exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun), showsTitle: true)
+        cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails), showsTitle: true)
+        removeButton = iconButton("trash", key: "history.remove.title", action: #selector(removeSelectedHistory), showsTitle: true)
+        for buttons in [[logButton, cleanupButton, exportButton], [revealButton, copyButton, removeButton]] {
+            let actions = NSStackView(views: buttons)
+            actions.orientation = .horizontal
+            actions.spacing = HistoryLayout.spacing
+            root.addArrangedSubview(actions)
+            actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        }
         progress.style = .spinning
         progress.controlSize = .small
         progress.isDisplayedWhenStopped = false
@@ -2810,7 +2818,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingMiddle
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let footer = NSStackView(views: [logButton, revealButton, copyButton, exportButton, cleanupButton, removeButton, progress, status])
+        let footer = NSStackView(views: [progress, status])
         footer.orientation = .horizontal
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
@@ -2862,14 +2870,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
     }
 
-    private func iconButton(_ symbol: String, key: String, action: Selector) -> NSButton {
+    private func iconButton(_ symbol: String, key: String, action: Selector, showsTitle: Bool = false) -> NSButton {
         let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: localized(key)) ?? NSImage(),
                               target: self, action: action)
         button.bezelStyle = .texturedRounded
-        button.imagePosition = .imageOnly
+        button.title = showsTitle ? localized(key) : ""
+        button.imagePosition = showsTitle ? .imageLeading : .imageOnly
         button.toolTip = localized(key)
         button.setAccessibilityLabel(localized(key))
-        button.widthAnchor.constraint(equalToConstant: HistoryLayout.buttonSize).isActive = true
+        if !showsTitle { button.widthAnchor.constraint(equalToConstant: HistoryLayout.buttonSize).isActive = true }
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.heightAnchor.constraint(equalToConstant: HistoryLayout.buttonSize).isActive = true
         return button
     }
@@ -2907,8 +2917,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                                (failedDetailsButton, "history.file_failure.detail"),
                               (failedCopyButton, "history.failed_files.copy"), (failedRevealButton, "history.failed_files.reveal"),
                               (olderButton, "history.output.older"), (newerButton, "history.output.newer")] {
-            button.toolTip = localized(key)
-            button.setAccessibilityLabel(localized(key))
+            let label = localized(button === copyButton && privacyEnabled ? "privacy.display.copy_visible" : key)
+            button.toolTip = label
+            if button.imagePosition != .imageOnly { button.title = label }
+            button.setAccessibilityLabel(label)
         }
         if refreshButton.isEnabled { applyFilter() }
     }
@@ -3364,6 +3376,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         revealButton.isEnabled = single && !privacyEnabled
         copyButton.isEnabled = ready && (privacyEnabled ? !selectedEntries.isEmpty : selectedEntries.contains { $0.context?.inputs.isEmpty == false })
         copyButton.toolTip = localized(privacyEnabled ? "privacy.display.copy_visible" : "history.copy_sources")
+        copyButton.title = copyButton.toolTip ?? ""
         copyButton.setAccessibilityLabel(copyButton.toolTip)
         exportButton.isEnabled = single && !privacyEnabled && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
         exportButton.toolTip = privacyEnabled ? localized("privacy.display.raw_disabled") : localized("history.export.scope")
@@ -4520,6 +4533,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         preferences.set(true, forKey: DisplayPrivacy.preferenceKey)
         displayPrivacyChanged()
+        updateLocalization()
         let column = table.tableColumns.first { $0.identifier.rawValue == "source" }!
         let cell = tableView(table, viewFor: column, row: 0) as? NSTableCellView
         let privacyChecks: [(String, Bool)] = [
@@ -4530,6 +4544,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             ("problem preserved", detail.string.contains(problemPath)),
             ("numeric setting preserved", detail.string.contains("jxl_distance: 0.8")),
             ("visible copy", visibleCopyText == detail.string),
+            ("visible copy label", copyButton.title == localized("privacy.display.copy_visible")),
             ("export disabled", !exportButton.isEnabled), ("reveal disabled", !revealButton.isEnabled),
             ("source evidence unchanged", entry.context?.inputs == [normalPath]),
             ("arguments unchanged", entry.invocations.first?.arguments == ["--input", normalPath]),
@@ -4567,6 +4582,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         displayPrivacyChanged()
         let restored = tableView(table, viewFor: column, row: 0) as? NSTableCellView
         guard restored?.textField?.toolTip == normalPath, Self.render(entry).contains(normalPath),
+              copyButton.title == localized("history.copy_sources"),
               try failureDetailText(for: failureRow).contains(normalPath) else {
             throw HostError(message: "History privacy changed or erased the retained original evidence")
         }
@@ -4729,6 +4745,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
               split.frame.maxX <= content.bounds.maxX else {
             throw HostError(message: "History controls clipped at minimum size")
         }
+        for button in [logButton, cleanupButton, exportButton, revealButton, copyButton, removeButton] {
+            let rect = button.convert(button.bounds, to: content)
+            guard button.imagePosition == .imageLeading, !button.title.isEmpty,
+                  button.frame.width + 1 >= button.intrinsicContentSize.width,
+                  rect.minX >= 0, rect.maxX <= content.bounds.maxX + 1,
+                  rect.minY >= 0, rect.maxY <= content.bounds.maxY + 1 else {
+                throw HostError(message: "History action label clipped at minimum size: \(button.title) \(rect)")
+            }
+        }
         let detailBounds = split.arrangedSubviews[1].bounds
         for control in [detailMode, outputFilter, olderButton, newerButton] as [NSView] {
             let rect = control.convert(control.bounds, to: split.arrangedSubviews[1])
@@ -4741,7 +4766,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.selectedSegment = 2
         detailModeChanged()
         content.layoutSubtreeIfNeeded()
-        for control in [detailMode, failedSearch, failedCopyButton, failedRevealButton, failedStatus, failedContent] as [NSView] {
+        for control in [detailMode, failedSearch, failedDetailsButton, failedCopyButton, failedRevealButton, failedStatus, failedContent] as [NSView] {
             let rect = control.convert(control.alignmentRect(forFrame: control.bounds), to: split.arrangedSubviews[1])
             let bounds = split.arrangedSubviews[1].bounds
             guard rect.minX >= -1, rect.maxX <= bounds.maxX + 1,

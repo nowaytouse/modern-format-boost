@@ -486,7 +486,7 @@
 "result.cleanup_primary" = "Primary cleanup completed; other leftover folders were not checked. Local Photos verification does not confirm iCloud sync.";
 "result.cleanup_unknown" = "Finalization needs review; other folders were not automatically removed. Local Photos verification does not confirm iCloud sync.";
 "cleanup.history_title" = "Output Folder Cleanup (Recorded Then)";
-"cleanup.inspect" = "Inspect Output Folders and Cleanup";
+"cleanup.inspect" = "View output and cleanup details";
 "cleanup.attention.short" = "Check Cleanup";
 "cleanup.inspect.note" = "Historical records only. Folder access is checked again before revealing; nothing is deleted and this does not authorize cleanup.";
 "cleanup.inspect.copy" = "Copy Full Record";
@@ -722,7 +722,7 @@
 "history.output.all_page" = "All (page)";
 "history.output.diagnostics_page" = "Diagnostic groups";
 "history.output.diagnostic_groups" = "Current page: %ld diagnostic log lines in %ld groups.";
-"history.export.title" = "Export Selected Run Diagnostics";
+"history.export.title" = "Export batch diagnostics";
 "history.export.scope" = "Includes local paths and error details. This diagnostic file is not processing or recovery state.";
 "history.export.running" = "Exporting selected run diagnostics…";
 "history.export.completed" = "Diagnostics exported: %@";

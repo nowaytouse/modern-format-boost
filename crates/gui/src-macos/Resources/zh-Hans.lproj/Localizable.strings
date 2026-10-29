@@ -14,7 +14,7 @@
 "privacy.display.output_notice" = "隐私显示只保留明确的问题记录；普通原始输出已隐藏。";
 "privacy.display.copy_visible" = "复制可见内容";
 "photos.source.title" = "照片中的来源标识";
-"history.remove.title" = "清理所选记录…";
+"history.remove.title" = "删除所选处理记录…";
 "history.remove.scope" = "清理所选处理记录及其保存的输出；只有能确认归属的日志才会删除。媒体、恢复状态和归属不明的日志会保留。";
 "history.remove.preview" = "确认清理范围";
 "history.remove.counts" = "所选批次：%d · 处理记录：%llu · 日志行：%llu";
