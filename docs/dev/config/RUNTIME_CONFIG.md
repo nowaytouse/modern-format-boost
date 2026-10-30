@@ -291,12 +291,25 @@ source and ordered source chain; new captured history snapshots include its winn
 source. This is not a failure-count threshold. Fast IMG encoding waves and local
 verification use this policy; Fast GIF retains its own encoding loop. Shared Photos
 import error handling continues to use the resolved policy.
+
+Gate 1 treats ExifTool's exact `Bad IFD1 directory` diagnostic as a rejected
+file, after the response has been bound to the complete requested source/output
+set. In `log-and-continue`, other assets can complete the remaining checks and
+the existing isolation/reverification flow. The malformed EXIF is not repaired,
+discarded, or accepted because JPEG reconstruction succeeds. Missing or duplicate
+responses, unknown diagnostics, and tool/read failures still block shared
+verification; explicit `fail-fast` still stops at the first failed check.
+
 The launcher reads its local `local_env.json` or fallback `local_env.sh` once at
 startup, before temporary-root initialization, typed configuration installation
 and signal-handler threads. These values participate in the environment layer;
 configuration files and explicit flags still override them. Changes to local-env
 files require restarting the launcher, including interactive and watch sessions;
 active batches do not repeatedly mutate the process-wide environment.
+
+Launcher resource snapshots retain unavailable CPU, memory and disk measurements
+as unknown. System-monitor initialization errors keep their cause; dashboard
+probes report them without substituting zero or an estimated disk capacity.
 
 ### Captured Runtime Configuration
 
@@ -386,6 +399,13 @@ cleanup details does not delete files. Record removal retains its existing
 selection checks, preview and confirmation. Under display privacy, the copy
 button reads **Copy visible content**, including after a language change, and
 raw export remains unavailable.
+
+The native history list uses an unstriped background and a centered empty-state
+message. An empty history, a search with no matches, and records that could not
+be read have different guidance; a read error is never presented as a clean,
+empty history. The action area is separated from the records with a native
+divider and rounded system buttons. These presentation changes do not change
+stored results or the conditions for enabling actions.
 
 ### Optional Display Privacy
 

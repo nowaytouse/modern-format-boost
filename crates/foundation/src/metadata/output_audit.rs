@@ -1153,12 +1153,14 @@ fn parse_metadata_records_for_requested_paths(
             let message = format!("exiftool reported {key} for {path}: {diagnostic}");
             if key.ends_with(":Warning")
                 && diagnostic.as_str().is_some_and(|message| {
-                    message
-                        .strip_prefix("Bad length ICC_Profile (length ")
-                        .and_then(|length| length.strip_suffix(')'))
-                        .is_some_and(|length| {
-                            !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit())
-                        })
+                    message == "Bad IFD1 directory"
+                        || message
+                            .strip_prefix("Bad length ICC_Profile (length ")
+                            .and_then(|length| length.strip_suffix(')'))
+                            .is_some_and(|length| {
+                                !length.is_empty()
+                                    && length.bytes().all(|byte| byte.is_ascii_digit())
+                            })
                 })
             {
                 let role = match pair {
@@ -1166,14 +1168,18 @@ fn parse_metadata_records_for_requested_paths(
                     Some([_, dst]) if Path::new(path) == dst => "output",
                     _ => "file",
                 };
+                let reason = if diagnostic.as_str() == Some("Bad IFD1 directory") {
+                    "embedded EXIF thumbnail directory is malformed. Byte-exact JPEG reconstruction \
+                     does not prove EXIF readability; the metadata has not been repaired or discarded"
+                } else {
+                    "embedded ICC profile has an invalid declared length. Byte-exact JPEG \
+                     reconstruction does not prove color-profile renderability; the profile has not \
+                     been repaired or discarded"
+                };
                 file_failure.get_or_insert_with(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!(
-                            "{message}; {role} embedded ICC profile has an invalid declared length. \
-                             Byte-exact JPEG reconstruction does not prove color-profile renderability; \
-                             the profile has not been repaired or discarded"
-                        ),
+                        format!("{message}; {role} {reason}"),
                     )
                 });
                 continue;
@@ -1302,6 +1308,55 @@ mod tests {
                 }
                 let raw = serde_json::to_vec(&records).unwrap();
                 assert_eq!(parse(&raw).unwrap_err().kind(), io::ErrorKind::Other);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_ifd1_is_rejected_only_as_a_bound_file_failure() {
+        let requested = ["source", "output"]
+            .map(std::path::PathBuf::from)
+            .into_iter()
+            .collect();
+        let parse = |raw: &[u8]| {
+            parse_metadata_records_for_requested_paths(
+                raw,
+                Some([Path::new("source"), Path::new("output")]),
+                Some(&requested),
+            )
+        };
+        let records = serde_json::json!([
+            {"SourceFile":"source", "EXIF:EXIF":"base64:YWJj"},
+            {"SourceFile":"output", "EXIF:EXIF":"base64:YWJj"},
+        ]);
+        for index in 0..2 {
+            let mut invalid = records.clone();
+            invalid[index]["ExifTool:Warning"] = Value::from("Bad IFD1 directory");
+            let error = parse(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not prove EXIF readability")
+            );
+            for unbound in [
+                serde_json::json!([invalid[index].clone()]),
+                serde_json::json!([invalid[index].clone(), invalid[index].clone()]),
+                serde_json::json!([
+                    {"SourceFile":"source", "ExifTool:Warning":"Bad IFD1 directory"},
+                    {"SourceFile":"output", "ExifTool:Error":"read failed"},
+                ]),
+                serde_json::json!([
+                    {"SourceFile":"source", "ExifTool:Warning":"Bad IFD1 directory; read failed"},
+                    {"SourceFile":"output"},
+                ]),
+            ] {
+                assert_eq!(
+                    parse(&serde_json::to_vec(&unbound).unwrap())
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::Other
+                );
             }
         }
     }

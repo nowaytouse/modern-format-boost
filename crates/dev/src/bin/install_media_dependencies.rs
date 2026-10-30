@@ -97,13 +97,16 @@ where
     Ok(())
 }
 
-fn capture<I, S>(program: &str, args: I) -> Result<String>
+fn capture<I, S>(program: &str, args: I, cwd: Option<&Path>) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let mut command = Command::new(program);
     command.args(args);
+    if let Some(directory) = cwd {
+        command.current_dir(directory);
+    }
     let rendered = format!("{command:?}");
     println!("Executing: {rendered}");
     let output = command.output().map_err(|error| {
@@ -162,6 +165,100 @@ fn download(url: &str, output: &Path, cwd: &Path) -> Result<()> {
         ],
         Some(cwd),
     )
+}
+
+fn parse_ffmpeg_revision(output: &str) -> Result<&str> {
+    let fields = output.split_whitespace().collect::<Vec<_>>();
+    match fields.as_slice() {
+        [revision, "refs/heads/master"]
+            if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            Ok(revision)
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "FFmpeg master must resolve to exactly one full commit identity",
+        )
+        .into()),
+    }
+}
+
+fn prepare_ffmpeg_source(workdir: &Path, remote: &str) -> Result<PathBuf> {
+    let destination = workdir.join("ffmpeg");
+    if destination.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "FFmpeg source destination already exists",
+        )
+        .into());
+    }
+    let staging = TempDir::create()?;
+    let resolved = capture(
+        "timeout",
+        [
+            "--kill-after=5",
+            "120",
+            "git",
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            remote,
+            "refs/heads/master",
+        ],
+        None,
+    )?;
+    let revision = parse_ffmpeg_revision(&resolved)?;
+    println!("FFmpeg development source: {remote} commit {revision}");
+    run("git", ["init", "--quiet"], Some(staging.path()))?;
+    for attempt in 1..=3 {
+        match run(
+            "timeout",
+            [
+                "--kill-after=5",
+                "180",
+                "git",
+                "fetch",
+                "--quiet",
+                "--depth=1",
+                "--no-tags",
+                remote,
+                revision,
+            ],
+            Some(staging.path()),
+        ) {
+            Ok(()) => break,
+            Err(error) if attempt < 3 => eprintln!(
+                "FFmpeg commit fetch attempt {attempt} failed; retrying the same {revision}: {error}"
+            ),
+            Err(error) => return Err(error),
+        }
+    }
+    run(
+        "git",
+        [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "switch",
+            "--quiet",
+            "--detach",
+            revision,
+        ],
+        Some(staging.path()),
+    )?;
+    let actual = capture(
+        "git",
+        ["rev-parse", "--verify", "HEAD"],
+        Some(staging.path()),
+    )?;
+    if actual.trim() != revision {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "FFmpeg checkout does not match the resolved commit",
+        )
+        .into());
+    }
+    fs::rename(staging.path(), &destination)?;
+    Ok(destination)
 }
 
 fn prepend_media_paths() -> Result<()> {
@@ -273,7 +370,7 @@ fn install_libheif(workdir: &Path) -> Result<()> {
         &archive,
         workdir,
     )?;
-    let digest = capture("sha256sum", [archive.as_os_str()])?;
+    let digest = capture("sha256sum", [archive.as_os_str()], None)?;
     verify_libheif_archive_digest(&digest)?;
     run(
         "tar",
@@ -467,19 +564,9 @@ fn main() -> Result<()> {
     prepend_media_paths()?;
     run("pkg-config", ["--exists", "SvtAv1Enc >= 0.9.0"], None)?;
 
-    println!("--- Building FFmpeg Development Snapshot ---");
-    let ffmpeg_archive = workdir.join("ffmpeg-snapshot.tar.bz2");
-    download(
-        "https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2",
-        &ffmpeg_archive,
-        workdir,
-    )?;
-    run(
-        "tar",
-        [OsStr::new("xjf"), ffmpeg_archive.as_os_str()],
-        Some(workdir),
-    )?;
-    let ffmpeg_dir = workdir.join("ffmpeg");
+    println!("--- Building FFmpeg Development Commit ---");
+    // FFmpeg lists this mirror at https://ffmpeg.org/download.html#repositories.
+    let ffmpeg_dir = prepare_ffmpeg_source(workdir, "https://github.com/FFmpeg/FFmpeg.git")?;
     run(
         "./configure",
         [
@@ -504,9 +591,9 @@ fn main() -> Result<()> {
     run("sudo", ["make", "install"], Some(&ffmpeg_dir))?;
     run("sudo", ["ldconfig"], None)?;
 
-    let filters = capture("ffmpeg", ["-hide_banner", "-filters"])?;
+    let filters = capture("ffmpeg", ["-hide_banner", "-filters"], None)?;
     require_output(&filters, "libvmaf", "ffmpeg -filters")?;
-    let encoders = capture("ffmpeg", ["-hide_banner", "-encoders"])?;
+    let encoders = capture("ffmpeg", ["-hide_banner", "-encoders"], None)?;
     for encoder in [
         "libx264",
         "libx265",
@@ -532,6 +619,69 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ffmpeg_revision_requires_one_full_master_identity() {
+        let revision = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            super::parse_ffmpeg_revision(&format!("{revision}\trefs/heads/master\n")).unwrap(),
+            revision
+        );
+        for invalid in [
+            String::new(),
+            "bad refs/heads/master".to_string(),
+            format!("{revision} refs/heads/main"),
+            format!("{revision} refs/heads/master\n{revision} refs/heads/master"),
+        ] {
+            assert!(super::parse_ffmpeg_revision(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn ffmpeg_source_is_published_only_after_an_exact_commit_checkout() -> super::Result<()> {
+        let upstream = super::TempDir::create()?;
+        super::run(
+            "git",
+            ["init", "--quiet", "--initial-branch=master"],
+            Some(upstream.path()),
+        )?;
+        let fixture = b"synthetic bootstrap fixture\n";
+        super::fs::write(upstream.path().join("configure"), fixture)?;
+        super::run("git", ["add", "configure"], Some(upstream.path()))?;
+        super::run(
+            "git",
+            [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "user.name=Bootstrap Test",
+                "-c",
+                "user.email=bootstrap@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "fixture",
+            ],
+            Some(upstream.path()),
+        )?;
+        let target = super::TempDir::create()?;
+        let source =
+            super::prepare_ffmpeg_source(target.path(), upstream.path().to_str().unwrap()).unwrap();
+        let head = super::capture("git", ["rev-parse", "HEAD"], Some(&source))?;
+        let expected = super::capture("git", ["rev-parse", "HEAD"], Some(upstream.path()))?;
+        assert_eq!(head, expected);
+        assert_eq!(super::fs::read(source.join("configure"))?, fixture);
+        assert!(
+            super::prepare_ffmpeg_source(target.path(), upstream.path().to_str().unwrap()).is_err()
+        );
+        let rejected = super::TempDir::create()?;
+        assert!(
+            super::prepare_ffmpeg_source(rejected.path(), rejected.path().to_str().unwrap())
+                .is_err()
+        );
+        assert!(!rejected.path().join("ffmpeg").exists());
+        Ok(())
+    }
+
     #[test]
     fn vmaf_feature_guard_is_checked_idempotent_and_rejects_drift() {
         let temp = super::TempDir::create().unwrap();

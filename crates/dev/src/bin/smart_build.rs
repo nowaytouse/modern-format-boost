@@ -1848,7 +1848,7 @@ fn terminate_running_instances(style: &Style, project_root: &Path) -> Result<()>
         style.reset
     );
 
-    let mut s = sysinfo::System::new_all();
+    let mut s = sysinfo::System::new_all().context("initialize running application inventory")?;
     s.refresh_all();
     let project_root = project_root
         .canonicalize()

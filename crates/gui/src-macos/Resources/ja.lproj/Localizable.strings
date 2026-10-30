@@ -546,6 +546,9 @@
 "history.loading" = "履歴を読み込み中…";
 "history.preparing_read" = "履歴の読み取り接続を復元中です。記録の削除や再作成は行いません…";
 "history.empty" = "処理履歴はありません";
+"history.empty.hint" = "処理後のバッチ結果をここで確認できます。新しい記録は更新して確認してください。";
+"history.filtered.hint" = "検索を消すか「すべて」を選ぶと、ほかのバッチを表示できます。";
+"history.empty.read_hint" = "一部の記録を読み取れませんでした。更新して再試行するか、下の詳細を確認してください。";
 "history.shown" = "%ld / %ld バッチを表示";
 "history.limited" = "最近の履歴の読み込み上限に到達";
 "history.select" = "バッチが選択されていません";

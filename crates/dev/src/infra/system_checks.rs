@@ -5,37 +5,26 @@
 
 #[cfg(target_os = "linux")]
 use crate::infra::hardening::parse_kb_token;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use anyhow::Context;
 #[cfg(unix)]
 use anyhow::anyhow;
 use anyhow::{Result, bail};
 use std::path::Path;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::thread;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::io::Read;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SystemResources {
-    pub disk_free_bytes: u64,
-    pub disk_total_bytes: u64,
-    pub memory_percent: f64,
-    pub cpu_percent: f64,
-}
-
-impl Default for SystemResources {
-    fn default() -> Self {
-        Self {
-            disk_free_bytes: 0,
-            disk_total_bytes: 1,
-            memory_percent: 0.0,
-            cpu_percent: 0.0,
-        }
-    }
+    pub disk_free_bytes: Option<u64>,
+    pub disk_total_bytes: Option<u64>,
+    pub memory_percent: Option<f64>,
+    pub cpu_percent: Option<f64>,
 }
 
 pub fn check_system_resources(check_dir: &Path, required_bytes: u64) -> Result<SystemResources> {
@@ -43,7 +32,7 @@ pub fn check_system_resources(check_dir: &Path, required_bytes: u64) -> Result<S
 
     // Disk check via statvfs
     let free = get_disk_free_space(check_dir)?;
-    resources.disk_free_bytes = free;
+    resources.disk_free_bytes = Some(free);
 
     let free_gb = free as f64 / (1024.0 * 1024.0 * 1024.0);
     let required_gb = (required_bytes as f64 / (1024.0 * 1024.0 * 1024.0)) + 1.0;
@@ -60,7 +49,7 @@ pub fn check_system_resources(check_dir: &Path, required_bytes: u64) -> Result<S
     // Memory/CPU via sysinfo (macOS + Linux)
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        refresh_sysinfo_snapshot(&mut resources);
+        refresh_sysinfo_snapshot(&mut resources, sysinfo::System::new())?;
     }
 
     Ok(resources)
@@ -72,8 +61,7 @@ pub fn probe_system_snapshot(check_dir: &Path) -> SystemResources {
     let mut resources = SystemResources::default();
     match get_disk_free_space(check_dir) {
         Ok(free) => {
-            resources.disk_free_bytes = free;
-            resources.disk_total_bytes = free.saturating_mul(4);
+            resources.disk_free_bytes = Some(free);
         }
         Err(err) => eprintln!(
             "[SYSTEM] disk probe failed ({}): {err}",
@@ -81,20 +69,30 @@ pub fn probe_system_snapshot(check_dir: &Path) -> SystemResources {
         ),
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    refresh_sysinfo_snapshot(&mut resources);
+    if let Err(error) = refresh_sysinfo_snapshot(&mut resources, sysinfo::System::new()) {
+        eprintln!("[SYSTEM] CPU/memory probe failed: {error:#}");
+    }
     resources
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn refresh_sysinfo_snapshot(resources: &mut SystemResources) {
-    use sysinfo::System;
-
-    let mut system = System::new();
-    thread::sleep(Duration::from_millis(120));
-    system.refresh_all();
-    let total = system.total_memory().max(1);
-    resources.memory_percent = (system.used_memory() as f64 / total as f64) * 100.0;
-    resources.cpu_percent = system.global_cpu_usage() as f64;
+fn refresh_sysinfo_snapshot(
+    resources: &mut SystemResources,
+    system: std::result::Result<sysinfo::System, sysinfo::Error>,
+) -> Result<()> {
+    let mut system = system.context("initialize system resource monitoring")?;
+    system.refresh_cpu_usage();
+    thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+    let total = system.total_memory();
+    anyhow::ensure!(
+        total > 0,
+        "system resource probe returned zero total memory"
+    );
+    resources.memory_percent = Some((system.used_memory() as f64 / total as f64) * 100.0);
+    resources.cpu_percent = Some(f64::from(system.global_cpu_usage()));
+    Ok(())
 }
 
 /// Read currently available bytes on the filesystem containing an existing path.
@@ -229,6 +227,25 @@ mod tests {
     };
     use std::path::Path;
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn resource_initialization_failure_preserves_unknown_metrics_and_error() {
+        let mut resources = super::SystemResources::default();
+        let error =
+            super::refresh_sysinfo_snapshot(&mut resources, Err(sysinfo::Error::Unsupported))
+                .expect_err("an unavailable system probe must not invent measurements");
+        assert!(
+            error
+                .to_string()
+                .contains("initialize system resource monitoring")
+        );
+        assert!(error.downcast_ref::<sysinfo::Error>().is_some());
+        assert_eq!(resources.cpu_percent, None);
+        assert_eq!(resources.memory_percent, None);
+        assert_eq!(resources.disk_free_bytes, None);
+        assert_eq!(resources.disk_total_bytes, None);
+    }
+
     #[test]
     fn disk_free_space_uses_statvfs_fragment_size() {
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -265,6 +282,9 @@ mod tests {
         let error = get_disk_free_space(&missing).unwrap_err();
         assert!(error.downcast_ref::<std::io::Error>().is_some());
         assert!(!missing.exists());
+        let snapshot = super::probe_system_snapshot(&missing);
+        assert_eq!(snapshot.disk_free_bytes, None);
+        assert_eq!(snapshot.disk_total_bytes, None);
     }
 }
 

@@ -25,6 +25,14 @@ tests and audits retain their pinned media dependencies and failure handling.
 The existing source-only shared Cargo cache is retained; large cross-lock target
 caches previously exhausted runner disk space and are not reintroduced.
 
+The Linux media bootstrapper still builds FFmpeg's rolling development branch,
+but fetches it from the [mirror listed by FFmpeg](https://ffmpeg.org/download.html#repositories)
+instead of depending on the mutable `ffmpeg.org` snapshot tarball. It resolves
+`master` once to a full commit ID, fetches that exact commit with bounded retries,
+and verifies the detached checkout before publishing the build source directory.
+Failures discard the owned staging directory and stop installation; they do not
+select a different commit, an older package, or an unverified archive.
+
 Check and deep-audit diagnostics expire after 14 days; coverage artifacts expire
 after 7 days. This does not remove published release assets or local user data.
 Existing branch concurrency continues to cancel superseded push/PR runs.

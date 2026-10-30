@@ -546,6 +546,9 @@
 "history.loading" = "正在读取记录…";
 "history.preparing_read" = "正在恢复记录读取连接；不会删除或重建记录…";
 "history.empty" = "暂无处理记录";
+"history.empty.hint" = "处理后的批次结果会显示在这里。可刷新以查找新记录。";
+"history.filtered.hint" = "清空搜索或选择“全部”，查看其他批次。";
+"history.empty.read_hint" = "部分记录未能读取。可刷新重试，或查看下方详情。";
 "history.shown" = "显示 %ld / %ld 个批次";
 "history.limited" = "已达到近期记录读取上限";
 "history.select" = "未选择批次";

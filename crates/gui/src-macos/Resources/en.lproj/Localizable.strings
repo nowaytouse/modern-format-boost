@@ -546,6 +546,9 @@
 "history.loading" = "Loading history…";
 "history.preparing_read" = "Restoring the history read connection; records will not be removed or rebuilt…";
 "history.empty" = "No processing history";
+"history.empty.hint" = "Check batch results here after processing. Refresh to look for new records.";
+"history.filtered.hint" = "Clear the search or select All to view other batches.";
+"history.empty.read_hint" = "Some records could not be read. Refresh to try again, or review the details below.";
 "history.shown" = "%ld of %ld batches";
 "history.limited" = "Recent history limit reached";
 "history.select" = "No batch selected";

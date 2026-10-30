@@ -2498,11 +2498,11 @@ fn build_runtime_dashboard(args: &Args) -> RuntimeDashboard {
         output_path: args.output.as_ref().map(|p| p.display().to_string()),
         ultimate: (args.ultimate || DRAG_DROP_CHILD_ULTIMATE) && mode_supports_ultimate(&args.mode),
         watch: args.watch,
-        cpu_percent: snapshot.as_ref().map(|s| s.cpu_percent),
-        memory_percent: snapshot.as_ref().map(|s| s.memory_percent),
-        disk_free_gb: snapshot.map(|s| {
-            foundation::numeric_cast::u64_to_f64(s.disk_free_bytes) / (1024.0 * 1024.0 * 1024.0)
-        }),
+        cpu_percent: snapshot.as_ref().and_then(|s| s.cpu_percent),
+        memory_percent: snapshot.as_ref().and_then(|s| s.memory_percent),
+        disk_free_gb: snapshot
+            .and_then(|s| s.disk_free_bytes)
+            .map(|bytes| foundation::numeric_cast::u64_to_f64(bytes) / (1024.0 * 1024.0 * 1024.0)),
     }
 }
 
@@ -3650,12 +3650,11 @@ fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
         output_path: None,
         ultimate: args.ultimate,
         watch: args.watch,
-        cpu_percent: Some(snapshot.cpu_percent),
-        memory_percent: Some(snapshot.memory_percent),
-        disk_free_gb: Some(
-            foundation::numeric_cast::u64_to_f64(snapshot.disk_free_bytes)
-                / (1024.0 * 1024.0 * 1024.0),
-        ),
+        cpu_percent: snapshot.cpu_percent,
+        memory_percent: snapshot.memory_percent,
+        disk_free_gb: snapshot
+            .disk_free_bytes
+            .map(|bytes| foundation::numeric_cast::u64_to_f64(bytes) / (1024.0 * 1024.0 * 1024.0)),
     });
 
     let mut dir_lock = None;

@@ -2296,6 +2296,54 @@ mod tests {
     }
 
     #[test]
+    fn gate1_metadata_keeps_malformed_ifd1_file_local() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let wc = root.path().join("src_optimized");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&wc).unwrap();
+        let src = src_dir.join("bad.jpg");
+        let out = wc.join("bad.jpg");
+        image::RgbImage::from_pixel(1, 1, image::Rgb([0, 0, 0]))
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = std::fs::read(&src).unwrap();
+        // The valid IFD0 points to an IFD1 outside this EXIF payload.
+        let mut malformed = b"\xff\xd8\xff\xe1\x00\x22Exif\x00\x00II\x2a\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x01\x00\x00".to_vec();
+        malformed.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&src, &malformed).unwrap();
+        std::fs::write(&out, &malformed).unwrap();
+        let mtime = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        filetime::set_file_mtime(&src, mtime).unwrap();
+        filetime::set_file_mtime(&out, mtime).unwrap();
+        let ctx = PipelineCtx {
+            working_copy: wc,
+            src_dir,
+            blake3_log: BTreeMap::from([(
+                "bad.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("bad.jpg".into()),
+                    src: calculate_blake3_hash(&src).unwrap(),
+                    out: calculate_blake3_hash(&out).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 1,
+            library_handle: None,
+            output_format: None,
+        };
+        let result = super::check_exact_metadata_copies(&ctx);
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(result.affected_files, [out]);
+        assert!(
+            result.actual.contains("Bad IFD1 directory"),
+            "{}",
+            result.actual
+        );
+    }
+
+    #[test]
     fn gate1_metadata_rejects_wrong_source_embedded_metadata() {
         let root = tempfile::TempDir::new().unwrap();
         let src_dir = root.path().join("src");

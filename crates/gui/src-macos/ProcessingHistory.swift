@@ -2469,6 +2469,9 @@ private func historyRemovalFixtureOutput(_ request: HistoryRemovalRequest, direc
 
 final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSWindowDelegate {
     private let table = NSTableView()
+    private let emptyState = NSStackView()
+    private let emptyTitle = NSTextField(labelWithString: "")
+    private let emptyHint = NSTextField(wrappingLabelWithString: "")
     private let search = NSSearchField()
     private let filter = NSSegmentedControl(labels: ["", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let detail = NSTextView()
@@ -2665,6 +2668,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 case let .failure(error):
                     self.entries = []
                     self.displayed = []
+                    self.loadIssues = [error.localizedDescription]
                     self.table.deselectAll(nil)
                     self.table.reloadData()
                     self.status.stringValue = error.localizedDescription
@@ -2708,7 +2712,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.delegate = self
         table.dataSource = self
         table.rowHeight = HistoryLayout.rowHeight
-        table.usesAlternatingRowBackgroundColors = true
+        table.usesAlternatingRowBackgroundColors = false
         table.style = .inset
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
@@ -2727,6 +2731,33 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         listScroll.autohidesScrollers = true
         listScroll.documentView = table
         listScroll.translatesAutoresizingMaskIntoConstraints = false
+        let listContainer = NSView(frame: listScroll.frame)
+        listContainer.addSubview(listScroll)
+        emptyState.orientation = .vertical
+        emptyState.alignment = .centerX
+        emptyState.spacing = HistoryLayout.spacing
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
+        let emptyIcon = NSImageView(image: NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil) ?? NSImage())
+        emptyIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 28, weight: .regular)
+        emptyIcon.contentTintColor = .secondaryLabelColor
+        emptyTitle.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        emptyHint.font = HistoryLayout.bodyFont
+        emptyHint.textColor = .secondaryLabelColor
+        for label in [emptyTitle, emptyHint] { label.alignment = .center }
+        for view in [emptyIcon, emptyTitle, emptyHint] { emptyState.addArrangedSubview(view) }
+        listContainer.addSubview(emptyState)
+        let emptyWidth = emptyState.widthAnchor.constraint(equalToConstant: 300)
+        emptyWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            listScroll.leadingAnchor.constraint(equalTo: listContainer.leadingAnchor),
+            listScroll.trailingAnchor.constraint(equalTo: listContainer.trailingAnchor),
+            listScroll.topAnchor.constraint(equalTo: listContainer.topAnchor),
+            listScroll.bottomAnchor.constraint(equalTo: listContainer.bottomAnchor),
+            emptyState.centerXAnchor.constraint(equalTo: listContainer.centerXAnchor),
+            emptyState.centerYAnchor.constraint(equalTo: listContainer.centerYAnchor),
+            emptyWidth,
+            emptyState.widthAnchor.constraint(lessThanOrEqualTo: listContainer.widthAnchor, constant: -40)
+        ])
         detail.isEditable = false
         detail.isSelectable = true
         detail.isRichText = false
@@ -2748,7 +2779,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         split.isVertical = true
         split.dividerStyle = .thin
         let listController = NSViewController()
-        listController.view = listScroll
+        listController.view = listContainer
         let listItem = NSSplitViewItem(viewController: listController)
         listItem.minimumThickness = 430
         listItem.preferredThicknessFraction = 0.57
@@ -2804,6 +2835,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         exportButton = iconButton("arrow.up.doc", key: "history.export.title", action: #selector(exportSelectedRun), showsTitle: true)
         cleanupButton = iconButton("tray.full", key: "cleanup.inspect", action: #selector(openCleanupDetails), showsTitle: true)
         removeButton = iconButton("trash", key: "history.remove.title", action: #selector(removeSelectedHistory), showsTitle: true)
+        removeButton.hasDestructiveAction = true
+        let divider = NSBox()
+        divider.boxType = .separator
+        root.addArrangedSubview(divider)
+        divider.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         for buttons in [[logButton, cleanupButton, exportButton], [revealButton, copyButton, removeButton]] {
             let actions = NSStackView(views: buttons)
             actions.orientation = .horizontal
@@ -2873,7 +2909,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private func iconButton(_ symbol: String, key: String, action: Selector, showsTitle: Bool = false) -> NSButton {
         let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: localized(key)) ?? NSImage(),
                               target: self, action: action)
-        button.bezelStyle = .texturedRounded
+        button.bezelStyle = showsTitle ? .rounded : .texturedRounded
         button.title = showsTitle ? localized(key) : ""
         button.imagePosition = showsTitle ? .imageLeading : .imageOnly
         button.toolTip = localized(key)
@@ -3347,6 +3383,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     private func updateActions() {
         let ready = refreshButton.isEnabled && !exportBusy && !removalBusy
+        emptyState.isHidden = !ready || !displayed.isEmpty
+        emptyTitle.stringValue = localized(!loadIssues.isEmpty ? "history.read_issues" : entries.isEmpty ? "history.empty" : "history.no_match")
+        emptyHint.stringValue = localized(!loadIssues.isEmpty ? "history.empty.read_hint" : entries.isEmpty ? "history.empty.hint" : "history.filtered.hint")
         let single = ready && selected != nil
         let pair = ready && selectedEntries.count == 2 && selectedEntries.allSatisfy(\.hasStoredOutput)
         table.isEnabled = ready
@@ -4618,6 +4657,18 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         generation = UUID()
         entries = []
         applyFilter()
+        guard !emptyState.isHidden, emptyTitle.stringValue == localized("history.empty"),
+              !table.usesAlternatingRowBackgroundColors else {
+            throw HostError(message: "History empty state is missing or renders empty striped rows")
+        }
+        loadIssues = ["Synthetic read failure"]
+        applyFilter()
+        guard emptyTitle.stringValue == localized("history.read_issues"),
+              emptyHint.stringValue == localized("history.empty.read_hint") else {
+            throw HostError(message: "History read failure was presented as an empty successful read")
+        }
+        loadIssues = []
+        applyFilter()
         guard table.tableColumns.count == 5, search.delegate != nil, detail.isEditable == false,
               split.arrangedSubviews.count == 2, copyButton.isEnabled == false,
               logButton.isEnabled == false, revealButton.isEnabled == false, !cleanupButton.isEnabled, table.numberOfRows == 0,
@@ -4632,6 +4683,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                                      timestamp: "synthetic", legacy: true)
         entries = [synthetic]
         applyFilter()
+        guard emptyState.isHidden else { throw HostError(message: "History empty state covered recorded batches") }
+        search.stringValue = "synthetic-no-match"
+        applyFilter()
+        guard !emptyState.isHidden, emptyTitle.stringValue == localized("history.no_match") else {
+            throw HostError(message: "History search with no matches lost its recovery hint")
+        }
+        search.stringValue = ""
+        applyFilter()
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        showSelected()
         guard table.numberOfRows == 1, revealButton.isEnabled, !copyButton.isEnabled, !logButton.isEnabled else {
             throw HostError(message: "History selection actions invented missing paths")
         }

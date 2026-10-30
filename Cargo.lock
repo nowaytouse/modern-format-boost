@@ -631,9 +631,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
+checksum = "a2376ffd6f96d8a9db59875b4b6b0237d6900b5baf64279714e05493ce64828a"
 dependencies = [
  "cmov",
 ]
@@ -1628,7 +1628,7 @@ dependencies = [
 [[package]]
 name = "log"
 version = "0.4.34"
-source = "git+https://github.com/rust-lang/log#b408d2ca4edcd5544658e3d1db79aa86b0b8197f"
+source = "git+https://github.com/rust-lang/log#5bc5545f5f0e01615da3893b658ec9e5c2b1bcdc"
 
 [[package]]
 name = "loop9"
@@ -2453,9 +2453,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.41.0"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c026b4444579e8d754556c6c75d040d69c4a44283cdb648ab8a8d5965c2cfa8"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags",
  "fallible-iterator 0.3.0",
@@ -2727,9 +2727,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.39.6"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2071df9448915b71c4fe6d25deaf1c22f12bd234f01540b77312bb8e41361e6"
+checksum = "110e37d98880fd804cd47509b90a8444f7aaaab655ae625e83cd442a8bc2ebf2"
 dependencies = [
  "libc",
  "memchr",
@@ -2962,7 +2962,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -2972,7 +2972,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.5"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -2984,7 +2984,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2994,7 +2994,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "valuable",
 ]
@@ -3002,7 +3002,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "log",
  "once_cell",
@@ -3012,7 +3012,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "serde",
  "tracing-core",
@@ -3021,7 +3021,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#9d0e557728ecb91e467fc29dfe738b9f28cf6684"
+source = "git+https://github.com/tokio-rs/tracing#79b80a9095944cef1006ec2893510325e157639d"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -3470,7 +3470,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "xattr"
 version = "1.7.0"
-source = "git+https://github.com/Stebalien/xattr#c0d3de0d4229e496584c4beb5882cbb1739f0632"
+source = "git+https://github.com/Stebalien/xattr#b34c0357a8726c204ac2efb81b7801e340726e9d"
 dependencies = [
  "libc",
  "rustix",
