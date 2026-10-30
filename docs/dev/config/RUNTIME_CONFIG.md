@@ -911,6 +911,8 @@ verified sidecar relationships, a persistent execution plan, or failed-only retr
 
 Ordinary macOS launches expose one main window. A repeated ordinary launch
 returns to that window; there is no debug-window menu item or normal shortcut.
+If macOS delivers an ordinary reopen to a debug instance, it routes the request
+back to the normal window role instead of presenting the debug window.
 Development tools may explicitly start a separate native debug instance with
 `open -n "/path/to/Modern Format Boost.app" --args --debug-window`.
 There can be one normal main window and one debug main window;

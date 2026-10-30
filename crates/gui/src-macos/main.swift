@@ -10215,6 +10215,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activateExistingWindow() { controller?.activate() }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if isDebugWindow {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            configuration.arguments = []
+            configuration.environment = ProcessInfo.processInfo.environment
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+                if let error { DispatchQueue.main.async { NSAlert(error: error).runModal() } }
+            }
+            return false
+        }
         controller?.activate()
         return false
     }
