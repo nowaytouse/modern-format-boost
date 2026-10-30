@@ -904,3 +904,76 @@ The check is not a file lock or immutable snapshot. Inputs can still change afte
 admission, so actual conversion, associated metadata, final-artifact and deletion
 checks remain required. This does not implement the Fast IMG inventory handoff,
 verified sidecar relationships, a persistent execution plan, or failed-only retry.
+
+## Background Native Validation
+
+`--self-test`, including the check invoked during GUI compilation, runs with
+application activation prohibited and never brings its windows forward. It
+still creates the real AppKit controls and exercises localized content, layout,
+and close/reopen state; it rejects any visible window or active application.
+Foreground visibility, focus and actual user interaction remain explicit native
+UI fixture/manual checks, not claims made by this background validation.
+
+## IMG Tool Runtime Lifetime
+
+After effective configuration and explicit tool overrides resolve, IMG binds
+its tool selection before media inventory or output preparation. On macOS the
+required JPEG tools use a verified private executable/dependency snapshot;
+standard IMG additionally captures its required FFmpeg, and AVIF Fast IMG binds
+its AVIF tools instead of requiring unrelated JXL tools. Snapshots are recovery
+state, not disposable cache. A subsequent run can select newly installed tools.
+
+`MFB_TOOL_SNAPSHOT=` is a flushed schema-1 control event with `pipeline: "img"`,
+`state` (`preparing`, `ready`, `blocked`), `boundary`, exact `tool_names`, optional
+`identity` and `manifest_path`, and a bounded cause/message. Only the listed
+snapshot tools are independent of their original installation. Ancillary
+executables are bound to selected absolute paths and observed when used;
+ImageMagick delegates/plugins, external configuration and operating-system
+libraries are not claimed to be frozen. Non-macOS currently reports
+`live-observed`; it does not claim an independent dependency snapshot.
+
+The launcher keeps the first verified snapshot authority for each pipeline in
+the current batch and supplies it to later workers through their individual
+environments. Starting another batch resets that in-memory binding. It does not
+change the parent process environment or let one pipeline replace another's
+tool selection. Matching tool selections and content reuse the verified runtime directory;
+tools and dependency files are not copied for every media file. Source and
+private-member hashes, original selection paths and the protected OS boundary
+are retained in the manifest. Explicit `DYLD_*` loader overrides are rejected
+rather than silently discarded or presented as a closed runtime.
+
+Fast IMG markers and standard IMG checkpoint headers retain the original private
+manifest and identity. Resume loads that authority, checks its private material,
+and refuses a conflicting supplied manifest or explicit tool override. Removing
+or upgrading the original installation does not invalidate a complete private
+snapshot. Historical completed-file proofs without a recorded tool authority
+require a new task and fresh verification; they are not silently relabelled as
+proofs from the new toolchain. Non-macOS has no persisted snapshot authority for
+that reuse guarantee.
+
+Before each encoding wave and critical delivery/deletion boundary, private
+snapshot hashes are checked. Executable filesystem identity is an additional
+early change detector, not content proof. After a failed operation, full private
+snapshot hashes and bounded executable probes distinguish shared tool failure
+from media failure. Shared failure stops
+further admission; independently verified results from the current wave are
+persisted, while its unresolved items and later inputs remain pending rather
+than becoming fabricated media failures. The control event does not increment
+media failure counts. A missing bound selection cannot fall through to a newer
+bare PATH tool. These checks preserve the existing E1–E11 comparisons and all
+final verification/deletion requirements; no speed improvement is claimed.
+
+A slow or unconfirmed version/help probe is not evidence of a damaged tool or
+media file. The shared probe uses the existing tool readiness budget with a
+diagnostic soft deadline. An unresolved response retains pending work for retry
+and reports `tool_probe_unconfirmed`; it does not poison the stored tool
+identity. Actual missing/changed materials and explicit failed probes remain
+distinct, recorded errors. Probe output is bounded and child processes remain
+managed for cancellation and cleanup.
+
+The GUI shows a compact, localized tool status independently from media counts.
+Shared faults retain their stated cause even if a later worker emits another
+ready event. The in-app tools guide explains fixed copies, upgrades, resume and
+the external configuration/platform boundaries; detailed diagnostics remain in
+the worker output and history. `--tool-runtime-ui-fixture` renders synthetic
+tool status without launching processors or querying a real Photos library.

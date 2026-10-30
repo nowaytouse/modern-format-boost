@@ -20,7 +20,5 @@ accepted = [
   "CC0-1.0",
 ]
 
-# Clarifications for specific crates
-[clarify]
 # jpegxl-rs and jpegxl-sys use GPL-3.0-or-later
 # This is acceptable as they are optional dependencies for JXL support

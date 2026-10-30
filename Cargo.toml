@@ -184,6 +184,7 @@ pgvector = { git = "https://github.com/pgvector/pgvector-rust", features = [
 
 # File type detection
 infer = { git = "https://github.com/bojand/infer" }
+goblin = { version = "0.10.7", default-features = false, features = ["std", "mach32", "mach64"] }
 crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
 quick-xml = { git = "https://github.com/tafia/quick-xml" }
 exr = { git = "https://github.com/johannesvollmer/exrs" }

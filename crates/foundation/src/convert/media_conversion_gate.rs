@@ -805,6 +805,9 @@ pub fn delivery_tool_path_or_bare_name(name: &str) -> PathBuf {
         mutex_guard_or_recover("tool_path_unresolved_clear", UNRESOLVED.lock()).remove(name);
         return path;
     }
+    if let Some(path) = crate::common_utils::bound_tool_unavailable_path(name) {
+        return path;
+    }
     if mutex_guard_or_recover("tool_path_unresolved_record", UNRESOLVED.lock())
         .insert(name.to_string())
     {

@@ -476,11 +476,37 @@ impl ManagedProcess {
         hard_timeout: Duration,
         context: &str,
     ) -> Result<ProcessOutput> {
+        self.wait_liveness_timeout_cancellable(soft_timeout, hard_timeout, context, || Ok(false))
+    }
+
+    /// Wait with the same liveness policy, while allowing a diagnostic probe to
+    /// stop at an explicit cancellation request. Cancellation drains and reaps.
+    ///
+    /// # Errors
+    /// Preserves cancellation as `Interrupted`; propagates wait/capture/cleanup failures.
+    pub fn wait_liveness_timeout_cancellable(
+        self,
+        soft_timeout: Duration,
+        hard_timeout: Duration,
+        context: &str,
+        mut cancelled: impl FnMut() -> std::io::Result<bool>,
+    ) -> Result<ProcessOutput> {
         let soft_timeout = soft_timeout.min(hard_timeout);
         let mut this = self;
         let start = Instant::now();
         let mut soft_deadline_reported = soft_timeout == hard_timeout;
         loop {
+            if cancelled()? {
+                this.stop_isolated_group()?;
+                kill_child_after_timeout(&mut this.child, context)?;
+                let status = this.child.wait()?;
+                let _ = this.finalize(status)?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    format!("{context} cancelled by user"),
+                )
+                .into());
+            }
             if let Some(status) = this.child.try_wait().with_context(|| {
                 format!(
                     "Failed to poll process: {command_line}",
@@ -697,6 +723,36 @@ mod tests {
             "/usr/bin/osascript -e <inline-script bytes=12 lines=1>",
             "Using last opened Photos library: /Users/example/Pictures/Main.photoslibrary",
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_diagnostic_probe_is_drained_reaped_and_preserves_interrupted() -> Result<()> {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf ready; printf diagnostic >&2; sleep 5"]);
+        let process = ManagedProcess::spawn_captured_isolated(&mut command)?;
+        let pid = libc::pid_t::try_from(process.pid())?;
+        let started = Instant::now();
+        let error = process
+            .wait_liveness_timeout_cancellable(
+                Duration::from_millis(5),
+                Duration::from_secs(2),
+                "cancelled probe fixture",
+                || Ok(started.elapsed() >= Duration::from_millis(50)),
+            )
+            .err()
+            .context("explicit cancellation must not become a tool failure")?;
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
+        }));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let exists = unsafe { libc::kill(pid, 0) };
+        let last = std::io::Error::last_os_error();
+        assert_eq!(exists, -1);
+        assert_eq!(last.raw_os_error(), Some(libc::ESRCH));
+        Ok(())
     }
 
     #[cfg(unix)]

@@ -3,6 +3,8 @@ import CoreServices
 import Darwin
 import Foundation
 
+let isBackgroundSelfTest = CommandLine.arguments.contains("--self-test")
+
 private let processorName = "drag_and_drop_processor"
 private let maxProcessLogChunkBytes = 64 * 1024
 private let maxProcessLogBatchBytes = 256 * 1024
@@ -4401,6 +4403,124 @@ private func countStatusValue(in line: String) -> String? {
         .trimmingCharacters(in: .whitespaces)
 }
 
+private struct ToolSnapshotPresentation {
+    static let prefix = "MFB_TOOL_SNAPSHOT="
+    struct Event: Decodable {
+        enum State: String, Decodable { case preparing, ready, blocked }
+        enum Boundary: String, Decodable { case persisted = "persisted-external", observed = "live-observed" }
+        let schema_version: Int
+        let state: State
+        let boundary: Boundary
+        let identity: String?
+        let manifest_path: String?
+        let cause_code: String?
+        let tool: String?
+        let tool_names: [String]?
+        let pipeline: String?
+        let message: String?
+
+        func validate() throws {
+            guard schema_version == 1, (message?.utf8.count ?? 0) <= 8 * 1024,
+                  (tool_names?.count ?? 0) <= 64,
+                  tool_names?.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) != false else {
+                throw HostError(message: "Invalid tool snapshot event")
+            }
+            if state == .ready && boundary == .persisted {
+                guard let identity, identity.utf8.count == 64,
+                      identity.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                      let manifest_path, manifest_path.hasPrefix("/"), !manifest_path.utf8.contains(0),
+                      tool_names?.isEmpty == false else {
+                    throw HostError(message: "Fixed tools have no complete snapshot identity")
+                }
+            }
+            if state == .blocked, cause_code?.isEmpty != false {
+                throw HostError(message: "Blocked tools have no recorded cause")
+            }
+        }
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    mutating func ingest(_ line: String) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        do {
+            let decoded = try JSONDecoder().decode(Event.self, from: Data(raw.dropFirst(Self.prefix.count).utf8))
+            try decoded.validate()
+            if event?.state != .blocked { event = decoded }
+        } catch { invalid = true }
+        return true
+    }
+
+    mutating func finish() {
+        if event?.state == .preparing { event = nil }
+    }
+
+    var label: String {
+        if invalid { return localized("tool_snapshot.invalid") }
+        guard let event else { return "" }
+        let content: String
+        switch event.state {
+        case .preparing: content = localized("tool_snapshot.preparing")
+        case .ready:
+            let label = localized(event.boundary == .persisted ? "tool_snapshot.ready" : "tool_snapshot.observed")
+            content = event.boundary == .persisted ? label + " · " + (event.tool_names ?? []).joined(separator: ", ") : label
+        case .blocked:
+            let cause = event.cause_code ?? ""
+            let key = ["tool_unavailable", "tool_changed", "snapshot_invalid", "snapshot_unsupported", "configuration_mismatch", "prepare_failed", "tool_probe_unconfirmed"]
+                .contains(cause) ? "tool_snapshot.\(cause)" : "tool_snapshot.blocked"
+            content = localized(key)
+        }
+        let scope = ["img", "vid"].contains(event.pipeline ?? "")
+            ? localized("tool_snapshot.scope.\(event.pipeline ?? "")") + " · " : ""
+        return scope + content
+    }
+
+    static func selfTest() throws {
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"),
+                  let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing tool snapshot locale: \(language)")
+            }
+            for suffix in ["preparing", "ready", "observed", "invalid", "blocked", "tool_unavailable", "tool_changed", "snapshot_invalid", "snapshot_unsupported", "configuration_mismatch", "prepare_failed", "tool_probe_unconfirmed", "scope.img", "scope.vid"] {
+                let key = "tool_snapshot." + suffix
+                let value = bundle.localizedString(forKey: key, value: nil, table: nil)
+                guard !value.isEmpty, value != key else { throw HostError(message: "Missing tool snapshot translation: \(key)") }
+            }
+        }
+        var state = Self()
+        _ = state.ingest(prefix + #"{"schema_version":1,"state":"preparing","boundary":"persisted-external"}"#)
+        state.finish()
+        guard state.event == nil else { throw HostError(message: "Ended tool preparation was still presented as running") }
+        let ready = prefix + "{\"schema_version\":1,\"state\":\"ready\",\"boundary\":\"persisted-external\",\"identity\":\"" + String(repeating: "a", count: 64) + "\",\"manifest_path\":\"/synthetic/manifest.json\",\"tool_names\":[\"cjxl\"]}"
+        guard state.ingest(ready), !state.invalid, state.label == localized("tool_snapshot.ready") + " · cjxl" else {
+            throw HostError(message: "Tool snapshot receipt did not show its verified boundary")
+        }
+        let blocked = prefix + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"tool_changed","tool":"cjxl","message":"Failed: 999 is technical text"}"#
+        guard state.ingest("ERR: " + blocked), state.label == localized("tool_snapshot.tool_changed") else {
+            throw HostError(message: "Tool change was not explained independently from media failure counts")
+        }
+        guard state.ingest(ready), state.label == localized("tool_snapshot.tool_changed") else {
+            throw HostError(message: "A later worker concealed an earlier tool failure")
+        }
+        var unconfirmed = Self()
+        guard unconfirmed.ingest(prefix + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"tool_probe_unconfirmed"}"#),
+              unconfirmed.label == localized("tool_snapshot.tool_probe_unconfirmed") else {
+            throw HostError(message: "Unconfirmed tool readiness was presented as a damaged tool")
+        }
+        var observed = Self()
+        guard observed.ingest(prefix + #"{"schema_version":1,"state":"ready","boundary":"live-observed"}"#),
+              observed.label == localized("tool_snapshot.observed") else {
+            throw HostError(message: "Live tools were presented as a persistent snapshot")
+        }
+        var invalid = Self()
+        guard invalid.ingest(ready.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2")),
+              invalid.invalid, invalid.label == localized("tool_snapshot.invalid") else {
+            throw HostError(message: "Unsupported tool evidence was presented as verified")
+        }
+    }
+}
+
 private struct FileStageProgress {
     struct Event: Decodable {
         let schema_version: Int
@@ -6366,6 +6486,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressLabel = NSTextField(labelWithString: "")
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
+    private var toolSnapshot = ToolSnapshotPresentation()
+    private let toolSnapshotLabel = NSTextField(wrappingLabelWithString: "")
     private var workerExecution = LiveWorkerExecution()
     private var photosImportProgress = PhotosImportProgress()
     private var photosProgressFixture = false
@@ -6831,6 +6953,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressRow.addArrangedSubview(fileProgressLabel)
         fileProgressRow.isHidden = true
 
+        toolSnapshotLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        toolSnapshotLabel.textColor = .secondaryLabelColor
+        toolSnapshotLabel.isSelectable = true
+        toolSnapshotLabel.maximumNumberOfLines = 2
+        toolSnapshotLabel.isHidden = true
+
         latestDiagnosticsRow.orientation = .vertical
         latestDiagnosticsRow.alignment = .leading
         latestDiagnosticsRow.spacing = 4
@@ -6880,7 +7008,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let stack = mainLayout
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -6889,7 +7017,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
-            countStatusLabel, fileProgressRow, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+            countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -7088,6 +7216,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         latestDiagnostics = LatestDiagnostics()
         refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
+        toolSnapshot = ToolSnapshotPresentation()
+        refreshToolSnapshot()
         photosImportProgress = PhotosImportProgress()
         gateActivity = GateCheckActivity()
         refreshFileProgress()
@@ -7429,6 +7559,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshPrivacyPresentation() {
+        refreshToolSnapshot()
         let hidden = privacyEnabled
         privacyButton.state = hidden ? .on : .off
         privacyButton.image = NSImage(systemSymbolName: hidden ? "eye.slash" : "eye", accessibilityDescription: nil)
@@ -7457,7 +7588,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private var visibleLogText: String {
         if logDetailsExpanded { return logView.string }
-        return [countStatusLabel, fileProgressLabel, batchOverviewTitle, batchOverviewCounts,
+        return [countStatusLabel, fileProgressLabel, toolSnapshotLabel, batchOverviewTitle, batchOverviewCounts,
             batchOverviewDelivery, batchOverviewCleanup, latestFailureLabel, latestWarningLabel]
             .filter { !$0.isHidden && !($0.superview?.isHidden ?? false) }
             .map(\.stringValue).filter { !$0.isEmpty }.joined(separator: "\n")
@@ -7479,6 +7610,19 @@ private final class AppController: NSObject, NSWindowDelegate {
         var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
+            if toolSnapshot.ingest(line) {
+                refreshToolSnapshot()
+                let blocked = toolSnapshot.invalid || toolSnapshot.event?.state == .blocked
+                let notice = (blocked ? "[WARN] " : "") + toolSnapshot.label
+                displayLines.append(notice)
+                privateLines.append(notice)
+                if developerMode { displayLines.append(line) }
+                if blocked {
+                    if let message = toolSnapshot.event?.message { displayLines.append(message); privateLines.append(message) }
+                    if captureDiagnostics && latestDiagnostics.ingest(notice) { latestChanged = true }
+                }
+                continue
+            }
             let processEvidenceWasInvalid = workerExecution.invalid
             if workerExecution.ingest(line) {
                 diagnosticLogFolder.reset()
@@ -7757,6 +7901,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func refreshToolSnapshot() {
+        toolSnapshotLabel.isHidden = toolSnapshot.event == nil && !toolSnapshot.invalid
+        toolSnapshotLabel.stringValue = toolSnapshot.label
+        toolSnapshotLabel.setAccessibilityLabel(toolSnapshot.label)
+        toolSnapshotLabel.textColor = toolSnapshot.invalid || toolSnapshot.event?.state == .blocked ? .systemOrange : .secondaryLabelColor
+        toolSnapshotLabel.toolTip = [toolSnapshot.label, toolSnapshot.event?.tool_names?.joined(separator: ", ")]
+            .compactMap { $0 }.joined(separator: "\n")
+    }
+
     private func refreshFileProgress(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         if (!configurationControlsEnabled || photosProgressFixture),
            photosImportProgress.invalid || photosImportProgress.event.map({ !$0.closed }) == true {
@@ -7833,6 +7986,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func processingCompleted(_ result: Result<String, Error>) {
+        toolSnapshot.finish()
+        refreshToolSnapshot()
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
         let resumeChoicePending: Bool
         if case .failure = result, sawResumeDecision, let request = lastRequest {
@@ -8780,6 +8935,17 @@ private final class AppController: NSObject, NSWindowDelegate {
         if let payload = queue.takeDelivery() { appendLog(payload) }
         _ = queue.finishDelivery()
         refreshBatchOverview(processExit: 1, exitedNormally: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func showToolRuntimeFixture() {
+        deliveryFixture = true
+        restoreFixture = true
+        targetField.stringValue = "/synthetic/tool-runtime"
+        clearBatchLog()
+        appendLog(ToolSnapshotPresentation.prefix + "{\"schema_version\":1,\"state\":\"ready\",\"pipeline\":\"img\",\"boundary\":\"persisted-external\",\"identity\":\"" + String(repeating: "a", count: 64) + "\",\"manifest_path\":\"/synthetic/manifest.json\",\"tool_names\":[\"cjxl\",\"djxl\",\"exiftool\",\"jxlinfo\"]}")
+        appendLog(ToolSnapshotPresentation.prefix + #"{"schema_version":1,"state":"blocked","pipeline":"img","boundary":"persisted-external","cause_code":"tool_changed","tool":"cjxl","message":"Synthetic tool change. No media was opened; pending work was retained."}"#)
         window.center()
         window.makeKeyAndOrderFront(nil)
     }
@@ -10339,6 +10505,7 @@ private func runSelfTest() -> Int32 {
             fputs("native-host self-test retry/fresh conflict was accepted\n", stderr)
             return 1
         } catch {}
+        try ToolSnapshotPresentation.selfTest()
         guard conciseProcessLog("DEBUG codec internals") == nil,
               conciseProcessLog("ERR: DEBUG codec internals") == nil,
               conciseProcessLog("ERR: INFO codec internals") == nil,
@@ -10803,15 +10970,29 @@ private func runSelfTest() -> Int32 {
     }
 }
 
-if CommandLine.arguments.contains("--self-test") {
-    exit(MainActor.assumeIsolated { runSelfTest() })
+if isBackgroundSelfTest {
+    exit(MainActor.assumeIsolated {
+        let application = NSApplication.shared
+        guard application.setActivationPolicy(.prohibited) else {
+            fputs("native-host self-test could not disable application activation\n", stderr)
+            return 1
+        }
+        let result = runSelfTest()
+        guard application.activationPolicy() == .prohibited, !application.isActive,
+              !application.windows.contains(where: \.isVisible) else {
+            fputs("native-host self-test activated the application or displayed a window\n", stderr)
+            return 1
+        }
+        return result
+    })
 }
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
     || CommandLine.arguments.contains("--photos-progress-handoff-ui-fixture") || CommandLine.arguments.contains("--photos-custody-ui-fixture")
     || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
     || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
-    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") || CommandLine.arguments.contains("--interrupted-scan-ui-fixture") {
+    || CommandLine.arguments.contains("--restore-integrity-ui-fixture") || CommandLine.arguments.contains("--interrupted-scan-ui-fixture")
+    || CommandLine.arguments.contains("--tool-runtime-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -10820,7 +11001,8 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--interrupted-scan-ui-fixture") { controller.showProcessInterruptionFixture() }
+            if CommandLine.arguments.contains("--tool-runtime-ui-fixture") { controller.showToolRuntimeFixture() }
+            else if CommandLine.arguments.contains("--interrupted-scan-ui-fixture") { controller.showProcessInterruptionFixture() }
             else if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
                 || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {
                 controller.showRestoreFixture(photosAudit: CommandLine.arguments.contains("--restore-audit-ui-fixture"),

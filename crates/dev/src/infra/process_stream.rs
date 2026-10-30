@@ -436,12 +436,7 @@ fn strip_ansi_escapes(input: &str) -> String {
     out
 }
 
-fn push_line<F: FnMut(&str)>(
-    _buffer: &mut String,
-    line: &str,
-    stats: &mut ProcessorStats,
-    line_handler: &mut F,
-) {
+fn push_line<F: FnMut(&str)>(line: &str, stats: &mut ProcessorStats, line_handler: &mut F) {
     let mut line = line.trim_end_matches('\r').to_string();
     if let Some(pos) = line.rfind('\r') {
         line = line[pos + 1..].to_string();
@@ -455,17 +450,36 @@ fn push_line<F: FnMut(&str)>(
 }
 
 fn push_chunk_log_lines<F: FnMut(&str)>(
-    buffer: &mut String,
-    chunk: &str,
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+    eof: bool,
     stats: &mut ProcessorStats,
     line_handler: &mut F,
-) {
-    buffer.push_str(chunk);
-    while let Some(pos) = buffer.find('\n') {
-        let line = buffer[..pos].to_string();
-        buffer.replace_range(..=pos, "");
-        push_line(buffer, &line, stats, line_handler);
+) -> io::Result<()> {
+    buffer.extend_from_slice(chunk);
+    let complete = if eof {
+        buffer.len()
+    } else {
+        buffer
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |end| end + 1)
+    };
+    let mut first_error = None;
+    for bytes in buffer[..complete].split(|&byte| byte == b'\n') {
+        match std::str::from_utf8(bytes) {
+            Ok(line) => push_line(line, stats, line_handler),
+            Err(error) if first_error.is_none() => {
+                first_error = Some(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("child output contains invalid UTF-8: {error}"),
+                ));
+            }
+            Err(_) => {}
+        }
     }
+    drop(buffer.drain(..complete));
+    first_error.map_or(Ok(()), Err)
 }
 
 #[cfg(unix)]
@@ -556,11 +570,11 @@ where
         let _ = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
     }
     let mut stats = ProcessorStats::default();
-    let mut output_tail = String::new();
-    let mut log_buffer = String::new();
+    let mut log_buffer = Vec::new();
     let mut last_heartbeat = Instant::now();
     let mut buf = [0u8; 16 * 1024];
     let mut log_write_error = None;
+    let mut decoding_error = None;
     let mut emit_line = |line: &str| {
         if let Some(file) = log_file.as_mut() {
             remember_log_write_error(writeln!(file, "{line}"), &mut log_write_error);
@@ -583,16 +597,10 @@ where
             }
             Ok(n) => {
                 let chunk = &buf[..n];
-                let text = String::from_utf8_lossy(chunk);
-                output_tail.push_str(&text);
-                if output_tail.len() > 50_000 {
-                    let mut start = output_tail.len() - 50_000;
-                    while !output_tail.is_char_boundary(start) {
-                        start += 1;
-                    }
-                    output_tail = output_tail[start..].to_string();
-                }
-                push_chunk_log_lines(&mut log_buffer, &text, &mut stats, &mut emit_line);
+                remember_log_write_error(
+                    push_chunk_log_lines(&mut log_buffer, chunk, false, &mut stats, &mut emit_line),
+                    &mut decoding_error,
+                );
             }
             Err(err)
                 if matches!(
@@ -627,18 +635,18 @@ where
         }
     }
 
-    if !log_buffer.trim().is_empty() {
-        let final_line = log_buffer.clone();
-        push_line(&mut log_buffer, &final_line, &mut stats, &mut emit_line);
-    }
-    for line in output_tail.lines() {
-        ingest_stats_line(&mut stats, &strip_ansi_escapes(line));
-    }
+    remember_log_write_error(
+        push_chunk_log_lines(&mut log_buffer, &[], true, &mut stats, &mut emit_line),
+        &mut decoding_error,
+    );
 
     let status = child.wait().context("wait for pty child")?;
     observer(ChildProcessObservation::Exited { pid, status });
     stats.exit_code = delegated_exit_code(status, &cmd[0], "stream_process_with_pty");
-    finish_log_writes(log_write_error, "write PTY child output log")?;
+    if let Some(error) = decoding_error {
+        remember_log_write_error(Err(error), &mut log_write_error);
+    }
+    finish_log_writes(log_write_error, "capture PTY child output")?;
     Ok(stats)
 }
 
@@ -903,9 +911,7 @@ mod tests {
     #[test]
     fn test_push_line_strips_terminal_title_and_color_sequences_before_stats() {
         let mut stats = ProcessorStats::default();
-        let mut buffer = String::new();
         push_line(
-            &mut buffer,
             "\x1b]0;00s\x07\x1b[33mSkipped: 2\x1b[0m",
             &mut stats,
             &mut |_| {},
@@ -916,14 +922,94 @@ mod tests {
     #[test]
     fn test_push_line_keeps_pty_crlf_content() {
         let mut stats = ProcessorStats::default();
-        let mut buffer = String::new();
         let mut handled = Vec::new();
 
-        push_line(&mut buffer, "first\r", &mut stats, &mut |line| {
+        push_line("first\r", &mut stats, &mut |line| {
             handled.push(line.to_string());
         });
 
         assert_eq!(handled, vec!["first".to_string()]);
+    }
+
+    #[test]
+    fn utf8_chunk_boundaries_preserve_control_lines_and_eof_counts() {
+        let marker = "MFB_TOOL_SNAPSHOT={\"schema_version\":1,\"state\":\"ready\",\"manifest_path\":\"/tmp/归档/日本語.json\",\"message\":\"中文 日本語 📷\"}";
+        let input = format!(
+            "\x1b[33mSkipped: 2\x1b[0m\r\n{marker}\r\nFailed: 1\nIgnored: 0\nUnprocessed: 0\nSucceeded: 3"
+        );
+        for split in 0..=input.len() {
+            let mut buffer = Vec::new();
+            let mut stats = ProcessorStats::default();
+            let mut handled = Vec::new();
+            let mut capture = |line: &str| handled.push(line.to_owned());
+            push_chunk_log_lines(
+                &mut buffer,
+                &input.as_bytes()[..split],
+                false,
+                &mut stats,
+                &mut capture,
+            )
+            .unwrap();
+            push_chunk_log_lines(
+                &mut buffer,
+                &input.as_bytes()[split..],
+                false,
+                &mut stats,
+                &mut capture,
+            )
+            .unwrap();
+            push_chunk_log_lines(&mut buffer, &[], true, &mut stats, &mut capture).unwrap();
+            assert!(buffer.is_empty());
+            assert_eq!(
+                handled,
+                [
+                    "Skipped: 2",
+                    marker,
+                    "Failed: 1",
+                    "Ignored: 0",
+                    "Unprocessed: 0",
+                    "Succeeded: 3"
+                ]
+            );
+            assert_eq!(
+                (stats.succeeded, stats.skipped, stats.ignored, stats.failed),
+                (3, 2, 0, 1)
+            );
+            assert_eq!(stats.unprocessed, Some(0));
+            assert!(stats.counts_complete());
+        }
+    }
+
+    #[test]
+    fn malformed_utf8_is_reported_without_rewriting_control_fields() {
+        let mut buffer = Vec::new();
+        let mut stats = ProcessorStats::default();
+        let mut handled = Vec::new();
+        let mut capture = |line: &str| handled.push(line.to_owned());
+        let error = push_chunk_log_lines(
+            &mut buffer,
+            b"MFB_TOOL_SNAPSHOT={\"message\":\"\xff\"}\nFailed: 1\n",
+            false,
+            &mut stats,
+            &mut capture,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(stats.failed, 1);
+        push_chunk_log_lines(
+            &mut buffer,
+            b"MFB_TOOL_SNAPSHOT=\xf0\x9f",
+            false,
+            &mut stats,
+            &mut capture,
+        )
+        .unwrap();
+        let error =
+            push_chunk_log_lines(&mut buffer, &[], true, &mut stats, &mut capture).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(buffer.is_empty());
+        assert_eq!(handled, ["Failed: 1"]);
+        assert_eq!(stats.reported, [false, false, false, true]);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

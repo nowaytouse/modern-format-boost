@@ -11,6 +11,171 @@ use foundation::infra::runtime_config::{
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// Bind the effective tools once, before any media inventory or output writes.
+pub(super) fn prepare_tool_runtime(
+    required: &[&str],
+    recorded: Option<&(PathBuf, String)>,
+) -> Result<()> {
+    use foundation::common_utils::{ToolRuntimeError, emit_tool_runtime_status};
+    let prepare = || -> Result<()> {
+        let supplied = std::env::var_os(foundation::tool_snapshot::MANIFEST_ENV).map(PathBuf::from);
+        if let (Some(supplied), Some((recorded, _))) = (&supplied, &recorded) {
+            anyhow::ensure!(
+                supplied == recorded,
+                "supplied tool runtime differs from the saved task runtime"
+            );
+        }
+        let manifest = recorded
+            .as_ref()
+            .map(|(path, _)| path)
+            .or(supplied.as_ref());
+        if let Some(manifest) = manifest {
+            anyhow::ensure!(
+                manifest.is_absolute(),
+                "tool runtime manifest must be an absolute path"
+            );
+        }
+        let mut observed = BTreeMap::new();
+        for name in [
+            "ffmpeg",
+            "ffprobe",
+            "magick",
+            "convert",
+            "avifenc",
+            "avifdec",
+            "cjxl",
+            "djxl",
+            "jxlinfo",
+            "exiftool",
+            "cwebp",
+            "dwebp",
+            "heif-convert",
+            "heif-enc",
+            "webpmux",
+            "gif2webp",
+            "gifski",
+            "osxphotos",
+            "opj_decompress",
+            "avifgainmaputil",
+        ] {
+            if let Some(path) = foundation::common_utils::resolve_tool_path(name) {
+                observed.insert(name.to_owned(), path);
+            }
+        }
+        let snapshot = if let Some(manifest) = manifest {
+            let snapshot = foundation::tool_snapshot::load_and_verify(manifest)?;
+            if let Some((_, identity)) = &recorded {
+                anyhow::ensure!(
+                    snapshot.identity == *identity,
+                    "saved task tool runtime identity does not match its manifest"
+                );
+            }
+            for name in required {
+                anyhow::ensure!(
+                    snapshot.tools.contains_key(*name),
+                    "saved tool runtime has no required {name}; refusing PATH reselection"
+                );
+            }
+            for name in snapshot.tools.keys() {
+                if let Some(path) = foundation::common_utils::explicit_tool_override(name) {
+                    snapshot
+                        .verify_selection(name, &path)
+                        .map_err(|error| ToolRuntimeError {
+                            cause_code: "configuration_mismatch",
+                            tool: Some(name.clone()),
+                            message: format!("{error:#}"),
+                        })?;
+                }
+            }
+            Some(snapshot)
+        } else {
+            let selected = required
+                .iter()
+                .map(|name| {
+                    observed
+                        .get(*name)
+                        .cloned()
+                        .map(|path| ((*name).to_owned(), path))
+                        .ok_or_else(|| {
+                            ToolRuntimeError {
+                                cause_code: "tool_unavailable",
+                                tool: Some((*name).to_owned()),
+                                message: format!(
+                                    "required tool {name} is unavailable before media processing"
+                                ),
+                            }
+                            .into()
+                        })
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            #[cfg(target_os = "macos")]
+            {
+                Some(foundation::tool_snapshot::prepare(
+                    &foundation::process_lock::get_mfb_root()?,
+                    &selected,
+                )?)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = selected;
+                None
+            }
+        };
+        foundation::common_utils::bind_tool_runtime(snapshot, observed, required)?;
+        emit_tool_runtime_status("ready", None)?;
+        Ok(())
+    };
+    emit_tool_runtime_status("preparing", None)?;
+    if let Err(error) = prepare() {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
+        }) {
+            return Err(error);
+        }
+        let shared = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<ToolRuntimeError>())
+            .cloned()
+            .unwrap_or_else(|| ToolRuntimeError {
+                cause_code: if recorded.is_some() {
+                    "snapshot_invalid"
+                } else {
+                    "prepare_failed"
+                },
+                tool: None,
+                message: format!("{error:#}"),
+            });
+        emit_tool_runtime_status("blocked", Some(&shared))?;
+        return Err(shared.into());
+    }
+    Ok(())
+}
+
+pub(super) fn check_tool_runtime() -> Result<()> {
+    report_tool_runtime_result(foundation::common_utils::verify_tool_runtime())
+}
+
+pub(super) fn check_tool_runtime_after_failure() -> Result<()> {
+    report_tool_runtime_result(foundation::common_utils::verify_tool_runtime_after_failure())
+}
+
+pub(super) fn check_tool_runtime_snapshot() -> Result<()> {
+    report_tool_runtime_result(foundation::common_utils::verify_tool_runtime_snapshot())
+}
+
+fn report_tool_runtime_result(result: Result<()>) -> Result<()> {
+    if let Err(error) = &result
+        && let Some(shared) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<foundation::common_utils::ToolRuntimeError>())
+    {
+        foundation::common_utils::emit_tool_runtime_status("blocked", Some(shared))?;
+    }
+    result
+}
+
 #[derive(Args, Debug, Default)]
 pub(super) struct RuntimeArgs {
     /// Overlay an explicit JSON configuration after user and project preferences.

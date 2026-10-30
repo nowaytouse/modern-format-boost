@@ -2618,8 +2618,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     func show() {
         updateLocalization()
-        showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        if !isBackgroundSelfTest {
+            showWindow(nil)
+            window?.makeKeyAndOrderFront(nil)
+        }
         configureInitialDivider()
     }
 
@@ -4330,20 +4332,29 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             throw HostError(message: "Ignored history tab mixed failures, changed counts or lost supported controls")
         }
         try ignoredView.validateForSelfTest(records)
+        let originalWindow = window
+        let originalContent = window?.contentView
         defer { window?.orderOut(nil) }
         for width in [1_040.0, 780.0, 1_040.0] {
             window?.setContentSize(NSSize(width: width, height: 620))
+            show()
             ignoredSources = records
             detailMode.selectedSegment = 4
             detailModeChanged()
-            showWindow(nil)
             window?.contentView?.layoutSubtreeIfNeeded()
             window?.displayIfNeeded()
+            try ignoredView.validateForSelfTest(records)
             close()
             show()
             window?.contentView?.layoutSubtreeIfNeeded()
             window?.displayIfNeeded()
-            guard window?.isVisible == true else { throw HostError(message: "Ignored history failed to reopen") }
+            guard window === originalWindow, window?.contentView === originalContent,
+                  entries.map(\.id) == [entry.id], entries.first?.summary?.img.ignored == records.count else {
+                throw HostError(message: "Ignored history lost its window, content or authoritative entry after reopening")
+            }
+            guard window?.isVisible == !isBackgroundSelfTest else {
+                throw HostError(message: "Ignored history violated the requested background or interactive presentation")
+            }
         }
         resetOutput()
         updateActions()

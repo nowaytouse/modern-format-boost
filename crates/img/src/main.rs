@@ -431,6 +431,23 @@ fn acquire_command_lock(command: &Commands) -> Option<foundation::infra::process
     }
 }
 
+fn finalize_img_resume_choice(
+    command: &mut Commands,
+    resolve: impl FnOnce(&Path, Option<&Path>, bool, bool) -> std::io::Result<bool>,
+) -> std::io::Result<()> {
+    if let Commands::Run {
+        input,
+        output,
+        resume,
+        no_resume,
+        ..
+    } = command
+    {
+        *resume = resolve(input, output.as_deref(), *resume, *no_resume)?;
+    }
+    Ok(())
+}
+
 fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyhow::Result<()> {
     let Commands::Run {
         input,
@@ -454,20 +471,14 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
         plain,
 
         base_dir,
-        resume: resume_flag,
-        no_resume,
+        resume,
+        no_resume: _,
         codec,
     } = command
     else {
         unreachable!("run_img_command called with a non-run command");
     };
     let (input, base_dir) = canonicalize_img_run_roots(&input, base_dir.as_deref());
-    let resume = foundation::checkpoint::resolve_resume_choice(
-        &input,
-        output.as_deref(),
-        resume_flag,
-        no_resume,
-    )?;
     let apple_compat = apple_compat && !no_apple_compat;
     let image_policy = &foundation::infra::runtime_config::active()
         .context("IMG runtime configuration must be installed before processing")?
@@ -637,10 +648,16 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     config.child_threads = thread_config.child_threads;
 
     if input.is_file() {
-        let result = foundation::progress_mode::with_deferred_skip_reporting(|| {
+        runtime_cli::check_tool_runtime()?;
+        let conversion = foundation::progress_mode::with_deferred_skip_reporting(|| {
             auto_convert_single_file(&input, &config)
-        })
-        .inspect_err(|error| {
+        });
+        if conversion.is_err() {
+            runtime_cli::check_tool_runtime_after_failure()?;
+        } else {
+            runtime_cli::check_tool_runtime()?;
+        }
+        let result = conversion.inspect_err(|error| {
             if let Some(failure) = error.downcast_ref::<ImageTaskFailure>() {
                 foundation::infra::static_logs::log_file_outcome_audit_with_class(
                     "img",
@@ -731,6 +748,92 @@ fn main_inner() -> anyhow::Result<()> {
         resolved.emit_history_marker_if_session("img")?;
     }
     foundation::infra::runtime_config::install(resolved.config)?;
+    foundation::ctrlc_guard::init();
+    // The final interactive/explicit decision must precede tool selection;
+    // choosing resume later could relabel old completed-file proofs as new tools.
+    finalize_img_resume_choice(
+        &mut cli.command,
+        foundation::checkpoint::resolve_resume_choice,
+    )?;
+    let tool_preparation = (|| -> anyhow::Result<()> {
+        match &cli.command {
+            Commands::Run {
+                input,
+                output,
+                resume,
+                no_resume,
+                ..
+            } => {
+                let recorded = if *resume && !*no_resume {
+                    foundation::checkpoint::Manager::saved_tool_snapshot(input, output.as_deref())?
+                } else {
+                    None
+                };
+                runtime_cli::prepare_tool_runtime(
+                    &["cjxl", "djxl", "jxlinfo", "exiftool", "ffmpeg"],
+                    recorded.as_ref(),
+                )?;
+            }
+            Commands::FastImg {
+                input,
+                output,
+                dry_run: false,
+                no_resume,
+                strategy,
+                ..
+            } => {
+                let src = FastImgInputPlan::source_root(input)?;
+                // Selection only: the normal resolver may recover a collided
+                // output path, which must happen after tool preflight.
+                let working = if let Some(output) = output {
+                    output.clone()
+                } else if *no_resume {
+                    foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src)
+                } else {
+                    resolve_working_copy_dir(&src, strategy)?
+                };
+                let recorded = if *no_resume {
+                    None
+                } else {
+                    read_existing_fast_img_marker(&working)?.map(|marker| marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
+                    .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")).transpose()?
+                };
+                let required: &[&str] = if strategy == "avif" {
+                    &["avifenc", "avifdec", "exiftool"]
+                } else {
+                    &["cjxl", "djxl", "jxlinfo", "exiftool"]
+                };
+                runtime_cli::prepare_tool_runtime(required, recorded.as_ref())?;
+            }
+            Commands::RestoreJpeg { .. } => {
+                runtime_cli::prepare_tool_runtime(&["djxl", "jxlinfo", "exiftool"], None)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    })();
+    if let Err(error) = tool_preparation {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
+        }) {
+            return Err(error);
+        }
+        if error
+            .downcast_ref::<foundation::common_utils::ToolRuntimeError>()
+            .is_none()
+        {
+            let shared = foundation::common_utils::ToolRuntimeError {
+                cause_code: "snapshot_invalid",
+                tool: None,
+                message: format!("{error:#}"),
+            };
+            foundation::common_utils::emit_tool_runtime_status("blocked", Some(&shared))?;
+            return Err(shared.into());
+        }
+        return Err(error);
+    }
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
     foundation::logging::init("img", &foundation::logging::LogConfig::default())
@@ -743,9 +846,6 @@ fn main_inner() -> anyhow::Result<()> {
     {
         tracing::warn!(target: "runtime_config", "Legacy environment preferences are active; inspect img config show --effective and migrate them to config/flags");
     }
-
-    // Initialize Ctrl+C guard for long-running batch operations
-    foundation::ctrlc_guard::init();
 
     let cache = initialize_analysis_cache(&cli.command);
     let _lock_guard = acquire_command_lock(&cli.command);
@@ -2602,6 +2702,14 @@ impl ImageBatchWorker<'_> {
         if self.abort_requested.load(Ordering::SeqCst) {
             return;
         }
+        if let Err(error) = runtime_cli::check_tool_runtime() {
+            self.abort_requested.store(true, Ordering::SeqCst);
+            *foundation::media_conversion_gate::mutex_guard_or_recover(
+                "img_batch_abort_reason",
+                self.abort_reason.lock(),
+            ) = Some(error.to_string());
+            return;
+        }
         let file_name = foundation::media_conversion_gate::path_file_name_for_log(path);
         let span = tracing::info_span!("image_processing", file = %path.display());
         let _enter = span.enter();
@@ -2638,9 +2746,18 @@ impl ImageBatchWorker<'_> {
 
         let mut live_config = self.config.clone();
         live_config.child_threads = child_threads;
-        match foundation::progress_mode::with_deferred_skip_reporting(|| {
+        let conversion = foundation::progress_mode::with_deferred_skip_reporting(|| {
             auto_convert_single_file(path, &live_config)
-        }) {
+        });
+        if let Err(shared) = runtime_cli::check_tool_runtime() {
+            self.abort_requested.store(true, Ordering::SeqCst);
+            *foundation::media_conversion_gate::mutex_guard_or_recover(
+                "img_batch_abort_reason",
+                self.abort_reason.lock(),
+            ) = Some(shared.to_string());
+            return;
+        }
+        match conversion {
             Ok(result) => {
                 if !result.ignored && !result.skipped {
                     foundation::media_conversion_gate::mutex_guard_or_recover(
@@ -2691,6 +2808,14 @@ impl ImageBatchWorker<'_> {
                 }
             }
             Err(error) => {
+                if let Err(shared) = runtime_cli::check_tool_runtime_after_failure() {
+                    self.abort_requested.store(true, Ordering::SeqCst);
+                    *foundation::media_conversion_gate::mutex_guard_or_recover(
+                        "img_batch_abort_reason",
+                        self.abort_reason.lock(),
+                    ) = Some(shared.to_string());
+                    return;
+                }
                 let error_text = error.to_string();
                 if let Some(reason) = disk_full_pause_reason(&error_text) {
                     if self.pause_controller.request_pause(path, reason.clone()) {
@@ -4010,6 +4135,7 @@ fn fast_img_prepare_retry_plan(
 
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     foundation::batch_control::checkpoint()?;
+    runtime_cli::check_tool_runtime()?;
     validate_fast_img_options(&options);
     let FastImgRunOptions {
         input,
@@ -4054,6 +4180,30 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )
     };
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
+    if !dry_run.0 {
+        if fresh.0 {
+            anyhow::ensure!(
+                existing_marker.is_none(),
+                "the fresh output acquired an existing checkpoint before its lock; no task proof was reused"
+            );
+        } else if let Some(marker) = &existing_marker
+            && foundation::common_utils::tool_runtime_is_bound()
+        {
+            if let Err(error) = fast_img_validate_tool_authority(
+                marker,
+                foundation::common_utils::active_tool_snapshot()
+                    .map(|snapshot| (snapshot.manifest_path.as_path(), snapshot.identity.as_str())),
+            ) {
+                let shared = foundation::common_utils::ToolRuntimeError {
+                    cause_code: "snapshot_invalid",
+                    tool: None,
+                    message: format!("{error:#}"),
+                };
+                foundation::common_utils::emit_tool_runtime_status("blocked", Some(&shared))?;
+                return Err(shared.into());
+            }
+        }
+    }
     if let Some(marker) = &existing_marker
         && !dry_run.0
         && !fresh.0
@@ -4083,6 +4233,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         ignored,
         planned_encode_count,
     } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
+    runtime_cli::check_tool_runtime_after_failure()?;
     let ignored_count = ignored.count();
     let marker_context = FastImgMarkerContext {
         src_dir: &src_dir,
@@ -4366,6 +4517,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 )
             })?;
 
+            runtime_cli::check_tool_runtime_after_failure()?;
             fast_img_run_verification_and_delivery_pipeline(FastImgDeliveryContext {
                 marker: &mut marker,
                 source_jpegs: &source_jpegs,
@@ -6769,6 +6921,20 @@ fn fast_img_checked_rel_path(rel: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
+fn fast_img_validate_tool_authority(
+    marker: &WorkingCopyMarker,
+    active: Option<(&Path, &str)>,
+) -> anyhow::Result<()> {
+    let (manifest, identity) = active
+        .context("cannot resume a checkpoint without a persisted active tool runtime authority")?;
+    anyhow::ensure!(
+        marker.tool_snapshot_manifest.as_deref() == Some(manifest)
+            && marker.tool_snapshot_identity.as_deref() == Some(identity),
+        "fast-img checkpoint tool runtime changed before the output lock; saved proofs and outputs were retained"
+    );
+    Ok(())
+}
+
 fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<WorkingCopyMarker>> {
     match read_marker(working_copy) {
         Ok(marker) => {
@@ -8384,12 +8550,20 @@ fn restore_jpeg_preflight(
         files
             .par_iter()
             .map(|source| {
+                if let Err(shared) = runtime_cli::check_tool_runtime() {
+                    return (source.clone(), Err(shared.to_string()));
+                }
                 let result = admission
                     .acquire(foundation::thread_manager::WorkloadType::Image, || false)
                     .ok_or_else(|| "preflight admission unexpectedly cancelled".to_owned())
                     .and_then(|_permit| {
                         foundation::jxl_utils::probe_jpeg_reconstruction_eligibility(source)
                     });
+                if result.is_err()
+                    && let Err(shared) = runtime_cli::check_tool_runtime_after_failure()
+                {
+                    return (source.clone(), Err(shared.to_string()));
+                }
                 let completed = checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == files.len() {
                     println!(
@@ -8402,6 +8576,7 @@ fn restore_jpeg_preflight(
             .collect::<Vec<_>>()
     });
 
+    runtime_cli::check_tool_runtime_snapshot()?;
     let mut restorable = Vec::with_capacity(files.len());
     let mut ineligible = Vec::new();
     let mut failures = Vec::new();
@@ -8733,6 +8908,7 @@ fn restore_jpeg_keep_source_parallel(
         files
             .par_iter()
             .map(|file| {
+                if let Err(shared) = runtime_cli::check_tool_runtime() { return (file.clone(), Err(shared)); }
                 let restored_file = admission.acquire(
                     foundation::thread_manager::WorkloadType::Image, || false,
                 ).context("restore admission unexpectedly cancelled")
@@ -8746,7 +8922,10 @@ fn restore_jpeg_keep_source_parallel(
                         }
                         Ok(restored_file)
                     }
-                    Err(error) => Err(error),
+                    Err(error) => {
+                        if let Err(shared) = runtime_cli::check_tool_runtime_after_failure() { return (file.clone(), Err(shared)); }
+                        Err(error)
+                    },
                 };
                 let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
                 if completed.is_multiple_of(250) || completed == file_count {
@@ -8761,6 +8940,7 @@ fn restore_jpeg_keep_source_parallel(
             .collect::<Vec<_>>()
     });
 
+    runtime_cli::check_tool_runtime_snapshot()?;
     let mut records = Vec::with_capacity(file_count);
     let mut metadata_reviews = Vec::new();
     let mut failures = Vec::new();
@@ -8829,6 +9009,7 @@ fn restore_jpeg_process_candidates(
 
     let mut outcome = RestoreJpegProcessOutcome::default();
     for (index, file) in files.iter().enumerate() {
+        runtime_cli::check_tool_runtime_snapshot()?;
         match restore_single_jpeg(file, input_root, output_root, force) {
             Ok(result) => {
                 if result.committed {
@@ -8843,6 +9024,7 @@ fn restore_jpeg_process_candidates(
                         reason: reason.clone(),
                     });
                 }
+                runtime_cli::check_tool_runtime_snapshot()?;
                 if record_and_delete_restored_jpeg_source(
                     &mut manifest,
                     output_root,
@@ -8856,6 +9038,7 @@ fn restore_jpeg_process_candidates(
                 }
             }
             Err(error) => {
+                runtime_cli::check_tool_runtime_after_failure()?;
                 let failure = RestoreJpegFailure {
                     source: file.clone(),
                     reason: format!("{error:#}"),
@@ -10006,6 +10189,7 @@ fn fast_img_apply_encode_results(
 }
 
 fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::Result<()> {
+    runtime_cli::check_tool_runtime_after_failure()?;
     let total = context.source_jpegs.len();
     let (jobs, completed_from_resume) = context.plan_jobs()?;
     let FastImgEncodeContext {
@@ -10080,7 +10264,8 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
         // A whole-batch collect would otherwise lose all checkpoint progress on exit.
         for wave in jobs.chunks(pool.current_num_threads()) {
             let _transaction = foundation::batch_control::begin_transaction()?;
-            let results = pool.install(|| {
+            runtime_cli::check_tool_runtime_snapshot()?;
+            let mut results = pool.install(|| {
                 wave.par_iter()
                     .map(|job| {
                         let permit = admission
@@ -10109,6 +10294,16 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                     })
                     .collect::<Vec<_>>()
             });
+            // Persist independently verified successes, but do not classify the
+            // current or pending files as corrupt when a shared tool broke.
+            let shared_failure = if results.iter().any(Result::is_err) {
+                runtime_cli::check_tool_runtime_after_failure().err()
+            } else {
+                runtime_cli::check_tool_runtime().err()
+            };
+            if shared_failure.is_some() {
+                results.retain(Result::is_ok);
+            }
             let wave_summary = fast_img_apply_encode_results(
                 marker,
                 results,
@@ -10116,6 +10311,9 @@ fn fast_img_run_encode_phase(mut context: FastImgEncodeContext<'_>) -> anyhow::R
                 src_dir,
                 working_copy,
             )?;
+            if let Some(error) = shared_failure {
+                return Err(error);
+            }
             let failed = u64::try_from(wave_summary.session_failed)
                 .context("fast-img failed count exceeds u64")?;
             let skipped = u64::try_from(wave_summary.session_skipped)
@@ -10323,6 +10521,7 @@ fn fast_img_finalize_sources(
     strategy: &str,
     removed_files: &mut Vec<PathBuf>,
 ) -> anyhow::Result<((usize, usize, usize), (usize, usize, usize))> {
+    runtime_cli::check_tool_runtime_snapshot()?;
     let removed_files = std::cell::RefCell::new(removed_files);
     fast_img_result::finalize_sources(
         marker,
@@ -10507,10 +10706,16 @@ fn fast_img_run_verification_and_delivery_pipeline(
 
     let output_format = foundation::delivery_codec_strategy::strategy_to_format_kind(strategy);
     if !gate1_complete_or_later(&marker.stage) {
+        runtime_cli::check_tool_runtime_snapshot()?;
         println!("[GATE 1  ] verifying local outputs");
         let mode = foundation::BatchErrorMode::current();
         let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
         let mut gate1 = Gate1Local.run_with_error_mode(&ctx, mode);
+        if gate1.passed {
+            runtime_cli::check_tool_runtime_snapshot()?;
+        } else {
+            runtime_cli::check_tool_runtime_after_failure()?;
+        }
         print_gate_result("GATE 1", &gate1);
         marker.apply_gate1(&gate1);
         write_marker_atomic(marker)?;
@@ -10537,6 +10742,11 @@ fn fast_img_run_verification_and_delivery_pipeline(
             }
             let remaining = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
             gate1 = Gate1Local.run_with_error_mode(&remaining, mode);
+            if gate1.passed {
+                runtime_cli::check_tool_runtime_snapshot()?;
+            } else {
+                runtime_cli::check_tool_runtime_after_failure()?;
+            }
             print_gate_result("GATE 1", &gate1);
             marker.apply_gate1(&gate1);
             write_marker_atomic(marker)?;
@@ -10676,12 +10886,18 @@ fn fast_img_run_verification_and_delivery_pipeline(
         foundation::batch_control::checkpoint()?;
         print_photos_verifier_proof_summary(&library_handle, expected_count);
         println!("[GATE 2  ] verifying Photos import");
+        runtime_cli::check_tool_runtime_snapshot()?;
         let gate2 = Gate2Import.run(&fast_img_pipeline_ctx(
             marker,
             expected_count,
             Some(library_handle.clone()),
             output_format,
         ));
+        if gate2.passed {
+            runtime_cli::check_tool_runtime_snapshot()?;
+        } else {
+            runtime_cli::check_tool_runtime_after_failure()?;
+        }
         print_gate_result("GATE 2", &gate2);
         marker.apply_gate2(&gate2);
         write_marker_atomic(marker)?;
@@ -10702,12 +10918,18 @@ fn fast_img_run_verification_and_delivery_pipeline(
 
     if !gate3_complete_or_later(&marker.stage) {
         println!("[GATE 3  ] verifying before cleanup");
+        runtime_cli::check_tool_runtime_snapshot()?;
         let gate3 = Gate3Deep.run(&fast_img_pipeline_ctx(
             marker,
             expected_count,
             Some(library_handle),
             output_format,
         ));
+        if gate3.passed {
+            runtime_cli::check_tool_runtime_snapshot()?;
+        } else {
+            runtime_cli::check_tool_runtime_after_failure()?;
+        }
         print_gate_result("GATE 3", &gate3);
         marker.apply_gate3(&gate3);
         write_marker_atomic(marker)?;
@@ -10973,6 +11195,50 @@ mod fast_img_hardening_tests {
         clippy::panic,
         clippy::assertions_on_constants
     )]
+    #[test]
+    fn interactive_resume_choice_is_final_before_tool_preparation() -> anyhow::Result<()> {
+        use clap::Parser;
+        let mut cli = super::Cli::try_parse_from(["img", "run", "selected-source"])?;
+        super::finalize_img_resume_choice(&mut cli.command, |input, output, resume, fresh| {
+            assert_eq!(input, std::path::Path::new("selected-source"));
+            assert!(output.is_none());
+            assert!(!resume && !fresh);
+            Ok(true)
+        })?;
+        assert!(matches!(
+            cli.command,
+            super::Commands::Run { resume: true, .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn locked_fast_img_marker_cannot_change_the_prepared_tool_authority() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let manifest_a = directory.path().join("runtime-a/manifest.json");
+        let manifest_b = directory.path().join("runtime-b/manifest.json");
+        let identity_a = "a".repeat(64);
+        let identity_b = "b".repeat(64);
+        let mut marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+            directory.path().join("source"),
+            directory.path().join("output"),
+            1,
+        );
+        marker.tool_snapshot_manifest = Some(manifest_b.clone());
+        marker.tool_snapshot_identity = Some(identity_b.clone());
+        assert!(
+            super::fast_img_validate_tool_authority(&marker, Some((&manifest_a, &identity_a)))
+                .is_err()
+        );
+        assert!(super::fast_img_validate_tool_authority(&marker, None).is_err());
+        assert!(
+            super::fast_img_validate_tool_authority(&marker, Some((&manifest_b, &identity_b)))
+                .is_ok()
+        );
+        assert_eq!(marker.tool_snapshot_manifest, Some(manifest_b));
+        assert_eq!(marker.tool_snapshot_identity, Some(identity_b));
+        Ok(())
+    }
     use super::{
         ArchiveFlag, Cli, Commands, DeleteSourceFlag, DryRunFlag, ExpertOptionsFlag,
         FastImgCleanupCompleteSourceState, FastImgEncodeContext, FastImgInputPlan,

@@ -20,6 +20,8 @@ pub mod logging;
 
 pub mod common_utils;
 
+pub mod tool_snapshot;
+
 pub mod io_utils;
 
 pub mod path_safety;

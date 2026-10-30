@@ -2895,6 +2895,11 @@ pub struct WorkingCopyMarker {
     pub strategy: String,
     #[serde(default)]
     pub metadata_policy_version: u32,
+    /// Exact private runtime authority used by this task; it is recovery state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_snapshot_manifest: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_snapshot_identity: Option<String>,
 }
 
 fn default_strategy() -> String {
@@ -2970,6 +2975,10 @@ impl WorkingCopyMarker {
             error: None,
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,
+            tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.manifest_path.clone()),
+            tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.identity.clone()),
         }
     }
 

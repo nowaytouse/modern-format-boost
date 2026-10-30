@@ -167,6 +167,7 @@ fn commit_with_size_check(
     pixel_audit: PixelAudit,
     preserve_codec_embedded_metadata: bool,
 ) -> Result<CommitOutcome> {
+    foundation::common_utils::verify_tool_runtime_snapshot()?;
     let input = source.original;
     let input_size = source.complete_size;
     let input_label = foundation::media_conversion_gate::path_file_name_for_log(input);
@@ -198,6 +199,8 @@ fn commit_with_size_check(
         pixel_audit.already_verified(),
         preserve_codec_embedded_metadata,
         |candidate| {
+            foundation::common_utils::verify_tool_runtime_snapshot()
+                .map_err(std::io::Error::other)?;
             if let Some(expected) = &prepared_jpeg_hash {
                 let actual = foundation::common_utils::calculate_blake3_hash(candidate)
                     .map_err(|error| std::io::Error::other(error.to_string()))?;

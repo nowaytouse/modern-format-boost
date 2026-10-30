@@ -31,9 +31,170 @@ pub trait WorkerSession {
     }
     fn log_dir(&self) -> &Path;
     fn session_audit(&self) -> &Path;
+    fn tool_snapshots(&self) -> &ToolSnapshotBindings;
     fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()>;
     fn append_session_line(&self, event: &str) -> Result<()>;
     fn append_verbose_line(&self, event: &str) -> Result<()>;
+}
+
+#[derive(Default)]
+pub struct ToolSnapshotBindings {
+    pipelines: std::sync::Mutex<BTreeMap<String, PipelineToolSnapshot>>,
+}
+
+#[derive(Default)]
+struct PipelineToolSnapshot {
+    snapshot: Option<foundation::tool_snapshot::Snapshot>,
+    configured_paths: Option<BTreeMap<String, PathBuf>>,
+    blocked: Option<String>,
+}
+
+impl ToolSnapshotBindings {
+    fn manifest(&self, pipeline: &str) -> Result<Option<String>> {
+        let pipelines = self
+            .pipelines
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tool snapshot bindings lock poisoned"))?;
+        let Some(state) = pipelines.get(pipeline) else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            state.blocked.is_none(),
+            "{pipeline} tool runtime blocked: {}",
+            state.blocked.as_deref().unwrap_or("")
+        );
+        state
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .manifest_path
+                    .to_str()
+                    .map(str::to_owned)
+                    .context("tool snapshot manifest path is not UTF-8")
+            })
+            .transpose()
+    }
+
+    fn observe_config(&self, pipeline: &str, paths: &BTreeMap<String, PathBuf>) -> Result<()> {
+        let mut pipelines = self
+            .pipelines
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tool snapshot bindings lock poisoned"))?;
+        let state = pipelines.entry(pipeline.to_owned()).or_default();
+        let result = (|| {
+            anyhow::ensure!(
+                state.blocked.is_none(),
+                "{pipeline} tool runtime is already blocked"
+            );
+            if let Some(previous) = &state.configured_paths {
+                anyhow::ensure!(
+                    previous == paths,
+                    "explicit tool selections changed within the {pipeline} pipeline"
+                );
+            }
+            if let Some(snapshot) = &state.snapshot {
+                for (name, path) in paths {
+                    if snapshot.tools.contains_key(name) {
+                        snapshot.verify_selection(name, path)?;
+                    }
+                }
+            }
+            state.configured_paths = Some(paths.clone());
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            state.blocked.get_or_insert_with(|| format!("{error:#}"));
+        }
+        result
+    }
+
+    fn observe(&self, pipeline: &str, payload: &str) -> Result<()> {
+        let mut pipelines = self
+            .pipelines
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tool snapshot bindings lock poisoned"))?;
+        let state = pipelines.entry(pipeline.to_owned()).or_default();
+        let result = (|| {
+            anyhow::ensure!(
+                state.blocked.is_none(),
+                "{pipeline} tool runtime is already blocked"
+            );
+            let event: foundation::tool_snapshot::SnapshotEvent =
+                serde_json::from_str(payload).context("decode tool snapshot event")?;
+            anyhow::ensure!(
+                event.schema_version == 1
+                    && event.pipeline == pipeline
+                    && serde_json::from_str::<serde_json::Value>(payload)?
+                        == serde_json::to_value(&event)?,
+                "tool snapshot event schema or pipeline mismatch"
+            );
+            match event.state.as_str() {
+                "preparing" => {
+                    anyhow::ensure!(
+                        event.identity.is_none()
+                            && event.manifest_path.is_none()
+                            && event.tool_names.is_empty()
+                            && event.observed_tool_names.is_empty(),
+                        "invalid preparing tool snapshot event"
+                    );
+                }
+                "ready" if event.boundary == "persisted-external" => {
+                    let path = event
+                        .manifest_path
+                        .context("ready tool snapshot has no manifest")?;
+                    anyhow::ensure!(
+                        path.is_absolute(),
+                        "tool snapshot manifest path is not absolute"
+                    );
+                    let snapshot = foundation::tool_snapshot::load_and_verify(&path)?;
+                    anyhow::ensure!(
+                        event.identity.as_deref() == Some(snapshot.identity.as_str())
+                            && event.tool_names
+                                == snapshot.tools.keys().cloned().collect::<Vec<_>>(),
+                        "tool snapshot event disagrees with verified manifest"
+                    );
+                    if let Some(previous) = &state.snapshot {
+                        anyhow::ensure!(
+                            previous.identity == snapshot.identity
+                                && previous.manifest_path == snapshot.manifest_path,
+                            "tool snapshot changed within the {pipeline} pipeline"
+                        );
+                    }
+                    if let Some(paths) = &state.configured_paths {
+                        for (name, path) in paths {
+                            if snapshot.tools.contains_key(name) {
+                                snapshot.verify_selection(name, path)?;
+                            }
+                        }
+                    }
+                    state.snapshot = Some(snapshot);
+                }
+                "ready" if event.boundary == "live-observed" => {
+                    anyhow::ensure!(
+                        state.snapshot.is_none()
+                            && event.identity.is_none()
+                            && event.manifest_path.is_none()
+                            && event.tool_names.is_empty(),
+                        "tool snapshot cannot be downgraded to live selection"
+                    );
+                }
+                "blocked" => anyhow::bail!(
+                    "{pipeline} tool runtime blocked ({}): {}",
+                    event
+                        .cause_code
+                        .context("blocked tool snapshot has no cause code")?,
+                    event.message
+                ),
+                _ => anyhow::bail!("unsupported tool snapshot state or boundary"),
+            }
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            state.blocked.get_or_insert_with(|| format!("{error:#}"));
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -479,6 +640,34 @@ impl LaunchCommand {
         if dry_run {
             return Ok(ProcessorStats::default());
         }
+        let expected_pipeline = match self.pipeline_label() {
+            "IMG" => "img",
+            "VID" => "vid",
+            _ => "",
+        };
+        let mut launch_env = self.env_overrides.clone();
+        if let Some(session) = session.filter(|_| !expected_pipeline.is_empty()) {
+            let bound = session.tool_snapshots().manifest(expected_pipeline)?;
+            if let Some(bound) = &bound {
+                for (_, value) in launch_env
+                    .iter()
+                    .filter(|(name, _)| name == foundation::tool_snapshot::MANIFEST_ENV)
+                {
+                    anyhow::ensure!(
+                        value.as_ref() == Some(bound),
+                        "worker tool snapshot override conflicts with the active pipeline"
+                    );
+                }
+            }
+            if bound.is_some()
+                || !launch_env
+                    .iter()
+                    .any(|(name, _)| name == foundation::tool_snapshot::MANIFEST_ENV)
+            {
+                launch_env.retain(|(name, _)| name != foundation::tool_snapshot::MANIFEST_ENV);
+                launch_env.push((foundation::tool_snapshot::MANIFEST_ENV.into(), bound));
+            }
+        }
         foundation::batch_control::checkpoint()?;
         if self.program.components().count() > 1 && !self.program.is_file() {
             bail!(
@@ -517,7 +706,7 @@ impl LaunchCommand {
 
         let mut cmd = Command::new(&self.program);
         cmd.args(&self.args);
-        for (name, value) in &self.env_overrides {
+        for (name, value) in &launch_env {
             if let Some(value) = value {
                 cmd.env(name, value);
             } else {
@@ -540,15 +729,10 @@ impl LaunchCommand {
             let heartbeat = session.session_audit().to_path_buf();
             let mut last_heartbeat = Instant::now();
             let pipeline_label = self.pipeline_label().to_string();
-            let expected_config_pipeline = match self.pipeline_label() {
-                "IMG" => "img",
-                "VID" => "vid",
-                _ => "",
-            };
+            let expected_config_pipeline = expected_pipeline;
             let pipeline_started_at = Instant::now();
             let argv = self.argv();
-            let mut env_overrides = self
-                .env_overrides
+            let mut env_overrides = launch_env
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_deref()))
                 .collect::<Vec<_>>();
@@ -565,6 +749,7 @@ impl LaunchCommand {
             let mut session_log_error = None;
             let mut observed_records = Some(0_u64);
             let mut config_marker_error = None;
+            let mut snapshot_marker_error = None;
             let mut execution_marker_error = None;
             let mut seen_config_marker = false;
             let result = stream_process_with_pty_observed(
@@ -585,6 +770,10 @@ impl LaunchCommand {
                             if let Err(error) =
                                 ChildConfigMarker::parse(payload, expected_config_pipeline)
                                     .and_then(|marker| {
+                                        session.tool_snapshots().observe_config(
+                                            expected_config_pipeline,
+                                            &marker.config.tools.paths,
+                                        )?;
                                         let mut marker = serde_json::to_value(marker)?;
                                         marker["invocation_id"] =
                                             serde_json::to_value(invocation_id)?;
@@ -596,6 +785,15 @@ impl LaunchCommand {
                             }
                         }
                         return;
+                    }
+                    if !expected_pipeline.is_empty()
+                        && snapshot_marker_error.is_none()
+                        && let Some(payload) = line.strip_prefix("MFB_TOOL_SNAPSHOT=")
+                        && let Err(error) =
+                            session.tool_snapshots().observe(expected_pipeline, payload)
+                    {
+                        snapshot_marker_error =
+                            Some(error.context("worker tool snapshot admission failed"));
                     }
                     observed_records = observed_records.and_then(|count| count.checked_add(1));
                     if observed_records.is_none() && session_log_error.is_none() {
@@ -708,6 +906,9 @@ impl LaunchCommand {
                     if let Some(config_error) = config_marker_error {
                         eprintln!("[LOG] child configuration marker failed: {config_error:#}");
                     }
+                    if let Some(snapshot_error) = snapshot_marker_error {
+                        eprintln!("[LOG] {snapshot_error:#}");
+                    }
                     if let Some(execution_error) = execution_marker_error {
                         eprintln!("[LOG] {execution_error:#}");
                     }
@@ -721,6 +922,12 @@ impl LaunchCommand {
                 }
             };
             if let Some(error) = execution_marker_error {
+                collected_error = Some(match collected_error {
+                    Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
+                    None => error,
+                });
+            }
+            if let Some(error) = snapshot_marker_error {
                 collected_error = Some(match collected_error {
                     Some(cause) => anyhow::anyhow!("{cause:#}; {error:#}"),
                     None => error,
@@ -858,6 +1065,7 @@ mod tests {
         events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
         fail_execution: bool,
         fail_output_receipt: bool,
+        tool_snapshots: ToolSnapshotBindings,
     }
 
     impl WorkerSession for TestSession {
@@ -875,6 +1083,10 @@ mod tests {
 
         fn session_audit(&self) -> &Path {
             &self.audit
+        }
+
+        fn tool_snapshots(&self) -> &ToolSnapshotBindings {
+            &self.tool_snapshots
         }
 
         fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
@@ -918,7 +1130,166 @@ mod tests {
             events: std::sync::Mutex::new(Vec::new()),
             fail_execution: false,
             fail_output_receipt: false,
+            tool_snapshots: ToolSnapshotBindings::default(),
         }
+    }
+
+    #[test]
+    fn snapshot_bindings_reject_invalid_receipts_without_cross_pipeline_state() {
+        let event = foundation::tool_snapshot::SnapshotEvent {
+            schema_version: 1,
+            pipeline: "img".into(),
+            state: "preparing".into(),
+            boundary: "persisted-external".into(),
+            identity: None,
+            manifest_path: None,
+            tool_names: Vec::new(),
+            observed_tool_names: Vec::new(),
+            cause_code: None,
+            tool: None,
+            message: "Preparing".into(),
+        };
+        let bindings = ToolSnapshotBindings::default();
+        let raw = serde_json::to_string(&event).unwrap();
+        bindings.observe("img", &raw).unwrap();
+        assert!(bindings.manifest("img").unwrap().is_none());
+        assert!(bindings.observe("vid", &raw).is_err());
+        assert!(bindings.manifest("vid").is_err());
+        assert!(bindings.manifest("img").unwrap().is_none());
+        for (field, value) in [
+            ("schema_version", serde_json::json!(2)),
+            ("state", serde_json::json!("unknown")),
+            ("identity", serde_json::json!("forged")),
+            ("extra", serde_json::json!(true)),
+        ] {
+            let invalid = ToolSnapshotBindings::default();
+            let mut payload = serde_json::to_value(&event).unwrap();
+            payload[field] = value;
+            assert!(invalid.observe("img", &payload.to_string()).is_err());
+            assert!(invalid.manifest("img").is_err());
+            assert!(invalid.observe("img", &raw).is_err());
+        }
+        let incomplete = ToolSnapshotBindings::default();
+        let mut payload = serde_json::to_value(&event).unwrap();
+        payload.as_object_mut().unwrap().remove("identity");
+        assert!(incomplete.observe("img", &payload.to_string()).is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[serial_test::serial]
+    fn snapshot_bindings_reuse_one_runtime_across_workers_and_refuse_conflicts() -> Result<()> {
+        use foundation::tool_snapshot::{MANIFEST_ENV, SnapshotEvent, prepare};
+        use std::os::unix::fs::PermissionsExt;
+        let _dyld = foundation::common_utils::EnvGuard::set("DYLD_FALLBACK_LIBRARY_PATH", "");
+        // SAFETY: this serial fixture temporarily removes Cargo's injected loader override.
+        unsafe { std::env::remove_var("DYLD_FALLBACK_LIBRARY_PATH") };
+        let directory = tempfile::tempdir()?;
+        let snapshot = prepare(
+            directory.path(),
+            &BTreeMap::from([("cjxl".into(), PathBuf::from("/bin/sh"))]),
+        )?;
+        let event = SnapshotEvent {
+            schema_version: 1,
+            pipeline: "img".into(),
+            state: "ready".into(),
+            boundary: "persisted-external".into(),
+            identity: Some(snapshot.identity.clone()),
+            manifest_path: Some(snapshot.manifest_path.clone()),
+            tool_names: snapshot.tools.keys().cloned().collect(),
+            observed_tool_names: Vec::new(),
+            cause_code: None,
+            tool: None,
+            message: "Private runtime ready".into(),
+        };
+        let raw = serde_json::to_string(&event)?;
+        let session = test_session(directory.path(), Some("snapshot-run"));
+        let worker = directory.path().join("img");
+        fs::write(
+            &worker,
+            "#!/bin/sh\nif [ \"$1\" = emit ]; then printf 'MFB_TOOL_SNAPSHOT=%s\\n' \"$2\"; else [ \"$MFB_TOOL_SNAPSHOT_MANIFEST\" = \"$2\" ] || exit 91; fi\nprintf 'Succeeded: 1\\nSkipped: 0\\nIgnored: 0\\nFailed: 0\\n'\n",
+        )?;
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o755))?;
+        let command = |operation: &str, value: String| {
+            LaunchCommand::from_argv(vec![
+                worker.to_string_lossy().into_owned(),
+                operation.into(),
+                value,
+            ])
+        };
+        let first = command("emit", raw.clone())?.run_collecting(false, Some(&session), false)?;
+        assert_eq!(first.exit_code, 0);
+        let manifest = snapshot.manifest_path.to_string_lossy().into_owned();
+        let next = command("inherit", manifest.clone())?;
+        assert_eq!(
+            next.run_collecting(false, Some(&session), false)?.exit_code,
+            0
+        );
+        session.tool_snapshots.observe("img", &raw)?;
+        assert_eq!(
+            session.tool_snapshots.manifest("img")?,
+            Some(manifest.clone())
+        );
+        assert!(session.tool_snapshots.manifest("vid")?.is_none());
+        let fresh = test_session(directory.path(), Some("fresh-run"));
+        assert_eq!(
+            next.run_collecting(false, Some(&fresh), false)?.exit_code,
+            91
+        );
+        let mut conflict = next.clone();
+        conflict
+            .env_overrides
+            .push((MANIFEST_ENV.into(), Some("/unrelated/manifest.json".into())));
+        assert!(
+            conflict
+                .run_collecting(false, Some(&session), false)
+                .is_err()
+        );
+        let mut changed = event.clone();
+        changed.identity = Some("0".repeat(64));
+        assert!(
+            ToolSnapshotBindings::default()
+                .observe("img", &serde_json::to_string(&changed)?)
+                .is_err()
+        );
+        let other = prepare(
+            directory.path(),
+            &BTreeMap::from([("cjxl".into(), PathBuf::from("/bin/bash"))]),
+        )?;
+        changed.identity = Some(other.identity);
+        changed.manifest_path = Some(other.manifest_path);
+        assert!(
+            session
+                .tool_snapshots
+                .observe("img", &serde_json::to_string(&changed)?)
+                .is_err()
+        );
+        assert!(session.tool_snapshots.manifest("img").is_err());
+        assert_eq!(
+            session.tool_snapshots.pipelines.lock().unwrap()["img"]
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .identity,
+            snapshot.identity
+        );
+        assert!(session.tool_snapshots.observe("img", &raw).is_err());
+        let configured = ToolSnapshotBindings::default();
+        configured.observe_config(
+            "img",
+            &BTreeMap::from([("cjxl".into(), PathBuf::from("/bin/sh"))]),
+        )?;
+        configured.observe("img", &raw)?;
+        assert!(
+            configured
+                .observe_config(
+                    "img",
+                    &BTreeMap::from([("cjxl".into(), PathBuf::from("/bin/ls"))])
+                )
+                .is_err()
+        );
+        assert!(configured.manifest("img").is_err());
+        Ok(())
     }
 
     #[test]
@@ -934,10 +1305,26 @@ mod tests {
     fn worker_execution_records_os_pid_exit_and_preserves_failed_counts() {
         let directory = tempfile::tempdir().unwrap();
         let session = test_session(directory.path(), Some("run-execution"));
+        let snapshot_markers = [
+            serde_json::json!({
+                "schema_version": 1, "state": "ready", "identity": "a".repeat(64),
+                "manifest_path": directory.path().join("snapshot.json"),
+                "boundary": "macos_snapshot", "cause_code": null, "message": null,
+            }),
+            serde_json::json!({
+                "schema_version": 1, "state": "blocked", "identity": null,
+                "manifest_path": null, "boundary": "blocked", "cause_code": "snapshot_failed",
+                "message": "Tool unavailable; Failed: 999 is diagnostic text, not a file count",
+            }),
+        ]
+        .map(|value| format!("MFB_TOOL_SNAPSHOT={value}"));
         let command = LaunchCommand::from_argv(vec![
             "/bin/sh".into(),
             "-c".into(),
-            "printf 'Succeeded: 2\\nSkipped: 0\\nIgnored: 0\\nFailed: 1\\n'; exit 7".into(),
+            "printf '%s\\n' \"$1\"; printf '%s\\n' \"$2\" >&2; printf 'Succeeded: 2\\nSkipped: 0\\nIgnored: 0\\nFailed: 1\\n'; exit 7".into(),
+            "test".into(),
+            snapshot_markers[0].clone(),
+            snapshot_markers[1].clone(),
         ])
         .unwrap();
         let stats = command
@@ -997,6 +1384,19 @@ mod tests {
         assert_eq!(storage["observed_records"], rows);
         assert_eq!(storage["committed_records"], rows);
         assert_eq!(storage["committed_utf8_bytes"], bytes);
+        for marker in &snapshot_markers {
+            let stored: i64 = database
+                .query_row(
+                    "SELECT COUNT(*) FROM history_output WHERE line=?1",
+                    [marker],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                stored, 1,
+                "tool snapshot control line must be retained exactly"
+            );
+        }
         drop(events);
         let mut failing = test_session(directory.path(), None);
         failing.fail_execution = true;

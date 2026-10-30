@@ -210,6 +210,10 @@ struct CheckpointHeader {
     cache_algorithm_version: i32,
     cache_schema_version: i32,
     created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_snapshot_manifest: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_snapshot_identity: Option<String>,
 }
 
 impl CheckpointHeader {
@@ -221,6 +225,10 @@ impl CheckpointHeader {
             cache_algorithm_version: cache_algorithm(),
             cache_schema_version: CACHE_SCHEMA_VERSION,
             created_at: current_unix_secs()?,
+            tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.manifest_path.clone()),
+            tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
+                .map(|snapshot| snapshot.identity.clone()),
         })
     }
 
@@ -231,8 +239,14 @@ impl CheckpointHeader {
             && self.target_dir == expected.target_dir
             && self.output_root == expected.output_root
             && self.cache_algorithm_version == expected.cache_algorithm_version
+            && self.has_same_tool_authority(expected)
             && (self.cache_schema_version == expected.cache_schema_version
                 || (self.cache_schema_version == 4 && expected.cache_schema_version == 5))
+    }
+
+    fn has_same_tool_authority(&self, expected: &Self) -> bool {
+        self.tool_snapshot_manifest == expected.tool_snapshot_manifest
+            && self.tool_snapshot_identity == expected.tool_snapshot_identity
     }
 }
 
@@ -612,10 +626,39 @@ impl Manager {
     pub fn saved_entry_count(target_dir: &Path, output_root: Option<&Path>) -> io::Result<usize> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let checkpoint_key = Self::hash_path(&canonical_target);
-        let header = CheckpointHeader::new(&canonical_target, output_root)?;
+        let mut header = CheckpointHeader::new(&canonical_target, output_root)?;
         let (loaded, _) = Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
+        // Inventory preview does not select or persist a runtime authority.
+        if let Some(saved) = &loaded.header {
+            header
+                .tool_snapshot_manifest
+                .clone_from(&saved.tool_snapshot_manifest);
+            header
+                .tool_snapshot_identity
+                .clone_from(&saved.tool_snapshot_identity);
+        }
         let (valid, _, _) = Self::validate_loaded_state(&loaded, &header, output_root);
         Ok(valid.len())
+    }
+
+    /// Read the original tool authority without consuming progress or writing media.
+    ///
+    /// # Errors
+    /// Rejects unreadable state and completed-file proofs without a recorded runtime.
+    pub fn saved_tool_snapshot(
+        target_dir: &Path,
+        output_root: Option<&Path>,
+    ) -> io::Result<Option<(PathBuf, String)>> {
+        let target = Self::normalize_path_to_buf(target_dir);
+        let (loaded, _) = Self::load_progress_for_path(&target, &Self::hash_path(&target))?;
+        let Some(header) = loaded.header else {
+            return Ok(None);
+        };
+        if loaded.entries.is_empty() || header.output_root != output_root.map(Self::normalize_path)
+        {
+            return Ok(None);
+        }
+        header.tool_snapshot_manifest.zip(header.tool_snapshot_identity).map(Some).ok_or_else(|| io::Error::other("saved IMG checkpoint has no fixed tool runtime authority; use a new task and reverify, rather than reuse historical completed-file proofs"))
     }
 
     /// Explicitly discard the saved checkpoint for a user-requested fresh run.
@@ -660,6 +703,7 @@ impl Manager {
             if resume_enabled {
                 let (loaded, loaded_legacy_key) =
                     Self::load_progress_for_path(&canonical_target, &checkpoint_key)?;
+                Self::validate_resume_tool_authority(&loaded, &header)?;
                 let (completed_set, resume_mode, reset_reason) =
                     Self::validate_loaded_state(&loaded, &header, output_root);
                 let persist_loaded_state = loaded.header.is_some() && reset_reason.is_none();
@@ -1092,6 +1136,22 @@ impl Manager {
         }
     }
 
+    fn validate_resume_tool_authority(
+        loaded: &LoadedCheckpointState,
+        expected: &CheckpointHeader,
+    ) -> io::Result<()> {
+        if let Some(saved) = &loaded.header
+            && !loaded.entries.is_empty()
+            && !saved.has_same_tool_authority(expected)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint tool runtime authority differs; saved completed-file proofs were retained and cannot be relabelled with the newly selected tools",
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_loaded_state(
         loaded: &LoadedCheckpointState,
         expected_header: &CheckpointHeader,
@@ -1470,6 +1530,36 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[test]
+    fn tool_runtime_authority_survives_checkpoint_header_serialization() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let mut header = CheckpointHeader::new(directory.path(), None)?;
+        header.tool_snapshot_manifest = Some(directory.path().join("manifest.json"));
+        header.tool_snapshot_identity = Some("a".repeat(64));
+        let restored: CheckpointHeader = serde_json::from_slice(&serde_json::to_vec(&header)?)?;
+        assert_eq!(
+            restored.tool_snapshot_manifest,
+            header.tool_snapshot_manifest
+        );
+        assert_eq!(
+            restored.tool_snapshot_identity,
+            header.tool_snapshot_identity
+        );
+        let mut historical = serde_json::to_value(&header)?;
+        historical
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("header object"))?
+            .remove("tool_snapshot_manifest");
+        historical
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("header object"))?
+            .remove("tool_snapshot_identity");
+        let historical: CheckpointHeader = serde_json::from_value(historical)?;
+        assert!(historical.tool_snapshot_manifest.is_none());
+        assert!(historical.tool_snapshot_identity.is_none());
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn checkpoint_keeps_full_status_change_time() {
@@ -1515,6 +1605,49 @@ mod tests {
                 _store: store,
             },
         ))
+    }
+
+    #[test]
+    fn checkpoint_runtime_rebinding_retains_completed_proofs_and_inventory() -> anyhow::Result<()> {
+        let (target, _progress, guard) = setup_test_env()?;
+        let input = target.path().join("saved.jpg");
+        create_test_file(&input)?;
+        let mut manager = Manager::new(target.path())?;
+        manager.header.tool_snapshot_manifest = Some(target.path().join("runtime-a/manifest.json"));
+        manager.header.tool_snapshot_identity = Some("a".repeat(64));
+        manager.mark_completed(&input)?;
+        let key = manager.checkpoint_key.clone();
+        let authority_a = manager.header.clone();
+        drop(manager);
+        let before =
+            load_progress_from_sqlite(&key)?.ok_or_else(|| anyhow::anyhow!("saved checkpoint"))?;
+        assert_eq!(Manager::saved_entry_count(target.path(), None)?, 1);
+        assert_eq!(
+            Manager::saved_tool_snapshot(target.path(), None)?,
+            authority_a
+                .tool_snapshot_manifest
+                .clone()
+                .zip(authority_a.tool_snapshot_identity.clone())
+        );
+        Manager::validate_resume_tool_authority(&before, &authority_a)?;
+        let mut authority_b = authority_a.clone();
+        authority_b.tool_snapshot_identity = Some("b".repeat(64));
+        assert!(!authority_a.is_compatible_with(&authority_b));
+        assert!(Manager::validate_resume_tool_authority(&before, &authority_b).is_err());
+        authority_b
+            .tool_snapshot_identity
+            .clone_from(&authority_a.tool_snapshot_identity);
+        authority_b.tool_snapshot_manifest = Some(target.path().join("runtime-b/manifest.json"));
+        assert!(!authority_a.is_compatible_with(&authority_b));
+        assert!(Manager::new_resuming(target.path()).is_err());
+        let after = load_progress_from_sqlite(&key)?
+            .ok_or_else(|| anyhow::anyhow!("retained checkpoint"))?;
+        assert_eq!(after.header, before.header);
+        assert_eq!(after.entries, before.entries);
+        assert_eq!(Manager::saved_entry_count(target.path(), None)?, 1);
+        assert_eq!(fs::read(input)?, b"checkpoint-test");
+        teardown_test_env(guard);
+        Ok(())
     }
 
     fn teardown_test_env(_guard: TestEnvGuard) {}

@@ -934,8 +934,428 @@ fn tool_override_env_name(name: &str) -> String {
     key
 }
 
+/// An explicit configuration/CLI/environment override, excluding default PATH discovery.
+#[must_use]
+pub fn explicit_tool_override(name: &str) -> Option<PathBuf> {
+    crate::runtime_config::active()
+        .and_then(|config| config.tools.paths.get(name))
+        .cloned()
+        .or_else(|| std::env::var_os(tool_override_env_name(name)).map(PathBuf::from))
+}
+
+/// A shared runtime prerequisite failed; this is not an individual media failure.
+#[derive(Clone, Debug)]
+pub struct ToolRuntimeError {
+    pub cause_code: &'static str,
+    pub tool: Option<String>,
+    pub message: String,
+}
+
+impl std::fmt::Display for ToolRuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Shared IMG tool runtime blocked: {}",
+            self.message
+        )
+    }
+}
+
+impl std::error::Error for ToolRuntimeError {}
+
+#[derive(Debug)]
+struct BoundTool {
+    path: PathBuf,
+    identity: ToolIdentity,
+}
+
+impl BoundTool {
+    fn capture(path: &Path) -> Result<Self> {
+        let identity = tool_identity(path)?;
+        Ok(Self {
+            path: identity.target.clone(),
+            identity,
+        })
+    }
+
+    fn unchanged(&self) -> bool {
+        tool_identity(&self.path).is_ok_and(|identity| identity == self.identity)
+    }
+}
+
+#[derive(Debug)]
+struct BoundToolRuntime {
+    snapshot: Option<crate::tool_snapshot::Snapshot>,
+    tools: std::collections::BTreeMap<String, BoundTool>,
+    failure: std::sync::Mutex<Option<ToolRuntimeError>>,
+    used: std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+static BOUND_TOOL_RUNTIME: std::sync::OnceLock<BoundToolRuntime> = std::sync::OnceLock::new();
+
+fn runtime_failure(
+    cause_code: &'static str,
+    tool: Option<&str>,
+    message: String,
+) -> ToolRuntimeError {
+    ToolRuntimeError {
+        cause_code,
+        tool: tool.map(str::to_owned),
+        message,
+    }
+}
+
+/// Install one immutable selection after effective configuration resolution.
+/// Optional, uncaptured tools cannot later escape to a newer PATH selection.
+///
+/// # Errors
+/// Rejects changed snapshots, unavailable selections, duplicate binding, and failed probes.
+pub fn bind_tool_runtime(
+    snapshot: Option<crate::tool_snapshot::Snapshot>,
+    observed: std::collections::BTreeMap<String, PathBuf>,
+    required: &[&str],
+) -> Result<()> {
+    if let Some(snapshot) = &snapshot {
+        snapshot.verify()?;
+    }
+    let mut paths = observed;
+    if let Some(snapshot) = &snapshot {
+        paths.extend(snapshot.tools.clone());
+    }
+    anyhow::ensure!(!paths.is_empty(), "cannot bind an empty tool runtime");
+    let tools = paths
+        .into_iter()
+        .map(|(name, path)| {
+            BoundTool::capture(&path)
+                .with_context(|| format!("bind selected tool {name} at {}", path.display()))
+                .map(|binding| (name, binding))
+        })
+        .collect::<Result<_>>()?;
+    BOUND_TOOL_RUNTIME
+        .set(BoundToolRuntime {
+            snapshot,
+            tools,
+            failure: std::sync::Mutex::new(None),
+            used: std::sync::Mutex::new(required.iter().map(|name| (*name).to_owned()).collect()),
+        })
+        .map_err(|_| anyhow::anyhow!("IMG tool runtime was already bound"))?;
+    verify_tool_runtime_after_failure()
+}
+
+/// The exact persisted authority to save in a checkpoint, never a fresh selection.
+#[must_use]
+pub fn active_tool_snapshot() -> Option<&'static crate::tool_snapshot::Snapshot> {
+    BOUND_TOOL_RUNTIME
+        .get()
+        .and_then(|runtime| runtime.snapshot.as_ref())
+}
+
+#[must_use]
+pub fn tool_runtime_is_bound() -> bool {
+    BOUND_TOOL_RUNTIME.get().is_some()
+}
+
+fn latch_tool_runtime_failure(error: ToolRuntimeError) -> ToolRuntimeError {
+    if let Some(runtime) = BOUND_TOOL_RUNTIME.get() {
+        let mut failure = crate::media_conversion_gate::mutex_guard_or_recover(
+            "tool_runtime_failure",
+            runtime.failure.lock(),
+        );
+        if failure.is_none() {
+            *failure = Some(error.clone());
+        }
+    }
+    error
+}
+
+/// Cheap per-file boundary: no media work begins with a missing or changed tool.
+///
+/// # Errors
+/// Returns a typed shared error if a bound executable changed or a failure was latched.
+pub fn verify_tool_runtime() -> Result<()> {
+    let Some(runtime) = BOUND_TOOL_RUNTIME.get() else {
+        return Ok(());
+    };
+    let latched = crate::media_conversion_gate::mutex_guard_or_recover(
+        "tool_runtime_failure",
+        runtime.failure.lock(),
+    )
+    .clone();
+    if let Some(error) = latched {
+        return Err(error.into());
+    }
+    for (name, tool) in &runtime.tools {
+        let used = crate::media_conversion_gate::mutex_guard_or_recover(
+            "tool_runtime_used",
+            runtime.used.lock(),
+        )
+        .contains(name);
+        if !used
+            && runtime
+                .snapshot
+                .as_ref()
+                .is_none_or(|snapshot| !snapshot.tools.contains_key(name))
+        {
+            continue;
+        }
+        if !tool.unchanged() {
+            return Err(latch_tool_runtime_failure(runtime_failure(
+                "tool_changed",
+                Some(name),
+                format!(
+                    "bound tool was removed or modified: {}",
+                    tool.path.display()
+                ),
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Recheck shared prerequisites after a failed operation, before labelling media.
+/// Full snapshot hashes and real bounded version commands detect broken dylibs.
+///
+/// # Errors
+/// Returns a typed shared error for damaged snapshots or failed executable probes.
+pub fn verify_tool_runtime_after_failure() -> Result<()> {
+    verify_tool_runtime_after_failure_with_budget(
+        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(crate::constants::FFPROBE_TIMEOUT_SECS),
+    )
+}
+
+fn verify_tool_runtime_after_failure_with_budget(
+    soft: std::time::Duration,
+    hard: std::time::Duration,
+) -> Result<()> {
+    verify_tool_runtime_snapshot()?;
+    let Some(runtime) = BOUND_TOOL_RUNTIME.get() else {
+        return Ok(());
+    };
+    for (name, tool) in &runtime.tools {
+        let used = crate::media_conversion_gate::mutex_guard_or_recover(
+            "tool_runtime_used",
+            runtime.used.lock(),
+        )
+        .contains(name);
+        if !used
+            && runtime
+                .snapshot
+                .as_ref()
+                .is_none_or(|snapshot| !snapshot.tools.contains_key(name))
+        {
+            continue;
+        }
+        if let Err(error) = probe_tool_runtime_with_budget(&tool.path, name, soft, hard) {
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
+            }) {
+                return Err(error);
+            }
+            // Recheck immutable evidence before classifying an inconclusive
+            // probe; a real identity/hash failure remains a hard shared error.
+            verify_tool_runtime_snapshot()?;
+            if let Some(shared) = error.downcast_ref::<ToolRuntimeError>()
+                && shared.cause_code == "tool_unavailable"
+            {
+                return Err(latch_tool_runtime_failure(shared.clone()).into());
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+/// Probe one selected executable with the existing external-probe budget.
+/// A slow or incomplete observation never proves that the tool is damaged.
+pub(crate) fn probe_tool_runtime(program: &Path, name: &str) -> Result<()> {
+    probe_tool_runtime_with_budget(
+        program,
+        name,
+        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(crate::constants::FFPROBE_TIMEOUT_SECS),
+    )
+}
+
+fn probe_tool_runtime_with_budget(
+    program: &Path,
+    name: &str,
+    soft: std::time::Duration,
+    hard: std::time::Duration,
+) -> Result<()> {
+    let flag = match name {
+        "exiftool" => "-ver",
+        "jxlinfo" => "--help",
+        "avifgainmaputil" => "help",
+        "opj_decompress" => "-h",
+        "ffmpeg" | "ffprobe" | "magick" | "convert" | "cwebp" | "dwebp" | "webpmux"
+        | "gif2webp" => "-version",
+        _ => "--version",
+    };
+    let mut command = Command::new(program);
+    command.arg(flag);
+    let result = crate::process_runner::ManagedProcess::spawn_captured_isolated(&mut command)
+        .map_err(|error| (error, true))
+        .and_then(|child| {
+            child
+                .wait_liveness_timeout_cancellable(
+                    soft,
+                    hard,
+                    "bound tool runtime check",
+                    crate::batch_control::is_cancelled,
+                )
+                .map_err(|error| (error, false))
+        });
+    match result {
+        Ok(output)
+            if output.status.success()
+                // OpenJPEG's documented help path exits 1 even when healthy;
+                // require its exact help identity, never accept an arbitrary failure.
+                || (name == "opj_decompress" && output.status.code() == Some(1)
+                    && output.stderr.trim().is_empty()
+                    && output.stdout.lines().any(|line| line == "This is the opj_decompress utility from the OpenJPEG project.")) =>
+            {}
+        Ok(output) => {
+            return Err(runtime_failure(
+                "tool_unavailable",
+                Some(name),
+                format!(
+                    "{} failed its runtime probe ({}): {}",
+                    program.display(),
+                    output.status,
+                    crate::logging::combined_tool_output(&output.stdout, &output.stderr)
+                ),
+            )
+            .into());
+        }
+        Err((error, failed_to_spawn)) => {
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
+            }) {
+                return Err(error);
+            }
+            let confirmed_unavailable = failed_to_spawn
+                && error.chain().any(|cause| {
+                    cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                        matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                        )
+                    })
+                });
+            return Err(runtime_failure(if confirmed_unavailable { "tool_unavailable" } else { "tool_probe_unconfirmed" }, Some(name), format!("{} runtime probe did not complete reliably; media and pending work are retained for retry: {error:#}", program.display())).into());
+        }
+    }
+    Ok(())
+}
+
+/// Strong private-material verification at encoding waves and delivery boundaries.
+/// Metadata observations alone are not a content proof.
+///
+/// # Errors
+/// Returns a typed shared error if any captured private member is changed or unreadable.
+pub fn verify_tool_runtime_snapshot() -> Result<()> {
+    verify_tool_runtime()?;
+    if let Some(snapshot) = active_tool_snapshot() {
+        snapshot.verify().map_err(|error| {
+            latch_tool_runtime_failure(runtime_failure(
+                "snapshot_invalid",
+                None,
+                format!("{error:#}"),
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Preserve a control event independently from media counts and diagnostics.
+///
+/// # Errors
+/// Propagates stdout write and flush failures; these control events must not disappear.
+pub fn emit_tool_runtime_status(state: &str, error: Option<&ToolRuntimeError>) -> Result<()> {
+    use std::io::Write;
+    let runtime = BOUND_TOOL_RUNTIME.get();
+    let snapshot = runtime.and_then(|runtime| runtime.snapshot.as_ref());
+    let names = snapshot
+        .map(|snapshot| snapshot.tools.keys().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let observed = runtime
+        .map(|runtime| {
+            runtime
+                .tools
+                .keys()
+                .filter(|name| snapshot.is_none_or(|snapshot| !snapshot.tools.contains_key(*name)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let boundary_message = if snapshot.is_some() {
+        "Listed tools use a verified private runtime; ancillary tools are observed at fixed executable paths, while system libraries and external user configuration remain outside the snapshot."
+    } else {
+        "Executable selections are observed and checked; this platform has no independent external dependency snapshot."
+    };
+    let event = crate::tool_snapshot::SnapshotEvent {
+        schema_version: 1,
+        pipeline: "img".to_owned(),
+        state: state.to_owned(),
+        boundary: if snapshot.is_some() {
+            "persisted-external"
+        } else {
+            "live-observed"
+        }
+        .to_owned(),
+        identity: snapshot.map(|snapshot| snapshot.identity.clone()),
+        manifest_path: snapshot.map(|snapshot| snapshot.manifest_path.clone()),
+        tool_names: names.into_iter().cloned().collect(),
+        observed_tool_names: observed.into_iter().cloned().collect(),
+        cause_code: error.map(|error| error.cause_code.to_owned()),
+        tool: error.and_then(|error| error.tool.clone()),
+        message: error.map_or_else(
+            || boundary_message.to_owned(),
+            |error| error.message.chars().take(2048).collect::<String>(),
+        ),
+    };
+    let event = serde_json::to_string(&event)?;
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    writeln!(output, "MFB_TOOL_SNAPSHOT={event}")?;
+    output.flush()?;
+    Ok(())
+}
+
+/// An absolute unavailable path prevents legacy builders from falling through
+/// to a different PATH tool when a bound runtime is missing a requested tool.
+// shortcut: legacy PathBuf builders cannot propagate Result; latch the typed
+// shared error and use a non-executable path until their APIs migrate to Result.
+#[must_use]
+pub fn bound_tool_unavailable_path(name: &str) -> Option<PathBuf> {
+    BOUND_TOOL_RUNTIME.get().and_then(|runtime| {
+        latch_tool_runtime_failure(runtime_failure("tool_unavailable", Some(name), format!("tool {name} was not available in the selected IMG runtime; PATH reselection is prohibited")));
+        // A component below an existing regular executable cannot execute.
+        runtime.tools.values().next().map(|tool| tool.path.join("unavailable").join(name.replace(['/', '\\'], "_")))
+    })
+}
+
 #[must_use]
 pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
+    if let Some(runtime) = BOUND_TOOL_RUNTIME.get() {
+        if runtime.tools.contains_key(name) {
+            crate::media_conversion_gate::mutex_guard_or_recover(
+                "tool_runtime_used",
+                runtime.used.lock(),
+            )
+            .insert(name.to_owned());
+        }
+        return runtime
+            .tools
+            .get(name)
+            .filter(|tool| tool.unchanged())
+            .map(|tool| tool.path.clone());
+    }
     resolve_tool_path_with_health(name, multimedia_tool_is_healthy)
 }
 
@@ -1341,6 +1761,126 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn tool_probe_slow_soft_success_and_unconfirmed_budget_do_not_poison_runtime() -> Result<()> {
+        if isolated_test_process() {
+            return Ok(());
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TempDir::new()?;
+        let _state = EnvGuard::set("MFB_HOME_ROOT", &directory.path().to_string_lossy());
+        let delay = directory.path().join("delay");
+        let _delay = EnvGuard::set("MFB_PROBE_DELAY_FLAG", &delay.to_string_lossy());
+        let program = directory.path().join("probe");
+        fs::write(
+            &program,
+            "#!/bin/sh\nif [ -f \"$MFB_PROBE_DELAY_FLAG\" ]; then sleep 0.15; fi\nexit 0\n",
+        )?;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700))?;
+        bind_tool_runtime(
+            None,
+            std::collections::BTreeMap::from([("cjxl".to_owned(), program.clone())]),
+            &["cjxl"],
+        )?;
+        fs::write(&delay, b"wait")?;
+        let soft = std::time::Duration::from_millis(5);
+        probe_tool_runtime_with_budget(&program, "cjxl", soft, std::time::Duration::from_secs(1))?;
+        let error = verify_tool_runtime_after_failure_with_budget(
+            soft,
+            std::time::Duration::from_millis(30),
+        )
+        .expect_err("the observation budget must be inconclusive, not success");
+        assert_eq!(
+            error
+                .downcast_ref::<ToolRuntimeError>()
+                .map(|error| error.cause_code),
+            Some("tool_probe_unconfirmed")
+        );
+        verify_tool_runtime()?;
+        fs::remove_file(&delay)?;
+        verify_tool_runtime_after_failure_with_budget(soft, std::time::Duration::from_secs(1))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bound_runtime_never_reselects_path_and_latches_shared_failure() -> Result<()> {
+        const CHILD: &str = "MFB_BOUND_RUNTIME_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let isolated = TempDir::new()?;
+            let output = Command::new(std::env::current_exe()?)
+                .args(["--exact", "infra::common_utils::tests::bound_runtime_never_reselects_path_and_latches_shared_failure", "--nocapture"])
+                .env(CHILD, "1").env("MFB_HOME_ROOT", isolated.path()).output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "isolated runtime test failed: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TempDir::new()?;
+        let executable = directory.path().join("selected-tool");
+        fs::write(&executable, "#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+        let executable = executable.canonicalize()?;
+        bind_tool_runtime(
+            None,
+            std::collections::BTreeMap::from([("cjxl".into(), executable.clone())]),
+            &["cjxl"],
+        )?;
+        assert_eq!(resolve_tool_path("cjxl"), Some(executable.clone()));
+        assert_eq!(resolve_tool_path("djxl"), None);
+        let unavailable = crate::media_conversion_gate::delivery_tool_path_or_bare_name("djxl");
+        assert!(unavailable.is_absolute());
+        assert_ne!(unavailable, PathBuf::from("djxl"));
+        let error =
+            verify_tool_runtime().expect_err("unbound required tool must latch a shared failure");
+        assert_eq!(
+            error
+                .downcast_ref::<ToolRuntimeError>()
+                .map(|error| error.cause_code),
+            Some("tool_unavailable")
+        );
+        fs::remove_file(executable)?;
+        assert_eq!(resolve_tool_path("cjxl"), None);
+        assert!(verify_tool_runtime_after_failure().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn observed_tool_replacement_is_detected_before_media_admission() -> Result<()> {
+        let directory = TempDir::new()?;
+        let executable = directory.path().join("tool");
+        fs::write(&executable, "original")?;
+        let binding = BoundTool::capture(&executable)?;
+        assert!(binding.unchanged());
+        #[cfg(unix)]
+        {
+            fs::write(&executable, "changed!")?;
+            fs::File::options()
+                .write(true)
+                .open(&executable)?
+                .set_times(std::fs::FileTimes::new().set_modified(binding.identity.modified))?;
+            assert_eq!(fs::metadata(&executable)?.len(), binding.identity.len);
+            assert_eq!(
+                fs::metadata(&executable)?.modified()?,
+                binding.identity.modified
+            );
+            assert!(
+                !binding.unchanged(),
+                "restoring length and mtime must not conceal a changed native identity"
+            );
+        }
+        fs::write(&executable, "replaced by an upgrade")?;
+        assert!(!binding.unchanged());
+        fs::remove_file(&executable)?;
+        assert!(!binding.unchanged());
+        Ok(())
+    }
 
     #[test]
     fn test_get_extension_lowercase() {

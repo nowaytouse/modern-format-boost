@@ -1683,7 +1683,7 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
 
     // Run native host self-test before signing
     println!(
-        "{}  Running native host self-test...{}",
+        "{}  Running background native host self-test...{}",
         style.cyan, style.reset
     );
     let test_status = Command::new(&host_binary)

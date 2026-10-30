@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
-        ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 4), ("restore", 3),
+        ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 5), ("restore", 3),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -52,8 +52,10 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             window?.center()
             didPosition = true
         }
-        showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        if !isBackgroundSelfTest {
+            showWindow(nil)
+            window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     private func buildInterface() {

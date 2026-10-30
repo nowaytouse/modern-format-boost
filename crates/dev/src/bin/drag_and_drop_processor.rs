@@ -257,6 +257,7 @@ struct DragDropSession {
     verbose_log: PathBuf,
     session_audit: PathBuf,
     run_id: Option<String>,
+    tool_snapshots: std::sync::Arc<dev::app::worker::ToolSnapshotBindings>,
 }
 
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -269,6 +270,7 @@ impl DragDropSession {
             })
             .map_err(|_| anyhow::anyhow!("run identity sequence exhausted"))?;
         let mut scoped = self.clone();
+        scoped.tool_snapshots = std::sync::Arc::default();
         let stamp_hash = blake3::hash(self.stamp.as_bytes()).to_hex();
         scoped.run_id = Some(format!(
             "run-{}-{}-{sequence}",
@@ -311,6 +313,7 @@ impl DragDropSession {
             log_dir,
             stamp,
             run_id: None,
+            tool_snapshots: std::sync::Arc::default(),
         };
         // A collision must never append another session's events or counters.
         for path in [
@@ -647,6 +650,10 @@ impl DragDropSession {
 }
 
 impl WorkerSession for DragDropSession {
+    fn tool_snapshots(&self) -> &dev::app::worker::ToolSnapshotBindings {
+        &self.tool_snapshots
+    }
+
     fn run_id(&self) -> Option<&str> {
         self.run_id.as_deref()
     }
@@ -4106,6 +4113,10 @@ mod tests {
         let session = DragDropSession::start_for_test(temp.path()).unwrap();
         let first = session.for_run().unwrap();
         let second = session.for_run().unwrap();
+        assert!(!std::sync::Arc::ptr_eq(
+            &first.tool_snapshots,
+            &second.tool_snapshots
+        ));
         assert_ne!(first.run_id, second.run_id);
         assert!(session.run_id.is_none());
         assert_eq!(first.clone().run_id, first.run_id);
