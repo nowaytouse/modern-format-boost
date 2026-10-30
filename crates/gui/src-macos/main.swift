@@ -5,6 +5,12 @@ import Foundation
 
 let isBackgroundSelfTest = CommandLine.arguments.contains("--self-test")
 
+private var isDebugWindow: Bool { ApplicationSession.current?.isDebug == true }
+private var guiPreferences: UserDefaults { ApplicationSession.activePreferences }
+private func nativeChildEnvironment() -> [String: String] {
+    ApplicationSession.current?.childEnvironment() ?? ProcessInfo.processInfo.environment
+}
+
 private let processorName = "drag_and_drop_processor"
 private let maxProcessLogChunkBytes = 64 * 1024
 private let maxProcessLogBatchBytes = 256 * 1024
@@ -37,7 +43,9 @@ private func initialHistoryDirectory(
     if let path = environment["MFB_HOME_ROOT"], path.hasPrefix("/") {
         return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("logs", isDirectory: true)
     }
-    if let path = preferences.string(forKey: historyPreferenceKey), path.hasPrefix("/") {
+    // Debug may inspect existing history, but all generated state uses its private child environment.
+    let historyPreferences = isDebugWindow ? UserDefaults.standard : preferences
+    if let path = historyPreferences.string(forKey: historyPreferenceKey), path.hasPrefix("/") {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
     return historyDirectory
@@ -114,7 +122,7 @@ private final class LocalizationCatalog {
     private let lock = NSLock()
 
     private init() {
-        language = UserDefaults.standard.string(forKey: languagePreferenceKey)
+        language = guiPreferences.string(forKey: languagePreferenceKey)
             .flatMap(AppLanguage.init(rawValue:)) ?? .system
         bundle = Self.bundle(for: language)
     }
@@ -124,7 +132,7 @@ private final class LocalizationCatalog {
         self.language = language
         bundle = Self.bundle(for: language)
         lock.unlock()
-        UserDefaults.standard.set(language.rawValue, forKey: languagePreferenceKey)
+        guiPreferences.set(language.rawValue, forKey: languagePreferenceKey)
     }
 
     func text(_ key: String) -> String {
@@ -829,9 +837,13 @@ private struct EffectiveRuntimeSettings {
 }
 
 func settingsToolOutput(_ binary: URL, arguments: [String], timeout: TimeInterval? = 10, acceptedExitCodes: Set<Int32> = [0]) throws -> Data {
+    if isDebugWindow, arguments.contains(where: { ["--history-cleanup", "--history-backup", "--local-backup", "--prune", "--yes"].contains($0) }) {
+        throw HostError(message: localized("debug.preview_only"))
+    }
     let process = Process()
     process.executableURL = binary
     process.arguments = arguments
+    process.environment = nativeChildEnvironment()
     let output = Pipe()
     process.standardOutput = output
     process.standardError = output
@@ -871,6 +883,7 @@ private final class PreflightQuery: @unchecked Sendable {
         let child = Process()
         child.executableURL = binary
         child.arguments = arguments
+        child.environment = nativeChildEnvironment()
         let pipe = Pipe()
         child.standardOutput = pipe
         child.standardError = pipe
@@ -2389,7 +2402,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func backupHistory() {
-        guard !cacheBusy, historyBackup.isEnabled else { return }
+        guard !isDebugWindow, !cacheBusy, historyBackup.isEnabled else { return }
         let directory = historyBackupDirectory
         let save = NSSavePanel()
         save.title = localized("settings.history.backup")
@@ -2431,7 +2444,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func backupStore() {
-        guard !cacheBusy, cacheLoaded, cacheBackup.isEnabled, let store = cacheStore else { return }
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cacheBackup.isEnabled, let store = cacheStore else { return }
         let save = NSSavePanel()
         save.title = localized("settings.cache.backup")
         save.message = localized("settings.cache.backup_help")
@@ -2476,7 +2489,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func pruneCache() {
-        guard !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cachePrune.isEnabled else { return }
         updateCache(action: .preview)
     }
 
@@ -2504,7 +2517,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     }
 
     @objc private func clearCache() {
-        guard !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
+        guard !isDebugWindow, !cacheBusy, cacheLoaded, cacheClear.isEnabled else { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = localized("settings.cache.confirm")
@@ -2660,6 +2673,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         historyBackup.isEnabled = !cacheBusy
         historyRefresh.isEnabled = !cacheBusy
         historyCheck.isEnabled = !cacheBusy
+        if isDebugWindow {
+            for button in [cacheClear, cachePrune, cacheBackup, historyBackup] {
+                button.isEnabled = false
+                button.toolTip = localized("debug.preview_only")
+            }
+        }
         status.isHidden = status.stringValue.isEmpty
         let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
         let rowsHeight: CGFloat
@@ -5873,8 +5892,8 @@ enum ProcessorLocator {
         if let configured = environment["MFB_PROCESSOR_BINARY"], !configured.isEmpty {
             candidates.append(URL(fileURLWithPath: configured))
         }
-        if UserDefaults.standard.bool(forKey: developerPreferenceKey),
-           let configured = UserDefaults.standard.string(forKey: "MFBGuiCoreBinary") {
+        if guiPreferences.bool(forKey: developerPreferenceKey),
+           let configured = guiPreferences.string(forKey: "MFBGuiCoreBinary") {
             candidates.append(URL(fileURLWithPath: configured))
         }
         if let executable {
@@ -6030,6 +6049,8 @@ private enum ProcessorReadiness: Equatable, Sendable {
 
 @MainActor
 private final class NativeHost {
+    private let readOnly: Bool
+    init(readOnly: Bool = isDebugWindow) { self.readOnly = readOnly }
     var onLog: ((String) -> Void)?
     var onCompletion: ((Result<String, Error>) -> Void)?
     private var activeProcess: Process?
@@ -6074,6 +6095,10 @@ private final class NativeHost {
         library: String,
         completion: @escaping (Result<[PhotosAuditContainer], Error>) -> Void
     ) {
+        guard !readOnly else {
+            completion(.failure(HostError(message: localized("debug.preview_only"))))
+            return
+        }
         guard activeProcess == nil else {
             completion(.failure(HostError(message: localized("error.task_running"))))
             return
@@ -6105,6 +6130,7 @@ private final class NativeHost {
         let process = Process()
         process.executableURL = binary
         process.arguments = ["--help"]
+        process.environment = nativeChildEnvironment()
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
@@ -6132,6 +6158,10 @@ private final class NativeHost {
     }
 
     func startProcessing(_ request: ProcessorRequest, photosAutomationAuthorized: Bool = false) {
+        guard !readOnly else {
+            onCompletion?(.failure(HostError(message: localized("debug.preview_only"))))
+            return
+        }
         guard !isRunning else {
             onCompletion?(.failure(HostError(message: localized("error.task_running"))))
             return
@@ -6173,7 +6203,7 @@ private final class NativeHost {
         let process = Process()
         process.executableURL = binary
         process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
+        var environment = nativeChildEnvironment()
         environment["MFB_USE_LEGACY_PY"] = "0"
         environment["FROM_APP"] = "1"
         environment["LC_ALL"] = "en_US.UTF-8"
@@ -6213,6 +6243,7 @@ private final class NativeHost {
     }
 
     func terminalCommand(for request: ProcessorRequest) throws -> String {
+        guard !readOnly else { throw HostError(message: localized("debug.preview_only")) }
         guard let binary = ProcessorLocator.resolve() else {
             throw HostError(message: ProcessorLocator.missingError())
         }
@@ -6558,6 +6589,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var closeWhenFinished = false
     private var lastRequest: ProcessorRequest?
     private var sawResumeDecision = false
+    private var sawProductionBusy = false
     private var configurationControlsEnabled = true
     private var processorStatus: ProcessorReadiness = .checking
     private enum StatusDisplay {
@@ -6609,7 +6641,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         preferences.set(control.state == .on, forKey: optionKey(name, for: selectedOperation))
     }
 
-    init(preferences: UserDefaults = .standard) {
+    init(preferences: UserDefaults = guiPreferences) {
         self.preferences = preferences
         resolvedHistoryDirectory = initialHistoryDirectory(preferences: preferences)
         window = NSWindow(
@@ -6633,8 +6665,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     func show() {
         window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        activate()
         processorStatus = .checking
         statusDisplay = .processor
         refreshStatus()
@@ -6647,6 +6678,11 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if self.configurationControlsEnabled, case .processor = self.statusDisplay { self.refreshStatus() }
             }
         }
+    }
+
+    func activate() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -6708,7 +6744,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func configureWindow() {
-        window.title = "Modern Format Boost · \(appVersion)"
+        window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.setContentSize(mainWindowContentSize)
@@ -7160,6 +7196,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             refreshStatus()
             return
         }
+        if isDebugWindow {
+            commandField.stringValue = ""
+            setLocalizedStatus("debug.banner")
+            return
+        }
         do {
             commandField.stringValue = try host.terminalCommand(for: request())
             setLocalizedStatus("status.ready")
@@ -7209,13 +7250,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openInTerminal() {
-        guard !restoreFixture, developerMode, configurationControlsEnabled, !privacyEnabled else { return }
+        guard !isDebugWindow, !restoreFixture, developerMode, configurationControlsEnabled, !privacyEnabled else { return }
         do { setStatus(try host.openInTerminal(request())) }
         catch { present(error) }
     }
 
     @objc private func copyCommand() {
-        guard !privacyEnabled else { return }
+        guard !isDebugWindow, !privacyEnabled else { return }
         do {
             let command = try host.terminalCommand(for: request())
             NSPasteboard.general.clearContents()
@@ -7226,6 +7267,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     private func clearBatchLog() {
         processEndedWithError = false
+        sawProductionBusy = false
         hasConfirmedFileFailures = false
         logView.string = ""
         fullLogPresentation.setAttributedString(NSAttributedString(string: ""))
@@ -7398,6 +7440,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func runHere() {
+        if isDebugWindow {
+            if !privacyEnabled { inspectInput() }
+            return
+        }
         guard !restoreFixture, !host.isRunning else { return }
         invalidatePreflight()
         do {
@@ -7504,6 +7550,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         optionsSpacer.isHidden = developerMode
         options.distribution = developerMode ? .fillEqually : .fill
         refreshPrivacyPresentation()
+        if isDebugWindow {
+            openButton.isEnabled = false
+            copyButton.isEnabled = false
+            photosScopeButton.isEnabled = false
+            dryRunCheck.state = .on
+            dryRunCheck.isEnabled = false
+            shortestPathCheck.state = .off
+            shortestPathCheck.isEnabled = false
+            runButton.isEnabled = !restoreFixture && preflightButton.isEnabled
+        }
     }
 
     private func updateMetadataSafetyNotice() {
@@ -7537,6 +7593,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         runButton.title = localized(runKey)
         runButton.setAccessibilityLabel(runButton.title)
         runButton.toolTip = restoresJpeg ? metadataSafetyLabel.stringValue : nil
+        if isDebugWindow {
+            runButton.title = localized("debug.preview_action")
+            runButton.setAccessibilityLabel(runButton.title)
+            runButton.toolTip = localized("debug.preview_only")
+        }
         settingsButton.toolTip = localized(restoresJpeg ? "settings.restore_unused" : "settings.title")
     }
 
@@ -7602,6 +7663,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         historyButton.toolTip = hidden ? localized("button.history") : resolvedHistoryDirectory.path
         preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
             && !targetField.stringValue.isEmpty && !hidden
+        if isDebugWindow { runButton.isEnabled = !restoreFixture && preflightButton.isEnabled }
         photosScopeButton.title = hidden ? localized("privacy.display.hidden") : selectedPhotosContainer.map {
             localized("photos.scope.\($0.kind.rawValue)") + "  " + $0.path.joined(separator: " › ")
         } ?? localized("photos.scope.entire_library")
@@ -7824,6 +7886,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
+        if text.split(separator: "\n").contains(where: { raw in
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
+            return message.hasPrefix("Error: MFB_PRODUCTION_TASK_BUSY:")
+        }) { sawProductionBusy = true }
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             if let value = countStatusValue(in: String(line)) {
                 countStatus = value
@@ -8017,10 +8084,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    func validateProductionBusyForSelfTest() throws {
+        appendLog("[FAIL] /synthetic/MFB_PRODUCTION_TASK_BUSY.jpg")
+        guard !sawProductionBusy else { throw HostError(message: "A filename was interpreted as task contention") }
+        appendLog("ERR: Error: MFB_PRODUCTION_TASK_BUSY: synthetic lease contention")
+        processingCompleted(.failure(HostError(message: "synthetic busy exit")))
+        guard !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
+              statusLabel.stringValue == localized("error.production_busy"), !host.isRunning else {
+            throw HostError(message: "Task contention was presented as a failed media batch")
+        }
+    }
+
     private func processingCompleted(_ result: Result<String, Error>,
                                      resumeDecision: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }) {
         toolSnapshot.finish()
         refreshToolSnapshot()
+        if sawProductionBusy, batchResults.totals.isEmpty {
+            processEndedWithError = false
+            batchOverview.isHidden = true
+            latestDiagnostics = LatestDiagnostics()
+            refreshLatestDiagnostics()
+            setProcessing(false)
+            setLocalizedStatus("error.production_busy")
+            return
+        }
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
         let resumeChoicePending: Bool
         if case .failure = result, sawResumeDecision, let request = lastRequest {
@@ -8287,7 +8374,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                     self.present(HostError(message: localized("status.processor_unavailable")))
                     return
                 }
-                UserDefaults.standard.set(url.path, forKey: "MFBGuiCoreBinary")
+                guiPreferences.set(url.path, forKey: "MFBGuiCoreBinary")
                 self.show()
             }
         } else if let url = URL(string: "https://github.com/nowaytouse/modern-format-boost/releases/tag/nightly") {
@@ -8309,14 +8396,14 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func appearanceChanged() {
         let appearance = AppAppearance.allCases[safe: appearancePopup.indexOfSelectedItem] ?? .system
-        UserDefaults.standard.set(appearance.rawValue, forKey: appearancePreferenceKey)
+        guiPreferences.set(appearance.rawValue, forKey: appearancePreferenceKey)
         appearance.apply()
     }
 
     private func selectSavedPreferences() {
         let selectedLanguage = LocalizationCatalog.shared.language
         languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: selectedLanguage) ?? 0)
-        let appearance = UserDefaults.standard.string(forKey: appearancePreferenceKey)
+        let appearance = guiPreferences.string(forKey: appearancePreferenceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
         appearance.apply()
@@ -8335,7 +8422,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func applyLocalization() {
         aboutIcon.toolTip = localized("menu.about")
         aboutIcon.setAccessibilityLabel(localized("menu.about"))
-        subtitleLabel.stringValue = localized("app.subtitle")
+        subtitleLabel.stringValue = localized(isDebugWindow ? "debug.banner" : "app.subtitle")
+        subtitleLabel.toolTip = subtitleLabel.stringValue
+        window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
         targetField.placeholderString = localized("field.target.placeholder")
         backupField.placeholderString = localized("field.backup.placeholder")
         backupLabel.stringValue = localized("field.backup")
@@ -10110,13 +10199,37 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: AppController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let appearance = UserDefaults.standard.string(forKey: appearancePreferenceKey)
+        let appearance = guiPreferences.string(forKey: appearancePreferenceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         appearance.apply()
         configureMenus()
         let controller = AppController()
         self.controller = controller
+        if let role = ApplicationSession.current?.role {
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(activateExistingWindow),
+                name: role.activationNotificationName, object: nil)
+        }
         controller.show()
+    }
+
+    @objc private func activateExistingWindow() { controller?.activate() }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        controller?.activate()
+        return false
+    }
+
+    @objc private func openDebugWindow() {
+        if isDebugWindow { controller?.activate(); return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = ["--debug-window"]
+        configuration.environment = nativeChildEnvironment()
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            if let error {
+                DispatchQueue.main.async { NSAlert(error: error).runModal() }
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -10158,6 +10271,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: localized("menu.window"))
+        let debug = windowMenu.addItem(withTitle: localized("menu.debug_window"), action: #selector(openDebugWindow), keyEquivalent: "n")
+        debug.target = self
+        debug.keyEquivalentModifierMask = [.command, .shift]
+        windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: localized("menu.close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: localized("menu.minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(.separator())
@@ -10172,6 +10289,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 private func runSelfTest() -> Int32 {
     do {
+        guard let executable = Bundle.main.executableURL else { throw HostError(message: "Native self-test executable is unavailable") }
+        try ApplicationSession.selfTest(executable: executable)
         try PhotosImportProgress.selfTest()
         try ProcessingGuideController.selfTest()
         try ToolInspectionPanel.selfTest()
@@ -10972,6 +11091,24 @@ private func runSelfTest() -> Int32 {
             try MediaSettings().save(to: preferences)
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
+            try AppController(preferences: preferences).validateProductionBusyForSelfTest()
+            let readOnlyHost = NativeHost(readOnly: true)
+            var rejectedReadOnly = false
+            readOnlyHost.onCompletion = { result in
+                if case let .failure(error) = result { rejectedReadOnly = error.localizedDescription == localized("debug.preview_only") }
+            }
+            let readOnlyRequest = ProcessorRequest(targetPath: "/synthetic/read-only-debug", processingMode: .imagesOnly,
+                                                   operationMode: .fastImgJxl)
+            readOnlyHost.startProcessing(readOnlyRequest)
+            guard rejectedReadOnly, !readOnlyHost.isRunning, readOnlyHost.lastExitStatus == nil else {
+                throw HostError(message: "Read-only debug started a media processor")
+            }
+            do {
+                _ = try readOnlyHost.terminalCommand(for: readOnlyRequest)
+                throw HostError(message: "Read-only debug exposed a production terminal command")
+            } catch {
+                guard error.localizedDescription == localized("debug.preview_only") else { throw error }
+            }
             try AppController(preferences: preferences).validatePrivacyForSelfTest()
             try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
             try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
@@ -11034,6 +11171,24 @@ private final class BackgroundPresentationMonitor {
     }
 }
 
+@MainActor
+private func runForegroundFixture(_ application: NSApplication, holding owner: AnyObject) {
+    let observer = ApplicationSession.current.map { session in
+        DistributedNotificationCenter.default().addObserver(forName: session.role.activationNotificationName,
+            object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                NSApp.activate(ignoringOtherApps: true)
+                (NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible))?.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+    defer { if let observer { DistributedNotificationCenter.default().removeObserver(observer) } }
+    application.activate(ignoringOtherApps: true)
+    withExtendedLifetime(owner) { application.run() }
+}
+
+if let status = ApplicationSession.runLeaseTestChildIfRequested() { exit(status) }
+
 if isBackgroundSelfTest {
     exit(MainActor.assumeIsolated {
         let application = NSApplication.shared
@@ -11051,6 +11206,18 @@ if isBackgroundSelfTest {
         }
         return result
     })
+}
+
+do {
+    if case let .alreadyRunning(role) = try ApplicationSession.bootstrap() {
+        if role == .debug { fputs(localized("debug.already_open") + "\n", stderr) }
+        DistributedNotificationCenter.default().postNotificationName(role.activationNotificationName, object: nil,
+                                                                     userInfo: nil, deliverImmediately: true)
+        exit(0)
+    }
+} catch {
+    MainActor.assumeIsolated { _ = NSAlert(error: error).runModal() }
+    exit(70)
 }
 
 if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.arguments.contains("--photos-progress-ui-fixture")
@@ -11085,8 +11252,7 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
             else { try controller.showDeferredDeliveryFixture() }
         }
         catch { fputs("Native fixture failed: \(error.localizedDescription)\n", stderr); exit(1) }
-        application.activate(ignoringOtherApps: true)
-        withExtendedLifetime(controller) { application.run() }
+        runForegroundFixture(application, holding: controller)
     }
     exit(0)
 }
@@ -11101,8 +11267,7 @@ if CommandLine.arguments.contains("--history-removal-ui-fixture") {
         preferences.set(CommandLine.arguments.contains("--display-privacy"), forKey: "MFBGuiDisplayPrivacy")
         let panel = ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/private/tmp/mfb-synthetic-history-removal"), preferences: preferences)
         panel.showRemovalFixture()
-        application.activate(ignoringOtherApps: true)
-        withExtendedLifetime(panel) { application.run() }
+        runForegroundFixture(application, holding: panel)
     }
     exit(0)
 }
@@ -11113,12 +11278,11 @@ if CommandLine.arguments.contains("--preflight-ui-fixture") {
         application.setActivationPolicy(.regular)
         let language = LocalizationCatalog.shared.language.resourceName
             ?? Bundle.main.preferredLocalizations.first ?? "en"
-        AppAppearance(rawValue: UserDefaults.standard.string(forKey: appearancePreferenceKey) ?? "system")?.apply()
+        AppAppearance(rawValue: guiPreferences.string(forKey: appearancePreferenceKey) ?? "system")?.apply()
         let panel = PreflightInspectorPanel(language: language)
         panel.onClose = { application.terminate(nil) }
         panel.showTestFixture()
-        application.activate(ignoringOtherApps: true)
-        application.run()
+        runForegroundFixture(application, holding: panel)
     }
     exit(0)
 }

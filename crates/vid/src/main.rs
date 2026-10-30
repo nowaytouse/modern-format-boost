@@ -934,6 +934,12 @@ fn main() -> anyhow::Result<()> {
     if let Commands::Config { command } = &cli.command {
         return inspect_config(&cli, command);
     }
+    let _production_lease = matches!(
+        &cli.command,
+        Commands::Run { .. } | Commands::FastGif { .. } | Commands::IngestSamples { .. }
+    )
+    .then(foundation::production_lock::acquire_production_lease)
+    .transpose()?;
     validate_command_strategy(&cli.command)?;
     let runtime = resolve_runtime(&cli)?;
     let configured_codec = runtime.config.vid.codec;

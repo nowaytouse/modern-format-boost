@@ -512,6 +512,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let _production_lease = foundation::infra::production_lock::acquire_production_lease()?;
+
     // 1. Check osxphotos
     let osxphotos = find_osxphotos().ok_or_else(|| {
         anyhow::anyhow!(

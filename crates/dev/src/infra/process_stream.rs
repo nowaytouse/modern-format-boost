@@ -555,6 +555,8 @@ where
 
     let mut command = Command::new(&cmd[0]);
     apply_env_overrides(&mut command, env_overrides);
+    foundation::infra::production_lock::inherit_active_lease(&mut command)
+        .context("attach active production task lease to PTY subprocess")?;
     let mut child = command
         .args(&cmd[1..])
         .stdout(stdout)
@@ -745,6 +747,8 @@ where
     let mut log_file = open_stream_log(log_path, "open process stream log")?;
     let mut command = Command::new(&cmd[0]);
     apply_env_overrides(&mut command, env_overrides);
+    foundation::infra::production_lock::inherit_active_lease(&mut command)
+        .context("attach active production task lease to streaming subprocess")?;
     let child = command
         .args(&cmd[1..])
         .stdout(Stdio::piped())

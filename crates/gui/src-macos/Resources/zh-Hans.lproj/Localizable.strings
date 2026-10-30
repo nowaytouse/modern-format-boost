@@ -1,4 +1,11 @@
 "app.subtitle" = "macOS 原生媒体处理 · 可将文件或文件夹拖放到窗口任意位置";
+"menu.debug_window" = "打开调试窗口";
+"window.debug_title" = "Modern Format Boost %@ — 调试窗口";
+"debug.banner" = "调试窗口 · 界面、日志与只读预览";
+"debug.preview_action" = "检查输入";
+"debug.preview_only" = "此调试窗口为只读，不能处理或导入媒体，也不能打开终端。请使用主窗口。";
+"error.production_busy" = "另一个媒体任务正在运行。请等待任务结束后重试。";
+"debug.already_open" = "只能打开 1 个调试窗口。请返回已打开的调试窗口。";
 "field.target.placeholder" = "选择或拖入文件/文件夹";
 "field.backup" = "备份";
 "field.backup.placeholder" = "选择对应的备份文件夹或照片图库";

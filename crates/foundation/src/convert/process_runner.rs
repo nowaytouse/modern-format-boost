@@ -282,6 +282,8 @@ impl ManagedProcess {
         );
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        crate::infra::production_lock::inherit_active_lease(cmd)
+            .context("attach active production task lease to managed subprocess")?;
 
         let child = cmd
             .spawn()

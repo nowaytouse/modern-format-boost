@@ -2440,6 +2440,9 @@ private struct HistoryReadOnlyAccessReceipt: Decodable {
 }
 
 private func prepareHistoryReadOnlyAccess(directory: URL) throws {
+    guard ApplicationSession.current?.isDebug != true else {
+        throw HostError(message: localized("history.issue.read"))
+    }
     guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
         throw HostError(message: localized("settings.cache.backend_missing"))
     }
@@ -2579,7 +2582,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var initialDividerConfigured = false
     private var selectionInitialized = false
 
-    init(directory: URL, preferences: UserDefaults = .standard) {
+    init(directory: URL, preferences: UserDefaults = ApplicationSession.activePreferences) {
         self.directory = directory
         self.preferences = preferences
         outputGeneration = UUID()
@@ -2589,7 +2592,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         window.minSize = NSSize(width: 780, height: 440)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.setFrameAutosaveName("MFBProcessingHistory")
+        if ApplicationSession.current?.isDebug != true { window.setFrameAutosaveName("MFBProcessingHistory") }
         buildInterface()
         NotificationCenter.default.addObserver(self, selector: #selector(displayPrivacyChanged),
             name: DisplayPrivacy.changed, object: preferences)
@@ -3422,8 +3425,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         exportButton.isEnabled = single && !privacyEnabled && !outputLoading && issueScanControl == nil && selected?.hasStoredOutput == true
         exportButton.toolTip = privacyEnabled ? localized("privacy.display.raw_disabled") : localized("history.export.scope")
         cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img" && (!privacyEnabled || selected?.hasCleanupAttention == true)
-        removeButton.isEnabled = ready && (try? HistoryRemovalRequest(entries: selectedEntries, directory: directory)) != nil
-        removeButton.toolTip = localized(removeButton.isEnabled || selectedEntries.isEmpty ? "history.remove.title" : "history.remove.unsupported")
+        removeButton.isEnabled = (ApplicationSession.current?.isDebug != true || removalFixture) && ready
+            && (try? HistoryRemovalRequest(entries: selectedEntries, directory: directory)) != nil
+        removeButton.toolTip = ApplicationSession.current?.isDebug == true && !removalFixture ? localized("debug.preview_only")
+            : localized(removeButton.isEnabled || selectedEntries.isEmpty ? "history.remove.title" : "history.remove.unsupported")
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -3513,6 +3518,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private func executeRemoval(_ request: HistoryRemovalRequest, preview: HistoryRemovalPreview, source: URL) {
+        guard ApplicationSession.current?.isDebug != true || removalFixture else { return }
         status.stringValue = localized("history.remove.running")
         progress.startAnimation(nil)
         let query = removalQuery

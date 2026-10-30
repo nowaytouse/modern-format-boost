@@ -1,4 +1,11 @@
 "app.subtitle" = "Native macOS media processing · Drop a file or folder anywhere";
+"menu.debug_window" = "Open debug window";
+"window.debug_title" = "Modern Format Boost %@ — Debug";
+"debug.banner" = "Debug · Interface, logs, and read-only previews";
+"debug.preview_action" = "Inspect input";
+"debug.preview_only" = "This read-only debug window cannot process or import media, or open Terminal. Use the main window.";
+"error.production_busy" = "Another media task is running. Wait until it finishes, then try again.";
+"debug.already_open" = "Only 1 debug window can be open. Return to the existing window.";
 "field.target.placeholder" = "Choose or drop a file/folder";
 "field.backup" = "Backup";
 "field.backup.placeholder" = "Choose the matching backup folder or Photos library";

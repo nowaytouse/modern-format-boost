@@ -907,6 +907,35 @@ verified sidecar relationships, a persistent execution plan, or failed-only retr
 
 ## Background Native Validation
 
+### Main and debug windows
+
+On macOS, Window → Open debug window (Shift-Command-N) opens a separate native
+debug instance. There can be one normal main window and one debug main window;
+Settings, History and other child panels do not consume another main-window
+slot. Starting the same role again brings its existing window forward. Role
+leases are kernel locks in the real user's state directory, independent of
+`MFB_HOME_ROOT`; exiting or crashing releases them without deleting lock files.
+
+The debug window is labelled explicitly and uses separate MFB preferences and
+a private temporary state/log directory. It supports interface inspection,
+log viewing and the existing read-only standard input preflight. Its process
+and terminal entrypoints reject media processing and Photos import, and it
+cannot remove history or run cache cleanup/backups. Configuration can still be
+inspected from existing sources; debug preferences do not rewrite those files.
+History browsing may read the existing production records; debug will not run
+the writable access-file repair path. Explicit log export may save a new local
+diagnostic artifact without changing the source records.
+The normal app's bundle identifier is unchanged.
+
+On Unix, real launcher/IMG/VID processing and the packaged verification,
+collection, XMP merge and Photos import tools acquire one per-user production
+task lease. Internal workers and managed tool subprocesses inherit the same
+lease, so a GUI or parent exit does not release it while those children are
+still working. An independent task is rejected before processing; read-only
+preflight and configuration queries remain available. Existing per-directory
+and Photos locks continue to protect their narrower operations. Non-Unix CLI
+behavior is unchanged by this native-window feature.
+
 `--self-test`, including the check invoked during GUI compilation, runs with
 application activation prohibited and never brings its windows forward. Build
 validation uses a temporary `LSBackgroundOnly` bundle with a separate identity,

@@ -94,6 +94,12 @@ fn main() -> Result<()> {
         }
     }
 
+    let _production_lease = if args.dry_run {
+        None
+    } else {
+        Some(foundation::infra::production_lock::acquire_production_lease()?)
+    };
+
     let summary = dev::infra::recovery_collection::run_recovery_collection(
         &source,
         &backup,

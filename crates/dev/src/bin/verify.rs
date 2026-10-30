@@ -2242,6 +2242,12 @@ fn main() -> Result<()> {
         return print_fast_img_marker_json(optimized_dir);
     }
 
+    let _production_lease = if args.verify.is_some() || args.fast_img_delivery || args.fast_img_restore {
+        Some(foundation::infra::production_lock::acquire_production_lease()?)
+    } else {
+        None
+    };
+
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
     let output_report = if let Some(ref p) = args.output {
         p.clone()

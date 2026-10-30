@@ -2539,11 +2539,45 @@ fn pipeline_summary_has_reportable_outcome(summary: &PipelineSummary) -> bool {
         || summary.integrity_state == Some("WARNINGS")
 }
 
+fn mode_requires_production_lease(mode: &LaunchMode) -> bool {
+    matches!(
+        mode,
+        LaunchMode::Auto
+            | LaunchMode::Images
+            | LaunchMode::Videos
+            | LaunchMode::FastImg
+            | LaunchMode::RestoreJpeg
+            | LaunchMode::FastVid
+            | LaunchMode::Collect
+            | LaunchMode::MergeXmp
+            | LaunchMode::IcloudImport
+    )
+}
+
 fn run_drag_drop(
     args: &Args,
     session: Option<&DragDropSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
+    run_drag_drop_with_lease(
+        args,
+        session,
+        dir_lock,
+        foundation::production_lock::acquire_production_lease,
+    )
+}
+
+fn run_drag_drop_with_lease<L>(
+    args: &Args,
+    session: Option<&DragDropSession>,
+    dir_lock: Option<&DirLock>,
+    acquire_lease: impl FnOnce() -> Result<L>,
+) -> Result<()> {
+    let _production_lease = if !args.dry_run && mode_requires_production_lease(&args.mode) {
+        Some(acquire_lease()?)
+    } else {
+        None
+    };
     let scoped_session = session.map(DragDropSession::for_run).transpose()?;
     let session = scoped_session.as_ref();
     let plans = match standard_input_plans(args) {
@@ -4091,6 +4125,9 @@ fn main() -> Result<()> {
 
 fn report_drag_drop_failure(result: &Result<()>) {
     if let Err(err) = result {
+        if foundation::production_lock::is_production_task_busy(err) {
+            return;
+        }
         eprintln!("{err:#}");
         print_pipeline_failure_panel();
         pause_before_gui_exit();
@@ -6513,7 +6550,7 @@ mod tests {
         args.output = None;
         assert!(standard_input_plans(&args).unwrap()[0].output.is_none());
         args.inputs = vec![input.clone(), temp.path().join("second")];
-        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        let error = run_drag_drop_with_lease(&args, Some(&session), None, || Ok(())).unwrap_err();
         assert!(error.to_string().contains("requires exactly one input"));
         assert_eq!(
             history_payloads(&session, "MFB_HISTORY_CONTEXT")[1]["inputs"]
@@ -6526,6 +6563,27 @@ mod tests {
             history_payloads(&session, "MFB_HISTORY_FINISHED")[1]["outcome"],
             "failed"
         );
+    }
+
+    #[test]
+    fn busy_production_start_is_not_recorded_as_a_failed_processing_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
+        let error = run_drag_drop_with_lease(&args, Some(&session), None, || -> Result<()> {
+            Err(anyhow::Error::new(
+                foundation::production_lock::ProductionTaskBusy,
+            ))
+        })
+        .unwrap_err();
+
+        assert!(foundation::production_lock::is_production_task_busy(&error));
+        assert_eq!(
+            format!("{error:#}"),
+            "MFB_PRODUCTION_TASK_BUSY: another Modern Format Boost production task is active"
+        );
+        assert!(history_payloads(&session, "MFB_HISTORY_CONTEXT").is_empty());
+        assert!(history_payloads(&session, "MFB_HISTORY_FINISHED").is_empty());
     }
 
     #[test]
@@ -6702,7 +6760,7 @@ mod tests {
             Args::try_parse_from(["mfb", "--mode", "images", "--photos-backend", "native"])
                 .unwrap();
         args.inputs = vec![first.join("."), second.clone()];
-        assert!(run_drag_drop(&args, Some(&session), None).is_err());
+        assert!(run_drag_drop_with_lease(&args, Some(&session), None, || Ok(())).is_err());
         let plans = history_payloads(&session, "MFB_HISTORY_INPUT_PLAN");
         let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
         assert_eq!(plans[0]["inputs"][0]["source"], contexts[0]["inputs"][0]);
@@ -6851,7 +6909,7 @@ mod tests {
             Args::try_parse_from(["mfb", "--mode", "images", "--photos-backend", "native"])
                 .unwrap();
         args.inputs = vec![input];
-        let error = run_drag_drop(&args, Some(&session), None).unwrap_err();
+        let error = run_drag_drop_with_lease(&args, Some(&session), None, || Ok(())).unwrap_err();
         assert!(
             error
                 .to_string()

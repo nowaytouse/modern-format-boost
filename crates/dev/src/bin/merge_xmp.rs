@@ -152,6 +152,12 @@ fn main() -> Result<()> {
     foundation::init_ghost_mode().context("initialize ghost mode")?;
     let args = Args::parse();
 
+    let _production_lease = if args.dry_run {
+        None
+    } else {
+        Some(foundation::infra::production_lock::acquire_production_lease()?)
+    };
+
     println!();
     println!("Modern Format Boost — XMP Merger Tool (8-Strategy Edition)");
     println!("Target: {}", args.target.display());

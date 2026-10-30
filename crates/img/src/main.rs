@@ -319,6 +319,23 @@ fn command_requires_database(command: &Commands) -> bool {
     }
 }
 
+fn command_requires_production_lease(command: &Commands) -> bool {
+    match command {
+        Commands::Run { .. }
+        | Commands::Verify { .. }
+        | Commands::RestoreTimestamps { .. }
+        | Commands::IngestSamples { .. }
+        | Commands::RestoreJpeg { .. } => true,
+        Commands::FastImg { dry_run, .. } => !dry_run,
+        Commands::Config { .. }
+        | Commands::CacheStats
+        | Commands::LockCheck { .. }
+        | Commands::PathHash { .. }
+        | Commands::DbHealth
+        | Commands::PhotosAlbums { .. } => false,
+    }
+}
+
 fn validate_command_strategy(command: &Commands) -> anyhow::Result<()> {
     if matches!(
         command,
@@ -724,6 +741,9 @@ fn main_inner() -> anyhow::Result<()> {
     if let Commands::Config { command } = &cli.command {
         return cli.policy.inspect(command);
     }
+    let _production_lease = command_requires_production_lease(&cli.command)
+        .then(foundation::production_lock::acquire_production_lease)
+        .transpose()?;
     let resolved = cli.policy.resolve(legacy_expert)?;
     let configuration_log = resolved.to_json(false)?;
     let allow_recovery = resolved.config.img.fallback_policy

@@ -942,6 +942,8 @@ impl LaunchCommand {
             stats
         } else {
             self.verify_sources_unchanged(invocation_error.as_ref())?;
+            foundation::infra::production_lock::inherit_active_lease(&mut cmd)
+                .context("attach active production task lease to worker")?;
             let mut child = cmd
                 .spawn()
                 .with_context(|| format!("launch {}", self.display()))?;

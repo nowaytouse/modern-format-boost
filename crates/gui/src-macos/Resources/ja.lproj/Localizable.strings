@@ -1,4 +1,11 @@
 "app.subtitle" = "macOS ネイティブのメディア処理 · ファイルまたはフォルダをドロップ";
+"menu.debug_window" = "デバッグウインドウを開く";
+"window.debug_title" = "Modern Format Boost %@ — デバッグウインドウ";
+"debug.banner" = "デバッグ専用 · 画面・ログ・読み取り専用プレビュー";
+"debug.preview_action" = "入力を確認";
+"debug.preview_only" = "このデバッグウインドウは読み取り専用です。処理、メディアの読み込み、ターミナルの起動はメインウインドウで行ってください。";
+"error.production_busy" = "別のメディア処理が実行中です。完了してから再試行してください。";
+"debug.already_open" = "デバッグウインドウは 1 つだけ開けます。既存のデバッグウインドウに戻ってください。";
 "field.target.placeholder" = "ファイルまたはフォルダを選択／ドロップ";
 "field.backup" = "バックアップ";
 "field.backup.placeholder" = "対応するバックアップフォルダまたは写真ライブラリを選択";
