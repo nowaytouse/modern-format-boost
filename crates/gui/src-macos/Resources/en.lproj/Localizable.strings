@@ -789,8 +789,8 @@
 "settings.history.absent" = "History database not present; counts are unavailable.";
 "settings.history.not_checked" = "Structure not checked";
 "settings.history.unsupported" = "Unavailable in this schema";
-"settings.history.overview_quick_value" = "%@ sessions · %@ event records (%@). Database records, not media counts.";
-"settings.history.overview_not_scanned" = "Output details were not scanned. Check Structure computes their row and byte totals.";
+"settings.history.overview_quick_value" = "%@ sessions · %@ event records (%@)";
+"settings.history.overview_not_scanned" = "Output totals not scanned. Use Check Structure for exact totals.";
 "settings.history.overview_value" = "%@ sessions · %@ event records (%@)\n%@ output rows (%@). Database records, not media counts.";
 "settings.history.update_range" = "Recorded session updates: %@ to %@";
 "settings.history.structure.healthy" = "Structure checks passed · %@ issues. Media and event JSON are not verified.";

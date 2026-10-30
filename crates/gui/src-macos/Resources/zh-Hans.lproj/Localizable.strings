@@ -803,8 +803,8 @@
 "settings.history.absent" = "历史数据库尚不存在，无法提供计数。";
 "settings.history.not_checked" = "尚未检查数据库结构";
 "settings.history.unsupported" = "此版本的数据库未提供";
-"settings.history.overview_quick_value" = "%@ 个会话 · %@ 条事件记录（%@）。这些是数据库记录数，不是媒体数量。";
-"settings.history.overview_not_scanned" = "输出明细未扫描；检查数据库结构时会统计其行数及内容字节。";
+"settings.history.overview_quick_value" = "%@ 个会话 · %@ 条事件记录（%@）";
+"settings.history.overview_not_scanned" = "输出明细未扫描；“检查数据库结构”可精确统计行数和字节。";
 "settings.history.overview_value" = "%@ 个会话 · %@ 条事件记录（%@）\n%@ 条输出记录（%@）。这些是数据库记录数，不是媒体数量。";
 "settings.history.update_range" = "已记录的会话更新时间：%@ 至 %@";
 "settings.history.structure.healthy" = "数据库结构检查通过 · %@ 个问题。未核验媒体和事件 JSON。";

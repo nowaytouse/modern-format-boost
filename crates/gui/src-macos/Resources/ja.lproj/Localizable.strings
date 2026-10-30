@@ -803,8 +803,8 @@
 "settings.history.absent" = "履歴データベースがないため、件数を確認できません。";
 "settings.history.not_checked" = "構造は未確認";
 "settings.history.unsupported" = "このスキーマでは未提供";
-"settings.history.overview_quick_value" = "%@ セッション · %@ イベント記録（%@）。データベースの記録数であり、メディア数ではありません。";
-"settings.history.overview_not_scanned" = "出力明細は未走査です。「構造を確認」で行数と内容のバイト数を集計できます。";
+"settings.history.overview_quick_value" = "%@ セッション · %@ イベント記録（%@）";
+"settings.history.overview_not_scanned" = "出力明細は未走査。「構造を確認」で正確な集計を取得。";
 "settings.history.overview_value" = "%@ セッション · %@ イベント記録（%@）\n%@ 出力行（%@）。データベースの記録数であり、メディア数ではありません。";
 "settings.history.update_range" = "記録されたセッション更新日時：%@ ～ %@";
 "settings.history.structure.healthy" = "構造の確認に合格 · 問題 %@ 件。メディアとイベント JSON は未検証です。";
