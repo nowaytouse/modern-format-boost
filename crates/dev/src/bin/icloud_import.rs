@@ -297,10 +297,14 @@ fn rename_with_emoji(target: &Path) -> Result<PathBuf> {
 // ───────────────────────────────────────────────
 
 fn run_osxphotos(cmd_args: &[String]) -> Result<bool> {
-    let mut child = Command::new(&cmd_args[0])
+    let mut command = Command::new(&cmd_args[0]);
+    command
         .args(&cmd_args[1..])
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    foundation::production_lock::inherit_active_lease(&mut command)
+        .context("attach production task lease to Photos import")?;
+    let mut child = command
         .spawn()
         .with_context(|| format!("spawn osxphotos: {}", cmd_args.join(" ")))?;
 

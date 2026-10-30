@@ -82,7 +82,7 @@ pub fn acquire_production_lease() -> Result<ProductionLease> {
         let path = stable_lock_path()?;
         let lease = match std::env::var_os(LEASE_FD_ENV) {
             Some(value) => acquire_inherited(&path, &value)?,
-            None => acquire_at(&path)?,
+            None => acquire_new(&path, &native_writer_lock_path()?)?,
         };
         register_active(&lease.inner)?;
         Ok(lease)
@@ -91,6 +91,12 @@ pub fn acquire_production_lease() -> Result<ProductionLease> {
     {
         Ok(ProductionLease {})
     }
+}
+
+/// Stable per-user lock file retained by the detached native `PhotoKit` helper.
+#[cfg(unix)]
+pub(crate) fn native_writer_lock_path() -> Result<PathBuf> {
+    Ok(stable_lock_dir()?.join("native-photos.lock"))
 }
 
 /// Attach the active lease to one explicitly managed worker command.
@@ -142,6 +148,11 @@ fn attach_lease(command: &mut Command, active: &LeaseInner) -> Result<()> {
 
 #[cfg(unix)]
 fn stable_lock_path() -> Result<PathBuf> {
+    Ok(stable_lock_dir()?.join("production-task.lock"))
+}
+
+#[cfg(unix)]
+fn stable_lock_dir() -> Result<PathBuf> {
     use std::ffi::CStr;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::DirBuilderExt;
@@ -205,7 +216,7 @@ fn stable_lock_path() -> Result<PathBuf> {
     }
     ensure_private_directory(&app_data)?;
     ensure_private_directory(&lock_dir)?;
-    Ok(lock_dir.join("production-task.lock"))
+    Ok(lock_dir)
 }
 
 #[cfg(unix)]
@@ -290,6 +301,54 @@ fn try_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
 }
 
 #[cfg(unix)]
+fn try_native_writer_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
+    let mut lock = std::mem::MaybeUninit::<libc::flock>::zeroed();
+    let lock = unsafe {
+        let lock = lock.assume_init_mut();
+        lock.l_type = libc::F_WRLCK as _;
+        lock.l_whence = libc::SEEK_SET as _;
+        lock
+    };
+    if unsafe { libc::fcntl(fd, libc::F_SETLK, lock) } == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EACCES) || error.raw_os_error() == Some(libc::EAGAIN) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(unix)]
+fn unlock_native_writer_lock(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    let mut lock = std::mem::MaybeUninit::<libc::flock>::zeroed();
+    let lock = unsafe {
+        let lock = lock.assume_init_mut();
+        lock.l_type = libc::F_UNLCK as _;
+        lock.l_whence = libc::SEEK_SET as _;
+        lock
+    };
+    if unsafe { libc::fcntl(fd, libc::F_SETLK, lock) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn ensure_native_writer_idle(path: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let file = open_lock_file(path)?;
+    if !try_native_writer_lock(file.as_raw_fd()).context("check native PhotoKit writer lock")? {
+        return Err(anyhow::Error::new(ProductionTaskBusy));
+    }
+    unlock_native_writer_lock(file.as_raw_fd()).context("release native PhotoKit writer probe")?;
+    Ok(())
+}
+
+#[cfg(unix)]
 fn acquire_at(path: &Path) -> Result<ProductionLease> {
     use std::os::fd::{AsRawFd, FromRawFd};
 
@@ -312,6 +371,13 @@ fn acquire_at(path: &Path) -> Result<ProductionLease> {
             inherited_file: Some(unsafe { File::from_raw_fd(inherited_fd) }),
         }),
     })
+}
+
+#[cfg(unix)]
+fn acquire_new(global_path: &Path, native_writer_path: &Path) -> Result<ProductionLease> {
+    let lease = acquire_at(global_path)?;
+    ensure_native_writer_idle(native_writer_path)?;
+    Ok(lease)
 }
 
 #[cfg(unix)]
@@ -385,6 +451,9 @@ mod tests {
     const TEST_PATH_ENV: &str = "MFB_TEST_PRODUCTION_LOCK_PATH";
     const TEST_READY_ENV: &str = "MFB_TEST_PRODUCTION_LOCK_READY";
     const TEST_RELEASE_ENV: &str = "MFB_TEST_PRODUCTION_LOCK_RELEASE";
+    const TEST_NATIVE_PATH_ENV: &str = "MFB_TEST_NATIVE_WRITER_LOCK_PATH";
+    const TEST_NATIVE_READY_ENV: &str = "MFB_TEST_NATIVE_WRITER_LOCK_READY";
+    const TEST_NATIVE_RELEASE_ENV: &str = "MFB_TEST_NATIVE_WRITER_LOCK_RELEASE";
 
     fn child_helper() -> Option<ProductionLease> {
         let path = std::env::var_os(TEST_PATH_ENV)?;
@@ -407,6 +476,25 @@ mod tests {
     fn production_lease_subprocess_helper() {
         if std::env::var_os(TEST_PATH_ENV).is_some() {
             let _lease = child_helper().expect("test child lease acquisition");
+        }
+    }
+
+    #[test]
+    fn native_photo_helper_lock_subprocess() {
+        let Some(path) = std::env::var_os(TEST_NATIVE_PATH_ENV) else {
+            return;
+        };
+        use std::os::fd::AsRawFd;
+
+        let file = open_lock_file(Path::new(&path)).expect("open native writer lock in helper");
+        assert!(try_native_writer_lock(file.as_raw_fd()).expect("lock native writer file"));
+        if let Some(ready) = std::env::var_os(TEST_NATIVE_READY_ENV) {
+            fs::write(ready, b"ready").expect("publish native helper readiness");
+        }
+        if let Some(release) = std::env::var_os(TEST_NATIVE_RELEASE_ENV) {
+            while !Path::new(&release).exists() {
+                thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 
@@ -453,6 +541,45 @@ mod tests {
         fs::write(&release, b"exit").unwrap();
         assert!(child.wait().unwrap().status.success());
         assert!(acquire_at(&lock_path).is_ok(), "child exit releases flock");
+    }
+
+    #[test]
+    fn native_helper_writer_lock_blocks_new_global_lease_until_helper_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let global_path = temp.path().join("production.lock");
+        let native_path = temp.path().join("native-photos.lock");
+        let ready = temp.path().join("helper-ready");
+        let release = temp.path().join("helper-release");
+
+        // Model a production parent which held the global lease while the
+        // LaunchServices helper starts, then exits while it owns an fcntl lock.
+        let parent_lease = acquire_new(&global_path, &native_path).unwrap();
+        let mut helper = Command::new(std::env::current_exe().unwrap());
+        helper
+            .arg("--exact")
+            .arg("infra::production_lock::tests::native_photo_helper_lock_subprocess")
+            .arg("--nocapture")
+            .env(TEST_NATIVE_PATH_ENV, &native_path)
+            .env(TEST_NATIVE_READY_ENV, &ready)
+            .env(TEST_NATIVE_RELEASE_ENV, &release)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let helper = crate::process_runner::ManagedProcess::spawn_captured(&mut helper).unwrap();
+        wait_for_file(&ready);
+        drop(parent_lease);
+
+        let busy = match acquire_new(&global_path, &native_path) {
+            Ok(lease) => {
+                drop(lease);
+                panic!("native helper writer lock must block a new lease");
+            }
+            Err(error) => error,
+        };
+        assert!(is_production_task_busy(&busy));
+
+        fs::write(&release, b"exit").unwrap();
+        assert!(helper.wait().unwrap().status.success());
+        assert!(acquire_new(&global_path, &native_path).is_ok());
     }
 
     #[test]

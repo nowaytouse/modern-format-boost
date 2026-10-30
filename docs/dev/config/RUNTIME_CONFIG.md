@@ -933,7 +933,10 @@ task lease. Internal workers and managed tool subprocesses inherit the same
 lease, so a GUI or parent exit does not release it while those children are
 still working. An independent task is rejected before processing; read-only
 preflight and configuration queries remain available. Existing per-directory
-and Photos locks continue to protect their narrower operations. Non-Unix CLI
+locks continue to protect their narrower operations. The LaunchServices
+PhotoKit helper holds its own shared native-writer lock; new production tasks
+check this lock as well, including after the parent exits during an import.
+Non-Unix CLI
 behavior is unchanged by this native-window feature.
 
 `--self-test`, including the check invoked during GUI compilation, runs with

@@ -45,6 +45,7 @@ impl Client {
         let socket = socket_dir.path().join("ipc");
         let listener = UnixListener::bind(&socket)?;
         listener.set_nonblocking(true)?;
+        let writer_lock = crate::infra::production_lock::native_writer_lock_path()?;
         let launch = std::process::Command::new("/usr/bin/open")
             .args(["-n", "-a"])
             .arg(app)
@@ -54,7 +55,7 @@ impl Client {
             .arg("--socket")
             .arg(&socket)
             .arg("--lock")
-            .arg(state.join("writer.lock"))
+            .arg(writer_lock)
             .output();
         let launch = match launch {
             Ok(launch) => launch,
