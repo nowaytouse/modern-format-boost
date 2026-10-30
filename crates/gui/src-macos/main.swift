@@ -7999,15 +7999,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         lastRequest = ProcessorRequest(targetPath: "/synthetic/saved-task", processingMode: .imagesOnly,
             operationMode: .fastImgJxl)
         sawResumeDecision = true
-        DispatchQueue.main.async { NSApp.stopModal(withCode: .alertThirdButtonReturn) }
-        processingCompleted(.failure(HostError(message: "MFB_RESUME_DECISION_REQUIRED: synthetic saved task")))
-        guard !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
+        var inspectedAlert: NSAlert?
+        processingCompleted(.failure(HostError(message: "MFB_RESUME_DECISION_REQUIRED: synthetic saved task")),
+                            resumeDecision: { alert in
+            // Exercise the real decision content and cancellation path without presenting a modal during builds.
+            alert.layout()
+            inspectedAlert = alert
+            return .alertThirdButtonReturn
+        })
+        guard let alert = inspectedAlert, alert.messageText == localized("alert.resume.title"),
+              alert.informativeText == localized("alert.resume.info"),
+              alert.buttons.map(\.title) == [localized("alert.resume.resume"), localized("alert.resume.fresh"), localized("alert.cancel")],
+              alert.window.contentView?.subviews.isEmpty == false, !alert.window.isVisible, NSApp.modalWindow == nil,
+              !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
               statusLabel.stringValue == localized("status.resume_choice_cancelled"), !host.isRunning else {
-            throw HostError(message: "Cancelling a saved-task choice was presented as a media failure")
+            throw HostError(message: "Saved-task choice lost its content, appeared during self-test or presented cancellation as a media failure")
         }
     }
 
-    private func processingCompleted(_ result: Result<String, Error>) {
+    private func processingCompleted(_ result: Result<String, Error>,
+                                     resumeDecision: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }) {
         toolSnapshot.finish()
         refreshToolSnapshot()
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
@@ -8068,7 +8079,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 alert.addButton(withTitle: localized("alert.resume.resume"))
                 alert.addButton(withTitle: localized("alert.resume.fresh"))
                 alert.addButton(withTitle: localized("alert.cancel"))
-                switch alert.runModal() {
+                switch resumeDecision(alert) {
                 case .alertFirstButtonReturn:
                     applyResumeDecision(fresh: false, to: &retry)
                 case .alertSecondButtonReturn:
@@ -10992,17 +11003,50 @@ private func runSelfTest() -> Int32 {
     }
 }
 
+@MainActor
+private final class BackgroundPresentationMonitor {
+    private var observers: [NSObjectProtocol] = []
+    private(set) var violations = Set<String>()
+
+    init() {
+        let center = NotificationCenter.default
+        let names: [Notification.Name] = [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeKeyNotification,
+            NSWindow.didBecomeMainNotification, NSWindow.willBeginSheetNotification,
+            NSWindow.didChangeOcclusionStateNotification, NSWindow.didExposeNotification, NSWindow.didUpdateNotification]
+        observers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    let attemptedPresentation = notification.name == NSApplication.didBecomeActiveNotification
+                        || notification.name == NSWindow.willBeginSheetNotification
+                        || notification.name == NSWindow.didBecomeKeyNotification
+                        || notification.name == NSWindow.didBecomeMainNotification
+                    if attemptedPresentation || NSApp.isActive || NSApp.windows.contains(where: \.isVisible) {
+                        self?.violations.insert(notification.name.rawValue)
+                    }
+                }
+            }
+        }
+    }
+
+    func stop() {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers.removeAll()
+    }
+}
+
 if isBackgroundSelfTest {
     exit(MainActor.assumeIsolated {
         let application = NSApplication.shared
-        guard application.setActivationPolicy(.prohibited) else {
+        guard application.activationPolicy() == .prohibited || application.setActivationPolicy(.prohibited) else {
             fputs("native-host self-test could not disable application activation\n", stderr)
             return 1
         }
+        let presentation = BackgroundPresentationMonitor()
+        defer { presentation.stop() }
         let result = runSelfTest()
         guard application.activationPolicy() == .prohibited, !application.isActive,
-              !application.windows.contains(where: \.isVisible) else {
-            fputs("native-host self-test activated the application or displayed a window\n", stderr)
+              !application.windows.contains(where: \.isVisible), presentation.violations.isEmpty else {
+            fputs("native-host self-test activated the application or presented a window: \(presentation.violations.sorted())\n", stderr)
             return 1
         }
         return result

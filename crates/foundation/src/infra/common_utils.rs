@@ -1850,6 +1850,56 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn killed_bound_tool_probe_latches_one_shared_failure_without_reselection() -> Result<()> {
+        if isolated_test_process() {
+            return Ok(());
+        }
+        use std::os::unix::{fs::PermissionsExt, process::ExitStatusExt};
+        let directory = TempDir::new()?;
+        let _state = EnvGuard::set("MFB_HOME_ROOT", &directory.path().to_string_lossy());
+        let flag = directory.path().join("kill");
+        let invocations = directory.path().join("invocations");
+        let _flag = EnvGuard::set("MFB_TOOL_KILL_FLAG", &flag.to_string_lossy());
+        let _invocations = EnvGuard::set("MFB_TOOL_PROBE_LOG", &invocations.to_string_lossy());
+        let program = directory.path().join("cjxl");
+        let script = b"#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$MFB_TOOL_PROBE_LOG\"\nif [ -f \"$MFB_TOOL_KILL_FLAG\" ]; then kill -KILL \"$$\"; fi\nexit 0\n";
+        fs::write(&program, script)?;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700))?;
+        bind_tool_runtime(
+            None,
+            std::collections::BTreeMap::from([("cjxl".to_owned(), program.clone())]),
+            &["cjxl"],
+        )?;
+        assert_eq!(fs::read_to_string(&invocations)?, "--version\n");
+        fs::write(&flag, b"kill candidate and probe")?;
+        let candidate = Command::new(&program).arg("candidate.jpg").output()?;
+        assert_eq!(candidate.status.signal(), Some(libc::SIGKILL));
+        verify_tool_runtime()?;
+        let error = verify_tool_runtime_after_failure()
+            .expect_err("a killed version probe must block the shared runtime");
+        let shared = error.downcast_ref::<ToolRuntimeError>().unwrap();
+        assert_eq!(shared.cause_code, "tool_unavailable");
+        assert_eq!(shared.tool.as_deref(), Some("cjxl"));
+        assert!(shared.message.contains("signal: 9"), "{shared}");
+        let expected_invocations = "--version\ncandidate.jpg\n--version\n";
+        assert_eq!(fs::read_to_string(&invocations)?, expected_invocations);
+        for recover_external_flag in [false, true] {
+            if recover_external_flag {
+                fs::remove_file(&flag)?;
+            }
+            let error = verify_tool_runtime_after_failure()
+                .expect_err("a shared failure must remain latched until a new run");
+            let repeated = error.downcast_ref::<ToolRuntimeError>().unwrap();
+            assert_eq!(repeated.cause_code, shared.cause_code);
+            assert_eq!(repeated.message, shared.message);
+            assert_eq!(fs::read_to_string(&invocations)?, expected_invocations);
+        }
+        assert_eq!(fs::read(&program)?, script);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn bound_runtime_never_reselects_path_and_latches_shared_failure() -> Result<()> {
         const CHILD: &str = "MFB_BOUND_RUNTIME_TEST_CHILD";
         if std::env::var_os(CHILD).is_none() {

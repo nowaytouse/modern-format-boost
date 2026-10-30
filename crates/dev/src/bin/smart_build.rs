@@ -1525,6 +1525,81 @@ fn sync_bundle_branding(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn prepare_native_self_test_bundle(bundle: &Path, root: &Path) -> Result<PathBuf> {
+    let contents = root.join("MFB Native Self Test.app/Contents");
+    fs::create_dir_all(contents.join("MacOS")).context("create background self-test bundle")?;
+    let executable = contents.join("MacOS/Modern Format Boost");
+    fs::copy(
+        bundle.join("Contents/MacOS/Modern Format Boost"),
+        &executable,
+    )
+    .context("copy native host for background validation")?;
+    std::os::unix::fs::symlink(
+        fs::canonicalize(bundle.join("Contents/Resources"))?,
+        contents.join("Resources"),
+    )
+    .context("link real bundle resources for background validation")?;
+    let info = contents.join("Info.plist");
+    fs::copy(bundle.join("Contents/Info.plist"), &info)?;
+    // LaunchServices reads this before Swift can change activationPolicy. The production plist stays untouched.
+    for args in [
+        ["-replace", "LSBackgroundOnly", "-bool", "true"],
+        [
+            "-replace",
+            "CFBundleIdentifier",
+            "-string",
+            "com.modernformatboost.self-test",
+        ],
+    ] {
+        let status = Command::new("plutil").args(args).arg(&info).status()?;
+        anyhow::ensure!(
+            status.success(),
+            "configure background native self-test bundle"
+        );
+    }
+    Ok(executable)
+}
+
+fn run_native_host_self_test(bundle: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Preserve the existing build-bundle worker lookup boundary without copying large Rust binaries.
+        let root = tempfile::Builder::new()
+            .prefix(".native-self-test-")
+            .tempdir_in(bundle.parent().context("native bundle has no parent")?)
+            .context("create isolated native validation directory")?;
+        let executable = prepare_native_self_test_bundle(bundle, root.path())?;
+        let qa_bundle = root.path().join("MFB Native Self Test.app");
+        let status = Command::new("codesign")
+            .args(["--force", "--sign", "-", "--timestamp=none"])
+            .arg(&qa_bundle)
+            .status()
+            .context("sign background validation copy")?;
+        anyhow::ensure!(
+            status.success(),
+            "background validation copy signing failed"
+        );
+        let state = root.path().join("state");
+        fs::create_dir(&state)?;
+        let status = Command::new(executable)
+            .arg("--self-test")
+            .env("MFB_HOME_ROOT", &state)
+            .env("TMPDIR", &state)
+            .env("MFB_LOG_DIR", &state)
+            .env("MFB_LOG_DIRECTORY", &state)
+            .status()
+            .context("background native host --self-test")?;
+        anyhow::ensure!(status.success(), "Native host self-test failed");
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bundle;
+        anyhow::bail!("Native AppKit validation requires macOS")
+    }
+}
+
 /// Compile the Swift native host and assemble the macOS .app bundle at
 /// `target/release/bundle/macos/Modern Format Boost.app`.
 ///
@@ -1681,18 +1756,12 @@ fn compile_swift_native_host(project_root: &Path, style: &Style) -> Result<()> {
         }
     }
 
-    // Run native host self-test before signing
+    // Run the real native host under a separate background identity before production signing.
     println!(
         "{}  Running background native host self-test...{}",
         style.cyan, style.reset
     );
-    let test_status = Command::new(&host_binary)
-        .arg("--self-test")
-        .status()
-        .context("native host --self-test")?;
-    if !test_status.success() {
-        anyhow::bail!("Native host self-test failed");
-    }
+    run_native_host_self_test(&bundle)?;
     fs::write(resources_dir.join("native-build-complete.txt"), b"1\n")
         .context("record successful native bundle assembly and self-test")?;
 
@@ -2362,6 +2431,48 @@ mod tests {
         ] {
             assert!(plist.contains("<key>NSPhotoLibraryUsageDescription</key>"));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_validation_uses_private_background_identity_and_shared_resources() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("production.app");
+        let contents = source.join("Contents");
+        fs::create_dir_all(contents.join("MacOS"))?;
+        fs::create_dir(contents.join("Resources"))?;
+        fs::write(
+            contents.join("MacOS/Modern Format Boost"),
+            b"native host fixture",
+        )?;
+        fs::write(contents.join("Resources/img"), b"shared worker fixture")?;
+        let production_info = include_bytes!("../../../gui/src-macos/Info.plist");
+        fs::write(contents.join("Info.plist"), production_info)?;
+        let executable = prepare_native_self_test_bundle(&source, &temp.path().join("qa"))?;
+        let qa_contents = executable.parent().unwrap().parent().unwrap();
+        assert_eq!(fs::read(&executable)?, b"native host fixture");
+        assert_eq!(
+            fs::canonicalize(qa_contents.join("Resources"))?,
+            fs::canonicalize(contents.join("Resources"))?
+        );
+        assert!(fs::symlink_metadata(qa_contents.join("Resources"))?.is_symlink());
+        let output = Command::new("plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(qa_contents.join("Info.plist"))
+            .output()?;
+        assert!(output.status.success());
+        let info: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(info["LSBackgroundOnly"], true);
+        assert_eq!(
+            info["CFBundleIdentifier"],
+            "com.modernformatboost.self-test"
+        );
+        assert_eq!(fs::read(contents.join("Info.plist"))?, production_info);
+        assert_eq!(
+            fs::read(contents.join("Resources/img"))?,
+            b"shared worker fixture"
+        );
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]

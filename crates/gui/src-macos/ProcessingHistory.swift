@@ -3826,6 +3826,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             let token = UUID()
             cleanupDetailGeneration = token
             cleanupDetailAlert = alert
+            if isBackgroundSelfTest {
+                // A sheet orders its hidden parent on screen even with a prohibited activation policy.
+                // Build the same inspector for native layout and reset tests, but keep presentation interactive-only.
+                alert.layout()
+                return
+            }
             alert.beginSheetModal(for: window) { [weak self] response in
                 guard let self, self.cleanupDetailGeneration == token else { return }
                 self.cleanupDetailAlert = nil
@@ -4270,7 +4276,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
             throw HostError(message: "Cleanup inspection lost the original run-bound receipt")
         }
         openCleanupDetails()
-        guard let alert = cleanupDetailAlert, window?.attachedSheet === alert.window,
+        guard let alert = cleanupDetailAlert, window?.attachedSheet == nil,
+              !alert.window.isVisible, window?.isVisible == false,
+              alert.window.contentView?.subviews.isEmpty == false,
               alert.buttons.count == 3, alert.buttons[1].title == localized("cleanup.inspect.copy"),
               alert.buttons[2].isEnabled == false,
               let scroll = alert.accessoryView as? NSScrollView, let view = scroll.documentView as? NSTextView,

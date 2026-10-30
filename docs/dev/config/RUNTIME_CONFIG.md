@@ -908,9 +908,15 @@ verified sidecar relationships, a persistent execution plan, or failed-only retr
 ## Background Native Validation
 
 `--self-test`, including the check invoked during GUI compilation, runs with
-application activation prohibited and never brings its windows forward. It
+application activation prohibited and never brings its windows forward. Build
+validation uses a temporary `LSBackgroundOnly` bundle with a separate identity,
+the freshly compiled host and links to the real resources, so LaunchServices
+does not first register it as a regular application. The production bundle's
+metadata and final signing flow stay unchanged. It
 still creates the real AppKit controls and exercises localized content, layout,
-and close/reopen state; it rejects any visible window or active application.
+decision handling and close/reopen state. Alerts are laid out without modal or
+sheet presentation; lifecycle notifications detect presentation during the run,
+in addition to the final visible-window and active-application checks.
 Foreground visibility, focus and actual user interaction remain explicit native
 UI fixture/manual checks, not claims made by this background validation.
 
