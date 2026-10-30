@@ -241,6 +241,18 @@ impl ToolBuilder for IdentifyBuilder {
     }
 
     fn check_available(&self) -> bool {
+        if crate::common_utils::media_tool_binding_applies(self.get_command_name())
+            && crate::common_utils::resolve_tool_path(self.get_command_name()).is_none()
+        {
+            if !self.use_magick
+                && crate::common_utils::resolve_tool_path(constants::TOOL_MAGICK).is_some()
+            {
+                let mut fallback = Self::new();
+                fallback.use_magick(true);
+                return ToolBuilder::check_available(&fallback);
+            }
+            return false;
+        }
         let mut cmd = self.get_resolved_command();
         if self.use_magick {
             cmd.arg(constants::MAGICK_ARG_IDENTIFY);
@@ -253,6 +265,11 @@ impl ToolBuilder for IdentifyBuilder {
                 if self.use_magick {
                     false
                 } else {
+                    if crate::common_utils::media_tool_binding_applies(constants::TOOL_MAGICK)
+                        && crate::common_utils::resolve_tool_path(constants::TOOL_MAGICK).is_none()
+                    {
+                        return false;
+                    }
                     let path =
                         crate::common_utils::resolve_tool_path_or_audit(constants::TOOL_MAGICK);
                     let mut fallback = Command::new(path);
@@ -732,6 +749,11 @@ impl ToolBuilder for SipsBuilder {
     }
 
     fn check_available(&self) -> bool {
+        if crate::common_utils::media_tool_binding_applies(self.get_command_name())
+            && crate::common_utils::resolve_tool_path(self.get_command_name()).is_none()
+        {
+            return false;
+        }
         #[cfg(target_os = "macos")]
         {
             match self.get_resolved_command().arg(constants::ARG_V).output() {

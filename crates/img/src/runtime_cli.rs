@@ -36,28 +36,7 @@ pub(super) fn prepare_tool_runtime(
             );
         }
         let mut observed = BTreeMap::new();
-        for name in [
-            "ffmpeg",
-            "ffprobe",
-            "magick",
-            "convert",
-            "avifenc",
-            "avifdec",
-            "cjxl",
-            "djxl",
-            "jxlinfo",
-            "exiftool",
-            "cwebp",
-            "dwebp",
-            "heif-convert",
-            "heif-enc",
-            "webpmux",
-            "gif2webp",
-            "gifski",
-            "osxphotos",
-            "opj_decompress",
-            "avifgainmaputil",
-        ] {
+        for &name in foundation::runtime_config::IMG_MEDIA_TOOL_NAMES {
             if let Some(path) = foundation::common_utils::resolve_tool_path(name) {
                 observed.insert(name.to_owned(), path);
             }

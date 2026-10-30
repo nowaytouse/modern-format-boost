@@ -319,6 +319,36 @@ impl Default for PhotosPolicy {
     }
 }
 
+/// Production IMG encoder/decoder, metadata and content-identification tools.
+/// This is the runtime-binding scope, not an allowlist for generic helper overrides.
+pub const IMG_MEDIA_TOOL_NAMES: &[&str] = &[
+    "ffmpeg",
+    "ffprobe",
+    "magick",
+    "convert",
+    "identify",
+    "avifenc",
+    "avifdec",
+    "cjxl",
+    "djxl",
+    "jxlinfo",
+    "exiftool",
+    "cwebp",
+    "dwebp",
+    "heif-convert",
+    "heif-enc",
+    "heif-info",
+    "webpmux",
+    "gif2webp",
+    "gifski",
+    "osxphotos",
+    "opj_decompress",
+    "avifgainmaputil",
+    "pngcheck",
+    "sf",
+    "sips",
+];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ToolsPolicy {

@@ -926,7 +926,7 @@ state, not disposable cache. A subsequent run can select newly installed tools.
 `MFB_TOOL_SNAPSHOT=` is a flushed schema-1 control event with `pipeline: "img"`,
 `state` (`preparing`, `ready`, `blocked`), `boundary`, exact `tool_names`, optional
 `identity` and `manifest_path`, and a bounded cause/message. Only the listed
-snapshot tools are independent of their original installation. Ancillary
+snapshot tools are independent of their original installation. Ancillary media
 executables are bound to selected absolute paths and observed when used;
 ImageMagick delegates/plugins, external configuration and operating-system
 libraries are not claimed to be frozen. Non-macOS currently reports
@@ -941,6 +941,13 @@ tools and dependency files are not copied for every media file. Source and
 private-member hashes, original selection paths and the protected OS boundary
 are retained in the manifest. Explicit `DYLD_*` loader overrides are rejected
 rather than silently discarded or presented as a closed runtime.
+
+The IMG binding scope is the shared media-tool name list. Operating-system
+resource/control helpers such as `sysctl` keep their existing resolution policy
+and cannot poison the media runtime merely because they are outside that list.
+Asking whether an optional media tool exists does not count as executing it;
+missing optional capabilities return unavailable without a shared-failure latch.
+Actual execution still cannot substitute an unbound PATH encoder or verifier.
 
 Fast IMG markers and standard IMG checkpoint headers retain the original private
 manifest and identity. Resume loads that authority, checks its private material,

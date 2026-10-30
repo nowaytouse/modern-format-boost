@@ -971,9 +971,15 @@ struct BoundTool {
 
 impl BoundTool {
     fn capture(path: &Path) -> Result<Self> {
+        anyhow::ensure!(
+            path.is_absolute(),
+            "bound tool invocation path must be absolute"
+        );
         let identity = tool_identity(path)?;
         Ok(Self {
-            path: identity.target.clone(),
+            // Aliases such as identify/convert select behavior through argv[0].
+            // Observe their resolved identity without changing the invocation name.
+            path: path.to_path_buf(),
             identity,
         })
     }
@@ -1191,8 +1197,10 @@ fn probe_tool_runtime_with_budget(
         "jxlinfo" => "--help",
         "avifgainmaputil" => "help",
         "opj_decompress" => "-h",
-        "ffmpeg" | "ffprobe" | "magick" | "convert" | "cwebp" | "dwebp" | "webpmux"
-        | "gif2webp" => "-version",
+        "pngcheck" => "-h",
+        "sf" => "-version",
+        "ffmpeg" | "ffprobe" | "magick" | "convert" | "identify" | "cwebp" | "dwebp"
+        | "webpmux" | "gif2webp" => "-version",
         _ => "--version",
     };
     let mut command = Command::new(program);
@@ -1293,21 +1301,13 @@ pub fn emit_tool_runtime_status(state: &str, error: Option<&ToolRuntimeError>) -
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let boundary_message = if snapshot.is_some() {
-        "Listed tools use a verified private runtime; ancillary tools are observed at fixed executable paths, while system libraries and external user configuration remain outside the snapshot."
-    } else {
-        "Executable selections are observed and checked; this platform has no independent external dependency snapshot."
-    };
+    let (boundary, boundary_message) =
+        tool_runtime_boundary_text(state, snapshot.is_some(), cfg!(target_os = "macos"));
     let event = crate::tool_snapshot::SnapshotEvent {
         schema_version: 1,
         pipeline: "img".to_owned(),
         state: state.to_owned(),
-        boundary: if snapshot.is_some() {
-            "persisted-external"
-        } else {
-            "live-observed"
-        }
-        .to_owned(),
+        boundary: boundary.to_owned(),
         identity: snapshot.map(|snapshot| snapshot.identity.clone()),
         manifest_path: snapshot.map(|snapshot| snapshot.manifest_path.clone()),
         tool_names: names.into_iter().cloned().collect(),
@@ -1327,12 +1327,53 @@ pub fn emit_tool_runtime_status(state: &str, error: Option<&ToolRuntimeError>) -
     Ok(())
 }
 
+fn tool_runtime_boundary_text(
+    state: &str,
+    has_snapshot: bool,
+    supports_snapshot: bool,
+) -> (&'static str, &'static str) {
+    if has_snapshot {
+        (
+            "persisted-external",
+            "Listed tools use a verified private runtime; ancillary tools are observed at fixed executable paths, while system libraries and external user configuration remain outside the snapshot.",
+        )
+    } else if state == "preparing" && supports_snapshot {
+        (
+            "persisted-external",
+            "Preparing a private IMG tool runtime; no tool snapshot has been verified or bound yet.",
+        )
+    } else if state == "preparing" {
+        (
+            "live-observed",
+            "Preparing observed IMG executable selections; verification is not complete.",
+        )
+    } else if supports_snapshot {
+        (
+            "live-observed",
+            "No verified private IMG tool snapshot is active; executable observations alone do not freeze dependencies.",
+        )
+    } else {
+        (
+            "live-observed",
+            "Executable selections are observed and checked; this platform has no independent external dependency snapshot.",
+        )
+    }
+}
+
+pub(crate) fn media_tool_binding_applies(name: &str) -> bool {
+    BOUND_TOOL_RUNTIME.get().is_some()
+        && crate::runtime_config::IMG_MEDIA_TOOL_NAMES.contains(&name)
+}
+
 /// An absolute unavailable path prevents legacy builders from falling through
 /// to a different PATH tool when a bound runtime is missing a requested tool.
 // shortcut: legacy PathBuf builders cannot propagate Result; latch the typed
 // shared error and use a non-executable path until their APIs migrate to Result.
 #[must_use]
 pub fn bound_tool_unavailable_path(name: &str) -> Option<PathBuf> {
+    if !media_tool_binding_applies(name) {
+        return None;
+    }
     BOUND_TOOL_RUNTIME.get().and_then(|runtime| {
         latch_tool_runtime_failure(runtime_failure("tool_unavailable", Some(name), format!("tool {name} was not available in the selected IMG runtime; PATH reselection is prohibited")));
         // A component below an existing regular executable cannot execute.
@@ -1342,7 +1383,10 @@ pub fn bound_tool_unavailable_path(name: &str) -> Option<PathBuf> {
 
 #[must_use]
 pub fn resolve_tool_path(name: &str) -> Option<std::path::PathBuf> {
-    if let Some(runtime) = BOUND_TOOL_RUNTIME.get() {
+    if let Some(runtime) = BOUND_TOOL_RUNTIME
+        .get()
+        .filter(|_| media_tool_binding_applies(name))
+    {
         if runtime.tools.contains_key(name) {
             crate::media_conversion_gate::mutex_guard_or_recover(
                 "tool_runtime_used",
@@ -1833,10 +1877,49 @@ mod tests {
             &["cjxl"],
         )?;
         assert_eq!(resolve_tool_path("cjxl"), Some(executable.clone()));
+        for helper in [
+            "sysctl",
+            "vm_stat",
+            "ps",
+            "kill",
+            "hostname",
+            "osascript",
+            "getfacl",
+            "setfacl",
+            "rsync",
+            "taskkill",
+        ] {
+            assert!(!media_tool_binding_applies(helper));
+            assert!(bound_tool_unavailable_path(helper).is_none());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let output = crate::ToolBuilder::build(&crate::tool_builders::SysctlBuilder::new())
+                .args(["-n", "hw.ncpu"])
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "bound media runtime blocked the actual system builder"
+            );
+            anyhow::ensure!(
+                std::str::from_utf8(&output.stdout)?
+                    .trim()
+                    .parse::<usize>()?
+                    > 0,
+                "sysctl did not report actual CPU capacity"
+            );
+        }
+        assert!(!crate::DjxlBuilder::check_available());
+        assert!(!crate::tools::check_tool("djxl"));
+        assert!(!crate::tools::check_tool_alt("djxl"));
+        verify_tool_runtime()?;
         assert_eq!(resolve_tool_path("djxl"), None);
         let unavailable = crate::media_conversion_gate::delivery_tool_path_or_bare_name("djxl");
         assert!(unavailable.is_absolute());
         assert_ne!(unavailable, PathBuf::from("djxl"));
+        let magick = crate::ToolBuilder::build(&crate::MagickBuilder::new());
+        assert!(Path::new(magick.get_program()).is_absolute());
+        assert_ne!(magick.get_program(), std::ffi::OsStr::new("magick"));
         let error =
             verify_tool_runtime().expect_err("unbound required tool must latch a shared failure");
         assert_eq!(
@@ -1880,6 +1963,67 @@ mod tests {
         fs::remove_file(&executable)?;
         assert!(!binding.unchanged());
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observed_tool_keeps_invocation_alias_and_detects_retargeting() -> Result<()> {
+        if isolated_test_process() {
+            return Ok(());
+        }
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = TempDir::new()?;
+        let executable = directory.path().join("canonical-tool");
+        let alias = directory.path().join("identify");
+        let convert = directory.path().join("convert");
+        fs::write(&executable, "#!/bin/sh\nprintf '%s' \"$0\"\n")?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+        symlink(&executable, &alias)?;
+        symlink(&executable, &convert)?;
+        let _identify = EnvGuard::set("MFB_TOOL_IDENTIFY", &alias.to_string_lossy());
+        let _convert = EnvGuard::set("MFB_TOOL_CONVERT", &convert.to_string_lossy());
+        let selected = ["identify", "convert"]
+            .into_iter()
+            .map(|name| {
+                resolve_tool_path(name)
+                    .map(|path| (name.to_owned(), path))
+                    .ok_or_else(|| anyhow::anyhow!("selected alias {name}"))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+        assert_eq!(selected["identify"], alias);
+        assert_eq!(selected["convert"], convert);
+        bind_tool_runtime(None, selected, &[])?;
+        let outputs = [
+            crate::ToolBuilder::build(&crate::IdentifyBuilder::new()).output()?,
+            crate::ToolBuilder::build(&crate::MagickBuilder::new()).output()?,
+        ];
+        for (output, expected) in outputs.iter().zip([&alias, &convert]) {
+            assert!(output.status.success());
+            assert_eq!(
+                std::str::from_utf8(&output.stdout)?,
+                expected
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("fixture alias"))?
+            );
+        }
+        verify_tool_runtime()?;
+        let replacement = directory.path().join("replacement");
+        fs::copy(&executable, &replacement)?;
+        fs::remove_file(&alias)?;
+        symlink(&replacement, &alias)?;
+        assert!(verify_tool_runtime().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn preparing_tool_runtime_text_does_not_claim_missing_platform_support_or_completion() {
+        let (boundary, message) = tool_runtime_boundary_text("preparing", false, true);
+        assert_eq!(boundary, "persisted-external");
+        assert!(message.contains("no tool snapshot has been verified or bound yet"));
+        assert!(!message.contains("this platform has no"));
+        let (boundary, message) = tool_runtime_boundary_text("preparing", false, false);
+        assert_eq!(boundary, "live-observed");
+        assert!(message.contains("verification is not complete"));
     }
 
     #[test]

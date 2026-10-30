@@ -37,6 +37,11 @@ fn tool_output_success(tool: &str, probe: &str, output: std::io::Result<Output>)
 
 #[must_use]
 pub fn check_tool(name: &str) -> bool {
+    if crate::common_utils::media_tool_binding_applies(name)
+        && crate::common_utils::resolve_tool_path(name).is_none()
+    {
+        return false;
+    }
     let path = crate::common_utils::resolve_tool_path_or_audit(name);
     let probe_arg = if name == crate::constants::TOOL_JXLINFO {
         "--help"
@@ -48,6 +53,11 @@ pub fn check_tool(name: &str) -> bool {
 
 #[must_use]
 pub fn check_tool_alt(name: &str) -> bool {
+    if crate::common_utils::media_tool_binding_applies(name)
+        && crate::common_utils::resolve_tool_path(name).is_none()
+    {
+        return false;
+    }
     let path = crate::common_utils::resolve_tool_path_or_audit(name);
     tool_output_success(
         name,

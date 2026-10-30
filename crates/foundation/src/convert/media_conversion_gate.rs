@@ -2587,12 +2587,12 @@ pub fn delivery_quality_model_python_command_or_default() -> String {
     "python3".to_string()
 }
 
-/// Resolved `ImageMagick` CLI path, or default tool name when discovery fails.
+/// Resolved `ImageMagick` CLI path, or the shared strict-gated unresolved path.
 #[must_use]
 pub fn delivery_imagemagick_cli_path_or_default() -> PathBuf {
     match crate::common_utils::resolve_imagemagick_cli() {
         Some((path, _)) => path,
-        None => PathBuf::from(crate::constants::TOOL_MAGICK),
+        None => delivery_tool_path_or_bare_name(crate::constants::TOOL_MAGICK),
     }
 }
 

@@ -43,6 +43,7 @@ pub trait ToolBuilder {
             );
             if let Some(&available) = cache.get(name)
                 && available
+                && !crate::common_utils::media_tool_binding_applies(name)
             {
                 return true;
             }
@@ -58,6 +59,12 @@ pub trait ToolBuilder {
                 cache.insert(name.to_string(), true);
             }
             return true;
+        }
+
+        // A capability query is not an attempt to process media. A bound but
+        // absent optional codec is unavailable; do not poison the run or search PATH.
+        if crate::common_utils::media_tool_binding_applies(name) {
+            return false;
         }
 
         // Slow path: try running the tool.
