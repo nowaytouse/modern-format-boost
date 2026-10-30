@@ -10219,19 +10219,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
-    @objc private func openDebugWindow() {
-        if isDebugWindow { controller?.activate(); return }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        configuration.arguments = ["--debug-window"]
-        configuration.environment = nativeChildEnvironment()
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
-            if let error {
-                DispatchQueue.main.async { NSAlert(error: error).runModal() }
-            }
-        }
-    }
-
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -10271,10 +10258,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowItem = NSMenuItem()
         let windowMenu = NSMenu(title: localized("menu.window"))
-        let debug = windowMenu.addItem(withTitle: localized("menu.debug_window"), action: #selector(openDebugWindow), keyEquivalent: "n")
-        debug.target = self
-        debug.keyEquivalentModifierMask = [.command, .shift]
-        windowMenu.addItem(.separator())
         windowMenu.addItem(withTitle: localized("menu.close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowMenu.addItem(withTitle: localized("menu.minimize"), action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(.separator())

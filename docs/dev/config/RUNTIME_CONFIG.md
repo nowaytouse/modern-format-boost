@@ -909,8 +909,11 @@ verified sidecar relationships, a persistent execution plan, or failed-only retr
 
 ### Main and debug windows
 
-On macOS, Window → Open debug window (Shift-Command-N) opens a separate native
-debug instance. There can be one normal main window and one debug main window;
+Ordinary macOS launches expose one main window. A repeated ordinary launch
+returns to that window; there is no debug-window menu item or normal shortcut.
+Development tools may explicitly start a separate native debug instance with
+`open -n "/path/to/Modern Format Boost.app" --args --debug-window`.
+There can be one normal main window and one debug main window;
 Settings, History and other child panels do not consume another main-window
 slot. Starting the same role again brings its existing window forward. Role
 leases are kernel locks in the real user's state directory, independent of

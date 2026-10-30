@@ -1,5 +1,4 @@
 "app.subtitle" = "Native macOS media processing · Drop a file or folder anywhere";
-"menu.debug_window" = "Open debug window";
 "window.debug_title" = "Modern Format Boost %@ — Debug";
 "debug.banner" = "Debug · Interface, logs, and read-only previews";
 "debug.preview_action" = "Inspect input";

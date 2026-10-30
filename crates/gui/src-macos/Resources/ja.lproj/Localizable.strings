@@ -1,5 +1,4 @@
 "app.subtitle" = "macOS ネイティブのメディア処理 · ファイルまたはフォルダをドロップ";
-"menu.debug_window" = "デバッグウインドウを開く";
 "window.debug_title" = "Modern Format Boost %@ — デバッグウインドウ";
 "debug.banner" = "デバッグ専用 · 画面・ログ・読み取り専用プレビュー";
 "debug.preview_action" = "入力を確認";
