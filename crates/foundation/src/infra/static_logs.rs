@@ -221,6 +221,10 @@ pub fn log_enhanced_debug(context: &str, detail: &str) {
 /// Emit an enhanced info log.
 pub fn log_enhanced_info(context: &str, detail: &str) {
     crate::ctrlc_guard::wait_if_prompt_active();
+    tracing::info!(target: "static_log", "{}", format_enhanced_info(context, detail));
+}
+
+pub(crate) fn format_enhanced_info(context: &str, detail: &str) -> String {
     let label = TerminalColor::info(&format!("[{context}]"));
     let symbol = get_symbol_by_label(context);
     let icon = if symbol.is_empty() {
@@ -230,7 +234,31 @@ pub fn log_enhanced_info(context: &str, detail: &str) {
     };
     let detail = plain_aware_detail(detail);
     let layout = DiagnosticLayout::new(label, format!("{icon} {detail}"));
-    tracing::info!(target: "static_log", "{}", layout.render());
+    layout.render()
+}
+
+/// One verified fact is persisted once; the terminal renders its category separately.
+#[track_caller]
+pub(crate) fn log_metadata_audit_info(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    policy: Option<&str>,
+    xmp: Option<&std::path::Path>,
+    detail: &str,
+) {
+    crate::ctrlc_guard::wait_if_prompt_active();
+    let caller = std::panic::Location::caller();
+    tracing::info!(
+        target: "mfb::report",
+        metadata_category = messages::LABEL_METADATA,
+        audit_file = caller.file(),
+        audit_line = caller.line(),
+        src = %src.display(),
+        dst = %dst.display(),
+        policy = policy,
+        xmp = xmp.map(|path| tracing::field::display(path.display())),
+        "{detail}"
+    );
 }
 
 /// Emit an enhanced report info log.

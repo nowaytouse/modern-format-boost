@@ -998,13 +998,7 @@ pub fn verify_exact_metadata_copy(src: &Path, dst: &Path) -> io::Result<Metadata
             src.display(),
             dst.display()
         );
-        tracing::info!(
-            target: "mfb::report",
-            src = %src.display(),
-            dst = %dst.display(),
-            "{detail}"
-        );
-        crate::log_info!(crate::infra::static_logs::messages::LABEL_METADATA, detail);
+        crate::infra::static_logs::log_metadata_audit_info(src, dst, None, None, &detail);
         Ok(MetadataCopyCheck {
             passed: true,
             mismatches,

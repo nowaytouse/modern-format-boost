@@ -984,3 +984,24 @@ ready event. The in-app tools guide explains fixed copies, upgrades, resume and
 the external configuration/platform boundaries; detailed diagnostics remain in
 the worker output and history. `--tool-runtime-ui-fixture` renders synthetic
 tool status without launching processors or querying a real Photos library.
+
+## Metadata Diagnostics and History Overview
+
+A successful metadata audit emits one structured INFO event, rendered once by
+each diagnostic sink. Its source, destination, policy or XMP context, category
+and audit call site remain available; the terminal uses the same event for its
+human-readable message. This does not reduce metadata checks or remove captured
+external-tool evidence. Existing logs and history records are not rewritten.
+
+JPEG encoder failures retain the operating system's actual termination status,
+including a signal number and native core-dump indication where available.
+A signal alone does not identify its cause; it must not be labelled as an OOM,
+signature failure or corrupt input without further evidence.
+
+The ordinary History storage overview does not scan captured-output rows or
+their content-byte totals. Schema-2 `output_rows` and `output_bytes` are null
+when these details were not scanned, rather than fabricated as zero. The GUI
+labels this as an overview choice, independently from missing-schema support or
+a failed read. `--history-stats --check-integrity` still scans the records and
+returns exact output totals alongside its read-only structural checks. Those
+checks do not establish media, event-JSON or Photos correctness.

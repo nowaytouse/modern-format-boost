@@ -93,6 +93,7 @@ pub struct HistoryStorageInspection {
 
 /// Inspect one committed snapshot without migration, repair, or payload decoding.
 /// Counts and byte lengths describe storage, not media outcomes or completed runs.
+/// Captured-output row and byte totals are scanned only with the full integrity check.
 pub fn inspect_history_store(
     log_dir: &Path,
     check_integrity: bool,
@@ -173,7 +174,7 @@ pub fn inspect_history_store(
             && overview.free_pages <= overview.page_count,
         "invalid history storage overview"
     );
-    if version == 2 {
+    if version == 2 && check_integrity {
         overview.output_rows = Some(backup_row_count(
             &snapshot,
             "SELECT COUNT(*) FROM history_output",
@@ -865,6 +866,11 @@ mod tests {
             "INSERT INTO history_sessions VALUES ('not-committed', 'later')",
             [],
         )?;
+        let quick = inspect_history_store(root.path(), false)?;
+        let quick_overview = quick.overview.context("missing quick overview")?;
+        assert_eq!((quick_overview.sessions, quick_overview.events), (1, 1));
+        assert!(quick_overview.output_rows.is_none() && quick_overview.output_bytes.is_none());
+        assert!(quick.integrity.is_none());
         let inspected = inspect_history_store(root.path(), true)?;
         let overview = inspected.overview.context("missing overview")?;
         assert_eq!(

@@ -220,14 +220,13 @@ pub fn verify_output_embedded_metadata(
                 audit.bytes_cleared()
             ),
         };
-        tracing::info!(
-            target: "mfb::report",
-            src = %src.display(),
-            dst = %dst.display(),
-            policy = ?policy,
-            "{detail}"
+        crate::infra::static_logs::log_metadata_audit_info(
+            src,
+            dst,
+            Some(&format!("{policy:?}")),
+            None,
+            &detail,
         );
-        crate::log_info!(crate::infra::static_logs::messages::LABEL_METADATA, detail);
         Ok(audit)
     } else {
         crate::media_conversion_gate::delivery_metadata_path_audit(
@@ -775,14 +774,7 @@ pub(super) fn verify_output_embedded_metadata_with_explicit_xmp(
             xmp.display(),
             dst.display()
         );
-        tracing::info!(
-            target: "mfb::report",
-            src = %src.display(),
-            xmp = %xmp.display(),
-            dst = %dst.display(),
-            "{detail}"
-        );
-        crate::log_info!(crate::infra::static_logs::messages::LABEL_METADATA, detail);
+        crate::infra::static_logs::log_metadata_audit_info(src, dst, None, Some(xmp), &detail);
         return Ok(());
     }
 

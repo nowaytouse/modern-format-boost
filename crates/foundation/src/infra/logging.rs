@@ -154,7 +154,22 @@ where
         }
 
         // 2. Message and Fields
+        if metadata.target() == "mfb::report"
+            && metadata.fields().field("metadata_category").is_some()
         {
+            let mut fields = AuditKvCollector::default();
+            event.record(&mut fields);
+            let category = fields
+                .values
+                .get("metadata_category")
+                .ok_or(std::fmt::Error)?;
+            let message = fields.values.get("message").ok_or(std::fmt::Error)?;
+            write!(
+                writer,
+                "{}",
+                crate::infra::static_logs::format_enhanced_info(category, message)
+            )?;
+        } else {
             let mut visitor = FieldVisitor {
                 writer: &mut writer,
                 is_first: true,
@@ -479,10 +494,9 @@ fn log_layer_accepts_metadata(metadata: &tracing::Metadata<'_>) -> bool {
 
 fn terminal_layer_accepts_metadata(metadata: &tracing::Metadata<'_>) -> bool {
     metadata.level() <= &tracing::Level::INFO
-        && !matches!(
-            metadata.target(),
-            "mfb::ui" | "mfb::report" | "mfb::tool_output"
-        )
+        && !matches!(metadata.target(), "mfb::ui" | "mfb::tool_output")
+        && (metadata.target() != "mfb::report"
+            || metadata.fields().field("metadata_category").is_some())
 }
 
 /// Returns true if an event at this level should be logged. Uses tracing order:
@@ -1688,6 +1702,7 @@ mod tests {
         fs::copy(&src, &dst).unwrap();
         crate::metadata::preserve_filesystem_for_delivery(&src, &dst).unwrap();
         let terminal = CaptureWriter::default();
+        let plain = CaptureWriter::default();
         let durable = CaptureWriter::default();
         let subscriber = tracing_subscriber::registry()
             .with(
@@ -1695,6 +1710,12 @@ mod tests {
                     .event_format(ModernFormatter)
                     .with_writer(terminal.clone())
                     .with_filter(FilterFn::new(terminal_layer_accepts_metadata)),
+            )
+            .with(
+                fmt::layer()
+                    .event_format(FileFormatter)
+                    .with_writer(plain.clone())
+                    .with_filter(FilterFn::new(log_layer_accepts_metadata)),
             )
             .with(
                 fmt::layer()
@@ -1710,20 +1731,74 @@ mod tests {
                 crate::metadata::MetadataOutputPolicy::Preserve,
             )
             .unwrap();
+            crate::infra::static_logs::log_metadata_audit_info(
+                &src,
+                &dst,
+                None,
+                Some(&src.with_extension("xmp")),
+                "explicit XMP audit formatting fixture",
+            );
+            tracing::info!(target: "mfb::report", "background report remains durable only");
             tracing::info!(target: "mfb.metadata", "reconstruction proof remains visible");
             tracing::error!(target: "mfb.metadata", "metadata failure remains visible");
         });
         let read =
             |writer: &CaptureWriter| String::from_utf8(writer.0.lock().unwrap().clone()).unwrap();
         let visible = read(&terminal);
+        let plain_records = read(&plain);
         let records = read(&durable);
         for message in [
             "filesystem metadata copy verified",
             "portable embedded metadata verified",
+            "explicit XMP audit formatting fixture",
         ] {
             assert_eq!(visible.matches(message).count(), 1, "{visible}");
-            assert_eq!(records.matches(message).count(), 2, "{records}");
+            assert_eq!(plain_records.matches(message).count(), 1, "{plain_records}");
+            assert_eq!(records.matches(message).count(), 1, "{records}");
+            assert!(
+                !plain_records
+                    .lines()
+                    .find(|line| line.contains(message))
+                    .unwrap()
+                    .contains('\u{1b}')
+            );
         }
+        let metadata_records = records
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|record| record["fields"]["metadata_category"] == "Metadata Integrity")
+            .collect::<Vec<_>>();
+        assert_eq!(metadata_records.len(), 3);
+        assert!(
+            metadata_records[0]["fields"]["audit_file"]
+                .as_str()
+                .unwrap()
+                .ends_with("metadata/mod.rs")
+        );
+        assert!(
+            metadata_records[1]["fields"]["audit_file"]
+                .as_str()
+                .unwrap()
+                .ends_with("metadata/output_audit.rs")
+        );
+        assert!(metadata_records.iter().all(|record| {
+            record["fields"]["audit_line"]
+                .as_u64()
+                .is_some_and(|line| line > 0)
+        }));
+        assert!(metadata_records.iter().all(|record| {
+            record["level"] == "INFO"
+                && record["fields"]["src"] == src.to_str().unwrap()
+                && record["fields"]["dst"] == dst.to_str().unwrap()
+                && !record["fields"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains('\u{1b}')
+        }));
+        assert_eq!(
+            metadata_records[2]["fields"]["xmp"],
+            src.with_extension("xmp").to_str().unwrap()
+        );
         assert!(
             records.contains("\"src\":")
                 && records.contains("\"dst\":")
@@ -1732,6 +1807,13 @@ mod tests {
         assert!(visible.contains("reconstruction proof remains visible"));
         assert!(visible.contains("metadata failure remains visible"));
         assert!(visible.contains("embedded tags and color profiles require separate checks"));
+        assert!(visible.contains("[Metadata Integrity]"));
+        assert!(
+            records.contains("Captured external-tool diagnostics")
+                && records.contains("SourceFile")
+        );
+        assert!(records.contains("background report remains durable only"));
+        assert!(!visible.contains("background report remains durable only"));
     }
 
     #[test]

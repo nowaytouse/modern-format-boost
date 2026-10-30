@@ -1620,10 +1620,12 @@ fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
 }
 
 fn cjxl_exit_summary(status: ExitStatus) -> String {
-    status.code().map_or_else(
-        || "terminated by signal".to_string(),
-        |code| format!("exit code {code}"),
-    )
+    let termination = foundation::media_conversion_gate::process_termination_label_for_context(
+        &status,
+        "cjxl",
+        "JPEG lossless transcode",
+    );
+    format!("{termination}; native status: {status}")
 }
 
 fn cjxl_failure_summary(stage: &str, output: &foundation::process_runner::ProcessOutput) -> String {
@@ -6876,7 +6878,47 @@ mod tests {
             .status()
             .unwrap_or_else(|err| panic!("spawn shell: {err:?}"));
 
-        assert_eq!(cjxl_exit_summary(status), "exit code 7");
+        let summary = cjxl_exit_summary(status);
+        assert!(summary.contains("exit_code(7)"), "{summary}");
+        assert!(summary.contains(&status.to_string()), "{summary}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cjxl_exit_summary_preserves_actual_signal_in_failure_context() {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg("kill -TERM $$")
+            .output()
+            .unwrap_or_else(|err| panic!("spawn self-terminating shell: {err:?}"));
+        let signal = output.status.signal().expect("shell ended by SIGTERM");
+        let native_status = output.status.to_string();
+        let observation = foundation::process_runner::ProcessOutput {
+            status: output.status,
+            stdout: String::from_utf8(output.stdout).expect("shell stdout"),
+            stderr: String::from_utf8(output.stderr).expect("shell stderr"),
+            command_line: "self-terminating test shell".to_string(),
+        };
+        let summary = cjxl_failure_summary("full effort candidate", &observation);
+
+        assert!(
+            summary.contains(&format!("full effort candidate: signal({signal})")),
+            "{summary}"
+        );
+        assert!(summary.contains(&native_status), "{summary}");
+        assert!(summary.contains("stderr: <empty stderr>"), "{summary}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cjxl_exit_summary_preserves_native_core_dump_status() {
+        // A synthetic wait status covers core-dump reporting without creating a core file.
+        let status = ExitStatus::from_raw(6 | 0x80);
+        assert!(status.core_dumped());
+        let summary = cjxl_exit_summary(status);
+
+        assert!(summary.contains("signal(6)"), "{summary}");
+        assert!(summary.contains(&status.to_string()), "{summary}");
     }
 
     #[test]

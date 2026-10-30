@@ -1192,7 +1192,7 @@ private struct HistoryDatabaseInspection: Decodable {
         let oldestSessionUpdate: String?
         let newestSessionUpdate: String?
 
-        func validate() throws {
+        func validate(checked: Bool) throws {
             let bytes = pageSize.multipliedReportingOverflow(by: pageCount)
             guard [1, 2].contains(historySchemaVersion), !sqliteVersion.isEmpty,
                   ["delete", "truncate", "persist", "memory", "wal", "off"].contains(journalMode),
@@ -1201,7 +1201,8 @@ private struct HistoryDatabaseInspection: Decodable {
                   [bytes.partialValue, sessions, events, eventBytes].allSatisfy({ $0 <= UInt64(Int64.max) }),
                   outputRows.map({ $0 <= UInt64(Int64.max) }) ?? true,
                   outputBytes.map({ $0 <= UInt64(Int64.max) }) ?? true,
-                  (historySchemaVersion == 1 ? outputRows == nil && outputBytes == nil : outputRows != nil && outputBytes != nil),
+                  (historySchemaVersion == 1 ? outputRows == nil && outputBytes == nil
+                    : (outputRows != nil && outputBytes != nil) || (!checked && outputRows == nil && outputBytes == nil)),
                   oldestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true,
                   newestSessionUpdate.map({ !$0.isEmpty && !$0.contains("\0") }) ?? true else {
                 throw HostError(message: localized("settings.history.inspection_invalid"))
@@ -1246,7 +1247,7 @@ private struct HistoryDatabaseInspection: Decodable {
                   : result.overview == nil && result.integrity == nil) else {
             throw HostError(message: localized("settings.history.inspection_invalid"))
         }
-        try result.overview?.validate()
+        try result.overview?.validate(checked: checked)
         try result.integrity?.validate()
         return result
     }
@@ -2324,9 +2325,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         }
         func size(_ bytes: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary) }
         let outputs = overview.outputRows.map { String($0) } ?? localized("settings.history.unsupported")
-        historyOverview.stringValue = localized("settings.history.overview_value", String(overview.sessions),
-            String(overview.events), size(overview.eventBytes), outputs,
-            overview.outputBytes.map(size) ?? localized("settings.history.unsupported"))
+        if overview.historySchemaVersion == 2 && overview.outputRows == nil {
+            historyOverview.stringValue = localized("settings.history.overview_quick_value", String(overview.sessions),
+                String(overview.events), size(overview.eventBytes)) + "\n" + localized("settings.history.overview_not_scanned")
+        } else {
+            historyOverview.stringValue = localized("settings.history.overview_value", String(overview.sessions),
+                String(overview.events), size(overview.eventBytes), outputs,
+                overview.outputBytes.map(size) ?? localized("settings.history.unsupported"))
+        }
         historyOverview.toolTip = inspection.source + "\n"
             + localized("settings.cache.database_value", overview.historySchemaVersion, overview.sqliteVersion)
             + " · \(overview.journalMode.uppercased())\n"
@@ -3912,6 +3918,22 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             throw HostError(message: "History inspection counts, arguments or Settings controls were lost")
         }
         var changed = document
+        var quickOverview = overview
+        quickOverview["output_rows"] = NSNull()
+        quickOverview["output_bytes"] = NSNull()
+        changed["overview"] = quickOverview
+        changed["integrity"] = NSNull()
+        displayHistoryInspection(try decode(changed, checked: false))
+        guard historyOverview.stringValue.contains(localized("settings.history.overview_not_scanned")),
+              !historyOverview.stringValue.contains(localized("settings.history.unsupported")),
+              historyIntegrity.stringValue == localized("settings.history.not_checked") else {
+            throw HostError(message: "Quick History overview presented unscanned output as a failure or unsupported schema")
+        }
+        try refuse(changed, checked: true)
+        quickOverview["output_rows"] = 5
+        changed["overview"] = quickOverview
+        try refuse(changed, checked: false)
+        changed = document
         changed["exists"] = false
         try refuse(changed)
         changed["overview"] = NSNull()
