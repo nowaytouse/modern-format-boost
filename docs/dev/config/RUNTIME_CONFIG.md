@@ -985,6 +985,30 @@ in addition to the final visible-window and active-application checks.
 Foreground visibility, focus and actual user interaction remain explicit native
 UI fixture/manual checks, not claims made by this background validation.
 
+An optional external developer observer lives at
+`crates/dev/native-qa/BackgroundBuildObserver.swift`. It is not part of normal
+build or app startup. Compile it with the installed macOS Swift compiler and
+run its deterministic lifecycle regressions before observing a build:
+
+```sh
+qa_root="$(mktemp -d)"
+xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
+  crates/dev/native-qa/BackgroundBuildObserver.swift -o "$qa_root/observer"
+"$qa_root/observer" --self-test
+"$qa_root/observer" "$qa_root/report" /usr/bin/env \
+  cargo run --locked --release -p dev --bin smart_build -- --gui
+```
+
+The command must actually run the private native self-test; a skipped GUI build
+does not establish observation coverage. Reports must use a new directory.
+Application equality binds samples to one lifecycle rather than treating a lost
+PID as a new process. A previously observed application's confirmed termination
+retains its valid identity and adds a terminal sample. Never-observed children,
+unavailable window capture, conflicting identity and a child still running at
+command completion cannot pass. Activation, visible windows and non-prohibited
+policy observations remain failures after termination. The original native
+presentation guard remains authoritative for activity between external samples.
+
 ## IMG Tool Runtime Lifetime
 
 After effective configuration and explicit tool overrides resolve, IMG binds

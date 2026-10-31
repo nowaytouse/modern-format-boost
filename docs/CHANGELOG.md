@@ -23,6 +23,15 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Background Build Observation (2026-10-31)
+
+- Keep external native-build observation separate from the app's in-process
+  presentation guard. A confirmed exit preserves earlier process identity and
+  records terminal property loss instead of inventing a PID -1 process.
+- Retain visible-window, activation, policy and monitoring failures; a missing
+  child or unavailable capture cannot pass. Preserve lifecycle regressions and
+  explicit developer usage in the repository without changing normal builds.
+
 ### Local Gate File-check Progress (2026-10-31)
 
 - Report actual Gate 1 hash, metadata and orientation check attempts through the
