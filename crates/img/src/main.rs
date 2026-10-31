@@ -33,9 +33,8 @@ use foundation::pipeline::verification::{
     PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
     deep_scan_complete_or_later, encode_complete_or_later, gate1_complete_or_later,
     gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
-    marker_checks_from_result, marker_path_for_working_copy, output_prepared_or_later,
-    prepare_jxl_output_dir, read_marker, resolve_working_copy_dir, retry_resume_stage,
-    working_copy_dir, write_marker_atomic,
+    marker_checks_from_result, output_prepared_or_later, prepare_jxl_output_dir, read_marker,
+    resolve_working_copy_dir, retry_resume_stage, working_copy_dir, write_marker_atomic,
 };
 use foundation::quality_matcher::SourceCodec;
 use foundation::{
@@ -806,12 +805,20 @@ fn main_inner() -> anyhow::Result<()> {
                 ..
             } => {
                 let src = FastImgInputPlan::source_root(input)?;
+                let migration =
+                    foundation::fast_img_store::migrate_legacy_for_source(&src, output.as_deref())?;
+                if migration.migrated != 0 || migration.retired != 0 {
+                    println!(
+                        "MFB_FAST_IMG_STATE_MIGRATION={{\"schema_version\":1,\"migrated\":{},\"retired\":{}}}",
+                        migration.migrated, migration.retired
+                    );
+                }
                 // Selection only: the normal resolver may recover a collided
                 // output path, which must happen after tool preflight.
                 let working = if let Some(output) = output {
                     output.clone()
                 } else if *no_resume {
-                    foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src)
+                    foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src)?
                 } else {
                     resolve_working_copy_dir(&src, strategy)?
                 };
@@ -7101,7 +7108,7 @@ fn read_existing_fast_img_marker(working_copy: &Path) -> anyhow::Result<Option<W
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(anyhow::anyhow!(
             "fast-img marker at {} is unreadable/corrupt; refusing to overwrite resume state: {err}",
-            marker_path_for_working_copy(working_copy).display()
+            foundation::fast_img_store::database_path()?.display()
         )),
     }
 }
@@ -7257,7 +7264,7 @@ fn fast_img_resolve_requested_working_copy(
     strategy: &str,
 ) -> anyhow::Result<PathBuf> {
     let live = if fresh.0 {
-        foundation::pipeline::verification::resolve_fresh_working_copy_dir(src_dir)
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(src_dir)?
     } else if requested.is_some() {
         foundation::pipeline::verification::resolve_working_copy_dir(src_dir, strategy)?
     } else {
@@ -9681,12 +9688,11 @@ fn validate_cleanup_complete_deleted_source_state(
                 continue;
             }
             Err(err) => {
-                let marker_file_path = marker_path_for_working_copy(&marker.working_copy);
                 return Err(err).with_context(|| {
                     format!(
-                        "fast-img cleanup marker cannot stat JXL output {}; source JPEGs are already absent, so restore this optimized JXL or restore the source backup before rerunning shortest-path fastmode (to force reset, delete the marker file at: {})",
+                        "fast-img cleanup state cannot stat output {}; source JPEGs are already absent. Restore this verified output or the source backup before continuing. The saved task for {} was retained; use --no-resume only for an explicitly isolated new task, never delete the Core state database to reset it",
                         output.display(),
-                        marker_file_path.display()
+                        marker.working_copy.display()
                     )
                 });
             }
@@ -14360,8 +14366,7 @@ mod fast_img_hardening_tests {
             "jxl", false, false,
         )?);
         foundation::pipeline::verification::write_marker_atomic(&marker)?;
-        let marker_path = foundation::pipeline::verification::marker_path_for_working_copy(&output);
-        let saved = std::fs::read(&marker_path)?;
+        let saved = super::read_marker(&output)?;
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
         // The selected root is readable. This child directory proves that the
         // real run path has not started recursive discovery before the choice.
@@ -14389,7 +14394,7 @@ mod fast_img_hardening_tests {
             format!("{error:#}").contains("MFB_RESUME_DECISION_REQUIRED"),
             "{error:#}"
         );
-        assert_eq!(std::fs::read(&marker_path)?, saved);
+        assert_eq!(super::read_marker(&output)?, saved);
         assert!(
             !output.exists(),
             "the choice must not prepare an output directory"
@@ -14399,7 +14404,7 @@ mod fast_img_hardening_tests {
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
         let continued = continued.expect_err("continue must still perform source inventory");
         assert!(format!("{continued:#}").contains("fast-img scan read dir"));
-        assert_eq!(std::fs::read(&marker_path)?, saved);
+        assert_eq!(super::read_marker(&output)?, saved);
         assert!(!output.exists());
 
         let mut changed = foundation::runtime_config::RuntimeConfig::default();
@@ -14408,24 +14413,24 @@ mod fast_img_hardening_tests {
             &changed, "jxl", false, false,
         )?);
         foundation::pipeline::verification::write_marker_atomic(&marker)?;
-        let saved_changed = std::fs::read(&marker_path)?;
+        let saved_changed = super::read_marker(&output)?;
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
         let changed = run(true);
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
         let changed = changed.expect_err("changed settings must reject before recursive scanning");
         assert!(format!("{changed:#}").contains("MFB_RESUME_CONFIG_CHANGED"));
-        assert_eq!(std::fs::read(&marker_path)?, saved_changed);
+        assert_eq!(super::read_marker(&output)?, saved_changed);
         assert!(!output.exists());
 
         marker.processing_contract = None;
         foundation::pipeline::verification::write_marker_atomic(&marker)?;
-        let saved_legacy = std::fs::read(&marker_path)?;
+        let saved_legacy = super::read_marker(&output)?;
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
         let legacy = run(true);
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
         let legacy = legacy.expect_err("missing identity must not inherit today's settings");
         assert!(format!("{legacy:#}").contains("MFB_RESUME_CONFIG_UNKNOWN"));
-        assert_eq!(std::fs::read(marker_path)?, saved_legacy);
+        assert_eq!(super::read_marker(&output)?, saved_legacy);
         assert!(!output.exists());
         Ok(())
     }
@@ -16285,19 +16290,16 @@ mod fast_img_hardening_tests {
         assert!(run_error.is::<super::fast_img_result::FileFailures>());
         assert!(run_error.to_string().contains("1 failed source(s)"));
         let working_copy = foundation::pipeline::verification::working_copy_dir(&src_root);
-        let marker_dir = root.path().join("fast_img/markers");
-        let marker_files = std::fs::read_dir(&marker_dir)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(
-            marker_files.len(),
-            1,
-            "failed scan must leave one marker: {marker_files:?}"
-        );
-        let marker_json = std::fs::read_to_string(&marker_files[0])?;
+        let markers =
+            foundation::pipeline::verification::matching_working_copy_markers(&src_root, "avif")?;
+        assert_eq!(markers.len(), 1, "failed scan must leave one SQL task");
+        let marker = super::read_marker(&working_copy)?;
         assert!(
-            marker_json.contains("static-container metadata"),
-            "scan failure must be recorded before any encoder fallback: {marker_json}"
+            marker
+                .failed_sources
+                .get("corrupt.gif")
+                .is_some_and(|entry| entry.reason.contains("static-container metadata")),
+            "scan failure must be recorded before any encoder fallback: {marker:?}"
         );
         assert!(corrupt_gif.is_file(), "malformed source must be retained");
         assert!(

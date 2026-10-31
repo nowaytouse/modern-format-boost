@@ -16,38 +16,6 @@ import mfb_log_paths
 
 
 class TestFastModePaths(unittest.TestCase):
-    def test_fastmode_output_dir_uses_adjacent_optimized_suffix(self):
-        src = Path("/Users/example/Pictures/Album")
-
-        self.assertEqual(
-            fastmode_paths.fast_img_output_dir_for_target(src),
-            Path("/Users/example/Pictures/Album_optimized"),
-        )
-
-    def test_fastmode_output_collision_uses_numbered_optimized_suffix(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "Album"
-            src.mkdir()
-            (Path(tmp) / "Album_optimized").mkdir()
-
-            self.assertEqual(
-                fastmode_paths.fast_img_output_dir_for_target(src),
-                Path(tmp) / "Album_optimized_2",
-            )
-
-    def test_fastmode_output_dir_allows_legacy_mfb_wc_resume_for_cleanup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "Album"
-            src.mkdir()
-            optimized = Path(tmp) / "Album_optimized"
-            optimized.mkdir()
-            (optimized / ".mfb_wc").write_text("legacy marker")
-
-            self.assertEqual(
-                fastmode_paths.fast_img_output_dir_for_target(src),
-                optimized,
-            )
-
     def test_fastmode_state_root_defaults_to_user_home_for_app_launch(self):
         with tempfile.TemporaryDirectory() as home:  # noqa: SIM117
             with patch.dict(os.environ, {"HOME": home, "FROM_APP": "1"}, clear=True):
@@ -265,10 +233,15 @@ class TestFastModePaths(unittest.TestCase):
         source = (RUST_BIN_DIR / "drag_and_drop_processor.rs").read_text(
             encoding="utf-8"
         )
+        session = (SCRIPT_DIR.parent / "src" / "app" / "session.rs").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("ensure_unified_log_dir", source)
-        self.assertIn("archive_drag_drop_session_bundle", source)
-        self.assertIn("SESSION_ARCHIVE_DONE", source)
+        self.assertIn("AppSession::start()", source)
+        self.assertIn("session.archive()", source)
+        self.assertIn("ensure_unified_log_dir", session)
+        self.assertIn("archive_drag_drop_session_bundle", session)
+        self.assertIn("SESSION_ARCHIVE_DONE", session)
 
     def test_named_session_archive_preserves_collision_and_legacy_fallback(self):
         stamp = "20261007_120000"

@@ -386,7 +386,8 @@ fn photos_pipeline_debug_benchmark() -> anyhow::Result<()> {
         "photos_count_after_resume": after_resume,
         "unique_uuids": imported_uuids.len(),
         "sources_and_outputs_retained": true,
-        "marker_path": crate::pipeline::verification::marker_path_for_working_copy(&working_copy),
+        "marker_database_path": crate::db::fast_img_store::database_path()?,
+        "marker_working_copy": working_copy,
     });
     let mut file = std::fs::File::create_new(scratch.join("report.json"))?;
     serde_json::to_writer_pretty(&mut file, &report)?;

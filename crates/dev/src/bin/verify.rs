@@ -299,139 +299,45 @@ fn integrity_count_status(stats: &IntegrityStats) -> String {
     delta_text
 }
 
-fn same_path(p1: &Path, p2: &Path) -> bool {
-    let c1 = match p1.canonicalize() {
-        Ok(c) => c,
-        Err(_) => p1.to_path_buf(),
-    };
-    let c2 = match p2.canonicalize() {
-        Ok(c) => c,
-        Err(_) => p2.to_path_buf(),
-    };
-    c1 == c2
-}
-
-fn fast_img_marker_candidates(optimized_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut list = Vec::new();
-    let marker_dir = foundation::process_lock::get_mfb_root()
-        .map_err(|e| format!("MFB state root unavailable: {e}"))?
-        .join("fast_img")
-        .join("markers");
-    if marker_dir.is_dir() {
-        let entries = fs::read_dir(&marker_dir)
-            .map_err(|e| format!("fast-img marker dir unreadable: {marker_dir:?}: {e}"))?;
-        let mut state_markers = Vec::new();
-        for entry in entries {
-            let entry = entry
-                .map_err(|e| format!("fast-img marker dir unreadable: {marker_dir:?}: {e}"))?;
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                state_markers.push(path);
-            }
-        }
-        state_markers.sort();
-        list.extend(state_markers);
-    }
-    list.push(optimized_dir.join(".mfb_wc"));
-    list.push(optimized_dir.join("fastmode_img_marker.json"));
-    if let Some(parent) = optimized_dir.parent() {
-        list.push(parent.join("fastmode_img_marker.json"));
-    }
-    Ok(list)
-}
-
 fn load_fast_img_marker_for_optimized(
     optimized_dir: &Path,
 ) -> (Option<serde_json::Value>, Option<PathBuf>, Option<String>) {
-    let candidates = match fast_img_marker_candidates(optimized_dir) {
-        Ok(candidates) => candidates,
-        Err(err) => return (None, None, Some(err)),
+    let database = match foundation::fast_img_store::database_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                None,
+                None,
+                Some(format!("fast-img state database unavailable: {error}")),
+            );
+        }
     };
-    for path in candidates {
-        if !path.is_file() {
-            continue;
-        }
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                return (
-                    None,
-                    Some(path.clone()),
-                    Some(format!("fast-img marker unreadable: {path:?}: {e}")),
-                );
-            }
-        };
-        let val: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(e) => {
-                if path.file_name().and_then(|f| f.to_str()) == Some(".mfb_wc") {
-                    return (
-                        None,
-                        Some(path.clone()),
-                        Some(format!("fast-img marker unreadable: {path:?}: {e}")),
-                    );
-                }
-                continue;
-            }
-        };
-        let working_copy = match val.get("working_copy").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        if !same_path(Path::new(working_copy), optimized_dir) {
-            continue;
-        }
-        let src_jpeg_count = val
-            .get("src_jpeg_count")
-            .and_then(serde_json::Value::as_i64);
-        match src_jpeg_count {
-            Some(c) if c >= 0 => {}
-            _ => {
-                return (
-                    None,
-                    Some(path.clone()),
-                    Some(format!(
-                        "fast-img marker has invalid src_jpeg_count: {path:?}"
-                    )),
-                );
-            }
-        }
-        if let Some(skipped) = val.get("skipped_sources")
-            && !skipped.is_object()
-        {
-            return (
+    match foundation::pipeline::verification::read_marker(optimized_dir) {
+        Ok(marker) => match serde_json::to_value(marker) {
+            Ok(value) => (Some(value), Some(database), None),
+            Err(error) => (
                 None,
-                Some(path.clone()),
-                Some(format!(
-                    "fast-img marker has invalid skipped_sources: {path:?}"
-                )),
-            );
-        }
-        if let Some(failed) = val.get("failed_sources")
-            && !failed.is_object()
-        {
-            return (
-                None,
-                Some(path.clone()),
-                Some(format!(
-                    "fast-img marker has invalid failed_sources: {path:?}"
-                )),
-            );
-        }
-        return (Some(val), Some(path), None);
+                Some(database),
+                Some(format!("fast-img diagnostic export failed: {error}")),
+            ),
+        },
+        Err(error) => (
+            None,
+            Some(database),
+            Some(format!(
+                "fast-img state unavailable for {}: {error}",
+                optimized_dir.display()
+            )),
+        ),
     }
-    (
-        None,
-        None,
-        Some("fast-img marker missing for optimized directory".to_string()),
-    )
 }
 
 fn print_fast_img_marker_json(optimized_dir: &Path) -> Result<()> {
     let (marker, marker_path, marker_error) = load_fast_img_marker_for_optimized(optimized_dir);
     let payload = serde_json::json!({
         "marker": marker,
-        "marker_path": marker_path.map(|p| p.to_string_lossy().to_string()),
+        "marker_database_path": marker_path,
+        "marker_working_copy": optimized_dir,
         "marker_error": marker_error,
     });
     println!("{}", serde_json::to_string(&payload)?);
@@ -2242,11 +2148,12 @@ fn main() -> Result<()> {
         return print_fast_img_marker_json(optimized_dir);
     }
 
-    let _production_lease = if args.verify.is_some() || args.fast_img_delivery || args.fast_img_restore {
-        Some(foundation::infra::production_lock::acquire_production_lease()?)
-    } else {
-        None
-    };
+    let _production_lease =
+        if args.verify.is_some() || args.fast_img_delivery || args.fast_img_restore {
+            Some(foundation::infra::production_lock::acquire_production_lease()?)
+        } else {
+            None
+        };
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
     let output_report = if let Some(ref p) = args.output {
@@ -2510,6 +2417,55 @@ mod tests {
     use super::*;
     use foundation::ToolBuilder;
     use serial_test::serial;
+
+    fn isolated_marker_test() -> bool {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap();
+        if std::env::var("MFB_VERIFY_MARKER_TEST").as_deref() == Ok(name) {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture", "--test-threads=1"])
+            .env("MFB_VERIFY_MARKER_TEST", name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    fn marker_test_state(root: &Path) -> foundation::common_utils::EnvGuard {
+        foundation::common_utils::EnvGuard::set(
+            "MFB_HOME_ROOT",
+            root.join("state").to_str().unwrap(),
+        )
+    }
+
+    fn write_marker_fixture(
+        path: &Path,
+        source: &Path,
+        partial: &serde_json::Value,
+    ) -> foundation::common_utils::EnvGuard {
+        let output = path.parent().unwrap();
+        let guard = marker_test_state(output.parent().unwrap());
+        let mut value =
+            serde_json::to_value(foundation::pipeline::verification::WorkingCopyMarker::new(
+                source.into(),
+                output.into(),
+                0,
+            ))
+            .unwrap();
+        for (name, field) in partial.as_object().unwrap() {
+            value[name] = field.clone();
+        }
+        let marker = serde_json::from_value(value).unwrap();
+        foundation::pipeline::verification::write_marker_atomic(&marker).unwrap();
+        guard
+    }
 
     #[test]
     fn machine_history_count_status_preserves_existing_verifier_labels() {
@@ -2780,6 +2736,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_accepts_deleted_sources_and_jxl_only_output() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -2795,7 +2754,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             "skipped_sources": {},
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -2812,6 +2771,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_meme_delivery_rejects_recorded_static_source_left_behind() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -2843,11 +2805,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             "skipped_sources": {},
             "failed_sources": {}
         });
-        fs::write(
-            optimized.join("fastmode_img_marker.json"),
-            serde_json::to_string(&marker_data).unwrap(),
-        )
-        .unwrap();
+        let _state = write_marker_fixture(&optimized.join("fixture"), &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -2863,31 +2821,32 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_marker_lookup_reads_state_root_marker() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let state_root = tempdir.path().join("mfb_state");
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
-        let marker_dir = state_root.join("fast_img").join("markers");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&optimized).unwrap();
-        fs::create_dir_all(&marker_dir).unwrap();
 
-        unsafe { std::env::set_var("MFB_HOME_ROOT", &state_root) };
-        let marker_path = marker_dir.join("run.json");
-        let marker_data = serde_json::json!({
-            "working_copy": optimized.to_string_lossy().to_string(),
-            "src_jpeg_count": 1,
-            "stage": "gate1_failed",
-            "blake3_log": {},
-            "skipped_sources": {},
-            "failed_sources": {}
-        });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state =
+            foundation::common_utils::EnvGuard::set("MFB_HOME_ROOT", state_root.to_str().unwrap());
+        let mut marker = foundation::pipeline::verification::WorkingCopyMarker::new(
+            source,
+            optimized.clone(),
+            1,
+        );
+        marker.stage = foundation::pipeline::verification::FastImgStageName::Gate1Failed;
+        foundation::pipeline::verification::write_marker_atomic(&marker).unwrap();
 
         let (marker, found_path, marker_error) = load_fast_img_marker_for_optimized(&optimized);
 
-        unsafe { std::env::remove_var("MFB_HOME_ROOT") };
-        assert_eq!(found_path, Some(marker_path));
+        assert_eq!(
+            found_path,
+            Some(foundation::fast_img_store::database_path().unwrap())
+        );
         assert!(
             marker_error.is_none(),
             "unexpected marker error: {marker_error:?}"
@@ -2904,6 +2863,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_accepts_recorded_skipped_sources_remaining() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -2925,7 +2887,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             },
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -2943,6 +2905,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_accepts_all_sources_skipped_with_no_jxl_outputs() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -2963,7 +2928,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             },
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -2981,6 +2946,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_accepts_recorded_failed_sources_remaining() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3002,7 +2970,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 }
             }
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3019,7 +2987,11 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_rejects_missing_marker_proof() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
+        let _state = marker_test_state(tempdir.path());
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
         fs::create_dir_all(&source).unwrap();
@@ -3040,6 +3012,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_rejects_remaining_true_jpeg_and_non_jxl_output() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3056,7 +3031,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             "skipped_sources": {},
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3093,6 +3068,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_rejects_spoofed_jxl_extension() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3108,7 +3086,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             "skipped_sources": {},
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3315,12 +3293,15 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         let pixels = source.join("pixels.ppm");
         let retained = source.join("pixels-only.JXL");
         fs::write(&pixels, b"P6\n1 1\n255\n\x28\x32\x3c").unwrap();
-        let encoded = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&pixels)
-            .arg(&retained)
-            .arg("--distance=0")
-            .output()
-            .unwrap();
+        let encoded = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .expect("available cjxl must have a resolved executable path"),
+        )
+        .arg(&pixels)
+        .arg(&retained)
+        .arg("--distance=0")
+        .output()
+        .unwrap();
         fs::remove_file(&pixels).unwrap();
         assert!(
             encoded.status.success(),
@@ -3526,6 +3507,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_records_media_probe_errors() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3555,7 +3539,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
             "skipped_sources": {},
             "failed_sources": {}
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3587,6 +3571,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_accepts_tier2_modern_lossy_assets() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3609,7 +3596,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 }
             ]
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3627,6 +3614,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_rejects_tier2_missing_proof() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3649,7 +3639,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 }
             ]
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =
@@ -3666,6 +3656,9 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
     #[test]
     #[serial]
     fn test_fast_img_delivery_check_rejects_tier2_unexpected_remaining() {
+        if isolated_marker_test() {
+            return;
+        }
         let tempdir = tempfile::tempdir().unwrap();
         let source = tempdir.path().join("Album");
         let optimized = tempdir.path().join("Album_optimized");
@@ -3690,7 +3683,7 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
                 }
             ]
         });
-        fs::write(&marker_path, serde_json::to_string(&marker_data).unwrap()).unwrap();
+        let _state = write_marker_fixture(&marker_path, &source, &marker_data);
 
         let mut report = String::new();
         let stats =

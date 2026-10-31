@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
 MFB_DEFAULT_HOME_DIRNAME = ".modern_format_boost"
@@ -23,34 +22,6 @@ def default_mfb_state_root() -> Path:
     if home := os.environ.get("HOME"):
         return Path(home).expanduser() / MFB_DEFAULT_HOME_DIRNAME
     return Path(tempfile.gettempdir()) / MFB_DEFAULT_HOME_DIRNAME
-
-
-def fast_img_output_dir_for_target(
-    target_dir: Path,
-    has_resume_marker: Callable[[Path], bool] | None = None,
-) -> Path:
-    """Resolve fastmode's adjacent JXL-only output directory.
-
-    Mirrors Rust ``resolve_working_copy_dir`` collision policy: an existing
-    directory is reused only when it carries a resume marker — the legacy
-    in-tree ``.mfb_wc`` or (via ``has_resume_marker``) the central state-dir
-    marker the current Rust binary writes. Without the callback Python would
-    skip to ``_optimized_2`` while Rust resumes into ``_optimized``.
-    """
-    target = target_dir.expanduser()
-    base = target.with_name(f"{target.name}_optimized")
-    candidate = base
-    suffix = 2
-    # Legacy Rust builds wrote `.mfb_wc` inside the output tree. Treat it only as
-    # a one-time resume signal so the fixed Rust binary can migrate/delete it.
-    while (
-        candidate.exists()
-        and not (candidate / ".mfb_wc").exists()
-        and not (has_resume_marker(candidate) if has_resume_marker else False)
-    ):
-        candidate = base.with_name(f"{base.name}_{suffix}")
-        suffix += 1
-    return candidate
 
 
 def _unique_adjacent_dir(target_dir: Path, suffix_name: str) -> Path:

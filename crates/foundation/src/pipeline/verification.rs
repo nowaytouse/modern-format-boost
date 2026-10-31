@@ -4,11 +4,11 @@ use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_t
 use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Blake3Entry {
     #[serde(default)]
     pub out_rel: Option<String>,
@@ -20,6 +20,7 @@ pub struct Blake3Entry {
 pub type Blake3Log = BTreeMap<String, Blake3Entry>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SkippedSourceEntry {
     pub src: String,
     pub reason: String,
@@ -28,9 +29,10 @@ pub struct SkippedSourceEntry {
 pub type SkippedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 pub type FailedSourceLog = BTreeMap<String, SkippedSourceEntry>;
 
-const FAST_IMG_MARKER_SCHEMA_VERSION: u8 = 1;
+pub(crate) const FAST_IMG_MARKER_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct LibraryAssetRecord {
     pub rel_path: String,
     pub blake3: String,
@@ -3065,6 +3067,7 @@ impl From<bool> for CheckPassed {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Gate1Checks {
     pub count: CheckPassed,
     pub blake3: CheckPassed,
@@ -3076,6 +3079,7 @@ pub struct Gate1Checks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Gate2Checks {
     pub count: CheckPassed,
     pub blake3_sample: CheckPassed,
@@ -3083,6 +3087,7 @@ pub struct Gate2Checks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Gate3Checks {
     pub count_x3: CheckPassed,
     pub sync: CheckPassed,
@@ -3322,6 +3327,7 @@ impl PhotosSubmissionHistory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct WorkingCopyMarker {
     pub schema: u8,
     pub src_dir: PathBuf,
@@ -3334,10 +3340,11 @@ pub struct WorkingCopyMarker {
     pub gate1_checks: Gate1Checks,
     pub gate2_checks: Gate2Checks,
     pub gate3_checks: Gate3Checks,
+    #[serde(deserialize_with = "deserialize_unique_marker_map")]
     pub blake3_log: Blake3Log,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub skipped_sources: SkippedSourceLog,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_marker_map")]
     pub failed_sources: FailedSourceLog,
     /// Tier-2 lossy modern static assets imported directly into Photos.
     #[serde(default)]
@@ -3374,6 +3381,39 @@ pub struct WorkingCopyMarker {
     pub tool_snapshot_manifest: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_snapshot_identity: Option<String>,
+}
+
+fn deserialize_unique_marker_map<'de, D, V>(
+    deserializer: D,
+) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    struct UniqueMap<V>(std::marker::PhantomData<V>);
+    impl<'de, V: Deserialize<'de>> serde::de::Visitor<'de> for UniqueMap<V> {
+        type Value = BTreeMap<String, V>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a marker map with unique source paths")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, V>()? {
+                if values.insert(key.clone(), value).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate marker source path {key}"
+                    )));
+                }
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(UniqueMap(std::marker::PhantomData))
 }
 
 fn default_strategy() -> String {
@@ -3725,7 +3765,7 @@ impl WorkingCopyMarker {
     }
 }
 
-fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn canonical_working_copy_path(path: &Path) -> std::io::Result<PathBuf> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() => path.canonicalize(),
         Ok(_) => Err(std::io::Error::other(format!(
@@ -3764,66 +3804,7 @@ pub fn matching_working_copy_markers(
     src: &Path,
     strategy: &str,
 ) -> std::io::Result<Vec<WorkingCopyMarker>> {
-    let source = canonical_working_copy_path(src)?;
-    let state_dir = fast_img_marker_state_dir();
-    let entries = match std::fs::read_dir(&state_dir) {
-        Ok(entries) => Some(entries),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let mut markers = Vec::new();
-    for entry in entries.into_iter().flatten() {
-        let path = entry?.path();
-        if path.extension().is_none_or(|extension| extension != "json") {
-            continue;
-        }
-        let data = std::fs::read(&path)?;
-        let header: serde_json::Value =
-            serde_json::from_slice(&data).map_err(std::io::Error::other)?;
-        if header
-            .get("strategy")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("jxl")
-            != strategy
-        {
-            continue;
-        }
-        let Some(recorded_source) = header.get("src_dir").and_then(serde_json::Value::as_str)
-        else {
-            return Err(std::io::Error::other(
-                "fast-img checkpoint has no source identity",
-            ));
-        };
-        let recorded_source = Path::new(recorded_source);
-        if recorded_source != src && recorded_source != source {
-            let matches = match recorded_source.canonicalize() {
-                Ok(recorded) => recorded == source,
-                Err(error) => {
-                    tracing::debug!(path = %recorded_source.display(), %error,
-                        "checkpoint source alias could not be resolved; not selected for this source");
-                    false
-                }
-            };
-            if !matches {
-                continue;
-            }
-        }
-        let marker: WorkingCopyMarker =
-            serde_json::from_value(header).map_err(std::io::Error::other)?;
-        if marker_path_for_working_copy(&marker.working_copy) != path {
-            return Err(std::io::Error::other(
-                "fast-img checkpoint identity/path mismatch",
-            ));
-        }
-        parse_marker_for_working_copy(&data, &marker.working_copy)?;
-        if marker.working_copy == source || marker.working_copy.starts_with(&source) {
-            return Err(std::io::Error::other(
-                "fast-img checkpoint output overlaps its source",
-            ));
-        }
-        markers.push(marker);
-    }
-    Ok(markers)
+    crate::db::fast_img_store::matching_markers(src, strategy)
 }
 
 pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<PathBuf> {
@@ -3850,19 +3831,18 @@ pub fn resolve_working_copy_dir(src: &Path, strategy: &str) -> std::io::Result<P
             "fast-img newest matching checkpoints have ambiguous start times",
         ));
     }
-    Ok(newest.map_or_else(
-        || resolve_working_copy_dir_inner(src, false),
-        |(_, path)| path,
-    ))
+    match newest {
+        Some((_, path)) => Ok(path),
+        None => resolve_working_copy_dir_inner(src),
+    }
 }
 
 /// Select a new adjacent working copy without consuming any prior marker.
-#[must_use]
-pub fn resolve_fresh_working_copy_dir(src: &Path) -> PathBuf {
-    resolve_working_copy_dir_inner(src, false)
+pub fn resolve_fresh_working_copy_dir(src: &Path) -> std::io::Result<PathBuf> {
+    resolve_working_copy_dir_inner(src)
 }
 
-fn resolve_working_copy_dir_inner(src: &Path, reuse_marked: bool) -> PathBuf {
+fn resolve_working_copy_dir_inner(src: &Path) -> std::io::Result<PathBuf> {
     let base = working_copy_dir(src);
     let mut suffix = 0usize;
     loop {
@@ -3881,135 +3861,15 @@ fn resolve_working_copy_dir_inner(src: &Path, reuse_marked: bool) -> PathBuf {
             };
             base.with_file_name(format!("{name}_{}", suffix + 1))
         };
-        let has_marker =
-            candidate.join(".mfb_wc").exists() || marker_path_for_working_copy(&candidate).exists();
-        if (!candidate.exists() && !has_marker) || (reuse_marked && has_marker) {
-            return candidate;
+        let reserved = crate::db::fast_img_store::is_reserved(&candidate)?;
+        if !candidate.try_exists()? && !reserved {
+            return Ok(candidate);
         }
         suffix += 1;
     }
 }
 
-fn fast_img_marker_state_dir() -> PathBuf {
-    let mfb_home_root = match std::env::var(crate::constants::ENV_MFB_HOME_ROOT) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(trimmed))
-            }
-        }
-        Err(std::env::VarError::NotPresent) => None,
-        Err(err) => {
-            crate::media_conversion_gate::delivery_jxl_batch_audit(
-                "fast_img_marker_state_dir",
-                format!(
-                    "{} could not be read: {err}",
-                    crate::constants::ENV_MFB_HOME_ROOT
-                ),
-            );
-            None
-        }
-    };
-    let home_root = || match std::env::var(crate::constants::ENV_HOME) {
-        Ok(home) => Some(PathBuf::from(home).join(crate::constants::MFB_DEFAULT_HOME_DIRNAME)),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(err) => {
-            crate::media_conversion_gate::delivery_jxl_batch_audit(
-                "fast_img_marker_state_dir",
-                format!("{} could not be read: {err}", crate::constants::ENV_HOME),
-            );
-            None
-        }
-    };
-    let root = mfb_home_root
-        .or_else(home_root)
-        .unwrap_or_else(crate::media_conversion_gate::delivery_temp_mfb_root_ssot);
-    root.join("fast_img").join("markers")
-}
-
-#[must_use]
-fn fast_img_marker_key(working_copy: &Path) -> String {
-    let absolute = crate::media_conversion_gate::delivery_absolute_output_path_or_dot(
-        working_copy,
-        "fast_img_marker_key",
-    );
-    blake3::hash(absolute.to_string_lossy().as_bytes())
-        .to_hex()
-        .to_string()
-}
-
-#[must_use]
-pub fn marker_path_for_working_copy(working_copy: &Path) -> PathBuf {
-    fast_img_marker_state_dir().join(format!("{}.json", fast_img_marker_key(working_copy)))
-}
-
-pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
-    marker
-        .validate_photos_submission_history()
-        .map_err(std::io::Error::other)?;
-    if let Some(contract) = &marker.processing_contract {
-        contract
-            .validate(&marker.strategy)
-            .map_err(std::io::Error::other)?;
-    }
-    marker
-        .validate_relative_path_contract()
-        .map_err(std::io::Error::other)?;
-    marker
-        .validate_library_asset_receipts_unique()
-        .map_err(std::io::Error::other)?;
-    if marker.working_copy.exists() {
-        marker
-            .validate_checkpoint_path_contract(&marker.working_copy)
-            .map_err(std::io::Error::other)?;
-    }
-    if marker.working_copy == marker.src_dir || marker.working_copy.starts_with(&marker.src_dir) {
-        return Err(std::io::Error::other(format!(
-            "fast-img marker output must not be inside source tree: source={} output={}",
-            marker.src_dir.display(),
-            marker.working_copy.display()
-        )));
-    }
-    let path = marker_path_for_working_copy(&marker.working_copy);
-    let marker_dir = path.parent().ok_or_else(|| {
-        std::io::Error::other(format!(
-            "fast-img marker path has no parent: {}",
-            path.display()
-        ))
-    })?;
-    std::fs::create_dir_all(marker_dir)?;
-    let data = serde_json::to_vec(marker).map_err(std::io::Error::other)?;
-    let mut tmp_file = crate::media_conversion_gate::delivery_named_tempfile_in_parent_or_err(
-        "fast_img_checkpoint_write",
-        marker_dir,
-        ".mfb-checkpoint-",
-        ".tmp",
-    )?;
-    tmp_file.write_all(&data)?;
-    tmp_file.as_file().sync_all()?;
-    tmp_file.persist(&path).map_err(|error| error.error)?;
-    #[cfg(unix)]
-    std::fs::File::open(marker_dir)?.sync_all()?;
-    for legacy in [
-        marker.working_copy.join(".mfb_wc"),
-        marker.working_copy.join(".mfb_wc.tmp"),
-    ] {
-        match std::fs::remove_file(&legacy) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
-        }
-    }
-    Ok(())
-}
-
-fn parse_marker_for_working_copy(
-    data: &[u8],
-    working_copy: &Path,
-) -> std::io::Result<WorkingCopyMarker> {
-    let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
+pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::Result<()> {
     if marker.schema != FAST_IMG_MARKER_SCHEMA_VERSION {
         return Err(std::io::Error::other(format!(
             "unsupported fast-img marker schema {}; expected {}",
@@ -4025,31 +3885,42 @@ fn parse_marker_for_working_copy(
             .map_err(std::io::Error::other)?;
     }
     marker
-        .validate_checkpoint_path_contract(working_copy)
+        .validate_relative_path_contract()
         .map_err(std::io::Error::other)?;
     marker
         .validate_library_asset_receipts_unique()
+        .map_err(std::io::Error::other)?;
+    marker
+        .validate_source_disposition_disjoint()
+        .map_err(std::io::Error::other)?;
+    if marker.working_copy == marker.src_dir || marker.working_copy.starts_with(&marker.src_dir) {
+        return Err(std::io::Error::other(format!(
+            "fast-img marker output must not be inside source tree: source={} output={}",
+            marker.src_dir.display(),
+            marker.working_copy.display()
+        )));
+    }
+    Ok(())
+}
+
+pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    crate::db::fast_img_store::write_marker(marker)
+}
+
+pub(crate) fn parse_marker_for_working_copy(
+    data: &[u8],
+    working_copy: &Path,
+) -> std::io::Result<WorkingCopyMarker> {
+    let marker: WorkingCopyMarker = serde_json::from_slice(data).map_err(std::io::Error::other)?;
+    validate_marker_structure(&marker)?;
+    marker
+        .validate_checkpoint_path_contract(working_copy)
         .map_err(std::io::Error::other)?;
     Ok(marker)
 }
 
 pub fn read_marker(working_copy: &Path) -> std::io::Result<WorkingCopyMarker> {
-    let marker_path = marker_path_for_working_copy(working_copy);
-    match std::fs::read(&marker_path) {
-        Ok(data) => parse_marker_for_working_copy(&data, working_copy),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let legacy_path = working_copy.join(".mfb_wc");
-            let data = std::fs::read(&legacy_path)?;
-            let marker = parse_marker_for_working_copy(&data, working_copy)?;
-            // Legacy inspection must not mutate a checkpoint whose processing
-            // intent cannot be compared with the current request.
-            if marker.processing_contract.is_some() {
-                write_marker_atomic(&marker)?;
-            }
-            Ok(marker)
-        }
-        Err(err) => Err(err),
-    }
+    crate::db::fast_img_store::read_marker(working_copy)
 }
 
 #[must_use]
@@ -4560,10 +4431,9 @@ mod photos_submission_tests {
 mod working_copy_tests {
     use super::{
         Blake3Entry, FAST_IMG_MARKER_SCHEMA_VERSION, FastImgStageName, LibraryAssetRecord,
-        SkippedSourceEntry, WorkingCopyMarker, marker_path_for_working_copy,
-        parse_marker_for_working_copy, prepare_jxl_output_dir, read_marker,
-        resolve_fresh_working_copy_dir, resolve_working_copy_dir, working_copy_dir,
-        write_marker_atomic,
+        SkippedSourceEntry, WorkingCopyMarker, parse_marker_for_working_copy,
+        prepare_jxl_output_dir, read_marker, resolve_fresh_working_copy_dir,
+        resolve_working_copy_dir, working_copy_dir, write_marker_atomic,
     };
     use crate::common_utils::EnvGuard;
     use serial_test::serial;
@@ -4761,7 +4631,14 @@ mod working_copy_tests {
 
     #[test]
     fn working_copy_collision_uses_numbered_optimized_dir_without_marker() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
         let root = TempDir::new().unwrap();
+        let _home = EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            root.path().to_str().unwrap(),
+        );
         let src = root.path().join("Photos");
         std::fs::create_dir(&src).unwrap();
         std::fs::create_dir_all(root.path().join("Photos_optimized")).unwrap();
@@ -4833,6 +4710,7 @@ mod working_copy_tests {
         assert_eq!(resolve_working_copy_dir(&src, "jxl").unwrap(), newer);
 
         let mut ambiguous = read_marker(&base).unwrap();
+        ambiguous.working_copy = base.with_file_name("Photos_optimized_4");
         ambiguous.started_at = "2026-10-15T10:00:00+00:00".to_owned();
         write_marker_atomic(&ambiguous).unwrap();
         assert!(resolve_working_copy_dir(&src, "jxl").is_err());
@@ -4856,14 +4734,14 @@ mod working_copy_tests {
         write_marker_atomic(&WorkingCopyMarker::new(src.clone(), wc, 1)).unwrap();
 
         assert_eq!(
-            resolve_fresh_working_copy_dir(&src),
+            resolve_fresh_working_copy_dir(&src).unwrap(),
             root.path().join("Photos_optimized_2")
         );
     }
 
     #[test]
     #[serial]
-    fn marker_write_is_readable_after_atomic_rename() {
+    fn marker_write_is_readable_after_atomic_sql_transaction() {
         if crate::common_utils::isolated_test_process() {
             return;
         }
@@ -4880,15 +4758,17 @@ mod working_copy_tests {
         marker.stage = FastImgStageName::OutputPrepared;
 
         write_marker_atomic(&marker).unwrap();
-        let stored = std::fs::read(marker_path_for_working_copy(&marker.working_copy)).unwrap();
-        assert_eq!(stored, serde_json::to_vec(&marker).unwrap());
-        assert!(stored.len() < serde_json::to_vec_pretty(&marker).unwrap().len());
         let read = read_marker(&marker.working_copy).unwrap();
 
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
         assert_eq!(read, marker);
         assert!(!marker.working_copy.join(".mfb_wc").exists());
-        assert!(marker_path_for_working_copy(&marker.working_copy).exists());
+        assert!(
+            crate::db::fast_img_store::database_path()
+                .unwrap()
+                .is_file()
+        );
+        assert!(!state.path().join("fast_img/markers").exists());
     }
 
     #[test]
@@ -4908,12 +4788,11 @@ mod working_copy_tests {
         let wc = root.path().join("Photos_optimized");
         std::fs::create_dir_all(&wc).unwrap();
         let mut marker = WorkingCopyMarker::new(src, wc, 1);
-        let path = marker_path_for_working_copy(&marker.working_copy);
-        let marker_dir = path.parent().unwrap();
-        std::fs::create_dir_all(marker_dir).unwrap();
+        let marker_dir = state.path().join("unrelated-old-artifacts");
+        std::fs::create_dir_all(&marker_dir).unwrap();
         let unrelated = root.path().join("unrelated-file");
         std::fs::write(&unrelated, b"retain these bytes").unwrap();
-        let old_temp = path.with_extension("json.tmp");
+        let old_temp = marker_dir.join("old-marker.json.tmp");
         std::os::unix::fs::symlink(&unrelated, &old_temp).unwrap();
 
         write_marker_atomic(&marker).unwrap();
@@ -4923,7 +4802,7 @@ mod working_copy_tests {
         assert_eq!(read_marker(&marker.working_copy).unwrap(), marker);
         assert_eq!(std::fs::read(&unrelated).unwrap(), b"retain these bytes");
         assert_eq!(std::fs::read_link(&old_temp).unwrap(), unrelated);
-        assert_eq!(std::fs::read_dir(marker_dir).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(marker_dir).unwrap().count(), 1);
         assert!(
             std::fs::read_dir(&marker.working_copy)
                 .unwrap()
@@ -4947,6 +4826,42 @@ mod working_copy_tests {
         assert!(
             err.to_string()
                 .contains("unsupported fast-img marker schema")
+        );
+    }
+
+    #[test]
+    fn migration_marker_rejects_unknown_fields_and_duplicate_source_entries() {
+        let root = TempDir::new().unwrap();
+        let wc = root.path().join("Photos_optimized");
+        let marker = WorkingCopyMarker::new(root.path().join("Photos"), wc.clone(), 1);
+        let encoded = serde_json::to_string(&marker).unwrap();
+        for field in ["blake3_log", "skipped_sources", "failed_sources"] {
+            let value = if field == "blake3_log" {
+                serde_json::to_string(&Blake3Entry::default()).unwrap()
+            } else {
+                serde_json::to_string(&SkippedSourceEntry {
+                    src: "hash".into(),
+                    reason: "test".into(),
+                })
+                .unwrap()
+            };
+            let duplicated = encoded.replace(
+                &format!("\"{field}\":{{}}"),
+                &format!("\"{field}\":{{\"same.jpg\":{value},\"same.jpg\":{value}}}"),
+            );
+            let error = parse_marker_for_working_copy(duplicated.as_bytes(), &wc).unwrap_err();
+            assert!(
+                error.to_string().contains("duplicate marker source path"),
+                "{field}: {error}"
+            );
+        }
+        let mut unknown = serde_json::to_value(marker).unwrap();
+        unknown["unknown_future_intent"] = serde_json::json!(true);
+        assert!(
+            parse_marker_for_working_copy(&serde_json::to_vec(&unknown).unwrap(), &wc)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
         );
     }
 
@@ -4990,10 +4905,8 @@ mod working_copy_tests {
         assert!(err.to_string().contains("contains a symlink"));
 
         marker.working_copy = outside;
-        let marker_path = marker_path_for_working_copy(&wc);
-        std::fs::create_dir_all(marker_path.parent().unwrap()).unwrap();
-        std::fs::write(&marker_path, serde_json::to_vec_pretty(&marker).unwrap()).unwrap();
-        let err = read_marker(&wc).unwrap_err();
+        let err =
+            parse_marker_for_working_copy(&serde_json::to_vec(&marker).unwrap(), &wc).unwrap_err();
         assert!(err.to_string().contains("working copy mismatch"));
     }
 
@@ -5037,8 +4950,9 @@ mod working_copy_tests {
         assert!(!src.join(".mfb_wc").exists());
         assert!(!wc.join(".mfb_wc").exists());
         assert!(!wc.join(".mfb_wc.tmp").exists());
-        assert!(marker_path_for_working_copy(&wc).starts_with(state.path()));
-        assert!(marker_path_for_working_copy(&wc).exists());
+        let database = crate::db::fast_img_store::database_path().unwrap();
+        assert!(database.starts_with(state.path()));
+        assert!(database.is_file());
         assert_eq!(wc, root.path().join("Photos_optimized"));
     }
 
@@ -5057,7 +4971,8 @@ mod working_copy_tests {
         let src = root.path().join("Photos");
         let wc = root.path().join("Photos_optimized");
         std::fs::create_dir_all(&wc).unwrap();
-        let mut marker = WorkingCopyMarker::new(src, wc.clone(), 1);
+        std::fs::create_dir_all(&src).unwrap();
+        let mut marker = WorkingCopyMarker::new(src.clone(), wc.clone(), 1);
         marker.stage = FastImgStageName::OutputPrepared;
         std::fs::write(
             wc.join(".mfb_wc"),
@@ -5065,18 +4980,23 @@ mod working_copy_tests {
         )
         .unwrap();
 
-        let read = read_marker(&wc).unwrap();
-
-        assert!(read.processing_contract.is_none());
+        let error = read_marker(&wc).unwrap_err();
+        assert!(error.to_string().contains("MFB_STATE_MIGRATION_REQUIRED"));
         assert!(wc.join(".mfb_wc").exists());
-        assert!(!marker_path_for_working_copy(&wc).exists());
-
-        marker.processing_contract = Some(processing_contract());
-        std::fs::write(wc.join(".mfb_wc"), serde_json::to_vec(&marker).unwrap()).unwrap();
+        let report = crate::db::fast_img_store::migrate_legacy_for_source(&src, Some(&wc)).unwrap();
+        assert_eq!(report.migrated, 1);
         let read = read_marker(&wc).unwrap();
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
+        assert!(
+            read.processing_contract.is_none(),
+            "migration must not invent old processing intent"
+        );
         assert!(!wc.join(".mfb_wc").exists());
-        assert!(marker_path_for_working_copy(&wc).exists());
+        assert!(
+            crate::db::fast_img_store::database_path()
+                .unwrap()
+                .is_file()
+        );
     }
 }
 

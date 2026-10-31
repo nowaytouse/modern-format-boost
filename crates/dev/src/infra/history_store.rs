@@ -569,6 +569,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_OUTPUT_CLEANUP"
                 | "MFB_HISTORY_FAST_IMG_RESULT"
+                | "MFB_HISTORY_FAST_IMG_STATE_MIGRATION"
                 | "MFB_HISTORY_FINISHED"
         ),
         "unsupported history event: {name}"
@@ -1311,6 +1312,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(saved, input_plan);
+        let migration = "MFB_HISTORY_FAST_IMG_STATE_MIGRATION={\"schema_version\":1,\"migrated\":1,\"retired\":1}";
+        append_history_event(directory.path(), "session", migration).unwrap();
+        let saved: String = connection
+            .query_row(
+                "SELECT event FROM history_events ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, migration);
         assert!(
             append_history_event(
                 directory.path(),

@@ -722,7 +722,7 @@ pub fn load_fast_img_marker_json(
     let payload: Value = serde_json::from_slice(&out.stdout).context("parse marker JSON")?;
     let marker = payload.get("marker").cloned();
     let marker_path = payload
-        .get("marker_path")
+        .get("marker_database_path")
         .and_then(Value::as_str)
         .map(PathBuf::from);
     let marker_error = payload

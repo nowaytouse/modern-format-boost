@@ -983,11 +983,13 @@ Missing historical coverage remains unknown; appending new requests to an old ch
 turn earlier unknown activity into an empty complete history. Invalid schemas,
 paths, hashes, duplicate entries and conflicting request scopes are rejected.
 Failure isolation and outcome resets retain these references after local outputs
-are removed. They share the existing checkpoint store; no second status database
-or per-file request sidecars are introduced. Grouping avoids a new full-checkpoint
-write per initial AppleScript media send; existing verified receipt persistence
-is retained. The checkpoint still serializes its complete JSON payload, so this
-is not a canonical per-row SQLite migration or a measured throughput claim.
+are removed. They share the Core SQLite task transaction; no second status
+database or per-file request sidecars are introduced. Grouping reserves bounded
+initial AppleScript requests, and existing verified receipt persistence is
+retained. SQL persists appended references and changed receipt rows rather than
+rewriting the full collection as a JSON checkpoint. Complete DTO validation and
+snapshot hashing still scan the logical state; this is not a measured throughput
+claim.
 
 AppleScript reconciliation reports `MFB_NOT_FOUND` only after a successful query
 returns no match. Query failures and ambiguous folder/album or single-asset
@@ -995,6 +997,62 @@ matches propagate instead of authorizing a new import. Discovery still does not
 replace original-resource identity verification. These references are a recovery
 building block; parent/child failed-only attempts, complete cross-attempt
 reconciliation and a full source/sidecar manifest remain unfinished.
+
+## Canonical Fast IMG State
+
+Fast IMG task headers, source outcomes, Photos request/entry references and
+verified receipt records use the existing Core SQLite store, schema 3. Large
+per-file collections are normalized rows, not a second authoritative JSON blob.
+One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
+preserve the last committed snapshot. The writer validates the saved state first,
+updates only changed rows, and verifies exact readback before commit. Identical
+logical snapshots make no row changes. Submission history is append-only, and
+missing historical coverage cannot be promoted to complete coverage.
+
+Canonical source/output paths bind the header, indexed task locator and complete
+snapshot digest. The same output cannot silently become a different task or
+strategy. Its reservation survives local directory cleanup, so a new task cannot
+overwrite older recovery evidence merely because the output no longer exists.
+Ordinary reads, discovery and dry-run do not create a database or migrate state.
+Unknown schema, missing previously bound storage, identity changes, malformed
+rows and hash drift are errors, not an empty history or permission to reset it.
+
+Legacy JSON is handled only by the named `migrate_legacy_for_source` operation at
+actual processing admission, before output discovery and tool preparation.
+Read-only discovery can inspect bounded old-format locators solely to report
+`MFB_STATE_MIGRATION_REQUIRED`; it does not consume JSON as recovery proof. A
+known-format migration validates ownership and all marker fields, then commits
+normalized state together with the original bytes, BLAKE3 and migration receipt.
+Only verified committed state permits retirement of the unchanged legacy file.
+Unknown, conflicting or changed legacy files remain protected. Interrupted
+retirement is resumable from its receipt; old configuration or submission gaps
+are never filled with current defaults.
+
+Retirement restores directory timestamps from a verified in-process cleanup
+snapshot. That original directory snapshot is not yet durable across a crash;
+a resumed retirement cannot establish the directory's pre-interruption dates.
+Exact checkpoint bytes remain backed up, but complete crash-safe ghost directory
+metadata preservation is still a separate unfinished requirement.
+
+Core schema migrations from CRC32 v1 and BLAKE3 v2 to v3 are transactional. A
+known v2 database remains inspectable read-only without pretending it already
+has the new tables. Integrity inspection verifies all six Fast IMG tables and
+migration backups in a consistent SQL snapshot. It does not open media files or
+confer Photos custody or deletion permission. Cache management counts these as
+protected State and includes them in verified backups; cache pruning never
+deletes them. Reported payload bytes cover actual stored header/migration blobs,
+not database pages, indexes or estimated disk recovery.
+
+The formal Rust Core root is fixed for the process; invalid or unavailable
+configuration cannot redirect durable state to temporary storage. The store
+selection follows startup environment loading: the bootstrap configuration
+location is read before the resolved state root is bound, and cannot be used
+to rebind an already active state session. The store
+still lives at `cache/mfb_store.sqlite` and also contains protected legacy
+Checkpoint/processed records. This change does not physically separate Cache and
+State, implement a complete file-task Manifest, prove cross-filesystem crash
+atomicity, or finish post-cleanup failed-only retry and cross-attempt Photos
+reconciliation.
 
 ## Standard Worker Preflight Admission
 

@@ -444,14 +444,8 @@ fn read_optional_text_file(path: &Path) -> Option<String> {
 /// Uses `serde_json` for robust JSON parsing — the previous hand-rolled
 /// `split(',')` approach silently mishandled values containing commas (e.g.
 /// `PostgreSQL` multi-host connection strings).
-fn load_local_env() {
-    let Ok(conf_dir) = foundation::process_lock::get_mfb_root() else {
-        eprintln!(
-            "{} MFB state root unavailable; skipping local environment",
-            pick_symbol("⚠️", "[WARN]")
-        );
-        return;
-    };
+fn load_local_env() -> Result<()> {
+    let conf_dir = foundation::process_lock::configuration_bootstrap_root()?;
     // JSON source (preferred)
     let json_path = conf_dir.join("local_env.json");
     if json_path.is_file() {
@@ -479,7 +473,7 @@ fn load_local_env() {
                 }
             }
         }
-        return; // JSON wins; skip .sh fallback
+        return Ok(()); // JSON wins; skip .sh fallback
     }
 
     // Shell fallback: `export KEY="VALUE"`
@@ -504,6 +498,7 @@ fn load_local_env() {
             }
         }
     }
+    Ok(())
 }
 
 /// Call `img db-health` and fail-fast with a helpful error if `PostgreSQL` is
@@ -1493,7 +1488,7 @@ fn fast_img_source_root_for_run(target: &Path) -> Result<PathBuf> {
 fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf> {
     let source_root = fast_img_source_root_for_run(target)?;
     let live_output = if args.no_resume {
-        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&source_root)
+        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&source_root)?
     } else {
         foundation::pipeline::verification::resolve_working_copy_dir(
             &source_root,
@@ -2076,6 +2071,24 @@ fn run_drag_drop_with_lease<L>(
                     "inputs": inputs,
                 }),
             )?;
+        }
+        if !args.dry_run && args.mode == LaunchMode::FastImg {
+            for input in &args.inputs {
+                let source = fast_img_source_root_for_run(input)?;
+                let migration = foundation::fast_img_store::migrate_legacy_for_source(
+                    &source,
+                    args.output.as_deref(),
+                )?;
+                if migration.migrated != 0 || migration.retired != 0 {
+                    let report = serde_json::json!({"schema_version":1,
+                        "migrated":migration.migrated,"retired":migration.retired});
+                    println!("MFB_FAST_IMG_STATE_MIGRATION={report}");
+                    if let Some(session) = session {
+                        session
+                            .append_history_event("MFB_HISTORY_FAST_IMG_STATE_MIGRATION", report)?;
+                    }
+                }
+            }
         }
         run_drag_drop_inner(args, session, dir_lock, &plans)
     })
@@ -3375,7 +3388,7 @@ fn run_watch_loop(args: &Args, session: &AppSession) -> Result<()> {
 }
 
 fn initialize_launcher_runtime(args: &Args) -> Result<()> {
-    load_local_env();
+    load_local_env()?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
     let mut runtime = foundation::runtime_config::load(None, false)?;
     args.performance.apply_to(&mut runtime);
@@ -3936,6 +3949,33 @@ mod tests {
     }
     use serial_test::serial;
     use std::path::{Path, PathBuf};
+
+    fn isolated_state_test() -> bool {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap();
+        if std::env::var("MFB_LAUNCHER_STATE_TEST").as_deref() == Ok(name) {
+            return false;
+        }
+        // Formal storage binds its root for the process lifetime. Keep each
+        // synthetic root alive until its one-test child has fully exited.
+        let state = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture", "--test-threads=1"])
+            .env("MFB_LAUNCHER_STATE_TEST", name)
+            .env(
+                foundation::constants::ENV_MFB_HOME_ROOT,
+                state.path().join("state"),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
 
     fn fast_img_plan_fixture() -> (tempfile::TempDir, foundation::common_utils::EnvGuard) {
         let input = tempfile::tempdir().unwrap();
@@ -4536,7 +4576,6 @@ mod tests {
         );
         assert_eq!(observation.program_path, Some(PathBuf::from("/bin/sh")));
         assert!(observation.binary.blake3.is_some());
-        let observed_invocation_id = observation.invocation_id;
         let unknown = BinaryObservation::observe(Some(&temp.path().join("unreadable-or-missing")));
         assert!(unknown.bytes.is_none() && unknown.blake3.is_none());
         assert!(unknown.diagnostic.is_some());
@@ -4794,6 +4833,9 @@ mod tests {
     #[test]
     #[serial]
     fn fast_avif_numeric_settings_are_isolated_and_forwarded_exactly() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
         let (input, _guard) = fast_img_plan_fixture();
         for arguments in [
             vec!["mfb", "--mode", "images", "--img-avif-quality", "10"],
@@ -4895,6 +4937,9 @@ mod tests {
     #[test]
     #[serial]
     fn jxl_pixel_effort_is_independent_scoped_and_forwarded() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
         let (input, _guard) = fast_img_plan_fixture();
         let args = Args::try_parse_from([
             "mfb",
@@ -5027,6 +5072,9 @@ mod tests {
 
     #[test]
     fn tool_paths_are_pipeline_scoped_exact_and_preview_only() -> Result<()> {
+        if isolated_state_test() {
+            return Ok(());
+        }
         let root = tempfile::tempdir()?;
         let input = root.path().join("input");
         fs::create_dir(&input)?;
@@ -5308,6 +5356,9 @@ mod tests {
 
     #[test]
     fn fast_img_failure_policy_reaches_worker_invocation() {
+        if isolated_state_test() {
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("input");
         fs::create_dir(&source).unwrap();
@@ -5460,6 +5511,9 @@ mod tests {
     #[test]
     #[serial]
     fn cache_policy_is_forwarded_only_to_supported_processing_modes() {
+        if isolated_state_test() {
+            return;
+        }
         let (input, _guard) = fast_img_plan_fixture();
         for mode in ["images", "videos", "fast-img", "fast-vid"] {
             let mut args = Args::try_parse_from([
@@ -5785,6 +5839,9 @@ mod tests {
     #[test]
     #[serial]
     fn gui_fast_img_mode_survives_images_only_filter() {
+        if isolated_state_test() {
+            return;
+        }
         let (input, _guard) = fast_img_plan_fixture();
         let parsed = Args::try_parse_from([
             "drag_and_drop_processor",
@@ -5819,6 +5876,9 @@ mod tests {
     #[test]
     #[serial]
     fn fresh_fast_img_output_uses_live_marker_state_instead_of_guessing() {
+        if isolated_state_test() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let state_root = temp.path().join("state");
         let _state_guard = foundation::common_utils::EnvGuard::set(
@@ -5856,6 +5916,9 @@ mod tests {
 
     #[test]
     fn fast_img_preview_and_execution_share_archive_choice() {
+        if isolated_state_test() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("Album");
         std::fs::create_dir(&input).unwrap();
@@ -6204,6 +6267,9 @@ mod tests {
     #[test]
     #[serial]
     fn standard_multi_input_locks_cover_every_in_place_source() {
+        if isolated_state_test() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let _state = foundation::common_utils::EnvGuard::set(
             foundation::constants::ENV_MFB_HOME_ROOT,

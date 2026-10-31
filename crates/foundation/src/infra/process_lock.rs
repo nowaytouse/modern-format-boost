@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashSet;
 use std::fs::{self, File};
+use std::io::Write;
 use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,166 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 
 static INIT_GHOST_ENV: Once = Once::new();
+
+struct BoundMfbRoot {
+    path: PathBuf,
+    identity: Option<MfbRootIdentity>,
+    write_checked: bool,
+}
+
+struct MfbRootIdentity {
+    canonical_path: PathBuf,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+static BOUND_MFB_ROOT: Mutex<Option<BoundMfbRoot>> = Mutex::new(None);
+
+impl BoundMfbRoot {
+    fn new(path: PathBuf) -> Result<Self> {
+        ensure_mfb_root_usable(&path)
+            .with_context(|| format!("prepare formal MFB root {}", path.display()))?;
+        let identity = MfbRootIdentity::capture(&path)?;
+        Ok(Self {
+            path,
+            identity: Some(identity),
+            write_checked: true,
+        })
+    }
+
+    fn inspect(path: PathBuf) -> Result<Self> {
+        let identity = inspect_mfb_root_identity(&path)?;
+        Ok(Self {
+            path,
+            identity,
+            write_checked: false,
+        })
+    }
+
+    fn inspect_bound(&mut self) -> Result<()> {
+        if let Some(identity) = &self.identity {
+            identity.validate(&self.path)
+        } else {
+            self.identity = inspect_mfb_root_identity(&self.path)?;
+            Ok(())
+        }
+    }
+
+    fn prepare_write(&mut self) -> Result<()> {
+        if let Some(identity) = &self.identity {
+            identity.validate(&self.path)?;
+            if !self.write_checked {
+                // A read-bound directory must not be recreated if it disappears.
+                probe_mfb_root_write(&self.path).with_context(|| {
+                    format!("prepare inspected formal MFB root {}", self.path.display())
+                })?;
+                identity.validate(&self.path)?;
+                self.write_checked = true;
+            }
+        } else {
+            // A read-only lookup selected this absent path without creating it.
+            // Only its first writer may initialize it; environment changes are
+            // never consulted again for this process's selected authority.
+            let initialized = Self::new(self.path.clone())?;
+            *self = initialized;
+        }
+        Ok(())
+    }
+}
+
+impl MfbRootIdentity {
+    fn capture(path: &Path) -> Result<Self> {
+        let canonical_path = path
+            .canonicalize()
+            .with_context(|| format!("resolve formal MFB root {}", path.display()))?;
+        let metadata = fs::metadata(&canonical_path)
+            .with_context(|| format!("inspect formal MFB root {}", path.display()))?;
+        anyhow::ensure!(metadata.is_dir(), "formal MFB root is not a directory");
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            canonical_path,
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+        })
+    }
+
+    fn validate(&self, path: &Path) -> Result<()> {
+        // Never create or select another directory after binding: a new inode
+        // at the same path would split both durable state and directory locks.
+        let canonical = path.canonicalize().with_context(|| {
+            format!(
+                "bound formal MFB root is unavailable; state and locks retained: {}",
+                path.display()
+            )
+        })?;
+        anyhow::ensure!(
+            canonical == self.canonical_path,
+            "bound formal MFB root changed its target; refusing another state or lock root: {}",
+            path.display()
+        );
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("inspect bound formal MFB root {}", path.display()))?;
+        anyhow::ensure!(
+            metadata.is_dir(),
+            "bound formal MFB root is no longer a directory: {}",
+            path.display()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            anyhow::ensure!(
+                metadata.dev() == self.device && metadata.ino() == self.inode,
+                "bound formal MFB root was replaced; refusing another state or lock root: {}",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+}
+
+fn inspect_mfb_root_identity(path: &Path) -> Result<Option<MfbRootIdentity>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => MfbRootIdentity::capture(path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Distinguish an absent subtree from an unreadable ancestor, a
+            // regular-file ancestor, or a dangling symlink. None authorizes no
+            // creation; it only preserves the selected path for a future writer.
+            for ancestor in path.ancestors().skip(1) {
+                match fs::symlink_metadata(ancestor) {
+                    Ok(_) => {
+                        let metadata = fs::metadata(ancestor).with_context(|| {
+                            format!("inspect formal MFB root ancestor {}", ancestor.display())
+                        })?;
+                        anyhow::ensure!(
+                            metadata.is_dir(),
+                            "formal MFB root ancestor is not a directory: {}",
+                            ancestor.display()
+                        );
+                        return Ok(None);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("inspect formal MFB root ancestor {}", ancestor.display())
+                        });
+                    }
+                }
+            }
+            Err(anyhow!(
+                "formal MFB root has no accessible existing ancestor: {}",
+                path.display()
+            ))
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("inspect formal MFB root {}", path.display()))
+        }
+    }
+}
 
 fn held_dir_locks() -> &'static Mutex<HashSet<PathBuf>> {
     static HELD_DIR_LOCKS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -119,74 +280,120 @@ fn ensure_tool_path() {
     }
 }
 
-/// Returns the central home for MFB metadata and transient files
-/// (~/.`modern_format_boost`).
+/// Return the writable formal MFB root selected for this process.
+///
+/// The configured absolute path spelling is preserved. Later environment changes
+/// cannot redirect existing state or locks; a missing or replaced bound directory
+/// is an error, never a reason to create another root or use temporary storage.
 ///
 /// # Errors
-/// Returns an error if neither the configured/user root nor the system-temp
-/// fallback can be created.
+/// Rejects invalid configuration, missing home, inaccessible storage, replacement,
+/// or a poisoned binding lock. An initial error does not establish a binding;
+/// an earlier read-only selection remains fixed even if its first write fails.
 pub fn get_mfb_root() -> Result<PathBuf> {
-    match std::env::var(crate::constants::ENV_MFB_HOME_ROOT) {
-        Ok(root) => {
-            return usable_mfb_root_or_fallback(
-                PathBuf::from(root),
-                "MFB_HOME_ROOT",
-                "Failed to create MFB_HOME_ROOT directory",
-            );
-        }
-        Err(std::env::VarError::NotPresent) => {}
-        Err(e) => {
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "process_lock_root",
-                format!(
-                    "failed to read {}: {e}; falling back to HOME",
-                    crate::constants::ENV_MFB_HOME_ROOT
-                ),
-            );
-        }
+    let mut binding = BOUND_MFB_ROOT
+        .lock()
+        .map_err(|_| anyhow!("formal MFB root binding lock is poisoned; state retained"))?;
+    if let Some(root) = binding.as_mut() {
+        root.prepare_write()?;
+        return Ok(root.path.clone());
     }
-
-    let home_root = std::env::var(crate::constants::ENV_HOME)
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var(crate::constants::ENV_USERPROFILE).map(PathBuf::from))
-        .map_or_else(
-            |_| crate::media_conversion_gate::delivery_temp_mfb_root_ssot(),
-            |h| h.join(".modern_format_boost"),
-        );
-    usable_mfb_root_or_fallback(home_root, "home", "Failed to create MFB home directory")
+    let root = BoundMfbRoot::new(configured_mfb_root()?)?;
+    let path = root.path.clone();
+    *binding = Some(root);
+    Ok(path)
 }
 
-fn usable_mfb_root_or_fallback(root: PathBuf, context: &str, create_msg: &str) -> Result<PathBuf> {
-    match ensure_mfb_root_usable(&root) {
-        Ok(()) => Ok(root),
-        Err(primary_err) => {
-            let fallback = crate::media_conversion_gate::delivery_temp_mfb_root_ssot();
-            ensure_mfb_root_usable(&fallback).with_context(|| {
-                format!(
-                    "{create_msg}; primary {} unavailable at {} ({primary_err}); fallback {} also \
-                     unavailable",
-                    context,
-                    root.display(),
-                    fallback.display()
-                )
-            })?;
-            crate::media_conversion_gate::delivery_runtime_path_audit(
-                "mfb_root_fallback",
-                &root,
-                format!(
-                    "{context} MFB root unavailable ({primary_err}); using {}",
-                    fallback.display()
-                ),
-            );
-            Ok(fallback)
+/// Inspect the selected formal root without creating directories or write probes.
+///
+/// An absent root still fixes this process's selected path for a later writer.
+/// An existing root also fixes its directory identity, but is not treated as
+/// write-checked until `get_mfb_root` successfully performs the initial probe.
+///
+/// # Errors
+/// Rejects invalid configuration, unreadable/non-directory paths, changed bound
+/// identities, or a poisoned binding lock; none is reported as absent state.
+pub fn inspect_mfb_root_path() -> Result<PathBuf> {
+    let mut binding = BOUND_MFB_ROOT
+        .lock()
+        .map_err(|_| anyhow!("formal MFB root binding lock is poisoned; state retained"))?;
+    if let Some(root) = binding.as_mut() {
+        root.inspect_bound()?;
+        return Ok(root.path.clone());
+    }
+    let root = BoundMfbRoot::inspect(configured_mfb_root()?)?;
+    let path = root.path.clone();
+    *binding = Some(root);
+    Ok(path)
+}
+
+/// Locate startup environment configuration before formal state is selected.
+/// This neither creates nor binds a state directory. Only single-threaded
+/// bootstrap may use it; normal state and lock readers must use the bound APIs.
+///
+/// # Errors
+/// Rejects invalid settings or an attempt to bootstrap after state was bound.
+pub fn configuration_bootstrap_root() -> Result<PathBuf> {
+    let binding = BOUND_MFB_ROOT
+        .lock()
+        .map_err(|_| anyhow!("formal MFB root binding lock is poisoned; state retained"))?;
+    anyhow::ensure!(
+        binding.is_none(),
+        "local environment must be loaded before formal state or locks are bound"
+    );
+    configured_mfb_root()
+}
+
+fn absolute_root_setting(name: &str, value: String) -> Result<PathBuf> {
+    anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
+    let path = PathBuf::from(value);
+    anyhow::ensure!(path.is_absolute(), "{name} must be an absolute path");
+    Ok(path)
+}
+
+fn configured_mfb_root() -> Result<PathBuf> {
+    // Do not call root-dependent audit logging while the binding mutex is held.
+    match std::env::var(crate::constants::ENV_MFB_HOME_ROOT) {
+        Ok(root) => return absolute_root_setting(crate::constants::ENV_MFB_HOME_ROOT, root),
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => return Err(error).context("MFB_HOME_ROOT must contain valid Unicode"),
+    }
+    let home = match std::env::var(crate::constants::ENV_HOME) {
+        Ok(home) => absolute_root_setting(crate::constants::ENV_HOME, home)?,
+        #[cfg(windows)]
+        Err(std::env::VarError::NotPresent) => absolute_root_setting(
+            crate::constants::ENV_USERPROFILE,
+            std::env::var(crate::constants::ENV_USERPROFILE)
+                .context("formal MFB root requires HOME or USERPROFILE")?,
+        )?,
+        #[cfg(not(windows))]
+        Err(std::env::VarError::NotPresent) => {
+            return Err(anyhow!("formal MFB root requires MFB_HOME_ROOT or HOME"));
         }
+        Err(error) => return Err(error).context("HOME must contain valid Unicode"),
+    };
+    Ok(home.join(crate::constants::MFB_DEFAULT_HOME_DIRNAME))
+}
+
+fn finish_root_probe(probe: &Path, write: std::io::Result<()>) -> Result<()> {
+    match (write, fs::remove_file(probe)) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(write), Err(cleanup)) => Err(anyhow!(
+            "formal MFB root write probe failed: {write}; probe cleanup also failed: {cleanup}"
+        )),
+        (Err(error), Ok(())) => Err(error).context("write formal MFB root probe"),
+        (Ok(()), Err(error)) => Err(error).context("remove formal MFB root probe"),
     }
 }
 
 fn ensure_mfb_root_usable(root: &Path) -> Result<()> {
+    fs::create_dir_all(root)?;
+    probe_mfb_root_write(root)
+}
+
+fn probe_mfb_root_write(root: &Path) -> Result<()> {
     static WRITE_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    fs::create_dir_all(root)?;
     // This check is called from image workers. A shared probe name lets one
     // worker remove another worker's probe and falsely marks a healthy root as
     // unavailable. PID + sequence also keeps concurrent MFB processes apart.
@@ -195,9 +402,13 @@ fn ensure_mfb_root_usable(root: &Path) -> Result<()> {
         std::process::id(),
         WRITE_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::write(&probe, b"probe")?;
-    fs::remove_file(&probe)?;
-    Ok(())
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    let written = file.write_all(b"probe");
+    drop(file);
+    finish_root_probe(&probe, written)
 }
 
 /// Returns the central temporary storage for MFB, ensuring it exists.
@@ -359,7 +570,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn mfb_root_uses_system_temp_without_home() {
+    fn mfb_root_rejects_missing_home_without_temporary_state() {
         if crate::common_utils::isolated_test_process() {
             return;
         }
@@ -372,11 +583,8 @@ mod tests {
             std::env::remove_var("USERPROFILE");
         }
 
-        let root = get_mfb_root().unwrap();
-        assert_eq!(
-            root,
-            crate::media_conversion_gate::delivery_temp_mfb_root_ssot()
-        );
+        let error = get_mfb_root().unwrap_err();
+        assert!(error.to_string().contains("formal MFB root requires"));
 
         unsafe {
             match saved_root {
@@ -392,6 +600,262 @@ mod tests {
                 None => std::env::remove_var("USERPROFILE"),
             }
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_bootstrap_configuration_precedes_binding_without_creating_storage() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let bootstrap = temp.path().join("configuration-location");
+        let selected = temp.path().join("resolved-state");
+        let _initial =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", bootstrap.to_str().unwrap());
+        assert_eq!(configuration_bootstrap_root().unwrap(), bootstrap);
+        assert!(!bootstrap.exists());
+        let _resolved =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", selected.to_str().unwrap());
+        assert_eq!(get_mfb_root().unwrap(), selected);
+        assert!(configuration_bootstrap_root().is_err());
+        assert!(!bootstrap.exists());
+        let _late =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", bootstrap.to_str().unwrap());
+        assert_eq!(get_mfb_root().unwrap(), selected);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_rejects_invalid_explicit_settings_without_binding_or_fallback() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let _home = crate::common_utils::EnvGuard::set("HOME", home.to_str().unwrap());
+        let blocked = temp.path().join("blocked");
+        fs::write(&blocked, b"unrelated user-owned bytes").unwrap();
+        for value in ["", "   ", "relative-state", blocked.to_str().unwrap()] {
+            let _root = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", value);
+            assert!(get_mfb_root().is_err(), "invalid setting {value:?}");
+            assert!(fs::read_dir(&home).unwrap().next().is_none());
+            assert_eq!(fs::read(&blocked).unwrap(), b"unrelated user-owned bytes");
+        }
+        let valid = temp.path().join("valid-state");
+        let _root = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", valid.to_str().unwrap());
+        assert_eq!(get_mfb_root().unwrap(), valid);
+        assert!(fs::read_dir(&valid).unwrap().next().is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_inspection_fixes_absent_path_without_creating_state() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let selected = temp.path().join("missing/state");
+        let other = temp.path().join("other-state");
+        let _selected =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", selected.to_str().unwrap());
+        assert_eq!(inspect_mfb_root_path().unwrap(), selected);
+        assert!(fs::read_dir(temp.path()).unwrap().next().is_none());
+        let _other = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", other.to_str().unwrap());
+        assert_eq!(inspect_mfb_root_path().unwrap(), selected);
+        assert!(!selected.exists());
+        assert_eq!(get_mfb_root().unwrap(), selected);
+        assert!(!other.exists());
+        let modified = fs::metadata(&selected).unwrap().modified().unwrap();
+        for _ in 0..4 {
+            assert_eq!(inspect_mfb_root_path().unwrap(), selected);
+        }
+        assert!(fs::read_dir(&selected).unwrap().next().is_none());
+        assert_eq!(
+            fs::metadata(&selected).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_inspection_of_existing_state_does_not_claim_write_probe() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("state");
+        fs::create_dir(&root).unwrap();
+        let _root = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", root.to_str().unwrap());
+        let before = fs::metadata(&root).unwrap().modified().unwrap();
+        assert_eq!(inspect_mfb_root_path().unwrap(), root);
+        assert_eq!(fs::metadata(&root).unwrap().modified().unwrap(), before);
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+        // The isolated process has not issued a write probe. Reserve its first
+        // probe name to prove a subsequent writer still checks create_new and
+        // never overwrites a pre-existing file.
+        let collision = root.join(format!(".mfb_write_probe.{}.0", std::process::id()));
+        fs::write(&collision, b"preserve existing bytes").unwrap();
+        assert!(get_mfb_root().is_err());
+        assert_eq!(fs::read(&collision).unwrap(), b"preserve existing bytes");
+        assert_eq!(inspect_mfb_root_path().unwrap(), root);
+        fs::remove_file(collision).unwrap();
+        assert_eq!(get_mfb_root().unwrap(), root);
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_inspection_rejects_non_directory_without_switching_selected_path() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let selected = temp.path().join("state");
+        let other = temp.path().join("other-state");
+        let _selected =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", selected.to_str().unwrap());
+        assert_eq!(inspect_mfb_root_path().unwrap(), selected);
+        fs::write(&selected, b"user-owned file").unwrap();
+        let _other = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", other.to_str().unwrap());
+        assert!(inspect_mfb_root_path().is_err());
+        assert!(get_mfb_root().is_err());
+        assert!(!other.exists());
+        assert_eq!(fs::read(&selected).unwrap(), b"user-owned file");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn mfb_root_inspection_distinguishes_broken_ancestors_from_absence() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("not-directory");
+        fs::write(&file, b"preserve ancestor").unwrap();
+        let alias = temp.path().join("dangling");
+        std::os::unix::fs::symlink(temp.path().join("unavailable"), &alias).unwrap();
+        for selected in [file, alias.clone(), alias.join("child")] {
+            let _root =
+                crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", selected.to_str().unwrap());
+            assert!(inspect_mfb_root_path().is_err());
+        }
+        assert!(!temp.path().join("unavailable").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn mfb_root_rejects_non_unicode_override_instead_of_using_home() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        use std::os::unix::ffi::OsStringExt;
+        let temp = TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let _home = crate::common_utils::EnvGuard::set("HOME", home.to_str().unwrap());
+        let previous = std::env::var_os("MFB_HOME_ROOT");
+        // SAFETY: This test runs alone in its isolated subprocess and preserves
+        // the original OS string without lossy conversion.
+        unsafe {
+            std::env::set_var(
+                "MFB_HOME_ROOT",
+                std::ffi::OsString::from_vec(vec![b'/', 0xff]),
+            );
+        }
+        let result = get_mfb_root();
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("MFB_HOME_ROOT", previous);
+            } else {
+                std::env::remove_var("MFB_HOME_ROOT");
+            }
+        }
+        assert!(result.unwrap_err().to_string().contains("valid Unicode"));
+        assert!(fs::read_dir(&home).unwrap().next().is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_binding_ignores_later_environment_and_does_not_probe_again() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first");
+        let alternate = temp.path().join("alternate");
+        let _first = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", first.to_str().unwrap());
+        assert_eq!(get_mfb_root().unwrap(), first);
+        let initial = fs::metadata(&first).unwrap().modified().unwrap();
+        let _alternate =
+            crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", alternate.to_str().unwrap());
+        for _ in 0..16 {
+            assert_eq!(get_mfb_root().unwrap(), first);
+        }
+        assert!(!alternate.exists());
+        assert!(fs::read_dir(&first).unwrap().next().is_none());
+        assert_eq!(fs::metadata(&first).unwrap().modified().unwrap(), initial);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn mfb_root_binding_rejects_missing_and_replaced_directory_without_new_locks() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("state");
+        let original = temp.path().join("retained-original");
+        let target = temp.path().join("media");
+        fs::create_dir(&target).unwrap();
+        let _root = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", root.to_str().unwrap());
+        let lock = acquire_dir_lock(&target).unwrap();
+        fs::rename(&root, &original).unwrap();
+        assert!(get_mfb_root().is_err());
+        assert!(
+            !root.exists(),
+            "a missing bound directory must not be recreated"
+        );
+        fs::create_dir(&root).unwrap();
+        let error = get_mfb_root().unwrap_err();
+        assert!(error.to_string().contains("replaced"));
+        assert!(acquire_output_dir_lock(&temp.path().join("new-output")).is_err());
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+        drop(lock);
+        fs::remove_dir(&root).unwrap();
+        fs::rename(&original, &root).unwrap();
+        assert_eq!(get_mfb_root().unwrap(), root);
+        assert!(acquire_dir_lock(&target).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn mfb_root_binding_preserves_alias_spelling_but_rejects_retargeting() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let alias = temp.path().join("configured");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        let _root = crate::common_utils::EnvGuard::set("MFB_HOME_ROOT", alias.to_str().unwrap());
+        assert_eq!(get_mfb_root().unwrap(), alias);
+        fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&second, &alias).unwrap();
+        assert!(
+            get_mfb_root()
+                .unwrap_err()
+                .to_string()
+                .contains("changed its target")
+        );
+        assert!(fs::read_dir(&second).unwrap().next().is_none());
     }
 
     #[test]

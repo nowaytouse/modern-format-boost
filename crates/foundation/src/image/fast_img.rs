@@ -1633,23 +1633,44 @@ fn bind_photos_import_naming_policy_with(
 /// Bind a legacy marker only after its existing custody is proved in the selected library.
 pub fn bind_marker_to_selected_photos_library(marker: &mut WorkingCopyMarker) -> Result<()> {
     let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
-    let naming_bound = bind_photos_import_naming_policy(marker)?;
-    if marker.photos_library_path == selected && !naming_bound {
+    bind_marker_to_selected_photos_library_with(
+        marker,
+        selected.as_deref(),
+        |prepared, selected| {
+            reverify_media_outputs_in_library(
+                &build_fast_img_output_import_candidates(prepared)?,
+                &prepared.photos_imported_assets,
+                selected,
+            )
+            .map(|_| ())
+        },
+        reverify_modern_lossy_static_photos_custody,
+        write_marker_atomic,
+    )
+}
+
+fn bind_marker_to_selected_photos_library_with(
+    marker: &mut WorkingCopyMarker,
+    selected: Option<&Path>,
+    verify_primary: impl FnOnce(&WorkingCopyMarker, Option<&Path>) -> Result<()>,
+    verify_tier2: impl FnOnce(&LibraryHandle) -> Result<()>,
+    persist: impl FnOnce(&WorkingCopyMarker) -> std::io::Result<()>,
+) -> Result<()> {
+    let mut prepared = marker.clone();
+    let naming_bound = bind_photos_import_naming_policy(&mut prepared)?;
+    if prepared.photos_library_path.as_deref() == selected && !naming_bound {
         return Ok(());
     }
-    if !marker.photos_imported_assets.is_empty() {
-        reverify_media_outputs_in_library(
-            &build_fast_img_output_import_candidates(marker)?,
-            &marker.photos_imported_assets,
-            selected.as_deref(),
-        )?;
+    if !prepared.photos_imported_assets.is_empty() {
+        verify_primary(&prepared, selected)?;
     }
-    if let Some(mut handle) = library_handle_from_marker_tier2_proof(marker) {
-        handle.photos_library_path.clone_from(&selected);
-        reverify_modern_lossy_static_photos_custody(&handle)?;
+    if let Some(mut handle) = library_handle_from_marker_tier2_proof(&prepared) {
+        handle.photos_library_path = selected.map(Path::to_path_buf);
+        verify_tier2(&handle)?;
     }
-    bind_photos_library_proof(marker, selected.as_deref())?;
-    write_marker_atomic(marker)?;
+    bind_photos_library_proof(&mut prepared, selected)?;
+    persist(&prepared)?;
+    *marker = prepared;
     Ok(())
 }
 
@@ -7790,12 +7811,13 @@ mod tests {
         if crate::common_utils::isolated_test_process() {
             return Ok(());
         }
+        let state = tempfile::tempdir()?;
+        let _home = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
         for controlled in [false, true] {
             let root = tempfile::tempdir()?;
-            let _home = crate::common_utils::EnvGuard::set(
-                crate::constants::ENV_MFB_HOME_ROOT,
-                root.path().to_str().unwrap(),
-            );
             let mut candidates = Vec::new();
             for name in ["a.webp", "b.webp", "c.webp"] {
                 let path = root.path().join(name);
@@ -7969,6 +7991,7 @@ mod tests {
         let mut marker =
             WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
         let mut before_receipt_write = None;
+        let mut held_writer = None;
         let mut calls = 0;
         let error = import_or_reconcile_original_candidates_with(
             &candidates,
@@ -7980,11 +8003,17 @@ mod tests {
                 assert!(permit.is_some());
                 let checkpoint = checkpoint.unwrap();
                 before_receipt_write = Some(checkpoint.clone());
-                let path = crate::pipeline::verification::marker_path_for_working_copy(
-                    &checkpoint.working_copy,
-                );
-                std::fs::remove_file(&path)?;
-                std::fs::create_dir(&path)?;
+                let writer =
+                    rusqlite::Connection::open(crate::db::fast_img_store::database_path()?)
+                        .map_err(|error| {
+                            ImgQualityError::AnalysisError(format!(
+                                "open synthetic writer lock: {error}"
+                            ))
+                        })?;
+                writer.execute_batch("BEGIN IMMEDIATE;").map_err(|error| {
+                    ImgQualityError::AnalysisError(format!("hold synthetic writer lock: {error}"))
+                })?;
+                held_writer = Some(writer);
                 calls += 1;
                 Ok(LibraryHandle {
                     imported_assets: vec![LibraryAssetRecord {
@@ -7998,6 +8027,7 @@ mod tests {
             },
         )
         .unwrap_err();
+        drop(held_writer);
         assert!(error.to_string().contains("checkpoint"), "{error}");
         assert_eq!(calls, 1);
         assert_eq!(marker, before_receipt_write.unwrap());
@@ -9438,6 +9468,121 @@ mod tests {
                 .and_then(|entry| entry.library_asset.as_ref())
                 .is_some()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn selected_library_binding_keeps_caller_unchanged_until_all_proofs_and_write_succeed()
+    -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let selected = root.path().join("Synthetic.photoslibrary");
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        for (assets, name) in [
+            (&mut marker.photos_imported_assets, "primary"),
+            (&mut marker.tier2_imported_assets, "original"),
+        ] {
+            assets.push(LibraryAssetRecord {
+                rel_path: format!("{name}.JXL"),
+                blake3: blake3::hash(name.as_bytes()).to_hex().to_string(),
+                photos_uuid: Some(format!("synthetic-{name}-uuid")),
+                ..Default::default()
+            });
+        }
+        let before = marker.clone();
+        for failure in ["primary", "tier2", "write"] {
+            let calls = std::cell::RefCell::new(Vec::new());
+            let error = bind_marker_to_selected_photos_library_with(
+                &mut marker,
+                Some(&selected),
+                |prepared, target| {
+                    calls.borrow_mut().push("primary");
+                    assert!(prepared.photos_import_naming_policy.is_some());
+                    assert_eq!(target, Some(selected.as_path()));
+                    if failure == "primary" {
+                        return Err(ImgQualityError::AnalysisError(
+                            "synthetic primary failure".into(),
+                        ));
+                    }
+                    Ok(())
+                },
+                |handle| {
+                    calls.borrow_mut().push("tier2");
+                    assert_eq!(
+                        handle.photos_library_path.as_deref(),
+                        Some(selected.as_path())
+                    );
+                    if failure == "tier2" {
+                        return Err(ImgQualityError::AnalysisError(
+                            "synthetic tier2 failure".into(),
+                        ));
+                    }
+                    Ok(())
+                },
+                |prepared| {
+                    calls.borrow_mut().push("write");
+                    assert_eq!(
+                        prepared.photos_library_path.as_deref(),
+                        Some(selected.as_path())
+                    );
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "synthetic write failure",
+                    ))
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(failure), "{error}");
+            assert_eq!(
+                marker, before,
+                "{failure} must not publish a prepared binding"
+            );
+            let expected: &[&str] = match failure {
+                "primary" => &["primary"],
+                "tier2" => &["primary", "tier2"],
+                _ => &["primary", "tier2", "write"],
+            };
+            assert_eq!(
+                calls.into_inner(),
+                expected,
+                "every retry must repeat the required proofs"
+            );
+        }
+        let calls = std::cell::RefCell::new(Vec::new());
+        bind_marker_to_selected_photos_library_with(
+            &mut marker,
+            Some(&selected),
+            |_, _| {
+                calls.borrow_mut().push("primary");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("tier2");
+                Ok(())
+            },
+            |_| {
+                calls.borrow_mut().push("write");
+                Ok(())
+            },
+        )?;
+        assert_eq!(calls.into_inner(), ["primary", "tier2", "write"]);
+        assert_eq!(
+            marker.photos_library_path.as_deref(),
+            Some(selected.as_path())
+        );
+        assert!(marker.photos_import_naming_policy.is_some());
+        assert_eq!(marker.photos_imported_assets, before.photos_imported_assets);
+        assert_eq!(marker.tier2_imported_assets, before.tier2_imported_assets);
+        bind_marker_to_selected_photos_library_with(
+            &mut marker,
+            Some(&selected),
+            |_, _| panic!("an unchanged published binding needs no new primary query"),
+            |_| panic!("an unchanged published binding needs no new tier2 query"),
+            |_| panic!("an unchanged published binding needs no new write"),
+        )?;
         Ok(())
     }
 

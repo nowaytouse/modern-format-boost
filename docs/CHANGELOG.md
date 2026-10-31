@@ -23,6 +23,19 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Canonical Fast IMG SQLite State (2026-10-31)
+
+- Persist task headers, per-source outcomes, Photos submission references and
+  receipts as normalized Core SQLite rows. Publish and verify one transaction,
+  retain output reservations after directory cleanup, and reject lost submission
+  history or changed task identity.
+- Migrate known legacy markers through a named, validated operation with original
+  bytes and hash preserved in the database before retiring the old file. Ordinary
+  reads do not fall back to JSON, migrate or create empty state on errors.
+- Extend protected-state integrity and verified backups to the new tables;
+  reconstructable cache cleanup retains them. State/Cache physical separation,
+  full file-task manifests and post-cleanup failed-only retries remain unfinished.
+
 ### Photos Submission Identity And Reconciliation (2026-10-31)
 
 - Persist per-file request references before checkpointed native and AppleScript

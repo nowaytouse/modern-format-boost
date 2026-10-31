@@ -2,19 +2,102 @@
 //! Only the path-tree namespace may be discarded on integrity failure.
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 2;
+pub const STORE_SCHEMA_VERSION: i32 = 3;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_CHECKPOINT: &str = "checkpoint";
 pub const NS_PROCESSED: &str = "processed";
 
 const STORE_FILE_NAME: &str = "mfb_store.sqlite";
 const STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+const FAST_IMG_STATE_SCHEMA: &str = "
+    CREATE TABLE fast_img_tasks (
+        task_key TEXT NOT NULL PRIMARY KEY,
+        working_copy TEXT NOT NULL UNIQUE,
+        source_root TEXT NOT NULL,
+        header_json BLOB NOT NULL,
+        header_blake3 BLOB NOT NULL CHECK(length(header_blake3) = 32),
+        snapshot_blake3 BLOB NOT NULL CHECK(length(snapshot_blake3) = 32),
+        revision INTEGER NOT NULL CHECK(revision >= 0),
+        updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+    ) STRICT;
+    CREATE INDEX idx_fast_img_tasks_source ON fast_img_tasks(source_root, working_copy);
+    CREATE TABLE fast_img_source_outcomes (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE CASCADE,
+        source_rel TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK(disposition IN ('converted', 'skipped', 'failed')),
+        source_blake3 TEXT NOT NULL,
+        output_rel TEXT,
+        output_blake3 TEXT,
+        library_blake3 TEXT,
+        reason TEXT,
+        PRIMARY KEY(task_key, source_rel)
+    ) STRICT;
+    CREATE TABLE fast_img_photos_requests (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE CASCADE,
+        request_key TEXT NOT NULL,
+        backend TEXT NOT NULL CHECK(backend IN ('native', 'applescript')),
+        native_journal_path TEXT,
+        native_request_blake3 TEXT,
+        applescript_request_id TEXT,
+        library_path TEXT,
+        PRIMARY KEY(task_key, request_key),
+        CHECK((backend = 'native' AND native_journal_path IS NOT NULL
+                   AND native_request_blake3 IS NOT NULL AND applescript_request_id IS NULL)
+               OR (backend = 'applescript' AND applescript_request_id IS NOT NULL
+                   AND native_journal_path IS NULL AND native_request_blake3 IS NULL))
+    ) STRICT;
+    CREATE UNIQUE INDEX idx_fast_img_native_journal
+        ON fast_img_photos_requests(task_key, native_journal_path);
+    CREATE TABLE fast_img_photos_entries (
+        task_key TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        request_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('encoded', 'original')),
+        source_rel TEXT NOT NULL,
+        source_blake3 TEXT NOT NULL,
+        output_rel TEXT NOT NULL,
+        output_blake3 TEXT NOT NULL,
+        album_name TEXT NOT NULL,
+        PRIMARY KEY(task_key, request_key, output_rel),
+        FOREIGN KEY(task_key, request_key) REFERENCES fast_img_photos_requests(task_key, request_key)
+            ON DELETE CASCADE
+    ) STRICT;
+    CREATE UNIQUE INDEX idx_fast_img_entries_ordinal ON fast_img_photos_entries(task_key, ordinal);
+    CREATE TABLE fast_img_photos_receipts (
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE CASCADE,
+        receipt_kind TEXT NOT NULL CHECK(receipt_kind IN ('primary', 'original')),
+        rel_path TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        blake3 TEXT NOT NULL,
+        sync_status TEXT NOT NULL,
+        quarantined INTEGER NOT NULL CHECK(quarantined IN (0, 1)),
+        photos_uuid TEXT,
+        library_blake3 TEXT,
+        xmp_sidecar_blake3 TEXT,
+        PRIMARY KEY(task_key, receipt_kind, rel_path)
+    ) STRICT;
+    CREATE UNIQUE INDEX idx_fast_img_receipts_ordinal
+        ON fast_img_photos_receipts(task_key, receipt_kind, ordinal);
+    CREATE TABLE fast_img_migrations (
+        origin_path TEXT NOT NULL PRIMARY KEY,
+        origin_blake3 BLOB NOT NULL CHECK(length(origin_blake3) = 32),
+        source_json BLOB NOT NULL,
+        task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0, 1))
+    ) STRICT;
+    CREATE INDEX idx_fast_img_migrations_task ON fast_img_migrations(task_key);
+";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathTreeMissReason {
@@ -62,6 +145,256 @@ struct BlobRecord {
 #[cfg(test)]
 thread_local! {
     static TEST_STORE_PATH: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_STORE_BINDING: std::cell::RefCell<Option<StorePathBinding>> = const { std::cell::RefCell::new(None) };
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct StoreFileIdentity {
+    canonical: PathBuf,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl StoreFileIdentity {
+    fn inspect_metadata(path: &Path, directory: bool) -> Result<Option<fs::Metadata>> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect formal store path {}", path.display()));
+            }
+        };
+        anyhow::ensure!(
+            !metadata.file_type().is_symlink()
+                && if directory {
+                    metadata.is_dir()
+                } else {
+                    metadata.is_file()
+                },
+            "formal store {} is not a regular non-symlink {}",
+            path.display(),
+            if directory { "directory" } else { "file" }
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            anyhow::ensure!(
+                directory || metadata.nlink() == 1,
+                "formal store file has multiple hard links; state retained: {}",
+                path.display()
+            );
+        }
+        Ok(Some(metadata))
+    }
+
+    fn inspect(path: &Path, directory: bool) -> Result<Option<Self>> {
+        let Some(metadata) = Self::inspect_metadata(path, directory)? else {
+            return Ok(None);
+        };
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("resolve formal store path {}", path.display()))?;
+        let resolved = fs::symlink_metadata(&canonical)
+            .with_context(|| format!("recheck formal store path {}", path.display()))?;
+        anyhow::ensure!(
+            !resolved.file_type().is_symlink()
+                && if directory {
+                    resolved.is_dir()
+                } else {
+                    resolved.is_file()
+                },
+            "formal store path changed type while resolving: {}",
+            path.display()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            anyhow::ensure!(
+                metadata.dev() == resolved.dev()
+                    && metadata.ino() == resolved.ino()
+                    && (directory || resolved.nlink() == 1),
+                "formal store path changed identity while resolving: {}",
+                path.display()
+            );
+        }
+        Ok(Some(Self {
+            canonical,
+            #[cfg(unix)]
+            device: {
+                use std::os::unix::fs::MetadataExt;
+                metadata.dev()
+            },
+            #[cfg(unix)]
+            inode: {
+                use std::os::unix::fs::MetadataExt;
+                metadata.ino()
+            },
+        }))
+    }
+}
+
+struct StorePathBinding {
+    path: PathBuf,
+    parent: PathBuf,
+    directory: Option<StoreFileIdentity>,
+    database: Option<StoreFileIdentity>,
+}
+
+impl StorePathBinding {
+    fn new(path: &Path) -> Result<Self> {
+        anyhow::ensure!(path.is_absolute(), "formal store path must be absolute");
+        let parent = path
+            .parent()
+            .context("formal store has no parent directory")?
+            .to_path_buf();
+        Ok(Self {
+            path: path.to_path_buf(),
+            parent,
+            directory: None,
+            database: None,
+        })
+    }
+
+    fn directory_ready(&mut self, write: bool) -> Result<bool> {
+        let mut current = StoreFileIdentity::inspect(&self.parent, true)?;
+        if let Some(expected) = &self.directory {
+            anyhow::ensure!(
+                current.as_ref() == Some(expected),
+                "bound formal store directory is missing or replaced; refusing another state store: {}",
+                self.parent.display()
+            );
+        } else {
+            if current.is_none() && write {
+                fs::create_dir_all(&self.parent).with_context(|| {
+                    format!("create formal store directory {}", self.parent.display())
+                })?;
+                current = StoreFileIdentity::inspect(&self.parent, true)?;
+            }
+            if let Some(identity) = current {
+                self.directory = Some(identity);
+            } else {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn inspect_database(&self) -> Result<Option<StoreFileIdentity>> {
+        let current = StoreFileIdentity::inspect(&self.path, false)?;
+        if let Some(expected) = &self.database {
+            anyhow::ensure!(
+                current.as_ref() == Some(expected),
+                "bound formal database is missing or replaced; state was not recreated: {}",
+                self.path.display()
+            );
+        }
+        Ok(current)
+    }
+
+    fn inspect_sidecars(&self) -> Result<bool> {
+        let mut present = false;
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut name = self.path.as_os_str().to_os_string();
+            name.push(suffix);
+            // SQLite may legitimately retire/recreate sidecars between opens.
+            // Check their observed type/link count without pinning their inode
+            // or requiring a second lookup of an already removed sidecar.
+            present |= StoreFileIdentity::inspect_metadata(Path::new(&name), false)?.is_some();
+        }
+        Ok(present)
+    }
+
+    fn open(&mut self, write: bool) -> Result<Option<Connection>> {
+        if !self.directory_ready(write)? {
+            return Ok(None);
+        }
+        let mut before = self.inspect_database()?;
+        let sidecars = self.inspect_sidecars()?;
+        if before.is_none() && sidecars {
+            // A concurrent first writer may have created the main file between
+            // these observations. Recheck it instead of misclassifying a live
+            // initialization as an orphaned journal.
+            before = self.inspect_database()?;
+        }
+        anyhow::ensure!(
+            before.is_some() || !sidecars,
+            "formal database is absent but SQLite sidecar evidence remains; state was not recreated: {}",
+            self.path.display()
+        );
+        if before.is_none() && !write {
+            return Ok(None);
+        }
+        let mode = if write {
+            let mode = OpenFlags::SQLITE_OPEN_READ_WRITE;
+            if before.is_none() {
+                mode | OpenFlags::SQLITE_OPEN_CREATE
+            } else {
+                mode
+            }
+        } else {
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+        };
+        let connection = Connection::open_with_flags(
+            &self.path,
+            mode | OpenFlags::SQLITE_OPEN_NOFOLLOW | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("open formal SQLite store {}", self.path.display()))?;
+        // Validate the observed path again before init_schema can issue WAL,
+        // recovery migration, or DDL. These are before/after path identities,
+        // not a claim that SQLite exposed its opened OS descriptor to us.
+        anyhow::ensure!(
+            self.directory_ready(false)?,
+            "formal store directory disappeared while opening"
+        );
+        let after = self
+            .inspect_database()?
+            .context("formal database disappeared while opening")?;
+        if let Some(before) = before {
+            anyhow::ensure!(
+                before == after,
+                "formal database changed while opening; schema was not initialized: {}",
+                self.path.display()
+            );
+        }
+        let _ = self.inspect_sidecars()?;
+        self.database = Some(after);
+        connection
+            .busy_timeout(STORE_BUSY_TIMEOUT)
+            .context("Failed to set SQLite busy timeout")?;
+        if !write {
+            connection.pragma_update(None, "query_only", true)?;
+        }
+        Ok(Some(connection))
+    }
+}
+
+static STORE_PATH_BINDING: Mutex<Option<StorePathBinding>> = Mutex::new(None);
+
+fn open_bound_store(path: &Path, write: bool) -> Result<Option<Connection>> {
+    let operation = |binding: &mut Option<StorePathBinding>| {
+        if binding.is_none() {
+            *binding = Some(StorePathBinding::new(path)?);
+        }
+        let bound = binding
+            .as_mut()
+            .context("formal store path binding is missing")?;
+        anyhow::ensure!(
+            bound.path == path,
+            "formal store path changed after binding"
+        );
+        bound.open(write)
+    };
+    #[cfg(test)]
+    if TEST_STORE_PATH.with(|path| path.borrow().is_some()) {
+        return TEST_STORE_BINDING.with(|binding| operation(&mut binding.borrow_mut()));
+    }
+    let mut binding = STORE_PATH_BINDING.lock().map_err(|_| {
+        anyhow::anyhow!("formal store path binding lock is poisoned; state retained")
+    })?;
+    operation(&mut binding)
 }
 
 fn now_unix_secs() -> Result<i64> {
@@ -73,11 +406,11 @@ fn now_unix_secs() -> Result<i64> {
 /// Default path: `~/.modern_format_boost/cache/mfb_store.sqlite`.
 ///
 /// # Errors
-/// Returns an error if the cache directory cannot be resolved or created.
+/// Returns an error if the durable application root cannot be bound for writing.
 pub fn default_store_path() -> Result<PathBuf> {
-    let mut path = crate::common_utils::get_user_project_cache_dir()?;
-    path.push(STORE_FILE_NAME);
-    Ok(path)
+    Ok(crate::process_lock::get_mfb_root()?
+        .join("cache")
+        .join(STORE_FILE_NAME))
 }
 
 fn migrate_v1_crc32_to_blake3(tx: &Transaction<'_>) -> Result<()> {
@@ -163,13 +496,260 @@ fn migrate_v1_crc32_to_blake3(tx: &Transaction<'_>) -> Result<()> {
     .context("Failed to finish BLAKE3 SQLite blob migration")?;
     tx.execute(
         "UPDATE store_metadata SET value = ?1 WHERE key = 'schema_version'",
-        params![STORE_SCHEMA_VERSION],
+        params![2],
     )?;
     tracing::debug!(
         migrated_rows,
         rejected_rows,
         "SQLite integrity migration prepared; pending transaction commit"
     );
+    Ok(())
+}
+
+fn require_index(
+    conn: &Connection,
+    table: &str,
+    index: &str,
+    columns: &[&str],
+    unique: bool,
+) -> Result<()> {
+    let properties: Option<(bool, bool)> = conn
+        .query_row(
+            "SELECT \"unique\", partial FROM pragma_index_list(?1) WHERE name = ?2",
+            params![table, index],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    anyhow::ensure!(
+        properties == Some((unique, false)),
+        "SQLite store lacks required index {index} on {table}; database retained without repair"
+    );
+    let actual = conn
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?
+        .query_map([index], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        actual
+            .iter()
+            .map(String::as_str)
+            .eq(columns.iter().copied()),
+        "SQLite index {index} has unexpected columns; database retained without repair"
+    );
+    Ok(())
+}
+
+fn require_foreign_key(
+    conn: &Connection,
+    table: &str,
+    parent: &str,
+    columns: &[(&str, &str)],
+    on_delete: &str,
+) -> Result<()> {
+    let actual = conn
+        .prepare(
+            "SELECT \"table\", \"from\", \"to\", on_delete, seq
+             FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+        )?
+        .query_map([table], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        actual.len() == columns.len()
+            && actual.iter().zip(columns).enumerate().all(
+                |(
+                    sequence,
+                    (
+                        (actual_parent, from, to, action, actual_sequence),
+                        (expected_from, expected_to),
+                    ),
+                )| {
+                    actual_parent == parent
+                        && from == expected_from
+                        && to == expected_to
+                        && action == on_delete
+                        && usize::try_from(*actual_sequence).ok() == Some(sequence)
+                },
+            ),
+        "SQLite state table {table} has incomplete foreign keys; database retained without repair"
+    );
+    Ok(())
+}
+
+fn validate_fast_img_state_schema(conn: &Connection) -> Result<()> {
+    for (table, expected) in [
+        (
+            "fast_img_tasks",
+            &[
+                "task_key",
+                "working_copy",
+                "source_root",
+                "header_json",
+                "header_blake3",
+                "snapshot_blake3",
+                "revision",
+                "updated_at",
+            ][..],
+        ),
+        (
+            "fast_img_source_outcomes",
+            &[
+                "task_key",
+                "source_rel",
+                "disposition",
+                "source_blake3",
+                "output_rel",
+                "output_blake3",
+                "library_blake3",
+                "reason",
+            ][..],
+        ),
+        (
+            "fast_img_photos_requests",
+            &[
+                "task_key",
+                "request_key",
+                "backend",
+                "native_journal_path",
+                "native_request_blake3",
+                "applescript_request_id",
+                "library_path",
+            ][..],
+        ),
+        (
+            "fast_img_photos_entries",
+            &[
+                "task_key",
+                "ordinal",
+                "request_key",
+                "kind",
+                "source_rel",
+                "source_blake3",
+                "output_rel",
+                "output_blake3",
+                "album_name",
+            ][..],
+        ),
+        (
+            "fast_img_photos_receipts",
+            &[
+                "task_key",
+                "receipt_kind",
+                "rel_path",
+                "ordinal",
+                "blake3",
+                "sync_status",
+                "quarantined",
+                "photos_uuid",
+                "library_blake3",
+                "xmp_sidecar_blake3",
+            ][..],
+        ),
+        (
+            "fast_img_migrations",
+            &[
+                "origin_path",
+                "origin_blake3",
+                "source_json",
+                "task_key",
+                "retired",
+            ][..],
+        ),
+    ] {
+        let strict: Option<bool> = conn.query_row(
+            "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?1 AND type = 'table'",
+            [table], |row| row.get(0),
+        ).optional()?;
+        anyhow::ensure!(
+            strict == Some(true),
+            "SQLite state table {table} is missing or not strict; database retained without repair"
+        );
+        let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0"))?;
+        anyhow::ensure!(
+            statement.column_names().eq(expected.iter().copied()),
+            "SQLite state table {table} has unexpected columns; database retained without repair"
+        );
+    }
+    for statement in [
+        "INSERT INTO fast_img_tasks(task_key) VALUES (?1) ON CONFLICT(task_key) DO NOTHING",
+        "INSERT INTO fast_img_tasks(working_copy) VALUES (?1) ON CONFLICT(working_copy) DO NOTHING",
+        "INSERT INTO fast_img_source_outcomes(task_key, source_rel) VALUES (?1, ?2) ON CONFLICT(task_key, source_rel) DO NOTHING",
+        "INSERT INTO fast_img_photos_requests(task_key, request_key) VALUES (?1, ?2) ON CONFLICT(task_key, request_key) DO NOTHING",
+        "INSERT INTO fast_img_photos_entries(task_key, request_key, output_rel) VALUES (?1, ?2, ?3) ON CONFLICT(task_key, request_key, output_rel) DO NOTHING",
+        "INSERT INTO fast_img_photos_receipts(task_key, receipt_kind, rel_path) VALUES (?1, ?2, ?3) ON CONFLICT(task_key, receipt_kind, rel_path) DO NOTHING",
+        "INSERT INTO fast_img_migrations(origin_path) VALUES (?1) ON CONFLICT(origin_path) DO NOTHING",
+    ] {
+        conn.prepare(statement).context(
+            "SQLite state table lacks required unique keys; database retained without repair",
+        )?;
+    }
+    for (table, index, columns, unique) in [
+        (
+            "fast_img_tasks",
+            "idx_fast_img_tasks_source",
+            &["source_root", "working_copy"][..],
+            false,
+        ),
+        (
+            "fast_img_photos_requests",
+            "idx_fast_img_native_journal",
+            &["task_key", "native_journal_path"][..],
+            true,
+        ),
+        (
+            "fast_img_photos_entries",
+            "idx_fast_img_entries_ordinal",
+            &["task_key", "ordinal"][..],
+            true,
+        ),
+        (
+            "fast_img_photos_receipts",
+            "idx_fast_img_receipts_ordinal",
+            &["task_key", "receipt_kind", "ordinal"][..],
+            true,
+        ),
+        (
+            "fast_img_migrations",
+            "idx_fast_img_migrations_task",
+            &["task_key"][..],
+            false,
+        ),
+    ] {
+        require_index(conn, table, index, columns, unique)?;
+    }
+    for table in [
+        "fast_img_source_outcomes",
+        "fast_img_photos_requests",
+        "fast_img_photos_receipts",
+    ] {
+        require_foreign_key(
+            conn,
+            table,
+            "fast_img_tasks",
+            &[("task_key", "task_key")],
+            "CASCADE",
+        )?;
+    }
+    require_foreign_key(
+        conn,
+        "fast_img_photos_entries",
+        "fast_img_photos_requests",
+        &[("task_key", "task_key"), ("request_key", "request_key")],
+        "CASCADE",
+    )?;
+    require_foreign_key(
+        conn,
+        "fast_img_migrations",
+        "fast_img_tasks",
+        &[("task_key", "task_key")],
+        "RESTRICT",
+    )?;
     Ok(())
 }
 
@@ -202,7 +782,7 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
     let version =
         current.context("SQLite store is missing its schema version; database retained")?;
     anyhow::ensure!(
-        matches!(version, 1 | STORE_SCHEMA_VERSION),
+        matches!(version, 1 | 2 | STORE_SCHEMA_VERSION),
         "mfb_store.sqlite schema version mismatch (db={version}, expected={STORE_SCHEMA_VERSION}); \
          database retained, use a compatible application or a verified backup"
     );
@@ -222,7 +802,57 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
         conn.prepare(query)
             .context("SQLite store lacks required unique keys; database retained without repair")?;
     }
+    if version >= 2 {
+        require_index(
+            conn,
+            "blob_store",
+            "idx_blob_ns_root",
+            &["namespace", "root_path"],
+            false,
+        )?;
+        require_index(
+            conn,
+            "blob_store",
+            "idx_blob_ns_updated",
+            &["namespace", "updated_at"],
+            false,
+        )?;
+    }
+    if version == STORE_SCHEMA_VERSION {
+        validate_fast_img_state_schema(conn)?;
+    } else {
+        let reserved: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema
+                WHERE name GLOB 'fast_img_*' OR name GLOB 'idx_fast_img_*')",
+            [],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            !reserved,
+            "legacy SQLite store contains conflicting Fast IMG state objects; database retained without repair"
+        );
+    }
     Ok(Some(version))
+}
+
+/// Inspect a schema in the caller's read snapshot without creating or migrating storage.
+///
+/// # Errors
+/// Rejects unknown, incomplete or conflicting schema evidence without repair.
+pub(crate) fn inspect_store_schema_version(conn: &Connection) -> Result<Option<i32>> {
+    schema_version(conn)
+}
+
+/// Require the complete current schema without issuing write pragmas or DDL.
+///
+/// # Errors
+/// Rejects a missing, older, unknown or incomplete schema without migration.
+pub(crate) fn validate_current_store_schema(conn: &Connection) -> Result<()> {
+    anyhow::ensure!(
+        schema_version(conn)? == Some(STORE_SCHEMA_VERSION),
+        "structured Fast IMG state requires store schema {STORE_SCHEMA_VERSION}; database retained without migration"
+    );
+    Ok(())
 }
 
 /// Enable WAL with bounded lock retries after the caller has validated its schema.
@@ -274,7 +904,7 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Failed to lock SQLite schema initialization")?;
     // Another process may have initialized or migrated while this connection waited.
-    match schema_version(&tx)? {
+    let version = match schema_version(&tx)? {
         None => {
             tx.execute_batch(
                 "CREATE TABLE store_metadata (
@@ -297,12 +927,31 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
             .context("Failed to initialize mfb_store.sqlite schema")?;
             tx.execute(
                 "INSERT INTO store_metadata (key, value) VALUES ('schema_version', ?1)",
-                params![STORE_SCHEMA_VERSION],
+                params![2],
             )?;
+            2
         }
-        Some(1) => migrate_v1_crc32_to_blake3(&tx)?,
-        Some(_) => {}
+        Some(1) => {
+            migrate_v1_crc32_to_blake3(&tx)?;
+            2
+        }
+        Some(version) => version,
+    };
+    if version == 2 {
+        // The v1 integrity conversion and this extension commit as one chain.
+        // A collision or invalid legacy row rolls all schema/data changes back.
+        anyhow::ensure!(
+            schema_version(&tx)? == Some(2),
+            "SQLite v2 migration precondition changed"
+        );
+        tx.execute_batch(FAST_IMG_STATE_SCHEMA)
+            .context("Failed to create structured Fast IMG state tables; database retained")?;
+        tx.execute(
+            "UPDATE store_metadata SET value = ?1 WHERE key = 'schema_version'",
+            params![STORE_SCHEMA_VERSION],
+        )?;
     }
+    validate_current_store_schema(&tx)?;
     tx.commit()
         .context("Failed to commit SQLite schema transaction")
 }
@@ -315,22 +964,35 @@ fn store_path() -> Result<PathBuf> {
     default_store_path()
 }
 
+/// Resolve the same formal store path without creating its root or storage.
+///
+/// # Errors
+/// Rejects an invalid, replaced or unavailable formal application root.
+pub(crate) fn store_path_current_for_read() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_STORE_PATH.with(|path| path.borrow().clone()) {
+        return Ok(path);
+    }
+    Ok(crate::process_lock::inspect_mfb_root_path()?
+        .join("cache")
+        .join(STORE_FILE_NAME))
+}
+
 fn open_connection() -> Result<Connection> {
     let path = store_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create SQLite store parent directory {}",
-                parent.display()
-            )
-        })?;
-    }
-    let mut conn = Connection::open(&path)
-        .with_context(|| format!("Failed to open SQLite store at {}", path.display()))?;
-    conn.busy_timeout(STORE_BUSY_TIMEOUT)
-        .context("Failed to set SQLite busy timeout")?;
+    let mut conn = open_bound_store(&path, true)?
+        .context("formal writer did not open its selected database")?;
     init_schema(&mut conn)?;
     Ok(conn)
+}
+
+/// Open the fixed formal store for inspection, without creating a database,
+/// creating directories, migrating schema, or selecting a fallback store.
+/// An existing file with an unknown schema is returned for strict validation;
+/// it is never converted into `None` or repaired here.
+pub(crate) fn open_store_readonly() -> Result<Option<Connection>> {
+    let path = store_path_current_for_read()?;
+    open_bound_store(&path, false)
 }
 
 fn with_conn<R>(f: impl FnOnce(&Connection) -> Result<R>) -> Result<R> {
@@ -428,8 +1090,8 @@ fn preview_path_tree_at(
 ) -> Result<CachePrunePreview> {
     policy.validate()?;
     anyhow::ensure!(
-        schema_version(snapshot)? == Some(STORE_SCHEMA_VERSION),
-        "cache pruning preview requires the current store schema; database retained without migration"
+        matches!(schema_version(snapshot)?, Some(2 | STORE_SCHEMA_VERSION)),
+        "cache pruning preview requires a recognized BLAKE3 store schema; database retained without migration"
     );
     let now = clock()?;
     anyhow::ensure!(now >= 0, "cache pruning preview clock is before UNIX epoch");
@@ -922,6 +1584,7 @@ impl Drop for TestStoreGuard {
         TEST_STORE_PATH.with(|p| {
             *p.borrow_mut() = None;
         });
+        TEST_STORE_BINDING.with(|binding| *binding.borrow_mut() = None);
     }
 }
 
@@ -931,12 +1594,175 @@ pub fn set_test_store_path_for_tests(path: PathBuf) -> TestStoreGuard {
     TEST_STORE_PATH.with(|p| {
         *p.borrow_mut() = Some(path);
     });
+    TEST_STORE_BINDING.with(|binding| *binding.borrow_mut() = None);
     TestStoreGuard
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formal_store_readonly_absence_and_unknown_schema_never_initialize_state() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("absent/cache/store.sqlite");
+        let _guard = set_test_store_path_for_tests(path.clone());
+        assert!(open_store_readonly()?.is_none());
+        assert!(fs::read_dir(root.path())?.next().is_none());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let foreign = Connection::open(&path)?;
+        foreign.execute_batch(
+            "CREATE TABLE unrelated(value TEXT); INSERT INTO unrelated VALUES('retain');",
+        )?;
+        drop(foreign);
+        let before = fs::read(&path)?;
+        let reader = open_store_readonly()?.expect("an unknown existing database is not absent");
+        assert!(inspect_store_schema_version(&reader).is_err());
+        let query_only: i32 = reader.pragma_query_value(None, "query_only", |row| row.get(0))?;
+        assert_eq!(query_only, 1);
+        drop(reader);
+        assert!(open_connection().is_err());
+        assert_eq!(fs::read(&path)?, before);
+        assert_eq!(fs::read_dir(path.parent().unwrap())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn formal_store_bound_database_cannot_disappear_or_be_replaced() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("cache/store.sqlite");
+        let retained = root.path().join("retained.sqlite");
+        let _guard = set_test_store_path_for_tests(path.clone());
+        drop(open_connection()?);
+        fs::rename(&path, &retained)?;
+        assert!(open_store_readonly().is_err());
+        assert!(open_connection().is_err());
+        assert!(
+            !path.exists(),
+            "a bound missing database must not be recreated"
+        );
+        fs::copy(&retained, &path)?;
+        let before = fs::read(&path)?;
+        assert!(open_store_readonly().is_err());
+        assert!(open_connection().is_err());
+        assert_eq!(fs::read(&path)?, before);
+        assert!(retained.is_file());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn formal_store_bound_cache_directory_cannot_be_recreated_or_replaced() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let directory = root.path().join("cache");
+        let path = directory.join("store.sqlite");
+        let retained = root.path().join("retained-cache");
+        let _guard = set_test_store_path_for_tests(path.clone());
+        drop(open_connection()?);
+        fs::rename(&directory, &retained)?;
+        assert!(open_store_readonly().is_err());
+        assert!(open_connection().is_err());
+        assert!(!directory.exists());
+        fs::create_dir(&directory)?;
+        let unrelated = Connection::open(&path)?;
+        unrelated.execute_batch("CREATE TABLE unrelated(value TEXT);")?;
+        drop(unrelated);
+        let before = fs::read(&path)?;
+        assert!(open_store_readonly().is_err());
+        assert!(open_connection().is_err());
+        assert_eq!(fs::read(&path)?, before);
+        assert!(retained.join("store.sqlite").is_file());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn formal_store_rejects_symlink_and_hardlink_targets_before_schema_writes() -> Result<()> {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir()?;
+        let external = root.path().join("unrelated");
+        fs::create_dir(&external)?;
+        let original = external.join("store.sqlite");
+        fs::write(&original, b"not an MFB database; preserve these bytes")?;
+        let alias = root.path().join("cache-alias");
+        symlink(&external, &alias)?;
+        {
+            let _guard = set_test_store_path_for_tests(alias.join("store.sqlite"));
+            assert!(format!("{:#}", open_connection().unwrap_err()).contains("non-symlink"));
+            assert!(open_store_readonly().is_err());
+        }
+        for hardlink in [false, true] {
+            let cache = root.path().join(if hardlink {
+                "hardlink-cache"
+            } else {
+                "symlink-cache"
+            });
+            fs::create_dir(&cache)?;
+            let path = cache.join("store.sqlite");
+            if hardlink {
+                fs::hard_link(&original, &path)?;
+            } else {
+                symlink(&original, &path)?;
+            }
+            let _guard = set_test_store_path_for_tests(path);
+            let error = format!("{:#}", open_connection().unwrap_err());
+            assert!(
+                error.contains(if hardlink {
+                    "hard links"
+                } else {
+                    "non-symlink"
+                }),
+                "{error}"
+            );
+            assert!(open_store_readonly().is_err());
+        }
+        let cache = root.path().join("sidecar-cache");
+        fs::create_dir(&cache)?;
+        let path = cache.join("store.sqlite");
+        symlink(&original, cache.join("store.sqlite-wal"))?;
+        let _guard = set_test_store_path_for_tests(path.clone());
+        assert!(open_connection().is_err());
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read(original)?,
+            b"not an MFB database; preserve these bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn formal_store_binding_allows_normal_in_place_commits() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("cache/store.sqlite");
+        let _guard = set_test_store_path_for_tests(path);
+        blob_put(NS_CHECKPOINT, "one", 1, None, b"first")?;
+        blob_put(NS_CHECKPOINT, "one", 1, None, b"second")?;
+        let reader = open_store_readonly()?.expect("committed state must remain present");
+        assert_eq!(
+            read_blob(&reader, NS_CHECKPOINT, "one", 1)?.as_deref(),
+            Some(b"second".as_slice())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn formal_store_orphaned_sqlite_sidecars_are_not_empty_state() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let directory = root.path().join(suffix);
+            fs::create_dir(&directory)?;
+            let path = directory.join("store.sqlite");
+            let sidecar = directory.join(format!("store.sqlite{suffix}"));
+            fs::write(&sidecar, b"retained state evidence")?;
+            let _guard = set_test_store_path_for_tests(path.clone());
+            assert!(open_store_readonly().is_err());
+            assert!(open_connection().is_err());
+            assert!(!path.exists());
+            assert_eq!(fs::read(sidecar)?, b"retained state evidence");
+        }
+        Ok(())
+    }
 
     #[test]
     fn pruning_preview_is_read_only_and_matches_the_actual_ttl_and_lru_receipt() -> Result<()> {
@@ -1537,6 +2363,196 @@ mod tests {
         );
     }
 
+    fn seed_v2_store(store: &Path) {
+        seed_v1_store(store, NS_PATH_TREE);
+        let mut conn = Connection::open(store).unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        migrate_v1_crc32_to_blake3(&tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), Some(2));
+    }
+
+    #[test]
+    fn v2_store_reads_without_migration_and_extends_state_without_losing_payloads() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v2_store(&store);
+        let before = std::fs::read(&store)?;
+        let readonly =
+            Connection::open_with_flags(&store, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        assert_eq!(inspect_store_schema_version(&readonly)?, Some(2));
+        assert!(validate_current_store_schema(&readonly).is_err());
+        drop(readonly);
+        assert_eq!(std::fs::read(&store)?, before);
+        let _guard = set_test_store_path_for_tests(store.clone());
+        assert_eq!(store_path_current_for_read()?, store);
+        let conn = open_connection()?;
+        validate_current_store_schema(&conn)?;
+        assert_eq!(schema_version(&conn)?, Some(3));
+        assert_eq!(
+            blob_get(NS_CHECKPOINT, "legacy", 7)?,
+            Some(b"resume-state".to_vec())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalized_fast_img_state_and_migration_backup_are_outside_cache_cleanup() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(root.path().join(STORE_FILE_NAME));
+        let mut conn = open_connection()?;
+        conn.execute_batch(
+            "INSERT INTO fast_img_tasks VALUES('task', '/synthetic/out', '/synthetic/source',
+                X'7B7D', zeroblob(32), zeroblob(32), 1, 1);
+             INSERT INTO fast_img_source_outcomes VALUES('task', 'retained.jpg', 'failed', '',
+                NULL, NULL, NULL, 'retained source');
+             INSERT INTO fast_img_photos_requests VALUES('task', 'request', 'applescript',
+                NULL, NULL, 'request-id', NULL);
+             INSERT INTO fast_img_photos_entries VALUES('task', 0, 'request', 'encoded',
+                'retained.jpg', '', 'retained.JXL', '', 'Synthetic');
+             INSERT INTO fast_img_photos_receipts VALUES('task', 'primary', 'verified.JXL', 0,
+                '', 'photos_local', 0, 'synthetic-uuid', NULL, NULL);
+             INSERT INTO fast_img_migrations VALUES('/synthetic/old.json', zeroblob(32),
+                X'7B7D', 'task', 0);",
+        )?;
+        blob_put(NS_PATH_TREE, "cache", 1, None, b"rebuildable")?;
+        blob_delete_namespace(NS_PATH_TREE)?;
+        prune_path_tree_cache(&mut conn, CachePolicy::default())?;
+        for table in [
+            "fast_img_tasks",
+            "fast_img_source_outcomes",
+            "fast_img_photos_requests",
+            "fast_img_photos_entries",
+            "fast_img_photos_receipts",
+            "fast_img_migrations",
+        ] {
+            let count: i64 =
+                conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(count, 1, "cache cleanup touched formal state {table}");
+        }
+        let backup: Vec<u8> =
+            conn.query_row("SELECT source_json FROM fast_img_migrations", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(backup, b"{}");
+        assert!(
+            conn.execute("DELETE FROM fast_img_tasks WHERE task_key='task'", [])
+                .is_err(),
+            "a migration's only legacy backup must not disappear through parent replacement"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_current_fast_img_schema_is_rejected_without_repair() -> Result<()> {
+        for mutation in [
+            "DROP TABLE fast_img_tasks",
+            "DROP TABLE fast_img_source_outcomes",
+            "DROP TABLE fast_img_photos_requests",
+            "DROP TABLE fast_img_photos_entries",
+            "DROP TABLE fast_img_photos_receipts",
+            "DROP TABLE fast_img_migrations",
+            "DROP INDEX idx_fast_img_tasks_source",
+            "DROP INDEX idx_fast_img_native_journal",
+            "DROP INDEX idx_fast_img_entries_ordinal",
+            "DROP INDEX idx_fast_img_receipts_ordinal",
+            "DROP INDEX idx_fast_img_migrations_task",
+            "DROP INDEX idx_blob_ns_root",
+            "DROP INDEX idx_blob_ns_updated",
+        ] {
+            let root = tempfile::tempdir()?;
+            let store = root.path().join(STORE_FILE_NAME);
+            let _guard = set_test_store_path_for_tests(store.clone());
+            let conn = open_connection()?;
+            conn.execute_batch(mutation)?;
+            assert!(validate_current_store_schema(&conn).is_err(), "{mutation}");
+            drop(conn);
+            let before = std::fs::read(&store)?;
+            assert!(open_connection().is_err(), "{mutation}");
+            assert_eq!(
+                std::fs::read(&store)?,
+                before,
+                "invalid schema was repaired: {mutation}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_reserved_state_objects_are_not_treated_as_an_empty_family() -> Result<()> {
+        for version in [1, 2] {
+            for reserved in [
+                "CREATE TABLE fast_img_tasks(value TEXT)",
+                "CREATE VIEW fast_img_photos_entries AS SELECT cache_key FROM blob_store",
+                "CREATE INDEX idx_fast_img_foreign ON blob_store(cache_key)",
+            ] {
+                let root = tempfile::tempdir()?;
+                let store = root.path().join(STORE_FILE_NAME);
+                if version == 1 {
+                    seed_v1_store(&store, NS_PATH_TREE);
+                } else {
+                    seed_v2_store(&store);
+                }
+                let conn = Connection::open(&store)?;
+                conn.execute_batch(reserved)?;
+                assert!(inspect_store_schema_version(&conn).is_err());
+                drop(conn);
+                let before = std::fs::read(&store)?;
+                let _guard = set_test_store_path_for_tests(store.clone());
+                assert!(open_connection().is_err());
+                assert_eq!(std::fs::read(&store)?, before);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn structured_extension_failure_rolls_back_the_entire_version_chain() -> Result<()> {
+        for version in [1, 2] {
+            let root = tempfile::tempdir()?;
+            let store = root.path().join(STORE_FILE_NAME);
+            if version == 1 {
+                seed_v1_store(&store, NS_PATH_TREE);
+            } else {
+                seed_v2_store(&store);
+            }
+            let conn = Connection::open(&store)?;
+            conn.execute_batch(
+                "CREATE TRIGGER reject_structured_extension BEFORE UPDATE OF value ON store_metadata
+                 WHEN NEW.value = 3 BEGIN SELECT RAISE(ABORT, 'synthetic state migration failure'); END;",
+            )?;
+            let original_rows: i64 =
+                conn.query_row("SELECT count(*) FROM blob_store", [], |row| row.get(0))?;
+            drop(conn);
+            let _guard = set_test_store_path_for_tests(store.clone());
+            let error = open_connection().unwrap_err();
+            assert!(format!("{error:#}").contains("synthetic state migration failure"));
+            let conn = Connection::open(&store)?;
+            assert_eq!(schema_version(&conn)?, Some(version));
+            let rows: i64 =
+                conn.query_row("SELECT count(*) FROM blob_store", [], |row| row.get(0))?;
+            assert_eq!(rows, original_rows);
+            let state_tables: i64 = conn.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'fast_img_*'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(state_tables, 0);
+            conn.execute_batch("DROP TRIGGER reject_structured_extension")?;
+            let reopened = open_connection()?;
+            validate_current_store_schema(&reopened)?;
+            assert_eq!(
+                blob_get(NS_CHECKPOINT, "legacy", 7)?,
+                Some(b"resume-state".to_vec())
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn v1_crc_store_migrates_payloads_to_blake3() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1787,11 +2803,13 @@ mod tests {
 
     #[test]
     fn concurrent_openers_initialize_or_migrate_once_without_losing_rows() {
-        for legacy in [false, true] {
+        for version in [0, 1, 2] {
             let dir = tempfile::tempdir().unwrap();
             let store = dir.path().join(STORE_FILE_NAME);
-            if legacy {
+            if version == 1 {
                 seed_v1_store(&store, NS_PATH_TREE);
+            } else if version == 2 {
+                seed_v2_store(&store);
             }
             let barrier = std::sync::Barrier::new(4);
             std::thread::scope(|scope| {
@@ -1815,7 +2833,7 @@ mod tests {
                     Some(&b"saved"[..])
                 );
             }
-            if legacy {
+            if version != 0 {
                 assert_eq!(
                     blob_get(NS_CHECKPOINT, "legacy", 7).unwrap().as_deref(),
                     Some(&b"resume-state"[..])
