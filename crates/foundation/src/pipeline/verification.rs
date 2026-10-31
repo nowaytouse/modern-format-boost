@@ -227,10 +227,14 @@ const LOCAL_REQUIRED_CHECKS: [(&str, LocalCheckProbe); 6] = [
     ("size", |ctx, files, _| {
         check_nonzero_size(ctx.expected_count, files)
     }),
-    ("blake3", |ctx, _, _| check_blake3_logged_outputs(ctx)),
-    ("metadata", |ctx, _, _| check_metadata_policy(ctx)),
-    ("orient", |ctx, files, _| {
-        check_orientation_policy(ctx, files)
+    ("blake3", |ctx, _, progress| {
+        check_blake3_logged_outputs(ctx, progress)
+    }),
+    ("metadata", |ctx, _, progress| {
+        check_metadata_policy(ctx, progress)
+    }),
+    ("orient", |ctx, files, progress| {
+        check_orientation_policy(ctx, files, progress)
     }),
     ("decode", |_, files, progress| {
         check_decode_probe_observed(files, progress)
@@ -700,10 +704,18 @@ fn check_count(expected: usize, actual: usize, files: &[PathBuf]) -> CheckDetail
     )
 }
 
-fn check_blake3_logged_outputs(ctx: &PipelineCtx) -> CheckDetail {
+fn check_blake3_logged_outputs(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     let mut failures = Vec::new();
     let mut hash_read_errors = 0usize;
-    for (rel_path, entry) in &ctx.blake3_log {
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
         let src = ctx.src_dir.join(rel_path);
         let out_rel = entry.out_rel.as_deref().map_or_else(
             || PathBuf::from(rel_path).with_extension("JXL"),
@@ -746,6 +758,9 @@ fn check_blake3_logged_outputs(ctx: &PipelineCtx) -> CheckDetail {
         if !logged_hashes_current {
             failures.push(out);
         }
+        if report_progress {
+            progress(index + 1, total);
+        }
     }
     let verified = ctx.blake3_log.len().saturating_sub(failures.len());
     let actual = if hash_read_errors == 0 {
@@ -768,19 +783,30 @@ fn check_blake3_logged_outputs(ctx: &PipelineCtx) -> CheckDetail {
     )
 }
 
-fn check_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
+fn check_metadata_policy(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     if ctx.output_format == Some(crate::image::format_detect::FormatKind::Avif) {
-        return check_meme_metadata_policy(ctx);
+        return check_meme_metadata_policy(ctx, progress);
     }
-    check_exact_metadata_copies(ctx)
+    check_exact_metadata_copies(ctx, progress)
 }
 
-fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
+fn check_meme_metadata_policy(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     let mut failures = Vec::new();
     let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut cleared = 0usize;
     let mut first_mismatch = None;
-    for (rel_path, entry) in &ctx.blake3_log {
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
         let src = ctx.src_dir.join(rel_path);
         let out_rel = entry.out_rel.as_deref().map_or_else(
             || PathBuf::from(rel_path).with_extension("avif"),
@@ -805,6 +831,9 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
                 );
                 failures.push(out);
             }
+        }
+        if report_progress {
+            progress(index + 1, total);
         }
     }
     let passed = failures.is_empty() && ctx.blake3_log.len() == ctx.expected_count;
@@ -836,12 +865,20 @@ fn check_meme_metadata_policy(ctx: &PipelineCtx) -> CheckDetail {
     )
 }
 
-fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
+fn check_exact_metadata_copies(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     let mut failures = Vec::new();
     let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
     let mut mismatch_count = 0usize;
     let mut first_mismatch = None;
-    for (rel_path, entry) in &ctx.blake3_log {
+    let total = ctx.blake3_log.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, (rel_path, entry)) in ctx.blake3_log.iter().enumerate() {
         let src = ctx.src_dir.join(rel_path);
         let out_rel = entry.out_rel.as_deref().map_or_else(
             || PathBuf::from(rel_path).with_extension("JXL"),
@@ -880,6 +917,9 @@ fn check_exact_metadata_copies(ctx: &PipelineCtx) -> CheckDetail {
                 );
                 failures.push(out);
             }
+        }
+        if report_progress {
+            progress(index + 1, total);
         }
     }
     let verified = ctx.blake3_log.len().saturating_sub(failures.len());
@@ -979,7 +1019,11 @@ fn check_nonzero_size(expected: usize, files: &[PathBuf]) -> CheckDetail {
     )
 }
 
-fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail {
+fn check_orientation_policy(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
     if !is_command_available("exiftool") {
         return detail(
             "orient",
@@ -1005,6 +1049,7 @@ fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail
     check_orientation_policy_with_probes(
         ctx,
         files,
+        progress,
         |path| {
             orientations
                 .get(path)
@@ -1033,6 +1078,7 @@ fn check_orientation_policy(ctx: &PipelineCtx, files: &[PathBuf]) -> CheckDetail
 fn check_orientation_policy_with_probes<F, R>(
     ctx: &PipelineCtx,
     files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
     mut orientation_probe: F,
     mut reconstruction_probe: R,
 ) -> CheckDetail
@@ -1056,7 +1102,12 @@ where
     let mut tagged_count = 0usize;
     let mut reconstructible_count = 0usize;
     let mut probe_errors = Vec::new();
-    for path in files {
+    let total = files.len();
+    let report_progress = total > 0 && total == ctx.expected_count;
+    if report_progress {
+        progress(0, total);
+    }
+    for (index, path) in files.iter().enumerate() {
         match orientation_probe(path) {
             Ok(true) => {
                 tagged_count += 1;
@@ -1064,6 +1115,9 @@ where
                     file_local = false;
                     failures.push(path.clone());
                     probe_errors.push(format!("{}: source mapping absent", path.display()));
+                    if report_progress {
+                        progress(index + 1, total);
+                    }
                     continue;
                 };
                 match reconstruction_probe(source, path) {
@@ -1092,6 +1146,9 @@ where
                 probe_errors.push(format!("{}: {err}", path.display()));
                 failures.push(path.clone());
             }
+        }
+        if report_progress {
+            progress(index + 1, total);
         }
     }
     let actual = if let Some(first_error) = probe_errors.first() {
@@ -2114,9 +2171,11 @@ mod tests {
             output_format: None,
         };
 
+        let mut attempts = Vec::new();
         let check = super::check_orientation_policy_with_probes(
             &ctx,
             &files,
+            &mut |done, total| attempts.push((done, total)),
             |_| Err(std::io::Error::other("synthetic exiftool failure")),
             |_, _| Ok(false),
         );
@@ -2129,6 +2188,7 @@ mod tests {
             "probe failure must be preserved in check detail: {}",
             check.actual
         );
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
     }
 
     #[test]
@@ -2156,6 +2216,7 @@ mod tests {
         let check = super::check_orientation_policy_with_probes(
             &ctx,
             &files,
+            &mut |_, _| {},
             |_| Ok(true),
             |actual_source, actual_output| {
                 assert_eq!(actual_source, source);
@@ -2168,15 +2229,60 @@ mod tests {
         assert_eq!(check.affected_files, [] as [std::path::PathBuf; 0]);
         assert!(check.actual.contains("1 exact-reconstructible"));
 
+        let second_output = PathBuf::from("/tmp/unoriented.JXL");
+        let mut mixed_log = ctx.blake3_log.clone();
+        mixed_log.insert(
+            "unoriented.jpg".to_owned(),
+            Blake3Entry {
+                out_rel: Some("unoriented.JXL".to_owned()),
+                ..Blake3Entry::default()
+            },
+        );
+        let mixed_ctx = PipelineCtx {
+            working_copy: ctx.working_copy,
+            src_dir: ctx.src_dir,
+            blake3_log: mixed_log,
+            expected_count: 2,
+            library_handle: None,
+            output_format: None,
+        };
+        let mixed_files = vec![output.clone(), second_output];
+        let mut rejected_attempts = Vec::new();
         let rejected = super::check_orientation_policy_with_probes(
-            &ctx,
-            &files,
-            |_| Ok(true),
+            &mixed_ctx,
+            &mixed_files,
+            &mut |done, total| rejected_attempts.push((done, total)),
+            |path| Ok(path == output),
             |_, _| Ok(false),
         );
         assert!(!rejected.passed);
-        assert_eq!(rejected.affected_files, files);
+        assert_eq!(rejected.affected_files, [output]);
         assert_eq!(rejected.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(rejected_attempts, [(0, 2), (1, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn empty_orientation_output_set_does_not_report_file_progress() {
+        let ctx = PipelineCtx {
+            working_copy: PathBuf::from("/tmp"),
+            src_dir: PathBuf::from("/tmp"),
+            blake3_log: Blake3Log::new(),
+            expected_count: 0,
+            library_handle: None,
+            output_format: None,
+        };
+        let mut attempts = Vec::new();
+
+        let check = super::check_orientation_policy_with_probes(
+            &ctx,
+            &[],
+            &mut |done, total| attempts.push((done, total)),
+            |_| Ok(false),
+            |_, _| Ok(false),
+        );
+
+        assert!(check.passed);
+        assert_eq!(attempts, [] as [(usize, usize); 0]);
     }
 
     #[test]
@@ -2208,9 +2314,13 @@ mod tests {
             },
         );
 
-        let result = super::check_blake3_logged_outputs(&ctx);
+        let mut attempts = Vec::new();
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
 
         assert!(result.passed, "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
     }
 
     #[test]
@@ -2243,10 +2353,53 @@ mod tests {
         );
         std::fs::write(&out, b"final-jxl-container-after-drift").unwrap();
 
-        let result = super::check_blake3_logged_outputs(&ctx);
+        let mut attempts = Vec::new();
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
 
         assert!(!result.passed, "{result:?}");
         assert_eq!(result.affected_files, vec![out]);
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn gate1_blake3_incomplete_mapping_keeps_shared_failure_without_progress_denominator() {
+        let root = tempfile::TempDir::new().unwrap();
+        let src_dir = root.path().join("src");
+        let working_copy = root.path().join("working");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&working_copy).unwrap();
+        let source = src_dir.join("one.jpg");
+        let output = working_copy.join("one.JXL");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&output, b"output").unwrap();
+        let ctx = PipelineCtx {
+            working_copy,
+            src_dir,
+            blake3_log: BTreeMap::from([(
+                "one.jpg".to_owned(),
+                Blake3Entry {
+                    out_rel: Some("one.JXL".to_owned()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+            expected_count: 2,
+            library_handle: None,
+            output_format: None,
+        };
+        let mut attempts = Vec::new();
+
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
+
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Shared);
+        assert_eq!(result.affected_files, [] as [PathBuf; 0]);
+        assert_eq!(attempts, [] as [(usize, usize); 0]);
     }
 
     #[test]
@@ -2282,17 +2435,30 @@ mod tests {
             },
         );
 
-        let result = super::check_exact_metadata_copies(&ctx);
+        let mut attempts = Vec::new();
+        let result = super::check_exact_metadata_copies(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
 
         assert!(!result.passed);
         assert_eq!(result.name, "metadata");
         assert_eq!(result.affected_files, vec![out]);
         assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
         assert!(
             result.actual.contains("Exact metadata copy mismatch"),
             "metadata gate must expose exact-copy mismatch: {}",
             result.actual
         );
+
+        ctx.expected_count = 2;
+        let mut incomplete_attempts = Vec::new();
+        let incomplete = super::check_exact_metadata_copies(&ctx, &mut |done, total| {
+            incomplete_attempts.push((done, total));
+        });
+        assert!(!incomplete.passed);
+        assert_eq!(incomplete.failure_scope, super::CheckFailureScope::Shared);
+        assert_eq!(incomplete_attempts, [] as [(usize, usize); 0]);
     }
 
     #[test]
@@ -2332,7 +2498,7 @@ mod tests {
             library_handle: None,
             output_format: None,
         };
-        let result = super::check_exact_metadata_copies(&ctx);
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
         assert!(!result.passed);
         assert_eq!(result.failure_scope, super::CheckFailureScope::Files);
         assert_eq!(result.affected_files, [out]);
@@ -2392,7 +2558,7 @@ mod tests {
             },
         );
 
-        let result = super::check_exact_metadata_copies(&ctx);
+        let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
 
         assert!(!result.passed);
         assert_eq!(result.affected_files, vec![out]);
@@ -2436,9 +2602,13 @@ mod tests {
             },
         );
 
-        let result = super::check_metadata_policy(&ctx);
+        let mut attempts = Vec::new();
+        let result = super::check_metadata_policy(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
 
         assert!(result.passed, "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
         assert!(
             result.expected.contains("cleared-metadata"),
             "meme gate must require cleared metadata: {}",
@@ -2485,11 +2655,15 @@ mod tests {
             },
         );
 
-        let result = super::check_metadata_policy(&ctx);
+        let mut attempts = Vec::new();
+        let result = super::check_metadata_policy(&ctx, &mut |done, total| {
+            attempts.push((done, total));
+        });
 
         assert!(!result.passed);
         assert_eq!(result.affected_files, vec![out]);
         assert!(result.actual.contains("Description"), "{result:?}");
+        assert_eq!(attempts, [(0, 1), (1, 1)]);
     }
 
     #[test]
@@ -2545,7 +2719,7 @@ mod tests {
             },
         );
 
-        let result = super::check_blake3_logged_outputs(&ctx);
+        let result = super::check_blake3_logged_outputs(&ctx, &mut |_, _| {});
 
         assert!(!result.passed, "{result:?}");
         assert!(

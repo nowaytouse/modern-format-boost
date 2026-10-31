@@ -23,6 +23,17 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Local Gate File-check Progress (2026-10-31)
+
+- Report actual Gate 1 hash, metadata and orientation check attempts through the
+  existing structured progress channel, alongside decode progress. Source/output
+  pairs and output-file inventories retain separate units and stage-local counts.
+- Reset file-count scope between checks and reject conflicting progress. Failed
+  attempts remain failures; a full attempt count does not establish a passing
+  gate, a completed batch or deletion permission.
+- Explain the counts in the native guide in English, Simplified Chinese and
+  Japanese. Progress reporting adds no media scans, hashes or metadata queries.
+
 ### CI Contracts And History Cleanup Boundaries (2026-10-27)
 
 - Keep unallocated history output sequences distinct from an allocated high-water

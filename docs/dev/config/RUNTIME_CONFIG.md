@@ -729,7 +729,7 @@ IDs are presentation scope, not persistent file-task identities. The
 events travel through the existing captured worker-output path; they do not
 create a second state store, authorize deletion, prove later Gates or iCloud
 completion. Generic candidate imports without a checkpoint do not emit this
-durable progress. The remaining Gate progress is not covered. Synthetic
+durable progress. Local Gate 1 file-check activity is documented separately below. Synthetic
 regression and GUI fixtures do not replace authorized live-library delivery
 acceptance.
 
@@ -759,6 +759,34 @@ This progress is a current local byte-custody observation, not a persisted
 checkpoint, whole-batch completion, deletion authorization, iCloud proof or a
 replacement for source, metadata and sidecar deletion gates. It reuses the
 captured worker-output channel and adds no state store or extra media query.
+
+### Local Gate 1 File-check Activity
+
+The existing `MFB_GATE_ACTIVITY` schema 1 reports file-check attempts within the
+local verification gate. Hash and metadata checks count the current recorded
+source/output mapping pairs. Orientation and decode checks count the actual
+output files being checked. These are stage-local inventories, not the batch's
+discovered, successfully processed or Photos-verified media counts.
+
+Hash and metadata progress requires a nonempty mapping inventory matching the
+expected count. Orientation progress starts after its existing shared metadata
+probe succeeds. An unavailable or inconsistent inventory has no invented file
+denominator. Each completed attempt advances the numerator, including attempts
+that fail; the existing check result, affected files and failure scope still
+decide whether the gate passes or further work is blocked. A complete attempt
+count does not prove a successful check.
+
+Updates reuse the existing 250 ms coalescing and captured worker-output channel.
+There is no additional media scan, hash, metadata query or separate state store.
+Within a check, counts cannot decrease or change denominator. Starting another
+check releases the preceding check's file-count scope. Malformed or conflicting
+events make progress unavailable without changing verification results.
+
+The native GUI and History retain the stage name and real counts. A complete
+file count or a completed local gate does not establish whole-batch completion,
+Photos custody, deletion authorization, a persistent checkpoint or iCloud sync.
+Photos original-custody progress above has a different numerator: it counts
+successful byte matches rather than completed check attempts.
 
 ## Launcher Preflight Content Identity
 

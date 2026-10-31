@@ -93,8 +93,13 @@ struct GateActivityEvent<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// Per-check progress; `total` is this check's inventory, not necessarily the run's media count.
+/// For Local Gate 1, `processed` counts completed attempts, including failures;
+/// Photos custody uses it for successfully byte-matched files.
 pub(crate) struct GateFileProgress {
+    /// Completed attempts or successful byte matches, according to the gate kind.
     pub(crate) processed: usize,
+    /// Number of work items in this check's established inventory.
     pub(crate) total: usize,
 }
 

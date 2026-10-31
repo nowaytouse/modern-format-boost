@@ -676,7 +676,10 @@
 "history.worker.execution.signal" = "已记录终止信号：%@";
 "history.worker.execution.unknown" = "未记录实际进程的启动与退出。";
 "history.worker.execution.invalid" = "实际进程记录存在冲突或无法核实。";
-"gate.activity.files" = "已完成解码检查：%@ / %@ 个文件";
+"gate.activity.files" = "已尝试解码检查：%@ / %@ 个输出";
+"gate.activity.files.blake3" = "已尝试哈希检查：%@ / %@ 组原件与输出";
+"gate.activity.files.metadata" = "已尝试元数据检查：%@ / %@ 组原件与输出";
+"gate.activity.files.orient" = "已尝试方向检查：%@ / %@ 个输出";
 "settings.vidForceMsSsimLong" = "长视频也执行完整质量检查";
 "settings.vidForceMsSsimLong.help" = "仅用于标准 VID。长视频也执行融合质量检查，可能增加耗时；不改变编码格式，也不绕过核验。未修改时继承处理程序的配置。";
 "history.worker.not_recorded" = "未记录工作进程启动证据。";
@@ -918,3 +921,5 @@
 "history.ignored.reason.outside_current_policy_scope" = "不在当前 Fast IMG 处理范围";
 "history.ignored.reason.modern_tier_not_admitted_for_original_delivery" = "当前策略保留该现代格式原件，不执行交付";
 "helpguide.results.4.body" = "在运行详情和历史记录中查看数量、路径、警告、失败与已记录的配置。预检说明的是开始时的路由快照，不是最终逐文件执行记录。结果尚未确认时，先保留原件和恢复证据，查看具体失败阶段，再决定如何重试或清理。";
+"helpguide.results.5.title" = "理解核验进度";
+"helpguide.results.5.body" = "Gate 1 中，哈希和元数据进度按本次原件与输出的配对计数，方向和解码进度按本次输出计数。已尝试的检查包含失败项。N/N 只表示这些尝试已结束，不表示检查通过或整批完成。尚未建立该项检查清单时，不显示文件数量。";

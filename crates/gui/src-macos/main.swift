@@ -4880,9 +4880,10 @@ struct GateCheckActivity {
             }
             guard gate == "local", total == 6 else { return false }
             if let files = file_progress {
-                guard check == "decode", files.total > 0, files.total <= UInt64(Int64.max),
+                guard ["blake3", "metadata", "orient", "decode"].contains(check),
+                      files.total > 0, files.total <= UInt64(Int64.max),
                       files.processed <= files.total,
-                      state == "running" || files.processed == files.total else { return false }
+                      ["running", "failed"].contains(state) || files.processed == files.total else { return false }
             }
             if check == "inventory" { return completed == 0 && ["running", "failed"].contains(state) }
             guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else { return false }
@@ -4912,7 +4913,7 @@ struct GateCheckActivity {
         }
         if let previous = event, previous.stage_id == next.stage_id {
             guard previous.gate == next.gate, previous.total == next.total else { invalidate(); return true }
-            if let files = previous.file_progress {
+            if previous.check == next.check, let files = previous.file_progress {
                 guard let nextFiles = next.file_progress, nextFiles.total == files.total,
                       nextFiles.processed >= files.processed else { invalidate(); return true }
             }
@@ -4926,7 +4927,8 @@ struct GateCheckActivity {
                     || (next.gate == "photos_custody" && next.state == "running"
                         && (previous.check == "inventory" || previous.check == "original_bytes")
                         && next.check == "original_bytes")
-                    || (previous.check == "decode" && next.check == "decode" && next.state == "running" && next.file_progress != nil) else {
+                    || (next.gate == "local" && previous.check == next.check
+                        && next.state == "running" && next.file_progress != nil) else {
                 invalidate()
                 return true
             }
@@ -4962,7 +4964,8 @@ struct GateCheckActivity {
                                       String(event.completed), String(event.total))
             }
             if let files = event.file_progress {
-                text += " · " + localized("gate.activity.files", String(files.processed), String(files.total))
+                let key = event.check == "decode" ? "gate.activity.files" : "gate.activity.files.\(event.check)"
+                text += " · " + localized(key, String(files.processed), String(files.total))
             }
         }
         guard event.state == "running", let updatedAt, now.isFinite else { return text }
@@ -8031,7 +8034,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 fileProgressIndicator.isHidden = false
                 fileProgressIndicator.isIndeterminate = false
                 let percentage = Double(files.processed) / Double(files.total) * 100
-                fileProgressIndicator.doubleValue = event.state == "running" ? min(99.99, percentage) : percentage
+                fileProgressIndicator.doubleValue = event.state == "passed" ? percentage : min(99.99, percentage)
                 fileProgressIndicator.setAccessibilityLabel(label)
             }
             return
@@ -8562,6 +8565,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let oldPhase = logPhase
         let oldActivity = gateActivity
         let oldWarnings = latestDiagnostics
+        let oldBatch = batchResults
         let oldLog = logView.string
         let oldFullLog = NSAttributedString(attributedString: fullLogPresentation)
         let oldPrivateLog = NSAttributedString(attributedString: privateLogPresentation)
@@ -8571,6 +8575,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             logPhase = oldPhase
             gateActivity = oldActivity
             latestDiagnostics = oldWarnings
+            batchResults = oldBatch
             logView.string = oldLog
             refreshLatestDiagnostics()
             refreshFileProgress()
@@ -8631,6 +8636,113 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard gateActivity.event == nil, !gateActivity.invalid else {
             throw HostError(message: "Ending a run retained live Gate activity")
         }
+        try validateGateFileProgressForSelfTest()
+    }
+
+    private static func gateFileFixtureEvent(check: String, processed: Int? = nil,
+                                             total: Int = 3, state: String = "running") throws -> String {
+        guard let index = ["count", "size", "blake3", "metadata", "orient", "decode"].firstIndex(of: check) else {
+            throw HostError(message: "Unknown synthetic Gate check")
+        }
+        var value: [String: Any] = ["schema_version": 1, "stage_id": "gate-file-fixture", "gate": "local",
+                                   "check": check, "completed": state == "running" ? index : index + 1,
+                                   "total": 6, "state": state]
+        if let processed { value["file_progress"] = ["processed": processed, "total": total] }
+        return "MFB_GATE_ACTIVITY=" + String(decoding: try JSONSerialization.data(withJSONObject: value), as: UTF8.self)
+    }
+
+    private func validateGateFileProgressForSelfTest() throws {
+        let phase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#
+        for check in ["blake3", "metadata", "orient", "decode"] {
+            gateActivity = GateCheckActivity()
+            batchResults = BatchResults()
+            appendLog(phase + "\n" + (try Self.gateFileFixtureEvent(check: check, processed: 0)), now: 1)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1), now: 2)
+            let key = check == "decode" ? "gate.activity.files" : "gate.activity.files.\(check)"
+            guard !gateActivity.invalid, !fileProgressIndicator.isHidden,
+                  abs(fileProgressIndicator.doubleValue - 100.0 / 3) < 0.001,
+                  fileProgressLabel.stringValue.contains(localized(key, "1", "3")),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue else {
+                throw HostError(message: "Gate file attempts lost their check-specific unit or accessibility: \(check)")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 3), now: 3)
+            guard fileProgressIndicator.doubleValue < 100, gateActivity.event?.state == "running",
+                  batchResults.totals.isEmpty, !batchResults.mandatoryEvidenceConflict else {
+                throw HostError(message: "Completed Gate attempts became successful media or a completed batch: \(check)")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 3, state: "failed"), now: 4)
+            guard !gateActivity.invalid, gateActivity.event?.state == "failed", fileProgressIndicator.doubleValue < 100,
+                  fileProgressLabel.textColor == .systemRed, batchResults.mandatoryEvidenceConflict else {
+                throw HostError(message: "A failed Gate with all attempts finished was presented as complete: \(check)")
+            }
+            gateActivity = GateCheckActivity()
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1), now: 5)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 1, state: "failed"), now: 6)
+            guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1 else {
+                throw HostError(message: "Interrupted Gate attempts discarded their actual partial count: \(check)")
+            }
+            let start = try Self.gateFileFixtureEvent(check: check, processed: 1)
+            for next in [try Self.gateFileFixtureEvent(check: check, processed: 0),
+                         try Self.gateFileFixtureEvent(check: check, processed: 1, total: 4),
+                         try Self.gateFileFixtureEvent(check: check)] {
+                var invalid = GateCheckActivity()
+                _ = invalid.ingest(start, now: 1)
+                _ = invalid.ingest(next, now: 2)
+                guard invalid.invalid else { throw HostError(message: "Gate attempt count regressed, changed scope or disappeared: \(check)") }
+            }
+        }
+        gateActivity = GateCheckActivity()
+        batchResults = BatchResults()
+        for check in ["blake3", "metadata", "orient", "decode"] {
+            appendLog(try Self.gateFileFixtureEvent(check: check), now: 10)
+            guard !gateActivity.invalid, gateActivity.event?.file_progress == nil, fileProgressIndicator.isHidden else {
+                throw HostError(message: "A new Gate check kept the preceding check's denominator")
+            }
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 0, total: 2), now: 11)
+            appendLog(try Self.gateFileFixtureEvent(check: check, processed: 2, total: 2), now: 12)
+            guard !gateActivity.invalid, fileProgressIndicator.doubleValue < 100 else {
+                throw HostError(message: "A new Gate check could not establish its own attempt count")
+            }
+        }
+        gateActivity = GateCheckActivity()
+        appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3, state: "file_failures"), now: 13)
+        appendLog(try Self.gateFileFixtureEvent(check: "orient"), now: 14)
+        guard !gateActivity.invalid, gateActivity.event?.check == "orient", fileProgressIndicator.isHidden,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Completed local file failures blocked the next independent check or retained their denominator")
+        }
+        var invalid = GateCheckActivity()
+        _ = invalid.ingest(try Self.gateFileFixtureEvent(check: "count", processed: 0), now: 1)
+        guard invalid.invalid else { throw HostError(message: "An unmeasured Gate check accepted invented file counts") }
+    }
+
+    func showGateFileProgressFixture(caseName: String = "metadata") throws {
+        photosProgressFixture = true
+        clearBatchLog()
+        targetField.stringValue = "/synthetic/検証と归档/原件与输出/long-file-name-🌿.jpeg"
+        appendLog(#"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#)
+        switch caseName {
+        case "blake3", "metadata", "orient", "decode":
+            appendLog(try Self.gateFileFixtureEvent(check: caseName, processed: 0))
+            appendLog(try Self.gateFileFixtureEvent(check: caseName, processed: 2))
+        case "zero": appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 0))
+        case "complete": appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3))
+        case "next":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 3))
+            appendLog(try Self.gateFileFixtureEvent(check: "orient"))
+        case "failed":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2))
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2, state: "failed"))
+        case "missing": appendLog(try Self.gateFileFixtureEvent(check: "metadata"))
+        case "backwards":
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 2))
+            appendLog(try Self.gateFileFixtureEvent(check: "metadata", processed: 1))
+        default: throw HostError(message: "Unknown Gate file-progress fixture case")
+        }
+        runButton.isEnabled = false
+        openButton.isEnabled = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func validateStatusLocalizationForSelfTest() throws {
@@ -11218,7 +11330,7 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
     || CommandLine.arguments.contains("--result-counts-ui-fixture") || CommandLine.arguments.contains("--missing-counts-ui-fixture")
     || CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
     || CommandLine.arguments.contains("--restore-integrity-ui-fixture") || CommandLine.arguments.contains("--interrupted-scan-ui-fixture")
-    || CommandLine.arguments.contains("--tool-runtime-ui-fixture") {
+    || CommandLine.arguments.contains("--tool-runtime-ui-fixture") || CommandLine.arguments.contains("--gate-file-progress-ui-fixture") {
     MainActor.assumeIsolated {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
@@ -11227,7 +11339,11 @@ if CommandLine.arguments.contains("--delivery-ui-fixture") || CommandLine.argume
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AppController(preferences: preferences)
         do {
-            if CommandLine.arguments.contains("--tool-runtime-ui-fixture") { controller.showToolRuntimeFixture() }
+            if let index = CommandLine.arguments.firstIndex(of: "--gate-file-progress-ui-fixture") {
+                let next = CommandLine.arguments[safe: index + 1]
+                try controller.showGateFileProgressFixture(caseName: next.flatMap { $0.hasPrefix("-") ? nil : $0 } ?? "metadata")
+            }
+            else if CommandLine.arguments.contains("--tool-runtime-ui-fixture") { controller.showToolRuntimeFixture() }
             else if CommandLine.arguments.contains("--interrupted-scan-ui-fixture") { controller.showProcessInterruptionFixture() }
             else if CommandLine.arguments.contains("--restore-ui-fixture") || CommandLine.arguments.contains("--restore-audit-ui-fixture")
                 || CommandLine.arguments.contains("--restore-integrity-ui-fixture") {

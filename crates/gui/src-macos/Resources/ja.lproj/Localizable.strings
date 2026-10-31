@@ -676,7 +676,10 @@
 "history.worker.execution.signal" = "観測した終了シグナル：%@";
 "history.worker.execution.unknown" = "実プロセスの起動と終了は記録されていません。";
 "history.worker.execution.invalid" = "実プロセスの観測が矛盾しているか無効です。";
-"gate.activity.files" = "完了したデコード検査：%@ / %@ ファイル";
+"gate.activity.files" = "デコード検査を実行：%@ / %@ 出力ファイル";
+"gate.activity.files.blake3" = "ハッシュ検査を実行：%@ / %@ 原本・出力ペア";
+"gate.activity.files.metadata" = "メタデータ検査を実行：%@ / %@ 原本・出力ペア";
+"gate.activity.files.orient" = "向きの検査を実行：%@ / %@ 出力ファイル";
 "settings.vidForceMsSsimLong" = "長い動画も完全な品質検査を実行";
 "settings.vidForceMsSsimLong.help" = "標準 VID のみ。長い動画も融合品質検査を実行します。時間がかかる場合がありますが、コーデック選択を変えたり検証を省略したりしません。変更しなければ処理側の設定を継承します。";
 "history.worker.not_recorded" = "ワーカー起動の記録はありません。";
@@ -918,3 +921,5 @@
 "history.ignored.reason.outside_current_policy_scope" = "現在の Fast IMG 処理方針の対象外です";
 "history.ignored.reason.modern_tier_not_admitted_for_original_delivery" = "現在の方針では、このモダン形式の原本を保持し配信しません";
 "helpguide.results.4.body" = "実行詳細と履歴で、件数、パス、警告、失敗、記録された設定を確認できます。事前確認は開始時の振り分けの記録であり、最終的なファイル別実行記録ではありません。結果が未確認なら原本と復旧証拠を残し、具体的な失敗段階を読んでから再試行や整理を判断してください。";
+"helpguide.results.5.title" = "検証の進捗を理解する";
+"helpguide.results.5.body" = "Gate 1 のハッシュとメタデータの進捗は、今回の原本と出力のペア数です。向きとデコードの進捗は出力ファイル数です。実行した検査には失敗も含まれます。N/N は試行の終了を示し、合格やバッチ全体の完了を意味しません。その検査の対象一覧が確定するまでは、ファイル数を表示しません。";

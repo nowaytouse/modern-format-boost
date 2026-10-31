@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
-        ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 4), ("tools", 5), ("restore", 3),
+        ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 5), ("tools", 5), ("restore", 3),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -284,6 +284,9 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             try require(controller.textView.string.hasPrefix(translate("helpguide.metadata.title"))
                 && (1...5).allSatisfy { controller.textView.string.contains(translate("helpguide.metadata.\($0).body")) },
                 "Metadata guide did not explain reconstruction, XMP, policy exceptions and delivery boundaries")
+            controller.show(relativeTo: nil, topic: "results")
+            try require(controller.textView.string.contains(translate("helpguide.results.5.body")),
+                "Result guide did not explain check-attempt units and final verification boundaries")
             controller.close()
         }
     }
