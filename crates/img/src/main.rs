@@ -1,6 +1,7 @@
 use anyhow::Context;
 pub mod fast_img_ignored;
 mod fast_img_result;
+mod resume_admission;
 mod runtime_cli;
 use clap::{Parser, Subcommand};
 use img::Rational;
@@ -716,6 +717,166 @@ fn run_img_command(command: Commands, cache: Option<Arc<AnalysisCache>>) -> anyh
     Ok(())
 }
 
+struct ImgToolRuntimeRequest {
+    required: &'static [&'static str],
+    recorded: Option<(PathBuf, String)>,
+}
+
+/// Saved-task admission runs before tool preparation. Its errors do not imply
+/// that any external executable or saved tool copy was inspected or damaged.
+fn select_img_startup_tools(command: &Commands) -> anyhow::Result<Option<ImgToolRuntimeRequest>> {
+    if FastImgRunOptions::for_command(command)
+        .map(fast_img_missing_source_retry_selection)
+        .transpose()?
+        .flatten()
+        .is_some()
+    {
+        return Ok(None);
+    }
+    match command {
+        Commands::Run {
+            input,
+            output,
+            resume,
+            no_resume,
+            ..
+        } => Ok(Some(ImgToolRuntimeRequest {
+            required: &["cjxl", "djxl", "jxlinfo", "exiftool", "ffmpeg"],
+            recorded: if *resume && !*no_resume {
+                foundation::checkpoint::Manager::saved_tool_snapshot(input, output.as_deref())?
+            } else {
+                None
+            },
+        })),
+        Commands::FastImg {
+            input,
+            output,
+            dry_run: false,
+            no_resume,
+            retry_failed,
+            retry_failed_parent,
+            shortest_path,
+            archive,
+            allow_expert_options,
+            strategy,
+            ..
+        } => {
+            let src = if *retry_failed {
+                fast_img_failed_retry_source_root(
+                    input,
+                    output.as_deref(),
+                    retry_failed_parent.as_deref(),
+                    strategy,
+                )?
+            } else {
+                FastImgInputPlan::source_root(input)?
+            };
+            let migration =
+                foundation::fast_img_store::migrate_legacy_for_source(&src, output.as_deref())?;
+            if migration.migrated != 0 || migration.retired != 0 {
+                println!(
+                    "MFB_FAST_IMG_STATE_MIGRATION={{\"schema_version\":1,\"migrated\":{},\"retired\":{}}}",
+                    migration.migrated, migration.retired
+                );
+            }
+            let recorded = if *retry_failed {
+                let delivery = fast_img_failed_retry_delivery(ShortestPathFlag(*shortest_path))?;
+                let (parent, child) = fast_img_failed_retry_selection(
+                    &src,
+                    output.as_deref(),
+                    retry_failed_parent.as_deref(),
+                    strategy,
+                    &delivery,
+                )?;
+                fast_img_validate_failed_retry_input(input, parent.marker())?;
+                let contract =
+                    fast_img_active_processing_contract(strategy, *archive, *allow_expert_options)?;
+                fast_img_validate_processing_contract(parent.marker(), &contract)?;
+                if let Some(marker) = &child {
+                    fast_img_validate_processing_contract(marker, &contract)?;
+                }
+                if child.as_ref().is_some_and(WorkingCopyMarker::is_terminal) {
+                    return Ok(None);
+                }
+                child.as_ref().map(|marker| {
+                    marker.tool_snapshot_manifest.clone().zip(marker.tool_snapshot_identity.clone())
+                        .context("Saved failed-only retry has no fixed tool runtime authority; recovery evidence was retained")
+                }).transpose()?
+            } else {
+                // Selection only: output recovery belongs after tool preflight.
+                let working = if let Some(output) = output {
+                    output.clone()
+                } else if *no_resume {
+                    foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src)?
+                } else {
+                    resolve_working_copy_dir(&src, strategy)?
+                };
+                if *no_resume {
+                    None
+                } else {
+                    read_existing_fast_img_marker(&working)?
+                        .map(|marker| {
+                            let contract = fast_img_active_processing_contract(
+                                strategy,
+                                *archive,
+                                *allow_expert_options,
+                            )?;
+                            fast_img_validate_processing_contract(&marker, &contract)?;
+                            marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
+                                .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")
+                        })
+                        .transpose()?
+                }
+            };
+            Ok(Some(ImgToolRuntimeRequest {
+                required: if strategy == "avif" {
+                    &["avifenc", "avifdec", "exiftool"]
+                } else {
+                    &["cjxl", "djxl", "jxlinfo", "exiftool"]
+                },
+                recorded,
+            }))
+        }
+        Commands::RestoreJpeg { .. } => Ok(Some(ImgToolRuntimeRequest {
+            required: &["djxl", "jxlinfo", "exiftool"],
+            recorded: None,
+        })),
+        _ => Ok(None),
+    }
+}
+
+fn prepare_img_startup_with(
+    command: &Commands,
+    prepare: impl FnOnce(&[&str], Option<&(PathBuf, String)>) -> anyhow::Result<()>,
+    report: impl FnOnce(&resume_admission::Blocked) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let selected = match select_img_startup_tools(command) {
+        Ok(selected) => selected,
+        Err(error) if resume_admission::is_interrupted(&error) => return Err(error),
+        Err(error) => {
+            let event = match resume_admission::Blocked::from_error(command, &error) {
+                Ok(event) => event,
+                Err(diagnostic) => {
+                    return Err(error.context(format!(
+                        "admission diagnostic could not be prepared: {diagnostic:#}"
+                    )));
+                }
+            };
+            if let Err(diagnostic) = report(&event) {
+                return Err(error.context(format!(
+                    "admission diagnostic could not be saved: {diagnostic:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    if let Some(selected) = selected {
+        // Only actual tool preparation owns tool-runtime errors and events.
+        prepare(selected.required, selected.recorded.as_ref())?;
+    }
+    Ok(())
+}
+
 fn main_inner() -> anyhow::Result<()> {
     foundation::entry_guard::assert_product_cli_entry("img").context("img entry guard")?;
     let mut cli = Cli::parse();
@@ -783,170 +944,11 @@ fn main_inner() -> anyhow::Result<()> {
         &mut cli.command,
         foundation::checkpoint::resolve_resume_choice,
     )?;
-    // A manifest-bound child can finish after its source tree has disappeared.
-    // Inspect this before source canonicalization, legacy migration or tool
-    // preparation; the actual custody recheck and commit happen in run_fast_img.
-    let missing_source_retry = FastImgRunOptions::for_command(&cli.command)
-        .map(fast_img_missing_source_retry_selection)
-        .transpose()?
-        .flatten()
-        .is_some();
-    let tool_preparation = (|| -> anyhow::Result<()> {
-        match &cli.command {
-            Commands::Run {
-                input,
-                output,
-                resume,
-                no_resume,
-                ..
-            } => {
-                let recorded = if *resume && !*no_resume {
-                    foundation::checkpoint::Manager::saved_tool_snapshot(input, output.as_deref())?
-                } else {
-                    None
-                };
-                runtime_cli::prepare_tool_runtime(
-                    &["cjxl", "djxl", "jxlinfo", "exiftool", "ffmpeg"],
-                    recorded.as_ref(),
-                )?;
-            }
-            Commands::FastImg {
-                input,
-                output,
-                dry_run: false,
-                no_resume,
-                retry_failed,
-                retry_failed_parent,
-                shortest_path,
-                archive,
-                allow_expert_options,
-                strategy,
-                ..
-            } => {
-                if missing_source_retry {
-                    return Ok(());
-                }
-                let src = if *retry_failed {
-                    fast_img_failed_retry_source_root(
-                        input,
-                        output.as_deref(),
-                        retry_failed_parent.as_deref(),
-                        strategy,
-                    )?
-                } else {
-                    FastImgInputPlan::source_root(input)?
-                };
-                let migration =
-                    foundation::fast_img_store::migrate_legacy_for_source(&src, output.as_deref())?;
-                if migration.migrated != 0 || migration.retired != 0 {
-                    println!(
-                        "MFB_FAST_IMG_STATE_MIGRATION={{\"schema_version\":1,\"migrated\":{},\"retired\":{}}}",
-                        migration.migrated, migration.retired
-                    );
-                }
-                let recorded = if *retry_failed {
-                    let delivery =
-                        fast_img_failed_retry_delivery(ShortestPathFlag(*shortest_path))?;
-                    let (parent, child) = fast_img_failed_retry_selection(
-                        &src,
-                        output.as_deref(),
-                        retry_failed_parent.as_deref(),
-                        strategy,
-                        &delivery,
-                    )?;
-                    fast_img_validate_failed_retry_input(input, parent.marker())?;
-                    let contract = fast_img_active_processing_contract(
-                        strategy,
-                        *archive,
-                        *allow_expert_options,
-                    )?;
-                    fast_img_validate_processing_contract(parent.marker(), &contract)?;
-                    if let Some(marker) = &child {
-                        fast_img_validate_processing_contract(marker, &contract)?;
-                    }
-                    if child.as_ref().is_some_and(WorkingCopyMarker::is_terminal) {
-                        return Ok(());
-                    }
-                    child.as_ref().map(|marker| {
-                        marker.tool_snapshot_manifest.clone().zip(marker.tool_snapshot_identity.clone())
-                            .context("Saved failed-only retry has no fixed tool runtime authority; recovery evidence was retained")
-                    }).transpose()?
-                } else {
-                    // Selection only: output recovery belongs after tool preflight.
-                    let working = if let Some(output) = output {
-                        output.clone()
-                    } else if *no_resume {
-                        foundation::pipeline::verification::resolve_fresh_working_copy_dir(&src)?
-                    } else {
-                        resolve_working_copy_dir(&src, strategy)?
-                    };
-                    if *no_resume {
-                        None
-                    } else {
-                        read_existing_fast_img_marker(&working)?
-                        .map(|marker| {
-                            let contract = fast_img_active_processing_contract(
-                                strategy,
-                                *archive,
-                                *allow_expert_options,
-                            )?;
-                            fast_img_validate_processing_contract(&marker, &contract)?;
-                            marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
-                                .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")
-                        })
-                        .transpose()?
-                    }
-                };
-                let required: &[&str] = if strategy == "avif" {
-                    &["avifenc", "avifdec", "exiftool"]
-                } else {
-                    &["cjxl", "djxl", "jxlinfo", "exiftool"]
-                };
-                runtime_cli::prepare_tool_runtime(required, recorded.as_ref())?;
-            }
-            Commands::RestoreJpeg { .. } => {
-                runtime_cli::prepare_tool_runtime(&["djxl", "jxlinfo", "exiftool"], None)?;
-            }
-            _ => {}
-        }
-        Ok(())
-    })();
-    if let Err(error) = tool_preparation {
-        if error.chain().any(|cause| {
-            cause
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::Interrupted)
-        }) {
-            return Err(error);
-        }
-        if matches!(
-            &cli.command,
-            Commands::FastImg {
-                retry_failed: true,
-                ..
-            }
-        ) && error
-            .downcast_ref::<foundation::common_utils::ToolRuntimeError>()
-            .is_none()
-        {
-            // Selection/configuration failures are not evidence that a tool
-            // executable changed or became unavailable.
-            return Err(error.context("failed-only retry preparation"));
-        }
-        if error
-            .downcast_ref::<foundation::common_utils::ToolRuntimeError>()
-            .is_none()
-        {
-            let shared = foundation::common_utils::ToolRuntimeError {
-                cause_code: "snapshot_invalid",
-                tool: None,
-                message: format!("{error:#}"),
-            };
-            foundation::common_utils::emit_tool_runtime_status("blocked", Some(&shared))?;
-            return Err(shared.into());
-        }
-        return Err(error);
-    }
+    prepare_img_startup_with(
+        &cli.command,
+        runtime_cli::prepare_tool_runtime,
+        resume_admission::emit,
+    )?;
     foundation::init_ghost_mode().context("Failed to initialize ghost mode")?;
 
     foundation::logging::init("img", &foundation::logging::LogConfig::default())
@@ -4240,9 +4242,10 @@ fn fast_img_validate_processing_contract(
     marker: &WorkingCopyMarker,
     current: &FastImgProcessingContract,
 ) -> anyhow::Result<()> {
-    let saved = marker.processing_contract.as_ref().context(
-        "MFB_RESUME_CONFIG_UNKNOWN: saved fast-img task has no processing-settings identity; its outputs and recovery evidence were retained. Use --no-resume for an isolated new task instead of assigning current settings to old results",
-    )?;
+    let saved = marker
+        .processing_contract
+        .as_ref()
+        .ok_or(resume_admission::SettingsError::Unknown)?;
     saved
         .validate(&marker.strategy)
         .map_err(anyhow::Error::msg)?;
@@ -4253,10 +4256,12 @@ fn fast_img_validate_processing_contract(
     current
         .validate(current_strategy)
         .map_err(anyhow::Error::msg)?;
-    anyhow::ensure!(
-        saved == current,
-        "MFB_RESUME_CONFIG_CHANGED: fast-img processing settings differ from the saved task; no saved result was reused or overwritten. Restore its settings to continue, or use --no-resume for an isolated new task. Saved: {saved:?}; current: {current:?}"
-    );
+    if saved != current {
+        return Err(resume_admission::SettingsError::Changed(format!(
+            "fast-img processing settings differ from the saved task; no saved result was reused or overwritten. Restore its settings to continue, or use --no-resume for an isolated new task. Saved: {saved:?}; current: {current:?}"
+        ))
+        .into());
+    }
     Ok(())
 }
 
@@ -12169,6 +12174,173 @@ mod fast_img_hardening_tests {
             cli.command,
             super::Commands::Run { resume: true, .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn startup_admission_preserves_unknown_or_changed_settings_without_preparing_tools()
+    -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let root = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(root.path());
+        for (failed_only, changed) in [(false, false), (false, true), (true, false), (true, true)] {
+            let case = root.path().join(format!("case-{failed_only}-{changed}"));
+            let input = case.join("source");
+            std::fs::create_dir_all(&input)?;
+            let input = input.canonicalize()?;
+            let output = input
+                .parent()
+                .context("fixture source has no parent")?
+                .join("saved-output");
+            std::fs::create_dir(&output)?;
+            let source = input.join("failed.jpg");
+            write_jpeg(
+                &source,
+                b"retained source must not be inspected or modified",
+            )?;
+            let source_bytes = std::fs::read(&source)?;
+            let artifact = output.join("saved-candidate.JXL");
+            let artifact_bytes = b"existing candidate must remain untouched";
+            std::fs::write(&artifact, artifact_bytes)?;
+            let mut marker = WorkingCopyMarker::new(input.clone(), output.clone(), 1);
+            marker.stage = FastImgStageName::CleanupComplete;
+            marker.failed_sources.insert(
+                "failed.jpg".into(),
+                SkippedSourceEntry {
+                    src: calculate_blake3_hash(&source)?,
+                    reason: "synthetic retained failure".into(),
+                },
+            );
+            if changed {
+                marker.processing_contract = Some(super::fast_img_active_processing_contract(
+                    "jxl", false, false,
+                )?);
+            }
+            foundation::pipeline::verification::write_marker_atomic(&marker)?;
+            let mut arguments = vec![
+                std::ffi::OsString::from("img"),
+                std::ffi::OsString::from("fast-img"),
+                input.as_os_str().to_owned(),
+            ];
+            if failed_only {
+                arguments.extend([
+                    "--retry-failed".into(),
+                    "--retry-failed-parent".into(),
+                    output.as_os_str().to_owned(),
+                ]);
+            } else {
+                arguments.extend([
+                    "--retry".into(),
+                    "--output".into(),
+                    output.as_os_str().to_owned(),
+                ]);
+            }
+            if changed {
+                arguments.push("--archive".into());
+            }
+            let cli = Cli::try_parse_from(arguments)?;
+            let prepared = std::cell::Cell::new(0usize);
+            let diagnostics = std::cell::RefCell::new(Vec::new());
+            let error = super::prepare_img_startup_with(
+                &cli.command,
+                |_, _| {
+                    prepared.set(prepared.get() + 1);
+                    Ok(())
+                },
+                |event| {
+                    diagnostics.borrow_mut().push(serde_json::to_value(event)?);
+                    Ok(())
+                },
+            )
+            .expect_err("unproven saved settings must block actual startup admission");
+            assert_eq!(prepared.get(), 0);
+            assert!(
+                error
+                    .downcast_ref::<foundation::common_utils::ToolRuntimeError>()
+                    .is_none()
+            );
+            let diagnostics = diagnostics.into_inner();
+            assert_eq!(diagnostics.len(), 1);
+            let diagnostic = &diagnostics[0];
+            let expected_cause = if changed {
+                "resume_config_changed"
+            } else if failed_only {
+                // Core refuses an unproven parent before a child may be selected.
+                "admission_failed"
+            } else {
+                "resume_config_unknown"
+            };
+            assert_eq!(diagnostic["cause_code"], expected_cause);
+            assert_eq!(diagnostic["input_path"], serde_json::to_value(&input)?);
+            assert_eq!(
+                diagnostic["requested_output"],
+                if failed_only {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::to_value(&output)?
+                }
+            );
+            assert!(!diagnostic.to_string().contains("snapshot_invalid"));
+            assert_eq!(super::read_marker(&output)?, marker);
+            assert_eq!(std::fs::read(&source)?, source_bytes);
+            assert_eq!(std::fs::read(&artifact)?, artifact_bytes);
+            assert_eq!(
+                foundation::pipeline::verification::matching_working_copy_markers(&input, "jxl")?,
+                [marker]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_tool_errors_and_cancellation_keep_their_actual_error_domain() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("img"),
+            std::ffi::OsString::from("restore-jpeg"),
+            root.path().join("synthetic-input").into_os_string(),
+        ])?;
+        for interrupted in [false, true] {
+            let reported = std::cell::Cell::new(false);
+            let error = super::prepare_img_startup_with(
+                &cli.command,
+                |_, _| {
+                    if interrupted {
+                        Err(
+                            std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled")
+                                .into(),
+                        )
+                    } else {
+                        Err(foundation::common_utils::ToolRuntimeError {
+                            cause_code: "snapshot_invalid",
+                            tool: Some("djxl".into()),
+                            message: "synthetic verified snapshot member mismatch".into(),
+                        }
+                        .into())
+                    }
+                },
+                |_| {
+                    reported.set(true);
+                    Ok(())
+                },
+            )
+            .expect_err("actual tool errors or cancellation must remain failures");
+            assert!(
+                !reported.get(),
+                "tool failures must not become saved-settings diagnoses"
+            );
+            if interrupted {
+                assert!(super::resume_admission::is_interrupted(&error));
+            } else {
+                let tool = error
+                    .downcast_ref::<foundation::common_utils::ToolRuntimeError>()
+                    .context("actual tool failure lost its typed cause")?;
+                assert_eq!(tool.cause_code, "snapshot_invalid");
+                assert_eq!(tool.tool.as_deref(), Some("djxl"));
+            }
+        }
         Ok(())
     }
 

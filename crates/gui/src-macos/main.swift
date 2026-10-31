@@ -4567,6 +4567,67 @@ private func countStatusValue(in line: String) -> String? {
         .trimmingCharacters(in: .whitespaces)
 }
 
+private struct ImgStartupAdmission {
+    static let prefix = "MFB_IMG_ADMISSION_BLOCKED="
+    struct Event: Decodable, Equatable {
+        enum Cause: String, Decodable {
+            case resumeConfigUnknown = "resume_config_unknown"
+            case resumeConfigChanged = "resume_config_changed"
+            case admissionFailed = "admission_failed"
+        }
+        let schema_version: Int
+        let pipeline: String
+        let cause_code: Cause
+        let input_path: String?
+        let requested_output: String?
+        let message: String
+    }
+    private(set) var event: Event?
+    private(set) var invalid = false
+
+    mutating func ingest(_ line: String, request: ProcessorRequest?, hasMediaEvidence: Bool) -> Bool {
+        let raw = LogTone.message(line)
+        guard raw.hasPrefix(Self.prefix) else { return false }
+        do {
+            let data = Data(raw.dropFirst(Self.prefix.count).utf8)
+            guard !invalid, !hasMediaEvidence, data.count <= 32_768,
+                  let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(fields.keys) == Set(["schema_version", "pipeline", "cause_code", "input_path", "requested_output", "message"])
+            else { throw HostError(message: localized("admission.invalid")) }
+            let next = try JSONDecoder().decode(Event.self, from: data)
+            guard next.schema_version == 1, next.pipeline == "img",
+                  !next.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  next.message.utf8.count <= 8_192, !next.message.utf8.contains(0),
+                  next.requested_output.map(FastImgDeliveryReceipt.absolute) ?? true,
+                  let input = next.input_path, FastImgDeliveryReceipt.absolute(input),
+                  let request, request.operationMode.backendMode == "fast-img", !request.dryRun,
+                  FastImgDeliveryReceipt.samePath(input, request.targetPath),
+                  event == nil || event == next
+            else { throw HostError(message: localized("admission.invalid")) }
+            // The output is a launcher diagnostic, never authority for a fresh
+            // output location, a recovered artifact, or a cleanup operation.
+            event = next
+        } catch {
+            event = nil
+            invalid = true
+        }
+        return true
+    }
+
+    var isBlocked: Bool { invalid || event != nil }
+    var allowsIndependentTask: Bool {
+        !invalid && (event?.cause_code == .resumeConfigUnknown || event?.cause_code == .resumeConfigChanged)
+    }
+    var status: String {
+        if invalid { return localized("admission.invalid") }
+        switch event?.cause_code {
+        case .resumeConfigUnknown: return localized("admission.resume_unknown")
+        case .resumeConfigChanged: return localized("admission.resume_changed")
+        default: return localized("admission.stopped")
+        }
+    }
+}
+
 private struct ToolSnapshotPresentation {
     static let prefix = "MFB_TOOL_SNAPSHOT="
     struct Event: Decodable {
@@ -6730,6 +6791,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let fileProgressRow = NSStackView()
     private var fileProgress = FileStageProgress()
     private var toolSnapshot = ToolSnapshotPresentation()
+    private var startupAdmission = ImgStartupAdmission()
+    private var startupAdmissionHasConflict = false
     private let toolSnapshotLabel = NSTextField(wrappingLabelWithString: "")
     private var workerExecution = LiveWorkerExecution()
     private var photosImportProgress = PhotosImportProgress()
@@ -7474,6 +7537,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshLatestDiagnostics()
         fileProgress = FileStageProgress()
         toolSnapshot = ToolSnapshotPresentation()
+        startupAdmission = ImgStartupAdmission()
+        startupAdmissionHasConflict = false
         refreshToolSnapshot()
         photosImportProgress = PhotosImportProgress()
         gateActivity = GateCheckActivity()
@@ -7927,6 +7992,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
             let control = LogTone.message(line)
+            if startupAdmission.ingest(line, request: lastRequest, hasMediaEvidence: hasStartedMediaEvidence) {
+                refreshToolSnapshot()
+                displayLines.append(startupAdmission.status)
+                privateLines.append(startupAdmission.status)
+                if let message = startupAdmission.event?.message {
+                    displayLines.append(message); privateLines.append(message)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
             if control.hasPrefix(FastImgFailedRetryAvailable.prefix) {
                 do {
                     guard !failedRetryAvailabilityInvalid, let available = try FastImgFailedRetryAvailable.decode(control),
@@ -8362,6 +8437,189 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    func validateStartupAdmissionForSelfTest() throws {
+        let input = "/synthetic/admission-source"
+        let initial = ProcessorRequest(targetPath: input, processingMode: .imagesOnly,
+            operationMode: .fastImgJxl, shortestPath: true, resume: true, retry: true)
+        func encoded(_ fields: [String: Any]) throws -> String {
+            ImgStartupAdmission.prefix
+                + String(decoding: try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), as: UTF8.self)
+        }
+        let fields: [String: Any] = ["schema_version": 1, "pipeline": "img", "cause_code": "resume_config_unknown",
+            "input_path": input, "requested_output": "/synthetic/admission-output", "message": "Saved settings are not available."]
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path)
+            else { throw HostError(message: "Missing startup admission locale") }
+            for suffix in ["invalid", "resume_unknown", "resume_changed", "stopped", "fresh_info", "photos_warning", "start_fresh", "cancelled"] {
+                let key = "admission." + suffix
+                guard bundle.localizedString(forKey: key, value: nil, table: nil) != key
+                else { throw HostError(message: "Missing startup admission translation: \(key)") }
+            }
+        }
+
+        guard let operation = operationPopup.itemArray.first(where: {
+            ($0.representedObject as? String) == OperationMode.fastImgJxl.rawValue
+        }) else { throw HostError(message: "Startup fixture has no Fast IMG operation") }
+        operationPopup.select(operation)
+        operationChanged()
+        targetField.stringValue = input
+        shortestPathCheck.state = .on
+        lastRequest = initial
+        clearBatchLog()
+        resumeCheck.state = .on; retryCheck.state = .on; freshCheck.state = .off
+        let beforeOptions = [resumeCheck.state, retryCheck.state, freshCheck.state]
+        let spawned = LiveWorkerExecution.prefix + #"{"schema_version":1,"scope":"os_child_process","invocation_id":"admission-call","run_id":"admission-run","pipeline":"img","state":"spawned","pid":1234,"exit_code":null,"signal":null}"#
+        let exited = spawned.replacingOccurrences(of: #""state":"spawned""#, with: #""state":"exited""#)
+        appendLog(spawned)
+        appendLog(try encoded(fields))
+        appendLog("ERR: Error: MFB_RESUME_CONFIG_UNKNOWN: saved task has no processing-settings identity; existing evidence was retained")
+        appendLog(exited.replacingOccurrences(of: #""exit_code":null"#, with: #""exit_code":1"#))
+        appendLog(OutputCleanupReceipt.prefix + #"{"already_absent_files":null,"error":null,"outcome":"not_requested","output_path":"/synthetic/admission-output","pruned_directories":null,"removed_files":null,"run_id":"admission-run","schema_version":1}"#)
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":null,"skipped":null,"failed":null,"ignored":null,"unprocessed":null,"exit_code":1}"#)
+        appendLog("[FAIL] IMG: 成功 未知 · 跳过 未知 · 失败 未知 · 忽略 未知 · 未完成 未知 (exit=1)\n"
+            + "[Summary] succeeded=? failed=? skipped=? ignored=?\nUnprocessed: ?\n"
+            + "[PROCESSING FAILED] The batch did not complete. Review the error details above.\n[RESULT] 计数不完整")
+        var inspected: NSAlert?
+        var started: [ProcessorRequest] = []
+        processingCompleted(.failure(HostError(message: "synthetic admission stopped")), resumeDecision: { alert in
+            alert.layout(); inspected = alert
+            return .alertFirstButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard let inspected else {
+            throw HostError(message: "Startup choice was not reached: admissionInvalid=\(startupAdmission.invalid), mediaEvidence=\(hasStartedMediaEvidence), resultInvalid=\(batchResults.invalid), toolInvalid=\(toolSnapshot.invalid), workerInvalid=\(workerExecution.invalid)")
+        }
+        let cancelledChecks: [(String, Bool)] = [
+            ("title", inspected.messageText == localized("admission.resume_unknown")),
+            ("buttons", inspected.buttons.map(\.title) == [localized("alert.cancel"), localized("admission.start_fresh")]),
+            ("fresh explanation", inspected.informativeText.contains(localized("admission.fresh_info"))),
+            ("Photos warning", inspected.informativeText.contains(localized("admission.photos_warning"))),
+            ("background alert", !inspected.window.isVisible && NSApp.modalWindow == nil),
+            ("no launch", started.isEmpty && !host.isRunning),
+            ("no media failure", !processEndedWithError && latestDiagnostics.failure == nil),
+            ("no media totals", batchOverview.isHidden && countStatusLabel.isHidden),
+            ("no tool fault", toolSnapshotLabel.isHidden),
+            ("cancel status", statusLabel.stringValue == localized("admission.cancelled")),
+            ("unchanged option controls", beforeOptions == [resumeCheck.state, retryCheck.state, freshCheck.state]),
+            ("unchanged request", lastRequest?.resume == true && lastRequest?.retry == true && lastRequest?.fresh == false),
+        ]
+        let failedCancellationChecks = cancelledChecks.filter { !$0.1 }.map(\.0)
+        guard failedCancellationChecks.isEmpty else {
+            throw HostError(message: "Startup cancellation failed: " + failedCancellationChecks.joined(separator: ", "))
+        }
+
+        processingCompleted(.failure(HostError(message: "synthetic admission stopped")), resumeDecision: { _ in
+            .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard started.count == 1, let fresh = started.first,
+              fresh.targetPath == input, fresh.fresh, !fresh.resume, !fresh.retry, !fresh.retryFailed,
+              fresh.shortestPath, freshCheck.state == .on, resumeCheck.state == .off, retryCheck.state == .off,
+              try ProcessorCommand.arguments(from: fresh).contains("--no-resume"),
+              !startupAdmission.isBlocked else {
+            throw HostError(message: "Explicit independent task did not use the existing fresh-request transition")
+        }
+        setProcessing(false)
+
+        for cause in ["resume_config_changed", "admission_failed"] {
+            var changed = fields; changed["cause_code"] = cause
+            var state = ImgStartupAdmission()
+            guard state.ingest(try encoded(changed), request: initial, hasMediaEvidence: false),
+                  !state.invalid, state.allowsIndependentTask == (cause == "resume_config_changed") else {
+                throw HostError(message: "Generic admission failure offered an unsafe recovery choice")
+            }
+        }
+        var badEvents: [[String: Any]] = []
+        var altered = fields; altered["input_path"] = "/synthetic/other-request"; badEvents.append(altered)
+        altered = fields; altered["requested_output"] = "relative-output"; badEvents.append(altered)
+        altered = fields; altered["schema_version"] = 2; badEvents.append(altered)
+        altered = fields; altered["cause_code"] = "tool_is_damaged"; badEvents.append(altered)
+        altered = fields; altered["unexpected"] = true; badEvents.append(altered)
+        for bad in badEvents {
+            var state = ImgStartupAdmission()
+            guard state.ingest(try encoded(bad), request: initial, hasMediaEvidence: false),
+                  state.invalid, !state.allowsIndependentTask else {
+                throw HostError(message: "Invalid or unrelated startup event enabled a new-task choice")
+            }
+        }
+        var conflict = ImgStartupAdmission()
+        _ = conflict.ingest(try encoded(fields), request: initial, hasMediaEvidence: false)
+        altered = fields; altered["cause_code"] = "resume_config_changed"
+        _ = conflict.ingest(try encoded(altered), request: initial, hasMediaEvidence: false)
+        guard conflict.invalid, !conflict.allowsIndependentTask else {
+            throw HostError(message: "Conflicting startup events enabled recovery")
+        }
+        var late = ImgStartupAdmission()
+        _ = late.ingest(try encoded(fields), request: initial, hasMediaEvidence: true)
+        guard late.invalid, !late.allowsIndependentTask else {
+            throw HostError(message: "Startup event concealed actual media-processing evidence")
+        }
+
+        lastRequest = initial
+        clearBatchLog()
+        altered = fields; altered["input_path"] = "/synthetic/unrelated-request"
+        appendLog(try encoded(altered))
+        var invalidChoices = 0
+        processingCompleted(.failure(HostError(message: "synthetic unrelated admission")), resumeDecision: { _ in
+            invalidChoices += 1; return .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard invalidChoices == 0, started.count == 1, !host.isRunning,
+              statusLabel.stringValue == localized("admission.invalid") else {
+            throw HostError(message: "An unrelated startup event offered a new-task action")
+        }
+
+        lastRequest = initial
+        clearBatchLog()
+        altered = fields; altered["cause_code"] = "admission_failed"
+        appendLog(try encoded(altered))
+        var choices = 0
+        processingCompleted(.failure(HostError(message: "synthetic generic admission")), resumeDecision: { _ in
+            choices += 1; return .alertSecondButtonReturn
+        }, admissionStart: { started.append($0) })
+        guard choices == 0, started.count == 1, batchOverview.isHidden, !processEndedWithError,
+              statusLabel.stringValue == localized("admission.stopped"), !host.isRunning else {
+            throw HostError(message: "Generic admission failure started media or invented a batch result")
+        }
+
+        let toolFailure = ToolSnapshotPresentation.prefix
+            + #"{"schema_version":1,"state":"blocked","boundary":"persisted-external","cause_code":"snapshot_invalid"}"#
+        let competingFailures: [(String, [String])] = [
+            ("malformed progress", ["MFB_PROGRESS={}"]),
+            ("malformed Photos progress", [PhotosImportProgress.prefix + "{}"]),
+            ("malformed result", ["MFB_BATCH_RESULT={}"]),
+            ("tool fault", [toolFailure]),
+            ("invalid worker", [LiveWorkerExecution.prefix + "{}"]),
+            ("worker signal", [spawned, exited.replacingOccurrences(of: #""signal":null"#, with: #""signal":9"#)]),
+        ]
+        for (name, diagnostics) in competingFailures {
+            lastRequest = initial
+            if name == "tool fault" {
+                lastRequest?.resume = false
+                lastRequest?.retry = false
+            }
+            clearBatchLog()
+            appendLog(try encoded(fields))
+            appendLog(diagnostics.joined(separator: "\n"))
+            if name == "tool fault" {
+                appendLog("ERR: Error: MFB_RESUME_DECISION_REQUIRED: synthetic conflicting legacy choice")
+            }
+            appendLog("[ERROR] synthetic associated failure: " + name)
+            let recordedFailure = latestDiagnostics.failure
+            processingCompleted(.failure(HostError(message: "synthetic conflicting startup evidence: " + name)), resumeDecision: { _ in
+                choices += 1; return .alertSecondButtonReturn
+            }, admissionStart: { started.append($0) })
+            refreshBatchOverview(processExit: 1, exitedNormally: true)
+            guard choices == 0, started.count == 1, processEndedWithError, !batchOverview.isHidden,
+                  recordedFailure != nil, latestDiagnostics.failure == recordedFailure, !host.isRunning else {
+                throw HostError(message: "Startup admission concealed independent failure evidence: " + name)
+            }
+            if name == "tool fault" {
+                guard !toolSnapshotLabel.isHidden,
+                      toolSnapshotLabel.stringValue == localized("tool_snapshot.snapshot_invalid") else {
+                    throw HostError(message: "Startup admission concealed the independent tool fault label")
+                }
+            }
+        }
+    }
+
     func validateFailedRetryForSelfTest() throws {
         func encoded(_ value: [String: Any]) throws -> String {
             String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
@@ -8545,10 +8803,75 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
+    private var hasStartedMediaEvidence: Bool {
+        batchResults.totals.values.contains { $0.contains { $0 != nil } }
+            || batchResults.pendingTotals.values.contains { $0 != nil } || batchResults.hasFastDelivery
+            || batchResults.invalid || batchResults.fastDeliveryInvalid || batchResults.controlRecordsMissing
+            || batchResults.mandatoryEvidenceConflict || batchResults.outputCleanupInvalid
+            || fileProgress.invalid || photosImportProgress.invalid || gateActivity.invalid
+            || fileProgress.event != nil || photosImportProgress.event != nil || gateActivity.event != nil
+    }
+
+    private var startupAdmissionIsIsolated: Bool {
+        startupAdmission.isBlocked && !startupAdmissionHasConflict && !hasStartedMediaEvidence && !toolSnapshot.invalid
+            && toolSnapshot.event?.state != .blocked && !workerExecution.invalid
+            && (workerExecution.latest.map { $0.pipeline == "img" && $0.signal == nil } ?? true)
+    }
+
+    private func handleStartupAdmission(
+        _ result: Result<String, Error>,
+        decision: @MainActor (NSAlert) -> NSApplication.ModalResponse,
+        start: (ProcessorRequest) -> Void
+    ) -> Bool {
+        guard case .failure = result, startupAdmission.isBlocked else { return false }
+        guard startupAdmissionIsIsolated else {
+            // Stopping resets live progress presenters. Their earlier invalid
+            // evidence must still dominate the launch-only interpretation.
+            startupAdmissionHasConflict = true
+            return false
+        }
+        processEndedWithError = false
+        batchOverview.isHidden = true
+        latestDiagnostics = LatestDiagnostics()
+        refreshLatestDiagnostics()
+        countStatusLabel.isHidden = true
+        setProcessing(false)
+        setStatus(startupAdmission.status)
+        guard !isDebugWindow, startupAdmission.allowsIndependentTask,
+              var retry = lastRequest,
+              FastImgDeliveryReceipt.samePath(startupAdmission.event?.input_path, retry.targetPath)
+        else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = startupAdmission.status
+        alert.informativeText = localized("admission.fresh_info")
+            + (retry.shortestPath ? "\n\n" + localized("admission.photos_warning") : "")
+        // Return and Escape both cancel. Starting another task always requires
+        // an explicit choice; there is deliberately no continue-old-task action.
+        alert.addButton(withTitle: localized("alert.cancel"))
+        alert.addButton(withTitle: localized("admission.start_fresh"))
+        guard decision(alert) == .alertSecondButtonReturn else {
+            setLocalizedStatus("admission.cancelled")
+            return true
+        }
+        applyResumeDecision(fresh: true, to: &retry)
+        lastRequest = retry
+        sawResumeDecision = false; sawFailedRetryDecision = false
+        failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
+        clearBatchLog()
+        setProcessing(true)
+        start(retry)
+        return true
+    }
+
     private func processingCompleted(_ result: Result<String, Error>,
-                                     resumeDecision: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }) {
+                                     resumeDecision: @MainActor (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() },
+                                     admissionStart: ((ProcessorRequest) -> Void)? = nil) {
         toolSnapshot.finish()
         refreshToolSnapshot()
+        if handleStartupAdmission(result, decision: resumeDecision, start: {
+            if let admissionStart { admissionStart($0) } else { host.startProcessing($0) }
+        }) { return }
         if sawProductionBusy, batchResults.totals.isEmpty {
             processEndedWithError = false
             batchOverview.isHidden = true
@@ -8560,7 +8883,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
         let resumeChoicePending: Bool
-        if case .failure = result, sawResumeDecision || sawFailedRetryDecision, let request = lastRequest {
+        if case .failure = result, !startupAdmissionHasConflict,
+           sawResumeDecision || sawFailedRetryDecision, let request = lastRequest {
             resumeChoicePending = !request.resume && !request.fresh && !request.retryFailed
         } else { resumeChoicePending = false }
         defer { if !resumeChoicePending { refreshBatchOverview() } }
@@ -8616,7 +8940,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .failure(error):
             // A saved-task choice is a launch decision, not a media failure.
             // Present it before recording failed delivery or a red error summary.
-            if !isDebugWindow, (sawResumeDecision || sawFailedRetryDecision), var retry = lastRequest,
+            if !isDebugWindow, !startupAdmissionHasConflict,
+               (sawResumeDecision || sawFailedRetryDecision), var retry = lastRequest,
                 !retry.resume, !retry.fresh, !retry.retryFailed {
                 processEndedWithError = false
                 batchOverview.isHidden = true
@@ -8699,6 +9024,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshBatchOverview(processExit: Int32? = nil, exitedNormally: Bool? = nil) {
+        if startupAdmissionIsIsolated {
+            batchOverview.isHidden = true
+            return
+        }
         let expectsFastDelivery = lastRequest.map {
             !$0.dryRun && [.fastImgJxl, .fastImgAvif].contains($0.operationMode)
         } ?? batchResults.hasFastDelivery
@@ -11710,6 +12039,7 @@ private func runSelfTest() -> Int32 {
             }
             try AppController(preferences: preferences).validatePrivacyForSelfTest()
             try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
+            try AppController(preferences: preferences).validateStartupAdmissionForSelfTest()
             try AppController(preferences: preferences).validateFailedRetryForSelfTest()
             try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()

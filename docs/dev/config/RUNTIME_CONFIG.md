@@ -951,6 +951,16 @@ Legacy inspection without this intent does not migrate the marker as a side
 effect. Unknown contract schemas, fields, strategies and invalid values fail
 closed on read and write.
 
+Startup admission is separate from tool health. A missing or changed saved
+processing contract emits `MFB_IMG_ADMISSION_BLOCKED`, not a damaged-tool
+snapshot receipt. The native interface explains that processing did not start
+and preserves the old task; it offers an explicit independent new attempt or
+cancellation, rather than offering an unsupported continuation. A new attempt
+processes only sources that still exist, without crediting or reusing old
+outputs. Missing historical Photos evidence remains unknown and may imply
+duplicate-import risk if Photos delivery is selected. Migration, state-read and
+other admission errors do not authorize automatic fresh execution.
+
 This contract complements the existing source, tool-runtime, metadata-version
 and Photos-target checks. It does not establish complete sidecar/filesystem
 identity or a complete persistent per-file plan. Failed-only child attempts add

@@ -229,6 +229,14 @@
 "alert.resume.resume" = "Verify and continue";
 "alert.resume.fresh" = "Start Fresh";
 "alert.cancel" = "Cancel";
+"admission.invalid" = "The startup record couldn't be matched to this request. Processing stopped; review the details.";
+"admission.resume_unknown" = "The previous task's processing settings can't be verified. It can't continue.";
+"admission.resume_changed" = "The current processing settings differ from the previous task. It can't continue.";
+"admission.stopped" = "Processing stopped before admission. Review the reason in the processing details.";
+"admission.fresh_info" = "This request hasn't changed the previous task records or any existing outputs. A new task will use a separate output folder and process only files still in the source folder. It won't reuse previous outputs.";
+"admission.photos_warning" = "Photos import is enabled. If previous delivery records are incomplete, files may be imported again.";
+"admission.start_fresh" = "Start independent task";
+"admission.cancelled" = "No new task started. This request hasn't changed the previous task records or any existing outputs.";
 "retry.invalid" = "This recovery record couldn't be verified. Open processing history for details. The result remains unconfirmed.";
 "retry.only_failed" = "Retry failed files";
 "retry.choice.info" = "This record retained %@ failed files. MFB checks and processes those originals in a separate attempt. Completed files aren't processed or imported again. An existing completed retry is reused.";

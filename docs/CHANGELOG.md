@@ -25,6 +25,10 @@ areas of change are:
 
 ### Launcher Startup And Session Archival (2026-10-31)
 
+- Keep saved-task configuration admission separate from tool-snapshot health.
+  Explain missing or changed historical settings before media scanning, retain
+  old evidence, and offer a deliberate independent attempt rather than an
+  unsupported resume or a misleading damaged-tool diagnosis.
 - Keep unavailable, unrelated legacy media trees from blocking a new task during
   state discovery, while retaining exact task matching and rejecting invalid,
   inaccessible or linked locators. Preserve the old checkpoint unchanged.

@@ -229,6 +229,14 @@
 "alert.resume.resume" = "核验并继续";
 "alert.resume.fresh" = "重新开始";
 "alert.cancel" = "取消";
+"admission.invalid" = "启动记录与本次请求无法核对。处理已停止，请查看处理详情。";
+"admission.resume_unknown" = "无法核对旧任务的处理设置，不能继续旧任务";
+"admission.resume_changed" = "当前处理设置与旧任务不同，不能继续旧任务";
+"admission.stopped" = "处理在开始前已停止，请到处理详情查看原因";
+"admission.fresh_info" = "本次未改动旧任务记录和已有产物。新任务会使用独立输出目录，仅处理当前仍在源目录中的文件，不会复用旧产物。";
+"admission.photos_warning" = "当前已开启导入照片。若旧交付记录不完整，可能重复导入。";
+"admission.start_fresh" = "开始独立新任务";
+"admission.cancelled" = "未开始新任务，本次未改动旧任务记录和已有产物。";
 "retry.invalid" = "无法核对本次恢复记录。请打开处理记录查看详情，结果暂未确认。";
 "retry.only_failed" = "仅处理失败项";
 "retry.choice.info" = "这份记录保留了 %@ 个失败项。MFB 会独立核验并处理这些原件，已成功的文件不会重复处理或导入；若已有完成的重试记录，将直接复用。";
