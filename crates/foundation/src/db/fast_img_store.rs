@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::mfb_sqlite_store::{
-    STORE_SCHEMA_VERSION, inspect_store_schema_version, open_store_connection, open_store_readonly,
+    inspect_store_schema_version, open_store_connection, open_store_readonly,
     store_path_current_for_read,
 };
 use crate::pipeline::verification::{
@@ -115,7 +115,7 @@ fn open_readonly() -> Result<Option<Connection>> {
 
 fn current_family(conn: &Connection) -> Result<bool> {
     match inspect_store_schema_version(conn)? {
-        Some(STORE_SCHEMA_VERSION) => Ok(true),
+        Some(3 | 4) => Ok(true),
         Some(1 | 2) => Ok(false),
         None => {
             bail!("Existing formal database has no recognized schema; not treated as empty state")

@@ -439,8 +439,8 @@ fn corrupt_headers_collections_hashes_and_future_store_versions_are_never_absenc
             [&marker.failed_sources["failed.jpg"].reason],
         )?;
         conn.execute(
-            "UPDATE store_metadata SET value=3 WHERE key='schema_version'",
-            [],
+            "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
+            params![crate::db::mfb_sqlite_store::STORE_SCHEMA_VERSION],
         )?;
         assert_eq!(read_marker(&marker.working_copy)?, marker);
     }

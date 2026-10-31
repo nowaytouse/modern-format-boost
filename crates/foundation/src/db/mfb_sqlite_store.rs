@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 3;
+pub const STORE_SCHEMA_VERSION: i32 = 4;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_CHECKPOINT: &str = "checkpoint";
 pub const NS_PROCESSED: &str = "processed";
@@ -97,6 +97,32 @@ const FAST_IMG_STATE_SCHEMA: &str = "
         retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0, 1))
     ) STRICT;
     CREATE INDEX idx_fast_img_migrations_task ON fast_img_migrations(task_key);
+";
+
+const FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA: &str = "
+    ALTER TABLE fast_img_migrations ADD COLUMN directory_snapshot BLOB;
+    ALTER TABLE fast_img_migrations ADD COLUMN directory_snapshot_blake3 BLOB
+        CONSTRAINT fast_img_directory_snapshot_pair CHECK(
+            (directory_snapshot IS NULL AND directory_snapshot_blake3 IS NULL)
+            OR (typeof(directory_snapshot) = 'blob'
+                AND typeof(directory_snapshot_blake3) = 'blob'
+                AND length(directory_snapshot_blake3) = 32)
+        );
+";
+
+// SQLite exposes CHECK constraints through the stored DDL rather than a pragma.
+// Require the exact suffix emitted by our v3-to-v4 ALTER, ignoring ASCII layout
+// and keyword case. A pair of unprotected columns is not a recognized v4 store.
+const FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA_SUFFIX: &str = "
+    directory_snapshot BLOB,
+    directory_snapshot_blake3 BLOB
+        CONSTRAINT fast_img_directory_snapshot_pair CHECK(
+            (directory_snapshot IS NULL AND directory_snapshot_blake3 IS NULL)
+            OR (typeof(directory_snapshot) = 'blob'
+                AND typeof(directory_snapshot_blake3) = 'blob'
+                AND length(directory_snapshot_blake3) = 32)
+        )
+    ) STRICT
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -582,7 +608,26 @@ fn require_foreign_key(
     Ok(())
 }
 
-fn validate_fast_img_state_schema(conn: &Connection) -> Result<()> {
+fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()> {
+    let migration_columns = if version == 3 {
+        &[
+            "origin_path",
+            "origin_blake3",
+            "source_json",
+            "task_key",
+            "retired",
+        ][..]
+    } else {
+        &[
+            "origin_path",
+            "origin_blake3",
+            "source_json",
+            "task_key",
+            "retired",
+            "directory_snapshot",
+            "directory_snapshot_blake3",
+        ][..]
+    };
     for (table, expected) in [
         (
             "fast_img_tasks",
@@ -651,16 +696,7 @@ fn validate_fast_img_state_schema(conn: &Connection) -> Result<()> {
                 "xmp_sidecar_blake3",
             ][..],
         ),
-        (
-            "fast_img_migrations",
-            &[
-                "origin_path",
-                "origin_blake3",
-                "source_json",
-                "task_key",
-                "retired",
-            ][..],
-        ),
+        ("fast_img_migrations", migration_columns),
     ] {
         let strict: Option<bool> = conn.query_row(
             "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?1 AND type = 'table'",
@@ -750,6 +786,23 @@ fn validate_fast_img_state_schema(conn: &Connection) -> Result<()> {
         &[("task_key", "task_key")],
         "RESTRICT",
     )?;
+    if version >= 4 {
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'fast_img_migrations'",
+            [],
+            |row| row.get(0),
+        )?;
+        let normalized = |sql: &str| {
+            sql.chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .map(|character| character.to_ascii_lowercase())
+                .collect::<String>()
+        };
+        anyhow::ensure!(
+            normalized(&sql).ends_with(&normalized(FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA_SUFFIX)),
+            "SQLite directory snapshot columns lack their paired evidence constraint; database retained without repair"
+        );
+    }
     Ok(())
 }
 
@@ -782,7 +835,7 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
     let version =
         current.context("SQLite store is missing its schema version; database retained")?;
     anyhow::ensure!(
-        matches!(version, 1 | 2 | STORE_SCHEMA_VERSION),
+        matches!(version, 1 | 2 | 3 | STORE_SCHEMA_VERSION),
         "mfb_store.sqlite schema version mismatch (db={version}, expected={STORE_SCHEMA_VERSION}); \
          database retained, use a compatible application or a verified backup"
     );
@@ -818,8 +871,8 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
             false,
         )?;
     }
-    if version == STORE_SCHEMA_VERSION {
-        validate_fast_img_state_schema(conn)?;
+    if version >= 3 {
+        validate_fast_img_state_schema(conn, version)?;
     } else {
         let reserved: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_schema
@@ -904,7 +957,7 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Failed to lock SQLite schema initialization")?;
     // Another process may have initialized or migrated while this connection waited.
-    let version = match schema_version(&tx)? {
+    let mut version = match schema_version(&tx)? {
         None => {
             tx.execute_batch(
                 "CREATE TABLE store_metadata (
@@ -946,6 +999,19 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
         );
         tx.execute_batch(FAST_IMG_STATE_SCHEMA)
             .context("Failed to create structured Fast IMG state tables; database retained")?;
+        tx.execute(
+            "UPDATE store_metadata SET value = ?1 WHERE key = 'schema_version'",
+            params![3],
+        )?;
+        version = 3;
+    }
+    if version == 3 {
+        anyhow::ensure!(
+            schema_version(&tx)? == Some(3),
+            "SQLite v3 migration precondition changed"
+        );
+        tx.execute_batch(FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA)
+            .context("Failed to extend Fast IMG directory snapshot evidence; database retained")?;
         tx.execute(
             "UPDATE store_metadata SET value = ?1 WHERE key = 'schema_version'",
             params![STORE_SCHEMA_VERSION],
@@ -1090,7 +1156,10 @@ fn preview_path_tree_at(
 ) -> Result<CachePrunePreview> {
     policy.validate()?;
     anyhow::ensure!(
-        matches!(schema_version(snapshot)?, Some(2 | STORE_SCHEMA_VERSION)),
+        matches!(
+            schema_version(snapshot)?,
+            Some(2 | 3 | STORE_SCHEMA_VERSION)
+        ),
         "cache pruning preview requires a recognized BLAKE3 store schema; database retained without migration"
     );
     let now = clock()?;
@@ -2374,6 +2443,231 @@ mod tests {
         assert_eq!(schema_version(&conn).unwrap(), Some(2));
     }
 
+    fn seed_v3_store(store: &Path) -> Result<()> {
+        seed_v2_store(store);
+        let mut conn = Connection::open(store)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(FAST_IMG_STATE_SCHEMA)?;
+        tx.execute(
+            "UPDATE store_metadata SET value=3 WHERE key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+        assert_eq!(schema_version(&conn)?, Some(3));
+        Ok(())
+    }
+
+    fn seed_fast_img_schema_rows(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "INSERT INTO fast_img_tasks VALUES('task', '/synthetic/out', '/synthetic/source',
+                X'7B7D', zeroblob(32), zeroblob(32), 1, 1);
+             INSERT INTO fast_img_source_outcomes VALUES('task', 'retained.jpg', 'failed', '',
+                NULL, NULL, NULL, 'retained source');
+             INSERT INTO fast_img_photos_requests VALUES('task', 'request', 'applescript',
+                NULL, NULL, 'request-id', NULL);
+             INSERT INTO fast_img_photos_entries VALUES('task', 0, 'request', 'encoded',
+                'retained.jpg', '', 'retained.JXL', '', 'Synthetic');
+             INSERT INTO fast_img_photos_receipts VALUES('task', 'primary', 'verified.JXL', 0,
+                '', 'photos_local', 0, 'synthetic-uuid', NULL, NULL);
+             INSERT INTO fast_img_migrations(origin_path, origin_blake3, source_json, task_key, retired)
+                VALUES('/synthetic/old.json', zeroblob(32), X'7B7D', 'task', 0);",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn schema4_v3_readonly_inspection_and_preview_do_not_migrate() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v3_store(&store)?;
+        let conn = Connection::open(&store)?;
+        seed_fast_img_schema_rows(&conn)?;
+        upsert_blob(&conn, NS_PATH_TREE, "cache", 1, None, b"cache", 1)?;
+        drop(conn);
+        let before = std::fs::read(&store)?;
+        let mut reader = Connection::open_with_flags(&store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        reader.pragma_update(None, "query_only", true)?;
+        let snapshot = reader.transaction()?;
+        assert_eq!(inspect_store_schema_version(&snapshot)?, Some(3));
+        assert!(validate_current_store_schema(&snapshot).is_err());
+        let preview = preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100))?;
+        assert_eq!((preview.total_rows, preview.total_payload_bytes), (1, 5));
+        assert!(
+            snapshot
+                .prepare("SELECT directory_snapshot FROM fast_img_migrations")
+                .is_err()
+        );
+        snapshot.commit()?;
+        drop(reader);
+        assert_eq!(std::fs::read(&store)?, before);
+        for suffix in ["-wal", "-shm", "-journal"] {
+            assert!(
+                !root
+                    .path()
+                    .join(format!("{STORE_FILE_NAME}{suffix}"))
+                    .exists()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn schema4_migrates_v3_without_inventing_directory_snapshots() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v3_store(&store)?;
+        let conn = Connection::open(&store)?;
+        seed_fast_img_schema_rows(&conn)?;
+        drop(conn);
+        let _guard = set_test_store_path_for_tests(store);
+        let conn = open_connection()?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(4));
+        for table in [
+            "fast_img_tasks",
+            "fast_img_source_outcomes",
+            "fast_img_photos_requests",
+            "fast_img_photos_entries",
+            "fast_img_photos_receipts",
+            "fast_img_migrations",
+        ] {
+            let rows: i64 =
+                conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(rows, 1, "schema4 migration changed state rows: {table}");
+        }
+        let backup = conn.query_row(
+            "SELECT origin_blake3,source_json,directory_snapshot,directory_snapshot_blake3
+             FROM fast_img_migrations",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                ))
+            },
+        )?;
+        assert_eq!(backup, (vec![0; 32], b"{}".to_vec(), None, None));
+        assert_eq!(
+            read_blob(&conn, NS_CHECKPOINT, "legacy", 7)?,
+            Some(b"resume-state".to_vec())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schema4_extension_failure_rolls_back_every_prior_version() -> Result<()> {
+        for version in [1, 2, 3] {
+            let root = tempfile::tempdir()?;
+            let store = root.path().join(STORE_FILE_NAME);
+            match version {
+                1 => seed_v1_store(&store, NS_PATH_TREE),
+                2 => seed_v2_store(&store),
+                3 => seed_v3_store(&store)?,
+                _ => unreachable!(),
+            }
+            let conn = Connection::open(&store)?;
+            if version == 3 {
+                seed_fast_img_schema_rows(&conn)?;
+            }
+            let original_rows: i64 =
+                conn.query_row("SELECT count(*) FROM blob_store", [], |row| row.get(0))?;
+            conn.execute_batch(
+                "CREATE TRIGGER reject_snapshot_extension BEFORE UPDATE OF value ON store_metadata
+                 WHEN NEW.value=4 BEGIN SELECT RAISE(ABORT, 'synthetic snapshot migration failure'); END;",
+            )?;
+            drop(conn);
+            let _guard = set_test_store_path_for_tests(store.clone());
+            let error = open_connection().unwrap_err();
+            assert!(format!("{error:#}").contains("synthetic snapshot migration failure"));
+            let conn = Connection::open(&store)?;
+            assert_eq!(inspect_store_schema_version(&conn)?, Some(version));
+            let rows: i64 =
+                conn.query_row("SELECT count(*) FROM blob_store", [], |row| row.get(0))?;
+            assert_eq!(rows, original_rows);
+            let added_columns: i64 = conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('fast_img_migrations')
+                 WHERE name IN ('directory_snapshot','directory_snapshot_blake3')",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(added_columns, 0);
+            if version == 3 {
+                let raw: Vec<u8> =
+                    conn.query_row("SELECT source_json FROM fast_img_migrations", [], |row| {
+                        row.get(0)
+                    })?;
+                assert_eq!(raw, b"{}");
+            } else {
+                let tables: i64 = conn.query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name GLOB 'fast_img_*'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(tables, 0);
+            }
+            conn.execute_batch("DROP TRIGGER reject_snapshot_extension")?;
+            validate_current_store_schema(&open_connection()?)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn schema4_directory_snapshot_pair_requires_both_blobs_and_complete_schema() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let _guard = set_test_store_path_for_tests(root.path().join(STORE_FILE_NAME));
+        let conn = open_connection()?;
+        seed_fast_img_schema_rows(&conn)?;
+        for mutation in [
+            "directory_snapshot=X'7B7D'",
+            "directory_snapshot_blake3=zeroblob(32)",
+            "directory_snapshot=X'7B7D', directory_snapshot_blake3=zeroblob(31)",
+            "directory_snapshot='{}', directory_snapshot_blake3=zeroblob(32)",
+            "directory_snapshot=X'7B7D', directory_snapshot_blake3='text'",
+        ] {
+            assert!(
+                conn.execute(&format!("UPDATE fast_img_migrations SET {mutation}"), [])
+                    .is_err(),
+                "{mutation}"
+            );
+            let empty: bool = conn.query_row("SELECT directory_snapshot IS NULL AND directory_snapshot_blake3 IS NULL FROM fast_img_migrations", [], |row| row.get(0))?;
+            assert!(
+                empty,
+                "rejected evidence pair changed its prior state: {mutation}"
+            );
+        }
+        conn.execute(
+            "UPDATE fast_img_migrations SET directory_snapshot=?1,directory_snapshot_blake3=?2",
+            params![b"{}", blake3::hash(b"{}").as_bytes()],
+        )?;
+        validate_current_store_schema(&conn)?;
+        conn.execute(
+            "UPDATE fast_img_migrations SET directory_snapshot=NULL,directory_snapshot_blake3=NULL",
+            [],
+        )?;
+        for complete_unprotected_pair in [false, true] {
+            let fixture = tempfile::tempdir()?;
+            let store = fixture.path().join(STORE_FILE_NAME);
+            seed_v3_store(&store)?;
+            let legacy = Connection::open(&store)?;
+            legacy.execute_batch(
+                "ALTER TABLE fast_img_migrations ADD COLUMN directory_snapshot BLOB",
+            )?;
+            if complete_unprotected_pair {
+                legacy.execute_batch("ALTER TABLE fast_img_migrations ADD COLUMN directory_snapshot_blake3 BLOB; UPDATE store_metadata SET value=4 WHERE key='schema_version'")?;
+            }
+            assert!(inspect_store_schema_version(&legacy).is_err());
+            drop(legacy);
+            let before = std::fs::read(&store)?;
+            let _fixture_guard = set_test_store_path_for_tests(store.clone());
+            assert!(open_connection().is_err());
+            assert_eq!(std::fs::read(&store)?, before);
+        }
+        Ok(())
+    }
+
     #[test]
     fn v2_store_reads_without_migration_and_extends_state_without_losing_payloads() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -2390,7 +2684,7 @@ mod tests {
         assert_eq!(store_path_current_for_read()?, store);
         let conn = open_connection()?;
         validate_current_store_schema(&conn)?;
-        assert_eq!(schema_version(&conn)?, Some(3));
+        assert_eq!(schema_version(&conn)?, Some(STORE_SCHEMA_VERSION));
         assert_eq!(
             blob_get(NS_CHECKPOINT, "legacy", 7)?,
             Some(b"resume-state".to_vec())
@@ -2403,20 +2697,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let _guard = set_test_store_path_for_tests(root.path().join(STORE_FILE_NAME));
         let mut conn = open_connection()?;
-        conn.execute_batch(
-            "INSERT INTO fast_img_tasks VALUES('task', '/synthetic/out', '/synthetic/source',
-                X'7B7D', zeroblob(32), zeroblob(32), 1, 1);
-             INSERT INTO fast_img_source_outcomes VALUES('task', 'retained.jpg', 'failed', '',
-                NULL, NULL, NULL, 'retained source');
-             INSERT INTO fast_img_photos_requests VALUES('task', 'request', 'applescript',
-                NULL, NULL, 'request-id', NULL);
-             INSERT INTO fast_img_photos_entries VALUES('task', 0, 'request', 'encoded',
-                'retained.jpg', '', 'retained.JXL', '', 'Synthetic');
-             INSERT INTO fast_img_photos_receipts VALUES('task', 'primary', 'verified.JXL', 0,
-                '', 'photos_local', 0, 'synthetic-uuid', NULL, NULL);
-             INSERT INTO fast_img_migrations VALUES('/synthetic/old.json', zeroblob(32),
-                X'7B7D', 'task', 0);",
-        )?;
+        seed_fast_img_schema_rows(&conn)?;
         blob_put(NS_PATH_TREE, "cache", 1, None, b"rebuildable")?;
         blob_delete_namespace(NS_PATH_TREE)?;
         prune_path_tree_cache(&mut conn, CachePolicy::default())?;

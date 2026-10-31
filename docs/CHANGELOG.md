@@ -23,6 +23,15 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Durable Legacy Directory Recovery (2026-10-31)
+
+- Persist and verify original directory observations before legacy-marker
+  retirement. Interrupted retirement reuses that baseline rather than adopting
+  changed dates, and confirms completion only after restoration and directory sync.
+- Upgrade Core storage to schema 4 transactionally; preserve read-only v3 access
+  and unknown historical coverage. Protect directory snapshots in integrity,
+  payload accounting and backups without treating them as media custody proofs.
+
 ### Canonical Fast IMG SQLite State (2026-10-31)
 
 - Persist task headers, per-source outcomes, Photos submission references and
@@ -64,6 +73,9 @@ areas of change are:
 
 ### Background Build Observation (2026-10-31)
 
+- Stop querying a confirmed-exited application's process properties and old PID;
+  use native termination notifications while retaining earlier visibility,
+  activation and missing-evidence failures.
 - Keep external native-build observation separate from the app's in-process
   presentation guard. A confirmed exit preserves earlier process identity and
   records terminal property loss instead of inventing a PID -1 process.

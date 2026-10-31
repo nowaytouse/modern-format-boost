@@ -11,6 +11,11 @@ private struct ApplicationSample {
     var terminated = false
     var visibleWindows: Int? = 0
     var bundle: String? = "/synthetic/Self Test.app"
+
+    static func exited(visibleWindows: Int? = 0) -> ApplicationSample {
+        ApplicationSample(pid: -1, policy: -1, terminated: true,
+                          visibleWindows: visibleWindows, bundle: nil)
+    }
 }
 
 private struct ObservedApplication {
@@ -33,6 +38,20 @@ private struct Observation {
     var applications: [Int: ObservedApplication] = [:]
     var errors = Set<String>()
 
+    mutating func sample(identity: Int, read: () -> ApplicationSample) {
+        // A confirmed lifecycle end makes its process properties and old PID
+        // unusable for later observation. Keep all earlier violations intact.
+        guard applications[identity]?.terminalSamples == nil
+                || applications[identity]?.terminalSamples == 0 else { return }
+        record(read(), identity: identity)
+    }
+
+    mutating func confirmTermination(identity: Int) {
+        guard applications[identity]?.terminalSamples == nil
+                || applications[identity]?.terminalSamples == 0 else { return }
+        record(.exited(), identity: identity)
+    }
+
     mutating func record(_ sample: ApplicationSample, identity: Int) {
         var row = applications[identity] ?? ObservedApplication()
         defer { applications[identity] = row }
@@ -52,11 +71,13 @@ private struct Observation {
             if let bundle = sample.bundle, let previous = row.bundle, bundle != previous {
                 errors.insert("Terminated application \(identity) changed bundle")
             }
+            // Termination is known even when live observation was incomplete.
+            // Stop further handle reads while retaining the missing evidence.
+            row.terminalSamples += 1
             guard row.samples > 0 else {
                 errors.insert("Application \(identity) terminated before a valid sample")
                 return
             }
-            row.terminalSamples += 1
             return
         }
         guard sample.pid > 0, (0...2).contains(sample.policy), let bundle = sample.bundle, !bundle.isEmpty else {
@@ -137,6 +158,48 @@ private func runRegression() throws {
     var running = Observation()
     running.record(ApplicationSample(pid: 42, policy: 2), identity: 0)
     try require(!running.passed, "An application still running at command completion must not pass")
+    var afterExit = observed
+    var readsAfterExit = 0
+    afterExit.sample(identity: 0) {
+        readsAfterExit += 1
+        // A dead process's PID can now belong to a different application.
+        return ApplicationSample(pid: 42, policy: 0, visibleWindows: 1)
+    }
+    try require(readsAfterExit == 0 && afterExit.passed,
+                "A confirmed exit still queried stale process properties or reused its PID")
+    var notified = Observation()
+    notified.record(ApplicationSample(pid: 42, policy: 2), identity: 0)
+    notified.confirmTermination(identity: 0)
+    notified.sample(identity: 0) {
+        readsAfterExit += 1
+        return ApplicationSample(pid: -1, policy: -1, bundle: nil)
+    }
+    try require(readsAfterExit == 0 && notified.passed,
+                "A termination notification still allowed stale property access")
+    var neverLive = Observation()
+    neverLive.confirmTermination(identity: 0)
+    neverLive.sample(identity: 0) {
+        readsAfterExit += 1
+        return ApplicationSample(pid: -1, policy: -1, bundle: nil)
+    }
+    try require(readsAfterExit == 0 && !neverLive.passed && !neverLive.errors.isEmpty,
+                "An unobserved exited application was queried again or accepted")
+    for visible: Int? in [nil, 1] {
+        var finalCapture = Observation()
+        finalCapture.record(ApplicationSample(pid: 42, policy: 2), identity: 0)
+        finalCapture.sample(identity: 0) { .exited(visibleWindows: visible) }
+        try require(!finalCapture.passed,
+                    "Exit discarded an already captured visible window or capture failure")
+    }
+    for bad in [ApplicationSample(pid: 42, policy: 2, visibleWindows: nil),
+                ApplicationSample(pid: 42, policy: 2, visibleWindows: 1),
+                ApplicationSample(pid: 42, policy: 2, active: true),
+                ApplicationSample(pid: 42, policy: 0)] {
+        var violation = Observation()
+        violation.record(bad, identity: 0)
+        violation.confirmTermination(identity: 0)
+        try require(!violation.passed, "A termination notification erased earlier violations")
+    }
     print("background observer regression passed")
 }
 
@@ -167,24 +230,33 @@ private final class ApplicationRegistry {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]]
         for (identity, app) in applications.enumerated() {
-            let terminated = app.isTerminated
-            let pid = app.processIdentifier
             let knownPID = observation.applications[identity]?.pid
-            let windowPID = pid > 0 ? pid : knownPID
-            let visible = windows.map { rows in
-                rows.filter {
-                    ($0[kCGWindowOwnerPID as String] as? pid_t) == windowPID
-                        && ($0[kCGWindowLayer as String] as? Int) == 0
-                        && ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0
-                }.count
+            observation.sample(identity: identity) {
+                // Do not query a process handle once AppKit confirms its exit.
+                // Preserve this sample's earlier capture even if exit races it;
+                // unknown attribution or capture is not a zero-window result.
+                if app.isTerminated {
+                    return .exited(visibleWindows: visibleWindowCount(windows, pid: knownPID))
+                }
+                let pid = app.processIdentifier
+                let visible = visibleWindowCount(windows, pid: pid)
+                let policy = app.activationPolicy.rawValue
+                let active = app.isActive
+                let bundle = app.bundleURL?.path
+                return ApplicationSample(pid: pid, policy: policy, active: active,
+                    terminated: app.isTerminated, visibleWindows: visible, bundle: bundle)
             }
-            let policy = app.activationPolicy.rawValue
-            let active = app.isActive
-            let bundle = app.bundleURL?.path
-            observation.record(ApplicationSample(pid: pid, policy: policy, active: active,
-                terminated: terminated || app.isTerminated, visibleWindows: visible, bundle: bundle), identity: identity)
         }
     }
+}
+
+private func visibleWindowCount(_ windows: [[String: Any]]?, pid: pid_t?) -> Int? {
+    guard let pid, pid > 0, let windows else { return nil }
+    return windows.filter {
+        ($0[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && ($0[kCGWindowLayer as String] as? Int) == 0
+            && ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0
+    }.count
 }
 
 @MainActor
@@ -207,13 +279,16 @@ private func observeCommand(_ arguments: [String]) throws -> Int32 {
     command.standardError = output
     let registry = ApplicationRegistry()
     let center = NSWorkspace.shared.notificationCenter
-    let observers = [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification].map { name in
+    let observers = [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didActivateApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification].map { name in
         let isActivation = name == NSWorkspace.didActivateApplicationNotification
+        let isTermination = name == NSWorkspace.didTerminateApplicationNotification
         return center.addObserver(forName: name, object: nil, queue: .main) { notification in
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             MainActor.assumeIsolated {
                 guard let identity = registry.targetIdentity(of: app) else { return }
                 if isActivation { registry.observation.activated(identity: identity) }
+                if isTermination { registry.observation.confirmTermination(identity: identity) }
             }
         }
     }

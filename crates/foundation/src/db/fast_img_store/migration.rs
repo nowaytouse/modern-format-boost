@@ -13,6 +13,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::metadata::SourceDirectoryCleanupSnapshot;
 use crate::pipeline::verification::{
     FAST_IMG_MARKER_SCHEMA_VERSION, WorkingCopyMarker, parse_marker_for_working_copy,
     validate_marker_structure,
@@ -376,28 +377,102 @@ struct Backup {
     hash: Vec<u8>,
     key: String,
     retired: bool,
+    directory_snapshot: Option<Vec<u8>>,
+    directory_snapshot_blake3: Option<Vec<u8>>,
 }
 
 fn backups(conn: &Connection) -> Result<Vec<Backup>> {
-    let mut query = conn.prepare("SELECT origin_path,origin_blake3,
-        CASE WHEN length(source_json)<=?1 THEN source_json ELSE NULL END,task_key,retired FROM fast_img_migrations ORDER BY origin_path")?;
+    read_backups(conn, None)
+}
+
+fn read_backups(conn: &Connection, origin: Option<&Path>) -> Result<Vec<Backup>> {
+    let version = crate::db::mfb_sqlite_store::inspect_store_schema_version(conn)?;
+    let snapshot_columns = match version {
+        Some(3) => "NULL,NULL",
+        Some(4) => {
+            "CASE WHEN length(directory_snapshot)<=?1 THEN directory_snapshot ELSE NULL END,directory_snapshot_blake3"
+        }
+        _ => bail!("Legacy migration backup requires a recognized structured state schema"),
+    };
+    let filter = if origin.is_some() {
+        "origin_path=?2"
+    } else {
+        "?2 IS NULL"
+    };
+    let mut query = conn.prepare(&format!("SELECT origin_path,origin_blake3,
+        CASE WHEN length(source_json)<=?1 THEN source_json ELSE NULL END,task_key,retired,{snapshot_columns}
+        FROM fast_img_migrations WHERE {filter} ORDER BY origin_path"))?;
     let rows = query
-        .query_map([i64::try_from(MAX_LEGACY_BYTES)?], |row| {
-            Ok(Backup {
-                path: PathBuf::from(row.get::<_, String>(0)?),
-                hash: row.get(1)?,
-                bytes: row
-                    .get::<_, Option<Vec<u8>>>(2)?
-                    .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
-                key: row.get(3)?,
-                retired: row.get(4)?,
-            })
-        })?
+        .query_map(
+            params![
+                i64::try_from(MAX_LEGACY_BYTES)?,
+                origin.map(text).transpose()?
+            ],
+            |row| {
+                Ok(Backup {
+                    path: PathBuf::from(row.get::<_, String>(0)?),
+                    hash: row.get(1)?,
+                    bytes: row
+                        .get::<_, Option<Vec<u8>>>(2)?
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    key: row.get(3)?,
+                    retired: row.get(4)?,
+                    directory_snapshot: row.get(5)?,
+                    directory_snapshot_blake3: row.get(6)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
+fn backup_for_origin(conn: &Connection, origin: &Path) -> Result<Backup> {
+    let mut rows = read_backups(conn, Some(origin))?;
+    ensure!(
+        rows.len() == 1,
+        "Legacy migration receipt disappeared or is ambiguous"
+    );
+    Ok(rows.remove(0))
+}
+
+fn retirement_paths(backup: &Backup) -> Result<(PathBuf, PathBuf, PathBuf)> {
+    let parent = backup
+        .path
+        .parent()
+        .context("Legacy origin has no parent")?
+        .to_path_buf();
+    let holding = parent.join(format!(
+        ".mfb-migration-{}",
+        blake3::hash(text(&backup.path)?.as_bytes()).to_hex()
+    ));
+    let moved = holding.join("checkpoint.json");
+    Ok((parent, holding, moved))
+}
+
+fn decoded_directory_snapshot(backup: &Backup) -> Result<Option<SourceDirectoryCleanupSnapshot>> {
+    match (
+        &backup.directory_snapshot,
+        &backup.directory_snapshot_blake3,
+    ) {
+        (None, None) => Ok(None),
+        (Some(bytes), Some(hash)) => {
+            ensure!(
+                hash.as_slice() == blake3::hash(bytes).as_bytes(),
+                "Legacy directory baseline failed BLAKE3 verification; no timestamps were restored"
+            );
+            let snapshot = SourceDirectoryCleanupSnapshot::from_durable_json(bytes)?;
+            let (parent, _, moved) = retirement_paths(backup)?;
+            snapshot.validate_durable_scope(&parent, &[backup.path.clone(), moved])?;
+            Ok(Some(snapshot))
+        }
+        _ => bail!(
+            "Legacy directory baseline/hash pair is missing, oversized, or incomplete; state retained"
+        ),
+    }
+}
+
 fn verify_backup(conn: &Connection, backup: &Backup) -> Result<WorkingCopyMarker> {
+    decoded_directory_snapshot(backup)?;
     ensure!(
         backup.path.is_absolute()
             && backup.hash.as_slice() == blake3::hash(&backup.bytes).as_bytes(),
@@ -464,29 +539,148 @@ fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn same_backup(left: &Backup, right: &Backup) -> bool {
+    left.path == right.path
+        && left.bytes == right.bytes
+        && left.hash == right.hash
+        && left.key == right.key
+        && left.retired == right.retired
+        && left.directory_snapshot == right.directory_snapshot
+        && left.directory_snapshot_blake3 == right.directory_snapshot_blake3
+}
+
+fn require_absent(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("Cannot inspect migration holding path"),
+        Ok(_) => bail!(
+            "Legacy retirement has no durable directory baseline but a holding path exists; original timestamps are unknown; state retained"
+        ),
+    }
+}
+
+// This transaction is deliberately separate from migration/retirement. No
+// rename, holding directory or removal may precede its committed readback.
+fn prepare_retirement_baseline(conn: &mut Connection, expected: &Backup) -> Result<Backup> {
+    ensure!(
+        conn.is_autocommit(),
+        "Directory baseline requires an independent committed transaction"
+    );
+    let current = super::in_snapshot(conn, |conn| {
+        let current = backup_for_origin(conn, &expected.path)?;
+        verify_backup(conn, &current)?;
+        ensure!(
+            same_backup(&current, expected),
+            "Legacy migration receipt changed before directory capture"
+        );
+        Ok(current)
+    })?;
+    ensure!(
+        !current.retired,
+        "Retired legacy checkpoint reappeared; refusing to reuse an older directory baseline"
+    );
+    if current.directory_snapshot.is_some() {
+        return Ok(current);
+    }
+    let (parent, holding, moved) = retirement_paths(&current)?;
+    ensure!(
+        real_directory(&parent)?,
+        "Legacy retirement directory disappeared; original timestamps cannot be confirmed"
+    );
+    require_absent(&holding)?;
+    let original = read_legacy(&current.path)?.context(
+        "Legacy retirement has no durable directory baseline and its origin is missing; original timestamps are unknown; state retained",
+    )?;
+    ensure!(
+        original.bytes == current.bytes,
+        "Legacy checkpoint changed before directory capture; retained"
+    );
+    // A prior interrupted retirement in this directory must restore its dates
+    // before another origin captures a new baseline containing those changes.
+    for other in backups(conn)? {
+        ensure!(
+            other.path == current.path
+                || other.retired
+                || other.directory_snapshot.is_none()
+                || other.path.parent() != Some(parent.as_path()),
+            "Another legacy retirement in this directory must finish its saved baseline first"
+        );
+    }
+    let snapshot =
+        SourceDirectoryCleanupSnapshot::capture(&parent, std::slice::from_ref(&current.path))?;
+    snapshot.validate_durable_scope(&parent, &[current.path.clone(), moved])?;
+    let bytes = snapshot.to_durable_json()?;
+    let hash = blake3::hash(&bytes);
+    let rechecked = read_legacy(&current.path)?
+        .context("Legacy checkpoint disappeared during directory capture")?;
+    ensure!(
+        rechecked.stamp == original.stamp && rechecked.bytes == current.bytes,
+        "Legacy checkpoint changed during directory capture; retained"
+    );
+    require_absent(&holding)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let latest = backup_for_origin(&tx, &current.path)?;
+    verify_backup(&tx, &latest)?;
+    ensure!(
+        same_backup(&latest, &current),
+        "Legacy migration receipt changed during directory capture"
+    );
+    let changed = tx.execute(
+        "UPDATE fast_img_migrations SET directory_snapshot=?4,directory_snapshot_blake3=?5
+        WHERE origin_path=?1 AND origin_blake3=?2 AND task_key=?3 AND retired=0
+        AND directory_snapshot IS NULL AND directory_snapshot_blake3 IS NULL",
+        params![
+            text(&current.path)?,
+            current.hash,
+            current.key,
+            bytes,
+            hash.as_bytes().as_slice()
+        ],
+    )?;
+    ensure!(
+        changed == 1,
+        "Legacy directory baseline was not durably recorded"
+    );
+    tx.commit()
+        .context("Legacy directory baseline commit failed; legacy files retained")?;
+    super::in_snapshot(conn, |conn| {
+        let saved = backup_for_origin(conn, &current.path)?;
+        verify_backup(conn, &saved)?;
+        ensure!(
+            !saved.retired
+                && saved.bytes == current.bytes
+                && saved.hash == current.hash
+                && saved.key == current.key
+                && saved.directory_snapshot.as_deref() == Some(bytes.as_slice())
+                && saved.directory_snapshot_blake3.as_deref() == Some(hash.as_bytes().as_slice()),
+            "Legacy directory baseline readback differs from its committed capture; files retained"
+        );
+        Ok(saved)
+    })
+}
+
 fn retire(backup: &Backup) -> Result<()> {
     let value = locator(&backup.bytes)?;
     validate_origin(&backup.path, &value)?;
-    let parent = backup
-        .path
-        .parent()
-        .context("Legacy origin has no parent")?;
-    if !real_directory(parent)? {
-        return Ok(());
-    }
-    let holding = parent.join(format!(
-        ".mfb-migration-{}",
-        blake3::hash(text(&backup.path)?.as_bytes()).to_hex()
-    ));
-    let moved = holding.join("checkpoint.json");
-    let snapshot = crate::metadata::SourceDirectoryCleanupSnapshot::capture(
-        parent,
-        &[backup.path.clone(), holding.clone(), moved.clone()],
-    )?;
-    let result = retire_files(backup, parent, &holding, &moved);
+    let (parent, holding, moved) = retirement_paths(backup)?;
+    ensure!(
+        real_directory(&parent)?,
+        "Legacy retirement directory disappeared; metadata restoration remains pending"
+    );
+    let snapshot = decoded_directory_snapshot(backup)?
+        .context("Legacy retirement has no committed directory baseline")?;
+    let result = retire_files(backup, &parent, &holding, &moved);
     let restored = snapshot.restore_after_cleanup(&[backup.path.clone(), moved]);
     match (result, restored) {
-        (Ok(()), Ok(true)) => Ok(()),
+        (Ok(()), Ok(true)) => {
+            ensure!(
+                real_directory(&parent)?,
+                "Legacy retirement directory disappeared during metadata restoration; confirmation remains pending"
+            );
+            // Flush the restored dates, not only the earlier directory removals.
+            sync_directory(&parent)
+                .context("Legacy directory metadata sync failed; retirement remains pending")
+        }
         (Err(error), Ok(true)) => Err(error),
         (result, Ok(false)) => bail!(
             "Legacy retirement remains pending: operation={}; directory metadata could not be restored after an external change or unsupported identity; timestamps not overwritten; SQL backup retained",
@@ -678,6 +872,10 @@ pub(super) fn migrate_legacy_for_source(
         let key = key_for_canonical(&wc);
         if let Some(backup) = existing.get(&file.path) {
             ensure!(
+                !backup.retired,
+                "Retired legacy checkpoint reappeared; file retained without applying its old directory baseline"
+            );
+            ensure!(
                 backup.bytes == file.bytes && backup.key == key,
                 "Legacy origin changed after a committed migration; retained"
             );
@@ -712,7 +910,7 @@ pub(super) fn migrate_legacy_for_source(
     tx.commit()
         .context("Fast IMG migration failed to commit; legacy files retained")?;
     // A new read snapshot must verify committed SQL before any legacy removal.
-    let targets = super::in_snapshot(&conn, |conn| {
+    let mut targets = super::in_snapshot(&conn, |conn| {
         inspect_backups(conn)?;
         let mut targets = Vec::new();
         for backup in backups(conn)? {
@@ -724,13 +922,31 @@ pub(super) fn migrate_legacy_for_source(
         }
         Ok(targets)
     })?;
+    targets.sort_by(|left, right| {
+        (
+            left.path.parent(),
+            left.directory_snapshot.is_none(),
+            &left.path,
+        )
+            .cmp(&(
+                right.path.parent(),
+                right.directory_snapshot.is_none(),
+                &right.path,
+            ))
+    });
     let mut retired = 0;
     for backup in targets {
+        let backup = prepare_retirement_baseline(&mut conn, &backup)?;
         retire(&backup)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        verify_backup(&tx, &backup)?;
-        let changed = tx.execute("UPDATE fast_img_migrations SET retired=1 WHERE origin_path=?1 AND origin_blake3=?2 AND task_key=?3",
-            params![text(&backup.path)?, backup.hash, backup.key])?;
+        let current = backup_for_origin(&tx, &backup.path)?;
+        verify_backup(&tx, &current)?;
+        ensure!(
+            same_backup(&current, &backup),
+            "Legacy directory baseline changed before retirement confirmation"
+        );
+        let changed = tx.execute("UPDATE fast_img_migrations SET retired=1 WHERE origin_path=?1 AND origin_blake3=?2 AND task_key=?3 AND retired=0 AND directory_snapshot_blake3=?4",
+            params![text(&backup.path)?, backup.hash, backup.key, backup.directory_snapshot_blake3])?;
         ensure!(
             changed == 1,
             "Committed legacy migration receipt changed before retirement confirmation"
@@ -836,6 +1052,18 @@ mod tests {
         reject_unmigrated_for_source(&original.src_dir)?;
         let report = migrate_legacy_for_source(&original.src_dir, None)?;
         assert_eq!((report.migrated, report.retired), (0, 0));
+        // Reusing an old receipt must not roll a newly created file/directory
+        // generation back to the previous retirement's timestamp.
+        fs::write(&origin, &raw)?;
+        let new_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
+        filetime::set_file_times(&original.working_copy, new_time, new_time)?;
+        assert!(migrate_legacy_for_source(&original.src_dir, None).is_err());
+        assert_eq!(fs::read(&origin)?, raw);
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            new_time
+        );
+        fs::remove_file(&origin)?;
         // Cold integrity is a database check, even after source/output cleanup.
         fs::remove_dir(&original.working_copy)?;
         fs::remove_dir(&original.src_dir)?;
@@ -902,18 +1130,213 @@ mod tests {
         assert_eq!(fs::read(&origin)?, changed_bytes);
         assert_eq!(read_snapshot(&conn, &key)?.unwrap(), original);
         fs::write(&origin, &raw)?;
+        let before_interruption = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
+        filetime::set_file_times(
+            &original.working_copy,
+            before_interruption,
+            before_interruption,
+        )?;
+        let pending = backup_for_origin(&conn, &origin)?;
+        let saved = prepare_retirement_baseline(&mut conn, &pending)?;
+        assert!(saved.directory_snapshot.is_some());
         let holding = origin.parent().unwrap().join(format!(
             ".mfb-migration-{}",
             blake3::hash(text(&origin)?.as_bytes()).to_hex()
         ));
         fs::create_dir(&holding)?;
         fs::rename(&origin, holding.join("checkpoint.json"))?;
+        // Simulate the changed directory time left by the interrupted process.
+        // It must not become the recovery attempt's replacement baseline.
+        let interrupted_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
+        filetime::set_file_times(&original.working_copy, interrupted_time, interrupted_time)?;
         assert!(reject_unmigrated_for_working_copy(&original.working_copy).is_err());
         let report = migrate_legacy_for_source(&original.src_dir, None)?;
         assert_eq!((report.migrated, report.retired), (0, 1));
         assert!(!origin.exists() && !holding.exists());
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            before_interruption,
+            "recovery must restore the pre-interruption timestamp, not recapture the changed one",
+        );
         inspect_backups(&conn)?;
         assert!(backups(&conn)?[0].retired);
+        Ok(())
+    }
+
+    fn pending_fixture(root: &Path, name: &str) -> Result<(WorkingCopyMarker, Connection, Backup)> {
+        let original = fixture(root, name)?;
+        let origin = origin_path(&original.working_copy.join(".mfb_wc"))?;
+        let raw = serde_json::to_vec(&original)?;
+        fs::write(&origin, &raw)?;
+        let mut conn = super::super::open_store_connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        write_snapshot(&tx, &original)?;
+        tx.execute("INSERT INTO fast_img_migrations(origin_path,origin_blake3,source_json,task_key,retired) VALUES(?1,?2,?3,?4,0)",
+            params![text(&origin)?, blake3::hash(&raw).as_bytes().as_slice(), raw,
+                key_for_canonical(&canonical_text(&original.working_copy)?)])?;
+        tx.commit()?;
+        let backup = backup_for_origin(&conn, &origin)?;
+        Ok((original, conn, backup))
+    }
+
+    #[test]
+    fn durable_retirement_recovers_after_removal_and_rejects_unknown_old_interruptions()
+    -> Result<()> {
+        if !isolated(
+            "durable_retirement_recovers_after_removal_and_rejects_unknown_old_interruptions",
+        )? {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let (original, mut conn, backup) = pending_fixture(root.path(), "removed")?;
+        let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
+        filetime::set_file_times(&original.working_copy, before, before)?;
+        let saved = prepare_retirement_baseline(&mut conn, &backup)?;
+        let (parent, holding, moved) = retirement_paths(&saved)?;
+        fs::create_dir(&holding)?;
+        fs::rename(&saved.path, &moved)?;
+        fs::remove_file(&moved)?;
+        fs::remove_dir(&holding)?;
+        let interrupted = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
+        filetime::set_file_times(&parent, interrupted, interrupted)?;
+        drop(conn);
+        let report = migrate_legacy_for_source(&original.src_dir, None)?;
+        assert_eq!((report.migrated, report.retired), (0, 1));
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(&parent)?),
+            before
+        );
+
+        let (unknown, mut conn, backup) = pending_fixture(root.path(), "unknown")?;
+        let (_, holding, moved) = retirement_paths(&backup)?;
+        fs::create_dir(&holding)?;
+        fs::rename(&backup.path, &moved)?;
+        let error = prepare_retirement_baseline(&mut conn, &backup)
+            .err()
+            .context("Missing baseline was accepted")?;
+        assert!(error.to_string().contains("timestamps are unknown"));
+        assert_eq!(fs::read(&moved)?, backup.bytes);
+        assert!(!backup_for_origin(&conn, &backup.path)?.retired);
+        fs::remove_file(&moved)?;
+        fs::remove_dir(&holding)?;
+        assert!(
+            prepare_retirement_baseline(&mut conn, &backup).is_err(),
+            "absent origin is not evidence of restored metadata"
+        );
+        assert!(!backup_for_origin(&conn, &backup.path)?.retired);
+        fs::remove_dir(&unknown.working_copy)?;
+        let (missing, mut conn, backup) = pending_fixture(root.path(), "missing-parent")?;
+        let saved = prepare_retirement_baseline(&mut conn, &backup)?;
+        fs::remove_file(&saved.path)?;
+        fs::remove_dir(&missing.working_copy)?;
+        assert!(
+            retire(&saved).is_err(),
+            "a missing parent cannot confirm timestamp restoration"
+        );
+        assert!(!backup_for_origin(&conn, &saved.path)?.retired);
+        Ok(())
+    }
+
+    #[test]
+    fn durable_baseline_rejects_tampering_and_external_changes_without_confirming_retirement()
+    -> Result<()> {
+        if !isolated(
+            "durable_baseline_rejects_tampering_and_external_changes_without_confirming_retirement",
+        )? {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let (original, mut conn, backup) = pending_fixture(root.path(), "changed")?;
+        let retained = original.working_copy.join("unrelated.txt");
+        fs::write(&retained, b"original unrelated bytes")?;
+        let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
+        filetime::set_file_times(&original.working_copy, before, before)?;
+        let saved = prepare_retirement_baseline(&mut conn, &backup)?;
+        conn.execute(
+            "UPDATE fast_img_migrations SET directory_snapshot_blake3=?1 WHERE origin_path=?2",
+            params![vec![0_u8; 32], text(&saved.path)?],
+        )?;
+        assert!(inspect_backups(&conn).is_err());
+        assert!(migrate_legacy_for_source(&original.src_dir, None).is_err());
+        assert_eq!(fs::read(&saved.path)?, saved.bytes);
+        conn.execute(
+            "UPDATE fast_img_migrations SET directory_snapshot_blake3=?1 WHERE origin_path=?2",
+            params![saved.directory_snapshot_blake3, text(&saved.path)?],
+        )?;
+
+        let (_, holding, moved) = retirement_paths(&saved)?;
+        fs::create_dir(&holding)?;
+        fs::rename(&saved.path, &moved)?;
+        fs::write(&retained, b"externally changed unrelated bytes")?;
+        let external_time = filetime::FileTime::from_unix_time(1_600_000_000, 987_654_321);
+        filetime::set_file_times(&original.working_copy, external_time, external_time)?;
+        assert!(migrate_legacy_for_source(&original.src_dir, None).is_err());
+        assert_eq!(fs::read(&retained)?, b"externally changed unrelated bytes");
+        assert!(!backup_for_origin(&conn, &saved.path)?.retired);
+        assert_ne!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(&original.working_copy)?),
+            filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789)
+        );
+        inspect_backups(&conn)?;
+        Ok(())
+    }
+
+    #[test]
+    fn shared_directory_finishes_a_pending_baseline_before_capturing_the_next_origin() -> Result<()>
+    {
+        if !isolated(
+            "shared_directory_finishes_a_pending_baseline_before_capturing_the_next_origin",
+        )? {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let first = fixture(root.path(), "shared")?;
+        let mut second = first.clone();
+        second.working_copy = root.path().join("shared_optimized_2");
+        fs::create_dir(&second.working_copy)?;
+        second.working_copy = second.working_copy.canonicalize()?;
+        let directory = central_dir()?;
+        fs::create_dir_all(&directory)?;
+        let directory = directory.canonicalize()?;
+        let mut conn = super::super::open_store_connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for value in [&first, &second] {
+            let path = origin_path(&legacy_marker_path_for_working_copy(&value.working_copy)?)?;
+            let raw = serde_json::to_vec(value)?;
+            fs::write(&path, &raw)?;
+            write_snapshot(&tx, value)?;
+            tx.execute("INSERT INTO fast_img_migrations(origin_path,origin_blake3,source_json,task_key,retired) VALUES(?1,?2,?3,?4,0)",
+                params![text(&path)?, blake3::hash(&raw).as_bytes().as_slice(), raw,
+                    key_for_canonical(text(&value.working_copy)?)])?;
+        }
+        tx.commit()?;
+        let before = filetime::FileTime::from_unix_time(1_500_000_000, 123_456_789);
+        filetime::set_file_times(&directory, before, before)?;
+        // Select the last filename so ordinary pathname order would incorrectly
+        // capture its sibling while this baseline's holding directory exists.
+        let last = backups(&conn)?
+            .pop()
+            .context("Missing shared directory fixture")?;
+        let saved = prepare_retirement_baseline(&mut conn, &last)?;
+        let (_, holding, moved) = retirement_paths(&saved)?;
+        fs::create_dir(&holding)?;
+        fs::rename(&saved.path, &moved)?;
+        drop(conn);
+        let report = migrate_legacy_for_source(&first.src_dir, None)?;
+        assert_eq!((report.migrated, report.retired), (0, 2));
+        assert!(fs::read_dir(&directory)?.next().is_none());
+        assert_eq!(
+            filetime::FileTime::from_last_modification_time(&fs::metadata(&directory)?),
+            before
+        );
+        let conn = open_readonly()?.context("Migration DB disappeared")?;
+        let records = backups(&conn)?;
+        assert!(
+            records
+                .iter()
+                .all(|backup| backup.retired && backup.directory_snapshot.is_some())
+        );
+        inspect_backups(&conn)?;
         Ok(())
     }
 }

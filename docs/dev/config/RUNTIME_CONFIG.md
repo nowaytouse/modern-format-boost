@@ -1001,7 +1001,7 @@ reconciliation and a full source/sidecar manifest remain unfinished.
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 3. Large
+verified receipt records use the existing Core SQLite store, schema 4. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
@@ -1028,20 +1028,40 @@ Unknown, conflicting or changed legacy files remain protected. Interrupted
 retirement is resumable from its receipt; old configuration or submission gaps
 are never filled with current defaults.
 
-Retirement restores directory timestamps from a verified in-process cleanup
-snapshot. That original directory snapshot is not yet durable across a crash;
-a resumed retirement cannot establish the directory's pre-interruption dates.
-Exact checkpoint bytes remain backed up, but complete crash-safe ghost directory
-metadata preservation is still a separate unfinished requirement.
+Before retiring each legacy marker, a separate transaction saves the original
+directory observations and their BLAKE3, then verifies committed readback before
+creating a holding directory or moving/removing the marker. Recovery reuses
+those original observations; it does not recapture post-interruption dates as
+the baseline. Native directory/entry identity and unrelated entry changes remain
+checked before restoring access/modification times. The restored directory is
+synced before confirming retirement. Multiple markers in one parent retire
+sequentially, with pending recorded recovery completed before a fresh baseline.
+This retains the existing cleanup comparison: known removals can change directory
+times. The snapshot cannot distinguish an unrelated timestamp-only directory edit
+from those changes and does not establish exclusive access against other programs.
 
-Core schema migrations from CRC32 v1 and BLAKE3 v2 to v3 are transactional. A
-known v2 database remains inspectable read-only without pretending it already
-has the new tables. Integrity inspection verifies all six Fast IMG tables and
-migration backups in a consistent SQL snapshot. It does not open media files or
+An older interrupted retirement with a missing origin or an existing holding
+path, but no original directory snapshot, remains explicitly unresolved. An intact
+origin without a holding path can acquire a baseline before this retirement;
+that cannot establish directory dates before earlier versions' actions.
+Historical completed rows keep their missing coverage; schema migration does
+not invent past observations.
+A reappeared retired origin is a conflict, not permission to apply old dates to
+a new directory generation. These snapshots authorize neither media deletion
+nor Photos delivery, and do not establish complete crash atomicity across the
+rest of the processing pipeline.
+
+Core schema migrations from CRC32 v1 and BLAKE3 v2/v3 to v4 are transactional.
+Known v2/v3 databases remain inspectable read-only without pretending they already
+have the newer tables or directory evidence. Integrity inspection verifies all
+six Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
+directory evidence is parsed, hashed and scope-checked without revisiting media
+paths. It does not open media files or
 confer Photos custody or deletion permission. Cache management counts these as
 protected State and includes them in verified backups; cache pruning never
-deletes them. Reported payload bytes cover actual stored header/migration blobs,
-not database pages, indexes or estimated disk recovery.
+deletes them. Reported payload bytes cover actual stored headers, legacy marker
+bytes and directory-snapshot payloads, not database pages, indexes or estimated
+disk recovery.
 
 The formal Rust Core root is fixed for the process; invalid or unavailable
 configuration cannot redirect durable state to temporary storage. The store
@@ -1151,7 +1171,10 @@ The command must actually run the private native self-test; a skipped GUI build
 does not establish observation coverage. Reports must use a new directory.
 Application equality binds samples to one lifecycle rather than treating a lost
 PID as a new process. A previously observed application's confirmed termination
-retains its valid identity and adds a terminal sample. Never-observed children,
+retains its valid identity and adds a terminal sample. The observer accepts
+AppKit termination notifications and stops reading that lifecycle's process
+properties or attributing later windows to its old PID after confirmed exit.
+Polling also checks termination before reading those properties. Never-observed children,
 unavailable window capture, conflicting identity and a child still running at
 command completion cannot pass. Activation, visible windows and non-prohibited
 policy observations remain failures after termination. The original native
