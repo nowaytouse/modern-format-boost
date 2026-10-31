@@ -19,6 +19,7 @@
 //!   completion polling is explicit opt-in to avoid pressuring Photos/cloud
 //!   daemons
 
+use crate::infra::runtime_config::AvifMetadataPolicy;
 use crate::pipeline::verification::{
     Blake3Entry, LibraryAssetRecord, LibraryHandle, WorkingCopyMarker, write_marker_atomic,
 };
@@ -267,11 +268,16 @@ pub fn verify_final_jxl_delivery_integrity(
 pub fn verify_final_avif_delivery_integrity(
     source_jpeg: &Path,
     avif_output: &Path,
+    metadata_policy: AvifMetadataPolicy,
 ) -> Result<IntegrityResult> {
     use crate::image::format_detect::FormatKind;
 
     if crate::image::format_detect::detect_true_format(source_jpeg)? == FormatKind::Avif {
-        return verify_existing_avif_meme_delivery_integrity(source_jpeg, avif_output);
+        return verify_existing_avif_meme_delivery_integrity(
+            source_jpeg,
+            avif_output,
+            metadata_policy,
+        );
     }
     verify_final_delivery_integrity(source_jpeg, avif_output, FormatKind::Avif)
 }
@@ -292,8 +298,10 @@ pub fn verify_final_avif_delivery_integrity(
 pub fn verify_existing_avif_meme_delivery_integrity(
     source_avif: &Path,
     avif_output: &Path,
+    metadata_policy: AvifMetadataPolicy,
 ) -> Result<IntegrityResult> {
-    let (source_hash, output_hash) = verify_existing_avif_meme_custody(source_avif, avif_output)?;
+    let (source_hash, output_hash) =
+        verify_existing_avif_meme_custody(source_avif, avif_output, metadata_policy)?;
     Ok(IntegrityResult::FinalModernDelivery {
         source_hash,
         output_hash,
@@ -303,6 +311,7 @@ pub fn verify_existing_avif_meme_delivery_integrity(
 fn verify_existing_avif_meme_custody(
     source_avif: &Path,
     avif_output: &Path,
+    metadata_policy: AvifMetadataPolicy,
 ) -> Result<(String, String)> {
     use crate::common_utils::calculate_blake3_hash;
     use crate::image::format_detect::{FormatKind, detect_true_format};
@@ -358,7 +367,7 @@ fn verify_existing_avif_meme_custody(
     crate::metadata::verify_output_embedded_metadata(
         source_avif,
         avif_output,
-        crate::metadata::MetadataOutputPolicy::Clear,
+        metadata_policy.output_policy(),
     )
     .map_err(|error| {
         ImgQualityError::AnalysisError(format!(
@@ -2007,7 +2016,11 @@ pub fn avif_codec_feature_hash(path: &Path) -> Result<String> {
 /// Clean inputs remain byte-identical. Dirty inputs are rewritten only by
 /// `ExifTool`'s container metadata editor, then accepted only when the exact
 /// primary-image SHA-256 is unchanged and the normal clear-policy audit passes.
-pub fn prepare_existing_avif_meme_candidate(source: &Path, staged_path: &Path) -> Result<String> {
+pub fn prepare_existing_avif_meme_candidate(
+    source: &Path,
+    staged_path: &Path,
+    metadata_policy: AvifMetadataPolicy,
+) -> Result<String> {
     use crate::ToolBuilder;
 
     let format = crate::image::format_detect::detect_true_format(source)?;
@@ -2104,7 +2117,7 @@ pub fn prepare_existing_avif_meme_candidate(source: &Path, staged_path: &Path) -
     // Candidate preparation and final delivery use the same encoded-payload,
     // feature and metadata proof. Bind it to the pre-copy source identity too.
     let (source_identity_after, output_hash) =
-        verify_existing_avif_meme_custody(source, staged_path)?;
+        verify_existing_avif_meme_custody(source, staged_path, metadata_policy)?;
     if source_identity_after != source_identity {
         return Err(ImgQualityError::AnalysisError(format!(
             "existing AVIF source changed during metadata sanitization: {}",
@@ -6819,7 +6832,11 @@ mod tests {
             let source_image_data = image_data_sha256(&source)?;
             let source_features = avif_codec_feature_hash(&source)?;
             let clean = temp.path().join(format!("{name}-clean.avif"));
-            let clean_candidate_hash = prepare_existing_avif_meme_candidate(&source, &clean)?;
+            let clean_candidate_hash = prepare_existing_avif_meme_candidate(
+                &source,
+                &clean,
+                AvifMetadataPolicy::Clear,
+            )?;
             assert_eq!(clean_candidate_hash, source_hash);
             assert_eq!(
                 crate::common_utils::calculate_blake3_hash(&clean)?,
@@ -6829,7 +6846,11 @@ mod tests {
             assert_eq!(avif_codec_feature_hash(&clean)?, source_features);
             assert_eq!(avif_progressive_state(&avifdec, &clean)?, expected_state);
             assert!(matches!(
-                verify_existing_avif_meme_delivery_integrity(&source, &clean)?,
+                verify_existing_avif_meme_delivery_integrity(
+                    &source,
+                    &clean,
+                    AvifMetadataPolicy::Clear,
+                )?,
                 IntegrityResult::FinalModernDelivery {
                     source_hash: verified_source,
                     output_hash: verified_output,
@@ -6858,7 +6879,7 @@ mod tests {
             let dirty_image_data = image_data_sha256(&dirty)?;
             let dirty_features = avif_codec_feature_hash(&dirty)?;
             let sanitized = temp.path().join(format!("{name}-sanitized.avif"));
-            prepare_existing_avif_meme_candidate(&dirty, &sanitized)?;
+            prepare_existing_avif_meme_candidate(&dirty, &sanitized, AvifMetadataPolicy::Clear)?;
 
             assert!(crate::metadata::embedded_metadata_is_clear(&sanitized)?);
             assert_eq!(image_data_sha256(&sanitized)?, dirty_image_data);
@@ -6876,7 +6897,11 @@ mod tests {
                 source_hash
             );
             assert!(matches!(
-                verify_existing_avif_meme_delivery_integrity(&dirty, &sanitized)?,
+                verify_existing_avif_meme_delivery_integrity(
+                    &dirty,
+                    &sanitized,
+                    AvifMetadataPolicy::Clear,
+                )?,
                 IntegrityResult::FinalModernDelivery { .. }
             ));
 

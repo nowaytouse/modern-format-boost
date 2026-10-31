@@ -1744,6 +1744,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var displayed: [MediaSetting: String] = [:]
     private var rows: [MediaSetting: NSGridRow] = [:]
     private var photosSourceNotice: NSStackView?
+    private let avifMetadataSummary = NSTextField(wrappingLabelWithString: "")
+    private var avifMetadataRow: NSGridRow?
     private let developer: Bool
     private let fast: Bool
     private let avif: Bool
@@ -1953,6 +1955,17 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 row.yPlacement = .center
             }
             if section == "img" {
+                if fast && avif {
+                    avifMetadataSummary.font = .systemFont(ofSize: 11)
+                    avifMetadataSummary.textColor = .secondaryLabelColor
+                    avifMetadataSummary.isSelectable = true
+                    avifMetadataSummary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                    displayAvifMetadataMessage("settings.avif_metadata.loading")
+                    avifMetadataRow = grid.addRow(with: developer
+                        ? [NSTextField(labelWithString: localized("settings.avif_metadata.title")), avifMetadataSummary, NSView()]
+                        : [NSTextField(labelWithString: localized("settings.avif_metadata.title")), avifMetadataSummary])
+                    avifMetadataRow?.yPlacement = .top
+                }
                 let guide = NSButton(title: localized("settings.recovery.guide"), target: self, action: #selector(showRecoveryGuide))
                 guide.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: nil)
                 guide.imagePosition = .imageLeading
@@ -2709,6 +2722,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         let videoArgs = settings.videoRuntimeArguments(inheritedOnly: true)
         let needsStandard = !fast && !videos
         let needsVideo = !fast
+        displayAvifMetadataMessage("settings.avif_metadata.loading")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result {
                 (try needsStandard ? queryRuntimeSettings(arguments: standardArgs) : nil,
@@ -2728,6 +2742,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     self.inherited.removeAll()
                     self.inheritedSources.removeAll()
                     self.inheritedMixed.removeAll()
+                    self.displayAvifMetadataMessage("settings.avif_metadata.unavailable")
                     self.restore(draft)
                     self.status.stringValue = error.localizedDescription
                 }
@@ -2754,6 +2769,23 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             inheritedMixed.insert(field)
             inherited[field] = nil
             inheritedSources[field] = "IMG: \(imageValue) (\(standard?.sources[key] ?? localized("result.unknown")))\nVID: \(videoValue) (\(video?.sources[key] ?? localized("result.unknown")))"
+        }
+        displayAvifMetadataPolicy(fast)
+    }
+
+    private func displayAvifMetadataMessage(_ key: String, policy: String? = nil) {
+        guard fast && avif && !videos else { return }
+        let message = localized(key)
+        avifMetadataSummary.stringValue = message
+        avifMetadataSummary.setAccessibilityLabel(message)
+        avifMetadataSummary.toolTip = policy.map { message + "\nimg.avif_metadata_policy: " + $0 } ?? message
+    }
+
+    private func displayAvifMetadataPolicy(_ effective: EffectiveRuntimeSettings) {
+        switch effective["img.avif_metadata_policy"] {
+        case "clear": displayAvifMetadataMessage("settings.avif_metadata.clear", policy: "clear")
+        case nil: displayAvifMetadataMessage("settings.avif_metadata.unavailable")
+        default: displayAvifMetadataMessage("settings.avif_metadata.unsupported")
         }
     }
 
@@ -3414,7 +3446,86 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         restore(MediaSettings())
     }
 
+    private func validateAvifMetadataForSelfTest() throws {
+        let expected = fast && avif && !videos
+        guard (avifMetadataRow != nil) == expected else {
+            throw HostError(message: "Fast AVIF metadata policy escaped its image settings scope")
+        }
+        guard expected, let row = avifMetadataRow else { return }
+        let key = "img.avif_metadata_policy"
+        let previousDraft = draft()
+        let previousInherited = inherited
+        let previousSources = inheritedSources
+        let previousMixed = inheritedMixed
+        let previousMessage = avifMetadataSummary.stringValue
+        let previousTooltip = avifMetadataSummary.toolTip
+        let beforePreferences = preferences.dictionaryRepresentation()
+        defer {
+            inherited = previousInherited
+            inheritedSources = previousSources
+            inheritedMixed = previousMixed
+            restore(previousDraft)
+            avifMetadataSummary.stringValue = previousMessage
+            avifMetadataSummary.setAccessibilityLabel(previousMessage)
+            avifMetadataSummary.toolTip = previousTooltip
+        }
+        for language in ["en", "zh-Hans", "ja"] {
+            guard let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) else {
+                throw HostError(message: "Missing Fast AVIF policy language bundle")
+            }
+            for suffix in ["title", "loading", "clear", "unavailable", "unsupported"] {
+                let translationKey = "settings.avif_metadata.\(suffix)"
+                guard bundle.localizedString(forKey: translationKey, value: translationKey, table: nil) != translationKey else {
+                    throw HostError(message: "Missing Fast AVIF policy translation: \(language)/\(translationKey)")
+                }
+            }
+        }
+        let confirmed = EffectiveRuntimeSettings(values: [key: "clear"], sources: [key: "default"], sourceChain: [key: ["default"]])
+        setInheritedValues(standard: nil, fast: confirmed, video: nil)
+        restore(previousDraft)
+        guard !avifMetadataSummary.isEditable, row.cell(at: 1).contentView === avifMetadataSummary,
+              avifMetadataSummary.stringValue == localized("settings.avif_metadata.clear"),
+              avifMetadataSummary.accessibilityLabel() == avifMetadataSummary.stringValue,
+              avifMetadataSummary.toolTip?.contains(key + ": clear") == true,
+              MediaSetting.allCases.allSatisfy({ $0.runtimeKey != key }), draft().values == previousDraft.values,
+              !draft().runtimeArguments(fast: true, inheritedOnly: false, avif: true).contains("--avif-metadata-policy") else {
+            throw HostError(message: "Fast AVIF policy summary fabricated an editable preference or lost the resolved policy")
+        }
+        for (value, message) in [(nil, "unavailable"), ("preserve", "unsupported")] as [(String?, String)] {
+            let effective = EffectiveRuntimeSettings(values: value.map { [key: $0] } ?? [:],
+                sources: value.map { _ in [key: "default"] } ?? [:], sourceChain: value.map { _ in [key: ["default"]] } ?? [:])
+            setInheritedValues(standard: nil, fast: effective, video: nil)
+            guard avifMetadataSummary.stringValue == localized("settings.avif_metadata.\(message)") else {
+                throw HostError(message: "Unavailable Fast AVIF policy was presented as confirmed Clear")
+            }
+        }
+        for message in ["loading", "unavailable"] {
+            displayAvifMetadataPolicy(confirmed)
+            displayAvifMetadataMessage("settings.avif_metadata.\(message)")
+            guard avifMetadataSummary.stringValue == localized("settings.avif_metadata.\(message)"),
+                  avifMetadataSummary.toolTip?.contains(key + ": clear") != true else {
+                throw HostError(message: "Fast AVIF configuration refresh retained a stale policy confirmation")
+            }
+        }
+        displayAvifMetadataPolicy(confirmed)
+        tabs.selectTabViewItem(withIdentifier: "img")
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard let cell = avifMetadataSummary.cell,
+              avifMetadataSummary.bounds.width > 0,
+              avifMetadataSummary.bounds.height + 1 >= cell.cellSize(forBounds:
+                NSRect(x: 0, y: 0, width: avifMetadataSummary.bounds.width, height: .greatestFiniteMagnitude)).height else {
+            throw HostError(message: "Fast AVIF metadata policy explanation was clipped")
+        }
+        cancel()
+        guard (preferences.dictionaryRepresentation() as NSDictionary).isEqual(to: beforePreferences),
+              draft().values == previousDraft.values else {
+            throw HostError(message: "Reading or cancelling the policy summary changed settings")
+        }
+    }
+
     func validateEncodingScopesForSelfTest() throws {
+        try validateAvifMetadataForSelfTest()
         if !videos && (!fast || !avif) {
             let searchField: MediaSetting = fast ? .fastJpegSearch : .imgJpegSearch
             let effortField: MediaSetting = fast ? .fastJpegEffort : .imgJpegEffort

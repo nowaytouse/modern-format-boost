@@ -923,3 +923,8 @@
 "helpguide.results.4.body" = "Use the run's details and History to inspect counts, paths, warnings, failures and recorded configuration. Preview explains the initial routing snapshot; it is not the final per-file execution record. When a result is unconfirmed, keep the originals and the recovery evidence and read the specific failed stage before retrying or cleaning up.";
 "helpguide.results.5.title" = "Read the verification progress";
 "helpguide.results.5.body" = "During Gate 1, hash and metadata counts refer to attempted source–output pairs. Orientation and decode counts refer to attempted outputs. Failed attempts are included. N/N means those attempts finished, not that they passed or the batch is complete. No file count is shown until the item list for that check has been established.";
+"settings.avif_metadata.title" = "Metadata policy";
+"settings.avif_metadata.loading" = "Reading the current Fast AVIF metadata policy…";
+"settings.avif_metadata.clear" = "The current private policy clears removable embedded metadata and leaves adjacent XMP out of the output. Applicable pixel, color, HDR, and file-attribute checks still apply.";
+"settings.avif_metadata.unavailable" = "The current metadata policy could not be confirmed. Check the configuration and processor version, then reopen settings.";
+"settings.avif_metadata.unsupported" = "This metadata policy is not supported by this interface. Check the configuration and processor version, then reopen settings.";

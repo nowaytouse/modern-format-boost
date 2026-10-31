@@ -4,8 +4,8 @@
 //! Python launcher.
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local};
 use clap::{Parser, ValueEnum};
+use dev::app::session::{AppSession, RunContext, processor_history_counts};
 use dev::app::worker::{CollectedChildError, LaunchCommand, WorkerSession};
 use dev::infra::drag_drop::{
     ContentScan, FastImgAction, OutputCleanupOutcome, OutputCleanupReceipt, ProcessingFilter,
@@ -21,11 +21,7 @@ use dev::infra::fastmode_paths::{
     build_fast_img_command, build_fast_img_restore_command, build_fast_vid_command,
     fast_img_restore_output_dir_for_target, fast_vid_output_dir_for_target,
 };
-use dev::infra::log_paths::{
-    append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
-    format_session_stamp,
-};
-use dev::infra::process_stream::{ProcessorByteTotals, ProcessorStats};
+use dev::infra::process_stream::ProcessorStats;
 use dev::infra::rich_panel::{
     PipelineSummary, RuntimeDashboard, clear_screen, draw_banner, draw_separator,
     pause_before_gui_exit, print_menu_hint, print_menu_row, print_pipeline_failure_panel,
@@ -54,7 +50,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
@@ -245,441 +241,6 @@ struct Args {
     /// Restrict restore-jpeg to one native Photos folder UUID.
     #[arg(long, conflicts_with = "photos_album_id")]
     photos_folder_id: Option<String>,
-}
-
-#[derive(Clone)]
-struct DragDropSession {
-    _history_lease: std::sync::Arc<dev::infra::history_store::HistorySessionLease>,
-    started_at: DateTime<Local>,
-    stamp: String,
-    log_dir: PathBuf,
-    session_log: PathBuf,
-    verbose_log: PathBuf,
-    session_audit: PathBuf,
-    run_id: Option<String>,
-    tool_snapshots: std::sync::Arc<dev::app::worker::ToolSnapshotBindings>,
-}
-
-static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-impl DragDropSession {
-    fn for_run(&self) -> Result<Self> {
-        let sequence = RUN_SEQUENCE
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| anyhow::anyhow!("run identity sequence exhausted"))?;
-        let mut scoped = self.clone();
-        scoped.tool_snapshots = std::sync::Arc::default();
-        let stamp_hash = blake3::hash(self.stamp.as_bytes()).to_hex();
-        scoped.run_id = Some(format!(
-            "run-{}-{}-{sequence}",
-            std::process::id(),
-            &stamp_hash[..24]
-        ));
-        Ok(scoped)
-    }
-    fn start() -> Result<Self> {
-        let log_dir = ensure_unified_log_dir()?;
-        Self::start_with_log_dir(&log_dir, true)
-    }
-
-    #[cfg(test)]
-    fn start_for_test(log_dir: &Path) -> Result<Self> {
-        Self::start_with_log_dir(log_dir, false)
-    }
-
-    fn start_with_log_dir(log_dir: &Path, set_child_env: bool) -> Result<Self> {
-        fs::create_dir_all(log_dir)
-            .with_context(|| format!("create drag/drop log dir {}", log_dir.display()))?;
-        let log_dir = log_dir
-            .canonicalize()
-            .with_context(|| format!("canonicalize drag/drop log dir {}", log_dir.display()))?;
-        let started_at = Local::now();
-        let stamp = format!(
-            "{}_{}_{:09}",
-            format_session_stamp(Some(started_at)),
-            std::process::id(),
-            started_at.timestamp_subsec_nanos()
-        );
-        let session = Self {
-            _history_lease: dev::infra::history_store::acquire_history_session_lease(
-                &log_dir, &stamp,
-            )?,
-            started_at,
-            session_log: log_dir.join(format!("MFB_Session_{stamp}.log")),
-            verbose_log: log_dir.join(format!("verbose_{stamp}.log")),
-            session_audit: log_dir.join(format!("session_audit_{stamp}.jsonl")),
-            log_dir,
-            stamp,
-            run_id: None,
-            tool_snapshots: std::sync::Arc::default(),
-        };
-        // A collision must never append another session's events or counters.
-        for path in [
-            &session.session_log,
-            &session.verbose_log,
-            &session.session_audit,
-        ] {
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .context("reserve unique processing session log")?;
-        }
-        if set_child_env {
-            unsafe {
-                std::env::set_var("MFB_SESSION_ID", &session.stamp);
-                std::env::set_var("MFB_LOG_DIR", session.log_dir.as_os_str());
-            }
-            if std::env::var("RUST_LOG").map_or(true, |value| value.trim().is_empty()) {
-                unsafe {
-                    std::env::set_var("RUST_LOG", "trace");
-                }
-            }
-        }
-        session.append_line(&session.session_log, "SESSION_STARTED")?;
-        session.append_line(&session.verbose_log, "SESSION_STARTED")?;
-        append_jsonl_audit_record(&session.session_audit, "SESSION_STARTED")?;
-        dev::infra::history_store::register_history_artifacts(
-            &session.log_dir,
-            &session.stamp,
-            &[
-                session.session_log.clone(),
-                session.verbose_log.clone(),
-                session.session_audit.clone(),
-            ],
-        )?;
-        Ok(session)
-    }
-
-    fn append_line(&self, path: &Path, event: &str) -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .with_context(|| format!("open drag/drop log {}", path.display()))?;
-        let stamp = Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-        writeln!(file, "[{stamp}] {event}")
-            .with_context(|| format!("write drag/drop log {}", path.display()))
-    }
-
-    fn append_history_event(&self, name: &str, mut payload: serde_json::Value) -> Result<()> {
-        if let Some(run_id) = &self.run_id {
-            let fields = payload
-                .as_object_mut()
-                .context("history payload is not an object")?;
-            if let Some(existing) = fields.get("run_id") {
-                anyhow::ensure!(
-                    existing.as_str() == Some(run_id.as_str()),
-                    "history event run identity does not match the active run"
-                );
-            } else {
-                fields.insert("run_id".to_owned(), serde_json::json!(run_id));
-            }
-        }
-        let event = format!("{name}={payload}");
-        dev::infra::history_store::append_history_event(&self.log_dir, &self.stamp, &event)
-    }
-
-    fn record_output_cleanup(&self, mut receipt: OutputCleanupReceipt) -> Result<()> {
-        receipt.run_id.clone_from(&self.run_id);
-        let payload = serde_json::to_value(receipt).context("serialize output cleanup receipt")?;
-        let marker = serde_json::to_string(&payload).context("encode output cleanup marker")?;
-        anyhow::ensure!(
-            marker.len() < 64 * 1024 - "MFB_HISTORY_OUTPUT_CLEANUP=".len(),
-            "output cleanup marker exceeds 64 KiB"
-        );
-        self.append_history_event("MFB_HISTORY_OUTPUT_CLEANUP", payload)?;
-        writeln!(io::stdout().lock(), "MFB_OUTPUT_CLEANUP={marker}")
-            .context("write output cleanup marker to stdout")
-    }
-
-    fn record_fast_img_result(&self, text: &str, stats: &ProcessorStats) -> Result<()> {
-        let mut reports = text
-            .lines()
-            .filter(|line| line.contains("MFB_FAST_IMG_RESULT="));
-        let Some(line) = reports.next() else {
-            return Ok(());
-        };
-        let payload = line
-            .strip_prefix("MFB_FAST_IMG_RESULT=")
-            .context("fast-img result has an invalid record prefix")?;
-        anyhow::ensure!(
-            payload.len() <= 32_768 && reports.next().is_none(),
-            "fast-img result is oversized or duplicated"
-        );
-        let report: serde_json::Value =
-            serde_json::from_str(payload).context("decode fast-img result for history")?;
-        anyhow::ensure!(
-            report["schema_version"] == 1 && stats.counts_complete(),
-            "fast-img history requires complete current result counts"
-        );
-        for (key, expected) in [
-            ("succeeded", stats.succeeded),
-            ("skipped", stats.skipped),
-            ("failed", stats.failed),
-            ("ignored", stats.ignored),
-            (
-                "unprocessed",
-                stats
-                    .unprocessed
-                    .context("missing fast-img unprocessed count")?,
-            ),
-        ] {
-            anyhow::ensure!(
-                report[key].as_u64() == Some(u64::try_from(expected)?),
-                "fast-img result count {key} disagrees with worker output"
-            );
-        }
-        self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report)
-    }
-
-    fn record_history_verification(
-        &self,
-        verify: &dev::infra::drag_drop::VerifyOutcome,
-        source: &Path,
-        output: &Path,
-        failed_sources_verified: Option<usize>,
-    ) -> Result<()> {
-        let counts = verify
-            .integrity_summary
-            .as_ref()
-            .context("history verification requires the machine integrity summary")?;
-        let source =
-            std::path::absolute(source).context("resolve history verification source path")?;
-        let output =
-            std::path::absolute(output).context("resolve history verification output path")?;
-        self.append_history_event(
-            "MFB_HISTORY_VERIFICATION",
-            serde_json::json!({
-                "schema_version": 1,
-                "source_path": serde_json::to_value(source).context("encode history verification source path")?,
-                "output_path": serde_json::to_value(output).context("encode history verification output path")?,
-                "has_warnings": counts.has_warnings,
-                "issue_count": counts.issue_count,
-                "source_count": counts.source_count,
-                "optimized_count": counts.optimized_count,
-                "skipped_count": counts.skipped_count,
-                "failed_count": counts.failed_count,
-                "source_remaining_count": counts.source_remaining_count,
-                "verified_deleted_count": counts.verified_deleted_count,
-                "count_status": counts.count_status,
-                "failed_sources_verified": failed_sources_verified,
-                "primary_cleanup_complete": failed_sources_verified.map(|_| true),
-            }),
-        )
-    }
-
-    /// Rename session log to include project folder name (mirrors Python
-    /// `rename_log_to_project`).
-    fn rename_log_to_project(&mut self, target: &Path) -> Result<()> {
-        let project_name = target.file_name().map_or_else(
-            || "project".to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let new_name = self
-            .log_dir
-            .join(format!("MFB_{project_name}_{}.log", self.stamp));
-        if self.session_log == new_name {
-            return Ok(());
-        }
-        if self.session_log.is_file() {
-            fs::rename(&self.session_log, &new_name).with_context(|| {
-                format!(
-                    "rename session log {} -> {}",
-                    self.session_log.display(),
-                    new_name.display()
-                )
-            })?;
-            self.session_log = new_name;
-        }
-        Ok(())
-    }
-
-    /// Write final statistics block to session log (mirrors Python
-    /// `finish_log`).
-    fn finish_log(&self, summary: &PipelineSummary, size_summary: Option<&str>) -> Result<()> {
-        self.append_history_event("MFB_HISTORY_SUMMARY", history_summary_payload(summary))?;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.session_log)
-            .with_context(|| format!("open session log {}", self.session_log.display()))?;
-        writeln!(file, "\n========================================")?;
-        writeln!(file, "Final Statistics")?;
-        writeln!(file, "========================================")?;
-        writeln!(
-            file,
-            "End Time: {}",
-            format_session_stamp(Some(Local::now()))
-        )?;
-        writeln!(file, "Verbose Log: {}", self.verbose_log.display())?;
-        let label =
-            |count: Option<usize>| count.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
-        for (media, stats, active) in [
-            ("Images", &summary.img, summary.has_image_stats()),
-            ("Videos", &summary.vid, summary.has_video_stats()),
-        ] {
-            if active {
-                writeln!(
-                    file,
-                    "{media}: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
-                    label(stats.reported[0].then_some(stats.succeeded)),
-                    label(stats.reported[1].then_some(stats.skipped)),
-                    label(stats.reported[2].then_some(stats.ignored)),
-                    label(stats.reported[3].then_some(stats.failed)),
-                    label(stats.unprocessed),
-                )?;
-            }
-        }
-        writeln!(
-            file,
-            "Total: {} succeeded, {} skipped, {} ignored, {} failed, {} unprocessed",
-            label(summary.total_count(0)),
-            label(summary.total_count(1)),
-            label(summary.total_count(2)),
-            label(summary.total_count(3)),
-            label(summary.total_unprocessed()),
-        )?;
-        writeln!(
-            file,
-            "Count scope: processor outcomes, not unique files or Photos assets"
-        )?;
-        writeln!(
-            file,
-            "Conversion Success Rate: {}",
-            summary
-                .success_rate()
-                .map_or_else(|| "N/A".to_owned(), |rate| rate.to_string())
-        )?;
-        if let Some(state) = summary.integrity_state {
-            writeln!(
-                file,
-                "Integrity: {state}; issues={}",
-                summary.integrity_issue_count
-            )?;
-        }
-        if !summary.failed_file_names.is_empty() || !summary.skipped_file_names.is_empty() {
-            writeln!(file, "Retained files (source preserved):")?;
-            for name in &summary.failed_file_names {
-                writeln!(file, "  [FAIL] {name}")?;
-            }
-            for name in &summary.skipped_file_names {
-                writeln!(file, "  [SKIP] {name}")?;
-            }
-        } else if let Some(failed) = summary.total_count(3).filter(|count| *count > 0) {
-            // If failed count > 0 but no file names, point to verbose log
-            writeln!(
-                file,
-                "Failed: {} file(s) - see verbose log for details: {}",
-                failed,
-                self.verbose_log.display()
-            )?;
-        }
-        if let Some(block) = size_summary {
-            writeln!(file, "{block}")?;
-        }
-        writeln!(
-            file,
-            "\n========================================\nSession \
-             completed.\n========================================"
-        )?;
-        append_jsonl_audit_record(
-            &self.session_audit,
-            &format!(
-                "SESSION_COMPLETED images_ok={} images_skip={} images_ignore={} images_fail={} images_unprocessed={} videos_ok={} \
-                 videos_skip={} videos_ignore={} videos_fail={} videos_unprocessed={} integrity={:?} integrity_issues={}",
-                label(summary.img.reported[0].then_some(summary.img.succeeded)),
-                label(summary.img.reported[1].then_some(summary.img.skipped)),
-                label(summary.img.reported[2].then_some(summary.img.ignored)),
-                label(summary.img.reported[3].then_some(summary.img.failed)),
-                label(summary.img.unprocessed),
-                label(summary.vid.reported[0].then_some(summary.vid.succeeded)),
-                label(summary.vid.reported[1].then_some(summary.vid.skipped)),
-                label(summary.vid.reported[2].then_some(summary.vid.ignored)),
-                label(summary.vid.reported[3].then_some(summary.vid.failed)),
-                label(summary.vid.unprocessed),
-                summary.integrity_state,
-                summary.integrity_issue_count,
-            ),
-        )?;
-        let has_integrity_issues =
-            summary.integrity_state == Some("WARNINGS") && summary.integrity_issue_count > 0;
-        if summary.total_failed() > 0 || has_integrity_issues {
-            eprintln!(
-                "   {} Session log:  {}",
-                pick_symbol("📋", "[LOG]"),
-                self.session_log.display()
-            );
-        }
-        Ok(())
-    }
-
-    fn archive(&self) -> Result<Option<PathBuf>> {
-        self.append_line(&self.session_log, "SESSION_ARCHIVE_BEGIN")?;
-        self.append_line(&self.verbose_log, "SESSION_ARCHIVE_BEGIN")?;
-        append_jsonl_audit_record(&self.session_audit, "SESSION_ARCHIVE_BEGIN")?;
-        let archived = archive_drag_drop_session_bundle(
-            &self.log_dir,
-            &self.stamp,
-            Some(&self.session_log),
-            Some(&self.verbose_log),
-            Some(&self.session_audit),
-            Some(self.started_at),
-        )?;
-        if let Some(bundle) = &archived {
-            let archived_audit = bundle.join(format!("session_audit_{}.jsonl", self.stamp));
-            append_jsonl_audit_record(&archived_audit, "SESSION_ARCHIVE_DONE")?;
-            let paths = [&self.session_log, &self.verbose_log, &self.session_audit]
-                .into_iter()
-                .map(|path| {
-                    path.file_name()
-                        .map(|name| bundle.join(name))
-                        .context("session artifact has no filename")
-                })
-                .collect::<Result<Vec<_>>>()?;
-            dev::infra::history_store::register_history_artifacts(
-                &self.log_dir,
-                &self.stamp,
-                &paths,
-            )?;
-        }
-        Ok(archived)
-    }
-}
-
-impl WorkerSession for DragDropSession {
-    fn tool_snapshots(&self) -> &dev::app::worker::ToolSnapshotBindings {
-        &self.tool_snapshots
-    }
-
-    fn run_id(&self) -> Option<&str> {
-        self.run_id.as_deref()
-    }
-    fn stamp(&self) -> &str {
-        &self.stamp
-    }
-
-    fn log_dir(&self) -> &Path {
-        &self.log_dir
-    }
-
-    fn session_audit(&self) -> &Path {
-        &self.session_audit
-    }
-
-    fn append_history_event(&self, name: &str, payload: serde_json::Value) -> Result<()> {
-        DragDropSession::append_history_event(self, name, payload)
-    }
-
-    fn append_session_line(&self, event: &str) -> Result<()> {
-        self.append_line(&self.session_log, event)
-    }
-
-    fn append_verbose_line(&self, event: &str) -> Result<()> {
-        self.append_line(&self.verbose_log, event)
-    }
 }
 
 fn resolve_runtime_root() -> Result<PathBuf> {
@@ -1273,86 +834,6 @@ fn routing_fail_fast(args: &Args, image: BatchErrorMode, video: BatchErrorMode) 
     }
 }
 
-fn processor_history_counts(stats: &ProcessorStats, active: bool) -> serde_json::Value {
-    let inventory_valid = !stats.unprocessed_invalid
-        && stats.checked_total().is_some_and(|total| {
-            stats
-                .unprocessed
-                .is_none_or(|pending| total.checked_add(pending).is_some())
-        });
-    let count =
-        |index: usize, value| (active && stats.reported[index] && inventory_valid).then_some(value);
-    serde_json::json!({
-        "active": active,
-        "succeeded": count(0, stats.succeeded),
-        "skipped": count(1, stats.skipped),
-        "ignored": count(2, stats.ignored),
-        "failed": count(3, stats.failed),
-        "unprocessed": stats.unprocessed.filter(|_| active && inventory_valid),
-        "exit_code": active.then_some(stats.exit_code),
-    })
-}
-
-fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
-    let active = [
-        (&summary.img, summary.has_image_stats()),
-        (&summary.vid, summary.has_video_stats()),
-    ];
-    let size_invalid = active
-        .iter()
-        .any(|(stats, enabled)| *enabled && stats.converted_bytes_invalid);
-    let size = (summary
-        .fast_img_session_converted
-        .is_some_and(|count| count > 0)
-        && (summary.fast_img_session_source_bytes.is_some()
-            || summary.fast_img_session_output_bytes.is_some()))
-    .then(|| {
-        serde_json::json!({
-            "scope": "fast_img_converted_this_run",
-            "input_bytes": summary.fast_img_session_source_bytes,
-            "output_bytes": summary.fast_img_session_output_bytes,
-        })
-    })
-    .or_else(|| {
-        if size_invalid
-            || !active
-                .iter()
-                .any(|(stats, enabled)| *enabled && stats.converted_bytes.is_some())
-        {
-            return None;
-        }
-        let bytes = active
-            .iter()
-            .filter(|(_, enabled)| *enabled)
-            .map(|(stats, _)| {
-                stats
-                    .converted_bytes
-                    .unwrap_or_else(ProcessorByteTotals::unknown)
-            })
-            .reduce(ProcessorByteTotals::merge)?;
-        let supported = |value: Option<u64>| value.filter(|bytes| i64::try_from(*bytes).is_ok());
-        Some(serde_json::json!({
-            "scope": "converted_this_run",
-            "input_bytes": supported(bytes.input_bytes),
-            "output_bytes": supported(bytes.output_bytes),
-        }))
-    });
-    serde_json::json!({
-        "schema_version": 1,
-        "count_scope": "processor_outcomes",
-        "img": processor_history_counts(&summary.img, summary.has_image_stats()),
-        "vid": processor_history_counts(&summary.vid, summary.has_video_stats()),
-        "integrity": {
-            "state": summary.integrity_state,
-            "issue_count": summary.integrity_state.map(|_| summary.integrity_issue_count),
-        },
-        "failed_files": summary.failed_file_names,
-        "skipped_files": summary.skipped_file_names,
-        "size": size,
-        "size_invalid": size_invalid,
-    })
-}
-
 fn batch_result_line(media: &str, stats: &ProcessorStats) -> String {
     let mut counts = processor_history_counts(stats, true);
     let payload = counts
@@ -1538,10 +1019,7 @@ fn resolve_planned_output(output: &Path) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-fn scan_standard_inputs(
-    plans: &[Args],
-    session: Option<&DragDropSession>,
-) -> Result<Vec<ContentScan>> {
+fn scan_standard_inputs(plans: &[Args], session: Option<&AppSession>) -> Result<Vec<ContentScan>> {
     plans
         .iter()
         .enumerate()
@@ -1550,27 +1028,18 @@ fn scan_standard_inputs(
             scan_content(
                 args.inputs.first().context("input required")?,
                 processing_filter(args),
-                scoped.as_ref().map(|s| s.session_audit.as_path()),
+                scoped.as_ref().map(|s| s.session_audit()),
             )
         })
         .collect()
 }
 
 fn input_audit_session(
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
     index: usize,
     count: usize,
-) -> Option<DragDropSession> {
-    session.map(|session| {
-        let mut scoped = session.clone();
-        if count > 1 {
-            scoped.session_audit = session.log_dir.join(format!(
-                "session_audit_{}_input_{index}.jsonl",
-                session.stamp
-            ));
-        }
-        scoped
-    })
+) -> Option<AppSession> {
+    session.map(|session| session.for_input_audit(index, count))
 }
 
 fn aggregate_content_scans(scans: &[ContentScan]) -> Result<ContentScan> {
@@ -1779,7 +1248,7 @@ fn plan_routed_pipeline_commands_unbound(
 fn run_post_adjacent_steps(
     args: &Args,
     project_root: &Path,
-    session: &DragDropSession,
+    session: &AppSession,
     scan: &ContentScan,
     summary: &mut PipelineSummary,
 ) -> Result<()> {
@@ -1794,7 +1263,7 @@ fn run_post_adjacent_steps(
         &output,
         scan,
         &cli_binary(project_root, "img"),
-        Some(&session.session_audit),
+        Some(session.session_audit()),
     )?;
     draw_separator("Auto Verification");
     println!(
@@ -1806,9 +1275,9 @@ fn run_post_adjacent_steps(
         target,
         Some(&output),
         processing_filter(args),
-        Some(&session.verbose_log),
-        &session.log_dir,
-        &session.stamp,
+        Some(session.verbose_log()),
+        session.log_dir(),
+        session.stamp(),
         dev::infra::drag_drop::VerificationFlags {
             include_logs: true,
             auto_mode: true,
@@ -1824,7 +1293,7 @@ fn run_post_adjacent_steps(
 fn run_fast_img_post_success(
     args: &Args,
     project_root: &Path,
-    session: &DragDropSession,
+    session: &AppSession,
     summary: &mut PipelineSummary,
     output_dir: &Path,
     failed_sources_verified: Option<usize>,
@@ -1863,9 +1332,9 @@ fn run_fast_img_post_success(
         target,
         Some(output_dir),
         processing_filter(args),
-        Some(&session.session_audit),
-        &session.log_dir,
-        &session.stamp,
+        Some(session.session_audit()),
+        session.log_dir(),
+        session.stamp(),
         dev::infra::drag_drop::VerificationFlags {
             include_logs: false,
             auto_mode: true,
@@ -1967,7 +1436,7 @@ fn run_fast_img_post_success(
 fn run_fast_img_restore_post_success(
     args: &Args,
     project_root: &Path,
-    session: &DragDropSession,
+    session: &AppSession,
     summary: &mut PipelineSummary,
     output_dir: &Path,
 ) -> Result<()> {
@@ -1982,9 +1451,9 @@ fn run_fast_img_restore_post_success(
         target,
         Some(output_dir),
         processing_filter(args),
-        Some(&session.session_audit),
-        &session.log_dir,
-        &session.stamp,
+        Some(session.session_audit()),
+        session.log_dir(),
+        session.stamp(),
         dev::infra::drag_drop::VerificationFlags {
             include_logs: false,
             auto_mode: true,
@@ -2046,7 +1515,7 @@ fn resolve_fast_img_output_for_run(args: &Args, target: &Path) -> Result<PathBuf
 fn run_fast_img_task(
     args: &Args,
     project_root: &Path,
-    session: &DragDropSession,
+    session: &AppSession,
 ) -> Result<(ProcessorStats, PathBuf)> {
     let target = args.inputs.first().context("input required")?;
     let (command, output) = fast_img_launch_command(args, project_root, target)?;
@@ -2303,7 +1772,7 @@ fn is_photos_library_package_path(path: &Path) -> bool {
 fn plan_cli_invocations(
     args: &Args,
     project_root: &Path,
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
 ) -> Result<Vec<LaunchCommand>> {
     validate_media_options(args)?;
     if args.inputs.is_empty() {
@@ -2434,7 +1903,7 @@ fn plan_cli_invocations(
                 verify_args.extend(["--mode".to_string(), "both".to_string()]);
                 if let Some(s) = session {
                     verify_args.push("--session-audit".to_string());
-                    verify_args.push(s.session_audit.to_string_lossy().into_owned());
+                    verify_args.push(s.session_audit().to_string_lossy().into_owned());
                 }
                 commands.push(dev_bin_command(project_root, "verify", verify_args)?);
             }
@@ -2556,7 +2025,7 @@ fn mode_requires_production_lease(mode: &LaunchMode) -> bool {
 
 fn run_drag_drop(
     args: &Args,
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
     dir_lock: Option<&DirLock>,
 ) -> Result<()> {
     run_drag_drop_with_lease(
@@ -2569,7 +2038,7 @@ fn run_drag_drop(
 
 fn run_drag_drop_with_lease<L>(
     args: &Args,
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
     dir_lock: Option<&DirLock>,
     acquire_lease: impl FnOnce() -> Result<L>,
 ) -> Result<()> {
@@ -2578,7 +2047,7 @@ fn run_drag_drop_with_lease<L>(
     } else {
         None
     };
-    let scoped_session = session.map(DragDropSession::for_run).transpose()?;
+    let scoped_session = session.map(AppSession::for_run).transpose()?;
     let session = scoped_session.as_ref();
     let plans = match standard_input_plans(args) {
         Ok(plans) => plans,
@@ -2614,86 +2083,43 @@ fn run_drag_drop_with_lease<L>(
 
 fn run_with_history(
     args: &Args,
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
     run: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let absolute = |path: &Path| -> Result<PathBuf> {
-        std::path::absolute(path).context("resolve history absolute path")
-    };
-    let context_result = match session {
-        Some(session) => (|| {
-            let inputs = args
-                .inputs
-                .iter()
-                .map(|path| absolute(path))
-                .collect::<Result<Vec<_>>>()?;
-            let output = args.output.as_deref().map(absolute).transpose()?;
-            let backup = args.backup.as_deref().map(absolute).transpose()?;
-            session.append_history_event(
-                "MFB_HISTORY_CONTEXT",
-                serde_json::json!({
-                    "schema_version": 1,
-                    "inputs": serde_json::to_value(inputs).context("encode history input paths")?,
-                    "output": serde_json::to_value(output).context("encode history output path")?,
-                    "backup": serde_json::to_value(backup).context("encode history backup path")?,
-                    "mode": args.mode.to_possible_value().context("history mode has no CLI name")?.get_name(),
-                    "dry_run": args.dry_run,
-                    "in_place": args.in_place,
-                    "shortest_path": args.shortest_path,
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "retry": args.retry,
-                    "resume": args.resume,
-                    "no_resume": args.no_resume,
-                    "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
-                }),
-            )
-        })(),
-        None => Ok(()),
-    };
-    let context_failed = context_result.is_err();
-    let result = context_result.and_then(|()| run());
-    if let Some(session) = session {
-        let cancelled = if result.is_err() && !context_failed {
-            match foundation::batch_control::is_cancelled() {
-                Ok(cancelled) => cancelled,
-                Err(error) => {
-                    eprintln!("history cancellation state unavailable: {error:#}");
-                    false
-                }
-            }
-        } else {
-            false
-        };
-        let finished = (|| {
-            session.append_history_event(
-            "MFB_HISTORY_FINISHED",
-            serde_json::json!({
-                "schema_version": 1,
-                "outcome": if cancelled { "cancelled" } else if result.is_err() { "failed" } else { "completed" },
-                "error": result.as_ref().err().map(|error| format!("{error:#}")),
-                "output_sequence": dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)?,
-            }),
-        )
-        })();
-        if let Err(error) = finished {
-            if result.is_ok() {
-                return Err(error).context("write history terminal outcome");
-            }
-            eprintln!("history terminal outcome write failed: {error:#}");
-        }
-    }
-    result
+    dev::app::session::run_with_history(
+        session,
+        || {
+            Ok(RunContext {
+                inputs: args.inputs.clone(),
+                output: args.output.clone(),
+                backup: args.backup.clone(),
+                mode: args
+                    .mode
+                    .to_possible_value()
+                    .context("history mode has no CLI name")?
+                    .get_name()
+                    .to_owned(),
+                dry_run: args.dry_run,
+                in_place: args.in_place,
+                shortest_path: args.shortest_path,
+                retry: args.retry,
+                resume: args.resume,
+                no_resume: args.no_resume,
+            })
+        },
+        run,
+    )
 }
 
 fn run_drag_drop_inner(
     args: &Args,
-    session: Option<&DragDropSession>,
+    session: Option<&AppSession>,
     dir_lock: Option<&DirLock>,
     plans: &[Args],
 ) -> Result<()> {
     let output_cursor = session
         .map(|session| {
-            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+            dev::infra::history_store::session_output_cursor(session.log_dir(), session.stamp())
         })
         .transpose()
         .context("record per-run processing output boundary")?;
@@ -2899,8 +2325,8 @@ fn run_drag_drop_inner(
                     let mut failed_sources_verified = None;
                     let mut evidence_available = false;
                     match dev::infra::history_store::read_fast_img_finalization_since(
-                        &session.expect("session").log_dir,
-                        &session.expect("session").stamp,
+                        session.expect("session").log_dir(),
+                        session.expect("session").stamp(),
                         output_cursor.context("fast-img run has no processing output boundary")?,
                     ) {
                         Ok(text) => {
@@ -3229,7 +2655,7 @@ fn run_drag_drop_inner(
     eprintln!(
         "{} Session stamp: {}",
         pick_symbol("✓", "[DONE]"),
-        session.map_or("-", |s| s.stamp.as_str())
+        session.map_or("-", |s| s.stamp())
     );
 
     if let Some(err) = first_error {
@@ -3281,13 +2707,13 @@ fn run_drag_drop_inner(
 fn finalize_handoff_preservation(
     source_root: &Path,
     optimized_root: &Path,
-    session: &DragDropSession,
+    session: &AppSession,
 ) -> Result<()> {
     draw_separator("Handoff Preserve (optional — post img/vid only)");
-    let routed = extract_routed_video_paths_from_audit(&session.session_audit)?;
+    let routed = extract_routed_video_paths_from_audit(session.session_audit())?;
     if routed.is_empty() {
         session.append_line(
-            &session.session_audit,
+            session.session_audit(),
             "HANDOFF_PRESERVE_SKIP reason=no_video_routes",
         )?;
         return Ok(());
@@ -3295,7 +2721,7 @@ fn finalize_handoff_preservation(
 
     let candidates = report_handoff_preserve_gaps_from_paths(source_root, optimized_root, &routed)?;
     session.append_line(
-        &session.session_audit,
+        session.session_audit(),
         &format!("HANDOFF_PRESERVE_SCAN candidates={}", candidates.len()),
     )?;
 
@@ -3308,7 +2734,7 @@ fn finalize_handoff_preservation(
 
     if candidates.is_empty() {
         println!("   {} No handoff gaps detected", pick_symbol("✓", "[OK]"));
-        session.append_line(&session.session_audit, "HANDOFF_PRESERVE_NONE_NEEDED")?;
+        session.append_line(session.session_audit(), "HANDOFF_PRESERVE_NONE_NEEDED")?;
         return Ok(());
     }
 
@@ -3326,7 +2752,7 @@ fn finalize_handoff_preservation(
             format_bytes(candidate.size_bytes)
         );
         session.append_line(
-            &session.session_audit,
+            session.session_audit(),
             &format!(
                 "HANDOFF_PRESERVE_CANDIDATE path={} bytes={}",
                 candidate.rel_path, candidate.size_bytes
@@ -3337,13 +2763,13 @@ fn finalize_handoff_preservation(
     let choice = read_choice("Preserve handoff gaps? (y/N): ")?;
     let accepted = matches!(choice.to_lowercase().as_str(), "y" | "yes");
     if !accepted {
-        session.append_line(&session.session_audit, "HANDOFF_PRESERVE_DECLINED")?;
+        session.append_line(session.session_audit(), "HANDOFF_PRESERVE_DECLINED")?;
         println!("   Skipped handoff preserve.");
         return Ok(());
     }
 
     let mut audit_cb = |line: &str| {
-        let _ = session.append_line(&session.session_audit, line);
+        let _ = session.append_line(session.session_audit(), line);
     };
     let preserved = preserve_handoff_gaps(
         source_root,
@@ -3392,7 +2818,7 @@ fn wait_enter() {
 
 fn execute_menu_quick_pick(
     choice: usize,
-    session: &DragDropSession,
+    session: &AppSession,
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     strategy: &str,
@@ -3430,7 +2856,7 @@ fn execute_menu_selection(
     opt_sub: usize,
     workspace_sub: usize,
     maint_sub: usize,
-    session: &DragDropSession,
+    session: &AppSession,
     dir_lock: &mut Option<DirLock>,
     target: &Path,
     filter: ProcessingFilter,
@@ -3455,7 +2881,7 @@ fn execute_menu_selection(
             let actual = map_mode_sub_state(opt_sub, fastmode_count, filter);
             if actual == 0 {
                 let output = adjacent_output_for_target(target);
-                create_directory_structure(target, &output, Some(&session.session_audit))?;
+                create_directory_structure(target, &output, Some(session.session_audit()))?;
                 println!("\n{} ADJACENT MODE SELECTED", pick_symbol("✅", "[OK]"));
                 println!("   Output: {}", output.display());
                 let args = build_run_args(
@@ -3667,7 +3093,7 @@ fn build_run_args(
     }
 }
 
-fn interactive_menu(args: &Args, session: &mut DragDropSession) -> Result<()> {
+fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
     let bold = if colors_enabled() { "\x1b[1m" } else { "" };
     let reset = if colors_enabled() { "\x1b[0m" } else { "" };
     let filter = processing_filter(args);
@@ -3903,7 +3329,7 @@ const fn apply_mode_overrides(mut args: Args) -> Args {
     args
 }
 
-fn run_watch_loop(args: &Args, session: &DragDropSession) -> Result<()> {
+fn run_watch_loop(args: &Args, session: &AppSession) -> Result<()> {
     let watch_root = args
         .inputs
         .first()
@@ -4062,10 +3488,10 @@ fn main() -> Result<()> {
     resize_terminal_for_gui(35, 110);
     initialize_launcher_runtime(&args)?;
     install_signal_handlers()?;
-    let mut session = DragDropSession::start()?;
+    let mut session = AppSession::start()?;
     println!(
         "MFB_LOG_DIRECTORY={}",
-        serde_json::to_string(&session.log_dir.to_string_lossy())?
+        serde_json::to_string(&session.log_dir().to_string_lossy())?
     );
     let mut dir_lock = None;
 
@@ -4137,26 +3563,28 @@ fn report_drag_drop_failure(result: &Result<()>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dev::app::session::history_summary_payload;
     use dev::app::worker::{
         BinaryObservation, ChildConfigMarker, INVOCATION_MAX_ARGUMENT_BYTES,
         INVOCATION_MAX_ARGUMENTS, collect_config_leaf_paths,
     };
+    use dev::infra::process_stream::ProcessorByteTotals;
     use foundation::infra::runtime_config::RuntimeConfig;
     use std::collections::BTreeMap;
 
     #[test]
     fn run_identity_is_distinct_per_attempt_and_binds_every_event() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let first = session.for_run().unwrap();
         let second = session.for_run().unwrap();
-        assert!(!std::sync::Arc::ptr_eq(
-            &first.tool_snapshots,
-            &second.tool_snapshots
+        assert!(!std::ptr::eq(
+            first.tool_snapshots(),
+            second.tool_snapshots()
         ));
-        assert_ne!(first.run_id, second.run_id);
-        assert!(session.run_id.is_none());
-        assert_eq!(first.clone().run_id, first.run_id);
+        assert_ne!(first.run_id(), second.run_id());
+        assert!(session.run_id().is_none());
+        assert_eq!(first.clone().run_id(), first.run_id());
         let args = Args::try_parse_from(["mfb", "--mode", "images", "--dry-run"]).unwrap();
         for scoped in [&first, &second] {
             run_with_history(&args, Some(scoped), || {
@@ -4174,14 +3602,14 @@ mod tests {
         ] {
             let events = history_payloads(&session, name);
             assert_eq!(events.len(), 2);
-            assert_eq!(events[0]["run_id"], first.run_id.as_deref().unwrap());
-            assert_eq!(events[1]["run_id"], second.run_id.as_deref().unwrap());
+            assert_eq!(events[0]["run_id"], first.run_id().unwrap());
+            assert_eq!(events[1]["run_id"], second.run_id().unwrap());
         }
         assert!(
             first
                 .append_history_event(
                     "MFB_HISTORY_FINISHED",
-                    serde_json::json!({"schema_version":1,"run_id":second.run_id})
+                    serde_json::json!({"schema_version":1,"run_id":second.run_id()})
                 )
                 .is_err()
         );
@@ -4192,7 +3620,7 @@ mod tests {
     #[test]
     fn output_cleanup_receipt_is_persisted_with_the_active_run_identity() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let run = session.for_run().unwrap();
         let output_path = temp.path().join("output");
 
@@ -4202,7 +3630,7 @@ mod tests {
         let events = history_payloads(&session, "MFB_HISTORY_OUTPUT_CLEANUP");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["schema_version"], 1);
-        assert_eq!(events[0]["run_id"], run.run_id.as_deref().unwrap());
+        assert_eq!(events[0]["run_id"], run.run_id().unwrap());
         assert_eq!(
             events[0]["output_path"],
             output_path.to_string_lossy().as_ref()
@@ -4214,7 +3642,7 @@ mod tests {
         assert!(events[0]["error"].is_null());
 
         let mut boundary = OutputCleanupReceipt::not_requested(Path::new("/"));
-        boundary.run_id.clone_from(&run.run_id);
+        boundary.run_id = run.run_id().map(str::to_owned);
         let base_bytes = serde_json::to_string(&boundary).unwrap().len();
         let stdout_payload_budget = 64 * 1024 - "MFB_OUTPUT_CLEANUP=".len() - 1;
         boundary.output_path = PathBuf::from(format!(
@@ -4518,11 +3946,11 @@ mod tests {
         (input, guard)
     }
 
-    fn history_payloads(session: &DragDropSession, name: &str) -> Vec<serde_json::Value> {
+    fn history_payloads(session: &AppSession, name: &str) -> Vec<serde_json::Value> {
         let prefix = format!("{name}=");
         let connection = rusqlite::Connection::open_with_flags(
             session
-                .log_dir
+                .log_dir()
                 .join(dev::infra::history_store::HISTORY_DATABASE),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
@@ -4531,7 +3959,7 @@ mod tests {
             .prepare("SELECT event FROM history_events WHERE session_id=?1 ORDER BY sequence")
             .unwrap();
         query
-            .query_map([&session.stamp], |row| row.get::<_, String>(0))
+            .query_map([session.stamp()], |row| row.get::<_, String>(0))
             .unwrap()
             .filter_map(|event| {
                 event
@@ -4605,7 +4033,7 @@ mod tests {
     #[test]
     fn fast_img_result_history_binds_current_run_and_rejects_count_conflicts() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path())
+        let session = AppSession::start_in(temp.path())
             .unwrap()
             .for_run()
             .unwrap();
@@ -4624,7 +4052,7 @@ mod tests {
         session.record_fast_img_result(&line, &stats).unwrap();
         let receipts = history_payloads(&session, "MFB_HISTORY_FAST_IMG_RESULT");
         assert_eq!(receipts.len(), 1);
-        assert_eq!(receipts[0]["run_id"].as_str(), session.run_id.as_deref());
+        assert_eq!(receipts[0]["run_id"].as_str(), session.run_id());
         assert_eq!(receipts[0]["photos_delivery_deferred"], true);
         let mut wrong = payload;
         wrong["unprocessed"] = serde_json::json!(4);
@@ -4645,7 +4073,7 @@ mod tests {
     #[test]
     fn history_preserves_escaped_context_and_separate_run_outcomes() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut args = Args::try_parse_from(["mfb", "--mode", "collect"]).unwrap();
         args.inputs = vec![PathBuf::from("/tmp/source with spaces\nsecond line")];
         args.output = Some(PathBuf::from("/tmp/output \"quoted\""));
@@ -4728,9 +4156,9 @@ mod tests {
     #[test]
     fn independent_sessions_do_not_share_history_or_logs() {
         let temp = tempfile::tempdir().unwrap();
-        let first = DragDropSession::start_for_test(temp.path()).unwrap();
-        let second = DragDropSession::start_for_test(temp.path()).unwrap();
-        assert_ne!(first.stamp, second.stamp);
+        let first = AppSession::start_in(temp.path()).unwrap();
+        let second = AppSession::start_in(temp.path()).unwrap();
+        assert_ne!(first.stamp(), second.stamp());
         let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
         run_with_history(&args, Some(&first), || Ok(())).unwrap();
         run_with_history(&args, Some(&second), || bail!("second failed")).unwrap_err();
@@ -4747,11 +4175,11 @@ mod tests {
     #[test]
     fn history_retains_primary_error_when_terminal_audit_write_fails() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
         let error = run_with_history(&args, Some(&session), || {
             let database = session
-                .log_dir
+                .log_dir()
                 .join(dev::infra::history_store::HISTORY_DATABASE);
             fs::remove_file(&database)?;
             fs::create_dir(&database)?;
@@ -4766,7 +4194,7 @@ mod tests {
     fn history_invalid_utf8_paths_fail_explicitly_without_panicking() {
         use std::os::unix::ffi::OsStringExt;
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
         args.inputs = vec![PathBuf::from(std::ffi::OsString::from_vec(
             b"/tmp/invalid\xff".to_vec(),
@@ -4792,11 +4220,11 @@ mod tests {
     #[test]
     fn history_requires_context_and_terminal_audit_writes() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let args = Args::try_parse_from(["mfb", "/tmp/source"]).unwrap();
         let called = AtomicBool::new(false);
         let database = session
-            .log_dir
+            .log_dir()
             .join(dev::infra::history_store::HISTORY_DATABASE);
         // Session startup already registered artifacts in this disposable DB.
         // Replace that file with a directory to reach the intended write failure.
@@ -4868,16 +4296,18 @@ mod tests {
     #[test]
     fn history_output_boundary_excludes_previous_run_retained_files() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
-        let mut output =
-            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
-                .unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
+        let mut output = dev::infra::history_store::HistoryOutputWriter::open(
+            session.log_dir(),
+            session.stamp(),
+        )
+        .unwrap();
         output
             .push_line("IMG", "[FAIL    ]   prior\u{00e9}.jpg: old failure")
             .unwrap();
         output.flush().unwrap();
         let cursor =
-            dev::infra::history_store::session_output_cursor(&session.log_dir, &session.stamp)
+            dev::infra::history_store::session_output_cursor(session.log_dir(), session.stamp())
                 .unwrap();
         output
             .push_line(
@@ -4893,8 +4323,8 @@ mod tests {
             .unwrap();
         output.flush().unwrap();
         let current = dev::infra::history_store::read_session_output_since(
-            &session.log_dir,
-            &session.stamp,
+            session.log_dir(),
+            session.stamp(),
             cursor,
         )
         .unwrap();
@@ -4952,7 +4382,7 @@ mod tests {
     #[test]
     fn launcher_output_is_sqlite_only_and_write_failure_does_not_interrupt_child() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let command = LaunchCommand::from_argv(vec![
             "/bin/sh".into(), "-c".into(),
             "printf 'synthetic worker output\\nSucceeded: 1\\nFailed: 0\\nSkipped: 0\\nIgnored: 0\\nUnprocessed: 0\\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":1000,\"output_bytes\":1200}\\n'".into(),
@@ -4971,14 +4401,14 @@ mod tests {
         );
         assert!(!stats.converted_bytes_invalid);
         let text = dev::infra::history_store::read_session_output_since(
-            &session.log_dir,
-            &session.stamp,
+            session.log_dir(),
+            session.stamp(),
             0,
         )
         .unwrap();
         assert!(text.contains("synthetic worker output"));
         assert!(text.contains("MFB_CONVERTED_BYTES="));
-        for path in [&session.session_log, &session.verbose_log] {
+        for path in [session.session_log(), session.verbose_log()] {
             assert!(
                 !fs::read_to_string(path)
                     .unwrap()
@@ -4988,7 +4418,7 @@ mod tests {
         }
         let database = rusqlite::Connection::open(
             session
-                .log_dir
+                .log_dir()
                 .join(dev::infra::history_store::HISTORY_DATABASE),
         )
         .unwrap();
@@ -5015,7 +4445,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let program = temp.path().join("img");
         symlink("/bin/sh", &program).unwrap();
         let receipt = temp.path().join("session_id");
@@ -5041,7 +4471,7 @@ mod tests {
                 expected
             );
         }
-        assert_eq!(fs::read_to_string(receipt).unwrap(), session.stamp);
+        assert_eq!(fs::read_to_string(receipt).unwrap(), session.stamp());
         let recorded = history_payloads(&session, "MFB_HISTORY_CONFIG");
         let invocations = history_payloads(&session, "MFB_HISTORY_INVOCATION");
         assert_eq!(invocations.len(), 2);
@@ -5070,8 +4500,8 @@ mod tests {
         assert_eq!(recorded[0]["pipeline"], "img");
         assert_eq!(recorded[0]["config"]["vid"]["codec"], "hevc");
         let worker_output = dev::infra::history_store::read_session_output_since(
-            &session.log_dir,
-            &session.stamp,
+            session.log_dir(),
+            session.stamp(),
             0,
         )
         .unwrap();
@@ -5089,7 +4519,7 @@ mod tests {
     #[test]
     fn worker_launch_observations_preserve_exact_arguments_unknowns_and_dry_run() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut command = LaunchCommand::from_argv(vec![
             "sh".into(),
             "-c".into(),
@@ -5121,7 +4551,7 @@ mod tests {
                 .is_some()
         );
         let database_path = session
-            .log_dir
+            .log_dir()
             .join(dev::infra::history_store::HISTORY_DATABASE);
         let history_snapshot = || {
             let database = rusqlite::Connection::open_with_flags(
@@ -5154,21 +4584,6 @@ mod tests {
             before,
             "dry-run must not persist worker observations or output"
         );
-        let mut long_session = session.clone();
-        long_session.stamp = "Unicode 界面".repeat(300);
-        let long_invocation = command.invocation(&long_session).unwrap();
-        assert!(long_invocation.invocation_id.len() <= 256);
-        assert!(long_invocation.invocation_id.is_ascii());
-        assert!(
-            long_invocation
-                .invocation_id
-                .starts_with(&format!("{}-", std::process::id()))
-        );
-        assert_ne!(long_invocation.invocation_id, observed_invocation_id);
-        assert_ne!(
-            long_invocation.invocation_id,
-            command.invocation(&long_session).unwrap().invocation_id
-        );
         command.args = vec!["too many".into(); INVOCATION_MAX_ARGUMENTS + 1];
         assert!(command.invocation(&session).is_err());
         command.args = vec!["x".repeat(INVOCATION_MAX_ARGUMENT_BYTES + 1)];
@@ -5181,14 +4596,17 @@ mod tests {
     #[test]
     fn worker_invocation_persistence_failure_drains_child_and_preserves_counts() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         drop(
-            dev::infra::history_store::HistoryOutputWriter::open(&session.log_dir, &session.stamp)
-                .unwrap(),
+            dev::infra::history_store::HistoryOutputWriter::open(
+                session.log_dir(),
+                session.stamp(),
+            )
+            .unwrap(),
         );
         let database = rusqlite::Connection::open(
             session
-                .log_dir
+                .log_dir()
                 .join(dev::infra::history_store::HISTORY_DATABASE),
         )
         .unwrap();
@@ -5211,8 +4629,8 @@ mod tests {
         assert_eq!(fs::read_to_string(completed).unwrap(), "done");
         assert!(
             dev::infra::history_store::read_session_output_since(
-                &session.log_dir,
-                &session.stamp,
+                session.log_dir(),
+                session.stamp(),
                 0
             )
             .unwrap()
@@ -5226,7 +4644,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let program = temp.path().join("vid");
         symlink("/bin/sh", &program).unwrap();
         let finished = temp.path().join("child_finished");
@@ -5251,8 +4669,8 @@ mod tests {
         assert_eq!(fs::read_to_string(finished).unwrap(), "done");
         assert_eq!(history_payloads(&session, "MFB_HISTORY_CONFIG").len(), 1);
         let output = dev::infra::history_store::read_session_output_since(
-            &session.log_dir,
-            &session.stamp,
+            session.log_dir(),
+            session.stamp(),
             0,
         )
         .unwrap();
@@ -5265,7 +4683,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let program = temp.path().join("img");
         symlink("/bin/sh", &program).unwrap();
         let child = LaunchCommand::from_argv(vec![
@@ -5283,8 +4701,8 @@ mod tests {
         assert_eq!(collected.stats.exit_code, 9);
         assert!(
             dev::infra::history_store::read_session_output_since(
-                &session.log_dir,
-                &session.stamp,
+                session.log_dir(),
+                session.stamp(),
                 0,
             )
             .unwrap()
@@ -6219,7 +5637,7 @@ mod tests {
     #[test]
     fn session_log_reports_rounded_success_ratio() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut summary = PipelineSummary::default();
         summary.add_image_stats(&ProcessorStats {
             succeeded: 1_829,
@@ -6230,14 +5648,14 @@ mod tests {
             ..ProcessorStats::default()
         });
         session.finish_log(&summary, None).unwrap();
-        let log = fs::read_to_string(&session.session_log).unwrap();
+        let log = fs::read_to_string(session.session_log()).unwrap();
         assert!(log.contains("Conversion Success Rate: 1829/1830 (99.95%)"));
     }
 
     #[test]
     fn session_log_retains_file_counts_and_reports_integrity_separately() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut summary = PipelineSummary {
             integrity_state: Some("WARNINGS"),
             integrity_issue_count: 56,
@@ -6253,11 +5671,11 @@ mod tests {
             ..ProcessorStats::default()
         });
         session.finish_log(&summary, None).unwrap();
-        let log = fs::read_to_string(&session.session_log).unwrap();
+        let log = fs::read_to_string(session.session_log()).unwrap();
         assert!(log.contains("Total: 3 succeeded, 2 skipped, 4 ignored, 1 failed, 5 unprocessed"));
         assert!(log.contains("Conversion Success Rate: 3/4 (75.00%)"));
         assert!(log.contains("Integrity: WARNINGS; issues=56"));
-        let audit = fs::read_to_string(&session.session_audit).unwrap();
+        let audit = fs::read_to_string(session.session_audit()).unwrap();
         assert!(audit.contains("images_ignore=4 images_fail=1 images_unprocessed=5"));
         assert!(audit.contains("integrity_issues=56"));
     }
@@ -6265,14 +5683,14 @@ mod tests {
     #[test]
     fn session_log_does_not_invent_file_counts_for_process_failure() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut summary = PipelineSummary::default();
         summary.add_image_stats(&ProcessorStats {
             exit_code: 2,
             ..ProcessorStats::default()
         });
         session.finish_log(&summary, None).unwrap();
-        let log = fs::read_to_string(&session.session_log).unwrap();
+        let log = fs::read_to_string(session.session_log()).unwrap();
         assert!(log.contains("Total: unknown succeeded, unknown skipped, unknown ignored, unknown failed, unknown unprocessed"));
         assert!(log.contains("Conversion Success Rate: N/A"));
         assert!(!log.contains("1 failed"));
@@ -6533,7 +5951,7 @@ mod tests {
         let plans = standard_input_plans(&args).unwrap();
         let output = temp.path().join("Album_restored_jpeg");
         assert_eq!(plans[0].output.as_ref(), Some(&output));
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         run_with_history(&plans[0], Some(&session), || {
             bail!("synthetic restore failure")
         })
@@ -6568,7 +5986,7 @@ mod tests {
     #[test]
     fn busy_production_start_is_not_recorded_as_a_failed_processing_run() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
         let error = run_drag_drop_with_lease(&args, Some(&session), None, || -> Result<()> {
             Err(anyhow::Error::new(
@@ -6600,7 +6018,7 @@ mod tests {
         let mut args = Args::try_parse_from(["mfb", "--mode", "images"]).unwrap();
         args.inputs = vec![first.clone(), second.clone(), file.clone()];
         let plans = standard_input_plans(&args).unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let scans = scan_standard_inputs(&plans, Some(&session)).unwrap();
         assert_eq!(aggregate_content_scans(&scans).unwrap().img_count, 3);
         for fail_fast in [false, true] {
@@ -6633,15 +6051,15 @@ mod tests {
         }
         let first_audit = input_audit_session(Some(&session), 0, plans.len()).unwrap();
         let second_audit = input_audit_session(Some(&session), 1, plans.len()).unwrap();
-        assert_ne!(first_audit.session_audit, second_audit.session_audit);
-        assert_eq!(first_audit.stamp, second_audit.stamp);
+        assert_ne!(first_audit.session_audit(), second_audit.session_audit());
+        assert_eq!(first_audit.stamp(), second_audit.stamp());
         assert!(
-            fs::read_to_string(first_audit.session_audit)
+            fs::read_to_string(first_audit.session_audit())
                 .unwrap()
                 .contains("one.bin")
         );
         assert!(
-            !fs::read_to_string(second_audit.session_audit)
+            !fs::read_to_string(second_audit.session_audit())
                 .unwrap()
                 .contains("one.bin")
         );
@@ -6755,7 +6173,7 @@ mod tests {
         let second = temp.path().join("Other");
         fs::create_dir(&first).unwrap();
         fs::create_dir(&second).unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let mut args =
             Args::try_parse_from(["mfb", "--mode", "images", "--photos-backend", "native"])
                 .unwrap();
@@ -6853,7 +6271,7 @@ mod tests {
                 .unwrap();
             assert_eq!(PathBuf::from(&output_arg[1]), *output);
         }
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         run_with_history(&args, Some(&session), || Ok(())).unwrap();
         let contexts = history_payloads(&session, "MFB_HISTORY_CONTEXT");
         assert_eq!(contexts[0]["output"], serde_json::to_value(output).unwrap());
@@ -6902,7 +6320,7 @@ mod tests {
     #[test]
     fn standard_output_binding_records_selected_path_before_processing_failure() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
+        let session = AppSession::start_in(temp.path()).unwrap();
         let input = temp.path().join("Album");
         fs::create_dir(&input).unwrap();
         let mut args =
@@ -7278,8 +6696,8 @@ mod tests {
     #[test]
     fn test_session_archive_moves_drag_drop_logs() {
         let temp = tempfile::tempdir().unwrap();
-        let session = DragDropSession::start_for_test(temp.path()).unwrap();
-        let stamp = session.stamp.clone();
+        let session = AppSession::start_in(temp.path()).unwrap();
+        let stamp = session.stamp().to_owned();
         let args = Args::try_parse_from(["mfb", "/tmp/synthetic source"]).unwrap();
         run_with_history(&args, Some(&session), || {
             session.finish_log(&PipelineSummary::default(), None)

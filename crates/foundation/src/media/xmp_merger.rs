@@ -2983,7 +2983,11 @@ mod tests {
 
         let source_hash = crate::common_utils::calculate_blake3_hash(&media)?;
         let sanitized = temp.path().join("synthetic-hdr-sanitized.avif");
-        crate::image::fast_img::prepare_existing_avif_meme_candidate(&media, &sanitized)?;
+        crate::image::fast_img::prepare_existing_avif_meme_candidate(
+            &media,
+            &sanitized,
+            crate::infra::runtime_config::AvifMetadataPolicy::Clear,
+        )?;
         assert_eq!(
             crate::common_utils::calculate_blake3_hash(&media)?,
             source_hash,

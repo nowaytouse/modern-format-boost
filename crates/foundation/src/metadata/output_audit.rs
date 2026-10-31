@@ -1982,6 +1982,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+            metadata_policy: MetadataOutputPolicy::Preserve,
         };
         let gate = crate::pipeline::verification::Gate1Local.run(&ctx);
         assert!(gate.passed, "{gate:?}");
@@ -2199,6 +2200,7 @@ mod tests {
                 expected_count: 1,
                 library_handle: None,
                 output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+                metadata_policy: MetadataOutputPolicy::Preserve,
             },
         );
         assert!(gate.passed, "{gate:?}");

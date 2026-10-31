@@ -28,8 +28,9 @@ use foundation::fast_img::{safe_delete_jpeg_source, safe_delete_matching_xmp_sid
 use foundation::image::format_detect::FormatKind;
 use foundation::modern_ui::{colors, symbols};
 use foundation::pipeline::verification::{
-    Blake3Entry, FastImgStageName, Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks,
-    Gate3Deep, LibraryHandle, PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
+    Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+    Gate1Checks, Gate1Local, Gate2Checks, Gate2Import, Gate3Checks, Gate3Deep, LibraryHandle,
+    PipelineCtx, SkippedSourceEntry, VerificationGate, WorkingCopyMarker,
     deep_scan_complete_or_later, encode_complete_or_later, gate1_complete_or_later,
     gate2_complete_or_later, gate3_complete_or_later, import_complete_or_later,
     marker_checks_from_result, marker_path_for_working_copy, output_prepared_or_later,
@@ -799,6 +800,8 @@ fn main_inner() -> anyhow::Result<()> {
                 output,
                 dry_run: false,
                 no_resume,
+                archive,
+                allow_expert_options,
                 strategy,
                 ..
             } => {
@@ -815,8 +818,18 @@ fn main_inner() -> anyhow::Result<()> {
                 let recorded = if *no_resume {
                     None
                 } else {
-                    read_existing_fast_img_marker(&working)?.map(|marker| marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
-                    .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")).transpose()?
+                    read_existing_fast_img_marker(&working)?
+                        .map(|marker| {
+                            let contract = fast_img_active_processing_contract(
+                                strategy,
+                                *archive,
+                                *allow_expert_options,
+                            )?;
+                            fast_img_validate_processing_contract(&marker, &contract)?;
+                            marker.tool_snapshot_manifest.zip(marker.tool_snapshot_identity)
+                                .context("Saved fast-img task has no fixed tool runtime authority; start a new task and reverify instead of reusing historical proofs")
+                        })
+                        .transpose()?
                 };
                 let required: &[&str] = if strategy == "avif" {
                     &["avifenc", "avifdec", "exiftool"]
@@ -3509,6 +3522,100 @@ struct FastImgRunOptions<'a> {
     extreme_precision: bool,
 }
 
+fn fast_img_processing_contract(
+    config: &foundation::runtime_config::RuntimeConfig,
+    strategy: &str,
+    archive: bool,
+    allow_expert_options: bool,
+) -> anyhow::Result<FastImgProcessingContract> {
+    use foundation::runtime_config::{JpegEffortSearch, QualitySearch};
+
+    let encoding = match strategy {
+        "jxl" => FastImgEncodingParameters::Jxl {
+            // Full comparison ignores the saved manual E, just like the actual
+            // effort candidate generator. Do not invalidate it for an inactive value.
+            jpeg_effort: if config.img.jpeg_effort_search == JpegEffortSearch::Full {
+                11
+            } else {
+                config.img.jpeg_effort
+            },
+            jpeg_effort_search: config.img.jpeg_effort_search,
+            archive,
+            allow_expert_options,
+        },
+        "avif" => {
+            let searching = config.img.quality_search.enabled(true);
+            FastImgEncodingParameters::Avif {
+                avif_quality: if searching {
+                    100
+                } else {
+                    config.img.avif_quality
+                },
+                avif_speed: config.img.avif_speed,
+                quality_search: if searching {
+                    QualitySearch::Adaptive
+                } else {
+                    QualitySearch::Fixed
+                },
+                avif_metadata_policy: config.img.avif_metadata_policy,
+                allow_expert_options,
+            }
+        }
+        _ => anyhow::bail!("unsupported fast-img strategy for processing contract: {strategy}"),
+    };
+    let contract = FastImgProcessingContract {
+        schema: 1,
+        tool_policy: config.tools.policy,
+        fallback_policy: config.img.fallback_policy,
+        encoding,
+    };
+    contract.validate(strategy).map_err(anyhow::Error::msg)?;
+    Ok(contract)
+}
+
+fn fast_img_active_processing_contract(
+    strategy: &str,
+    archive: bool,
+    allow_expert_options: bool,
+) -> anyhow::Result<FastImgProcessingContract> {
+    // The CLI installs validated effective settings before reaching this path.
+    // Direct internal callers use the same defaults as the encoder getters.
+    let defaults = foundation::runtime_config::RuntimeConfig::default();
+    let config = foundation::runtime_config::active().unwrap_or(&defaults);
+    fast_img_processing_contract(config, strategy, archive, allow_expert_options)
+}
+
+fn fast_img_validate_processing_contract(
+    marker: &WorkingCopyMarker,
+    current: &FastImgProcessingContract,
+) -> anyhow::Result<()> {
+    let saved = marker.processing_contract.as_ref().context(
+        "MFB_RESUME_CONFIG_UNKNOWN: saved fast-img task has no processing-settings identity; its outputs and recovery evidence were retained. Use --no-resume for an isolated new task instead of assigning current settings to old results",
+    )?;
+    saved
+        .validate(&marker.strategy)
+        .map_err(anyhow::Error::msg)?;
+    let current_strategy = match &current.encoding {
+        FastImgEncodingParameters::Jxl { .. } => "jxl",
+        FastImgEncodingParameters::Avif { .. } => "avif",
+    };
+    current
+        .validate(current_strategy)
+        .map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        saved == current,
+        "MFB_RESUME_CONFIG_CHANGED: fast-img processing settings differ from the saved task; no saved result was reused or overwritten. Restore its settings to continue, or use --no-resume for an isolated new task. Saved: {saved:?}; current: {current:?}"
+    );
+    Ok(())
+}
+
+fn fast_img_avif_metadata_policy() -> foundation::runtime_config::AvifMetadataPolicy {
+    foundation::runtime_config::active().map_or_else(
+        foundation::runtime_config::AvifMetadataPolicy::default,
+        |config| config.img.avif_metadata_policy,
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FastImgPostGate1Policy {
     LocalOnlyDelivery,
@@ -4200,20 +4307,26 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         )
     };
     let mut existing_marker = read_existing_fast_img_marker(&working_copy)?;
+    let processing_contract =
+        fast_img_active_processing_contract(strategy, archive, allow_expert_options)?;
     if !dry_run.0 {
         if fresh.0 {
             anyhow::ensure!(
                 existing_marker.is_none(),
                 "the fresh output acquired an existing checkpoint before its lock; no task proof was reused"
             );
-        } else if let Some(marker) = &existing_marker
-            && foundation::common_utils::tool_runtime_is_bound()
-        {
-            if let Err(error) = fast_img_validate_tool_authority(
-                marker,
-                foundation::common_utils::active_tool_snapshot()
-                    .map(|snapshot| (snapshot.manifest_path.as_path(), snapshot.identity.as_str())),
-            ) {
+        } else if let Some(marker) = &existing_marker {
+            // Recheck under the output lock: the checkpoint may have changed
+            // since tool preparation. This precedes all prompts and media scans.
+            fast_img_validate_processing_contract(marker, &processing_contract)?;
+            if foundation::common_utils::tool_runtime_is_bound()
+                && let Err(error) = fast_img_validate_tool_authority(
+                    marker,
+                    foundation::common_utils::active_tool_snapshot().map(|snapshot| {
+                        (snapshot.manifest_path.as_path(), snapshot.identity.as_str())
+                    }),
+                )
+            {
                 let shared = foundation::common_utils::ToolRuntimeError {
                     cause_code: "snapshot_invalid",
                     tool: None,
@@ -4416,8 +4529,11 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
             })?;
 
         let mut marker = existing_marker.take().unwrap_or_else(|| {
-            WorkingCopyMarker::new(src_dir.clone(), working_copy.clone(), source_jpegs.len())
-                .with_strategy(strategy.to_string())
+            let mut marker =
+                WorkingCopyMarker::new(src_dir.clone(), working_copy.clone(), source_jpegs.len())
+                    .with_strategy(strategy.to_string());
+            marker.processing_contract = Some(processing_contract.clone());
+            marker
         });
         let execution = (|| -> anyhow::Result<()> {
             if retry_failed_sources_from_cleanup {
@@ -4735,6 +4851,11 @@ fn fast_img_pipeline_ctx(
         expected_count,
         library_handle,
         output_format,
+        metadata_policy: if marker.strategy == "avif" {
+            fast_img_avif_metadata_policy().output_policy()
+        } else {
+            foundation::metadata::MetadataOutputPolicy::Preserve
+        },
     }
 }
 
@@ -5768,6 +5889,7 @@ fn try_fast_img_lossless_avif(
         &temp_path,
         &content_blake3,
         options,
+        fast_img_avif_metadata_policy(),
     )?
     .with_optimization_outcome(
         foundation::exploration_policy::ExplorationOutcome::LosslessTranscoded,
@@ -5786,14 +5908,19 @@ fn fast_img_prepare_existing_avif(
     foundation::ensure_parent_dir_exists(output)?;
     let temp_output = foundation::conversion::temp_path_for_output(output);
     let _temp_guard = foundation::conversion::TempOutputGuard::new(temp_output.clone());
-    let content_blake3 =
-        foundation::fast_img::prepare_existing_avif_meme_candidate(source, &temp_output)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let metadata_policy = fast_img_avif_metadata_policy();
+    let content_blake3 = foundation::fast_img::prepare_existing_avif_meme_candidate(
+        source,
+        &temp_output,
+        metadata_policy,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     img::lossless_converter::finalize_meme_avif_probe(
         source,
         &temp_output,
         &content_blake3,
         options,
+        metadata_policy,
     )
     .map(|result| {
         result
@@ -5860,8 +5987,9 @@ fn fast_img_run_encode_job_inner(
                             job.source.display()
                         )
                     })?;
-            let mut metadata_retry =
-                img::lossless_converter::AvifencMetadataRetryState::strip_all();
+            let mut metadata_retry = img::lossless_converter::AvifencMetadataRetryState::for_policy(
+                fast_img_avif_metadata_policy(),
+            );
             let detected_source = foundation::image_detection::detect_format_from_bytes(
                 &job.source,
             )
@@ -5934,6 +6062,7 @@ fn fast_img_run_encode_job_inner(
                             &temp_path,
                             &content_blake3,
                             &convert_options,
+                            fast_img_avif_metadata_policy(),
                         )?
                         .with_optimization_outcome(outcome)
                     }
@@ -5982,7 +6111,12 @@ fn fast_img_run_encode_job_inner(
 
     let is_avif_output = strategy == "avif";
     if is_avif_output {
-        verify_final_avif_delivery_integrity(&job.source, out_path).map_err(|error| {
+        verify_final_avif_delivery_integrity(
+            &job.source,
+            out_path,
+            fast_img_avif_metadata_policy(),
+        )
+        .map_err(|error| {
             anyhow::anyhow!(
                 "final AVIF delivery verification failed for {}: {error}",
                 out_path.display()
@@ -6153,7 +6287,8 @@ fn fast_img_refresh_reused_jxl_delivery(source: &Path, output: &Path) -> anyhow:
     );
     Ok(refreshed_hash)
 }
-pub const FAST_IMG_AVIF_CLEAN_POLICY_VERSION: u32 = 3;
+pub const FAST_IMG_AVIF_CLEAN_POLICY_VERSION: u32 =
+    foundation::runtime_config::AvifMetadataPolicy::Clear.version();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReuseDecision {
@@ -6223,10 +6358,11 @@ fn fast_img_check_reused_delivery(
     }
 
     let label = if strategy == "avif" { "AVIF" } else { "JXL" };
-    if strategy == "avif" && marker_policy_ver < FAST_IMG_AVIF_CLEAN_POLICY_VERSION {
+    let current_metadata_version = fast_img_avif_metadata_policy().version();
+    if strategy == "avif" && marker_policy_ver != current_metadata_version {
         return Ok(ReuseDecision::NeedsReencode {
             reason: format!(
-                "legacy AVIF marker policy version ({marker_policy_ver} < {FAST_IMG_AVIF_CLEAN_POLICY_VERSION}); forcing clean re-encode"
+                "AVIF marker metadata policy version differs ({marker_policy_ver} != {current_metadata_version}); forcing clean re-encode"
             ),
         });
     }
@@ -6679,6 +6815,7 @@ fn fast_img_delete_verified_source_jpegs(
                         FormatKind::Avif => verify_final_avif_delivery_integrity(
                             &candidate.source,
                             &candidate.output,
+                            fast_img_avif_metadata_policy(),
                         )
                         .map_err(|err| {
                             anyhow::anyhow!(
@@ -7535,7 +7672,12 @@ fn restore_jpeg_hex_encode(text: &str) -> String {
 fn restore_jpeg_djxl_version() -> anyhow::Result<&'static str> {
     static VERSION: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
     let version = VERSION.get_or_init(|| {
-        let mut command = std::process::Command::new(foundation::constants::TOOL_DJXL);
+        let executable =
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_DJXL)
+                .ok_or_else(|| {
+                    "failed to resolve djxl for restore-jpeg version probe".to_owned()
+                })?;
+        let mut command = std::process::Command::new(executable);
         command.arg("--version");
         let output = foundation::process_runner::run_command_with_liveness_timeout(
             &mut command,
@@ -9880,7 +10022,7 @@ fn fast_img_record_controllable_media_import_failures(
 
 fn fast_img_commit_transcode_complete(marker: &mut WorkingCopyMarker, strategy: &str) {
     if strategy == "avif" {
-        marker.metadata_policy_version = FAST_IMG_AVIF_CLEAN_POLICY_VERSION;
+        marker.metadata_policy_version = fast_img_avif_metadata_policy().version();
     }
     marker.stage = FastImgStageName::TranscodeComplete;
 }
@@ -11216,6 +11358,92 @@ mod fast_img_hardening_tests {
         clippy::assertions_on_constants
     )]
     #[test]
+    fn fast_img_processing_contract_tracks_effective_route_parameters() -> anyhow::Result<()> {
+        use foundation::runtime_config::{
+            FallbackPolicy, JpegEffortSearch, QualitySearch, RuntimeConfig, ToolPolicy, VidCodec,
+        };
+
+        let config = RuntimeConfig::default();
+        let jxl = super::fast_img_processing_contract(&config, "jxl", false, false)?;
+        let avif = super::fast_img_processing_contract(&config, "avif", false, false)?;
+        let mut inactive = config.clone();
+        inactive.img.jpeg_effort = 7;
+        inactive.img.avif_quality = 75;
+        inactive.img.jxl_distance = Some(0.5);
+        inactive.img.jxl_effort = Some(8);
+        inactive.img.quality_heuristic = true;
+        inactive.img.allow_database = true;
+        inactive.vid.codec = VidCodec::Av1;
+        inactive.cache.path_tree_ttl_seconds += 1;
+        assert_eq!(
+            super::fast_img_processing_contract(&inactive, "jxl", false, false)?,
+            jxl,
+            "full JPEG comparison must ignore saved manual effort and other routes' settings"
+        );
+        inactive.img.quality_search = QualitySearch::ModeDefault;
+        assert_eq!(
+            super::fast_img_processing_contract(&inactive, "avif", false, false)?,
+            avif,
+            "automatic AVIF search must ignore saved manual quality and equivalent default mode"
+        );
+
+        let mut fixed = config.clone();
+        fixed.img.jpeg_effort_search = JpegEffortSearch::Fixed;
+        let fixed_jxl = super::fast_img_processing_contract(&fixed, "jxl", false, false)?;
+        assert_ne!(fixed_jxl, jxl);
+        fixed.img.jpeg_effort = 7;
+        assert_ne!(
+            super::fast_img_processing_contract(&fixed, "jxl", false, false)?,
+            fixed_jxl
+        );
+        fixed.img.jpeg_effort_search = JpegEffortSearch::Adaptive;
+        assert_ne!(
+            super::fast_img_processing_contract(&fixed, "jxl", false, false)?,
+            fixed_jxl
+        );
+
+        fixed.img.quality_search = QualitySearch::Fixed;
+        let fixed_avif = super::fast_img_processing_contract(&fixed, "avif", false, false)?;
+        assert_ne!(fixed_avif, avif);
+        fixed.img.avif_quality = 80;
+        assert_ne!(
+            super::fast_img_processing_contract(&fixed, "avif", false, false)?,
+            fixed_avif
+        );
+        let mut speed = config.clone();
+        speed.img.avif_speed = 8;
+        assert_ne!(
+            super::fast_img_processing_contract(&speed, "avif", false, false)?,
+            avif
+        );
+        assert_ne!(
+            super::fast_img_processing_contract(&config, "jxl", true, false)?,
+            jxl
+        );
+        assert_ne!(
+            super::fast_img_processing_contract(&config, "jxl", false, true)?,
+            jxl
+        );
+        assert_ne!(
+            super::fast_img_processing_contract(&config, "avif", false, true)?,
+            avif
+        );
+        let mut permissions = config.clone();
+        permissions.tools.policy = ToolPolicy::Single;
+        assert_ne!(
+            super::fast_img_processing_contract(&permissions, "jxl", false, false)?,
+            jxl
+        );
+        permissions = config;
+        permissions.img.fallback_policy = FallbackPolicy::Repair;
+        assert_ne!(
+            super::fast_img_processing_contract(&permissions, "avif", false, false)?,
+            avif
+        );
+        Ok(())
+    }
+
+    #[test]
     fn interactive_resume_choice_is_final_before_tool_preparation() -> anyhow::Result<()> {
         use clap::Parser;
         let mut cli = super::Cli::try_parse_from(["img", "run", "selected-source"])?;
@@ -11506,12 +11734,15 @@ mod fast_img_hardening_tests {
         }
         let source_jpeg = path.with_extension("mfb-test-source.jpg");
         write_real_jpeg(&source_jpeg, [10, 20, 30])?;
-        let output = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&source_jpeg)
-            .arg(path)
-            .arg("--lossless_jpeg=1")
-            .arg("--effort=7")
-            .output()?;
+        let output = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic JXL fixture")?,
+        )
+        .arg(&source_jpeg)
+        .arg(path)
+        .arg("--lossless_jpeg=1")
+        .arg("--effort=7")
+        .output()?;
         std::fs::remove_file(&source_jpeg)?;
         anyhow::ensure!(
             output.status.success(),
@@ -11758,11 +11989,14 @@ mod fast_img_hardening_tests {
         // JPEG reconstruction data when a newer cjxl changes JPEG defaults.
         let pixels_source = input_root.join("pixels-only.ppm");
         write_real_ppm(&pixels_source, [40, 50, 60])?;
-        let encoded = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&pixels_source)
-            .arg(&non_reconstructible)
-            .arg("--distance=0")
-            .output()?;
+        let encoded = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic pixel JXL fixture")?,
+        )
+        .arg(&pixels_source)
+        .arg(&non_reconstructible)
+        .arg("--distance=0")
+        .output()?;
         std::fs::remove_file(&pixels_source)?;
         anyhow::ensure!(
             encoded.status.success(),
@@ -11841,11 +12075,14 @@ mod fast_img_hardening_tests {
         let restored_xmp = foundation::metadata::find_xmp_sidecar(&output)?
             .context("restored XMP sidecar missing")?;
         assert_eq!(std::fs::read(restored_xmp)?, std::fs::read(&source_xmp)?);
-        let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
-            .arg("-s3")
-            .arg("-XMP-photoshop:DateCreated")
-            .arg(&output)
-            .output()?;
+        let date_created = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_EXIFTOOL)
+                .context("resolve ExifTool for synthetic metadata fixture")?,
+        )
+        .arg("-s3")
+        .arg("-XMP-photoshop:DateCreated")
+        .arg(&output)
+        .output()?;
         assert!(date_created.status.success());
         assert_eq!(String::from_utf8_lossy(&date_created.stdout).trim(), "");
         #[cfg(target_os = "macos")]
@@ -12875,13 +13112,16 @@ mod fast_img_hardening_tests {
 <rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="2025-10-24T12:00:24+08:00"/>
 </rdf:RDF></x:xmpmeta>"#,
         )?;
-        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&src)
-            .arg(&out)
-            .arg("--lossless_jpeg=1")
-            .arg("--effort=7")
-            .output()
-            .context("encode source JXL")?;
+        let cjxl = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic JXL fixture")?,
+        )
+        .arg(&src)
+        .arg(&out)
+        .arg("--lossless_jpeg=1")
+        .arg("--effort=7")
+        .output()
+        .context("encode source JXL")?;
         assert!(
             cjxl.status.success(),
             "encode source JXL failed: stdout={} stderr={}",
@@ -12896,12 +13136,15 @@ mod fast_img_hardening_tests {
             stale_hash, refreshed_hash,
             "metadata refresh must update reused JXL hash proof after XMP embedding"
         );
-        let date_created = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
-            .arg("-s3")
-            .arg("-XMP-photoshop:DateCreated")
-            .arg(&out)
-            .output()
-            .context("probe refreshed JXL XMP")?;
+        let date_created = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_EXIFTOOL)
+                .context("resolve ExifTool for synthetic metadata fixture")?,
+        )
+        .arg("-s3")
+        .arg("-XMP-photoshop:DateCreated")
+        .arg(&out)
+        .output()
+        .context("probe refreshed JXL XMP")?;
         assert!(
             date_created.status.success(),
             "XMP probe failed: {}",
@@ -12953,25 +13196,31 @@ mod fast_img_hardening_tests {
             String::from_utf8_lossy(&magick.stdout),
             String::from_utf8_lossy(&magick.stderr)
         );
-        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&src)
-            .arg(&out)
-            .arg("--lossless_jpeg=1")
-            .arg("--effort=7")
-            .output()
-            .context("encode source JXL")?;
+        let cjxl = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic JXL fixture")?,
+        )
+        .arg(&src)
+        .arg(&out)
+        .arg("--lossless_jpeg=1")
+        .arg("--effort=7")
+        .output()
+        .context("encode source JXL")?;
         assert!(
             cjxl.status.success(),
             "encode source JXL failed: stdout={} stderr={}",
             String::from_utf8_lossy(&cjxl.stdout),
             String::from_utf8_lossy(&cjxl.stderr)
         );
-        let metadata = std::process::Command::new(foundation::constants::TOOL_EXIFTOOL)
-            .arg("-overwrite_original")
-            .arg("-EXIF:UserComment=marker refresh")
-            .arg(&src)
-            .output()
-            .context("add source metadata after JXL encode")?;
+        let metadata = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_EXIFTOOL)
+                .context("resolve ExifTool for synthetic metadata fixture")?,
+        )
+        .arg("-overwrite_original")
+        .arg("-EXIF:UserComment=marker refresh")
+        .arg(&src)
+        .output()
+        .context("add source metadata after JXL encode")?;
         assert!(
             metadata.status.success(),
             "add source metadata failed: stdout={} stderr={}",
@@ -13035,13 +13284,16 @@ mod fast_img_hardening_tests {
         std::fs::create_dir_all(&src_root)?;
         std::fs::create_dir_all(&wc)?;
         write_real_jpeg(&src, [10, 20, 30])?;
-        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&src)
-            .arg(&out)
-            .arg("--lossless_jpeg=1")
-            .arg("--effort=7")
-            .output()
-            .context("encode source JXL")?;
+        let cjxl = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic JXL fixture")?,
+        )
+        .arg(&src)
+        .arg(&out)
+        .arg("--lossless_jpeg=1")
+        .arg("--effort=7")
+        .output()
+        .context("encode source JXL")?;
         assert!(
             cjxl.status.success(),
             "encode source JXL failed: stdout={} stderr={}",
@@ -13116,13 +13368,16 @@ mod fast_img_hardening_tests {
         write_real_jpeg(&src, [10, 20, 30])?;
 
         // Produce the initial JXL (simulates a previous run that wrote a.JXL)
-        let cjxl = std::process::Command::new(foundation::constants::TOOL_CJXL)
-            .arg(&src)
-            .arg(&out)
-            .arg("--lossless_jpeg=1")
-            .arg("--effort=7")
-            .output()
-            .context("encode source JXL")?;
+        let cjxl = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for synthetic JXL fixture")?,
+        )
+        .arg(&src)
+        .arg(&out)
+        .arg("--lossless_jpeg=1")
+        .arg("--effort=7")
+        .output()
+        .context("encode source JXL")?;
         assert!(
             cjxl.status.success(),
             "encode source JXL failed: {}",
@@ -14100,7 +14355,10 @@ mod fast_img_hardening_tests {
         std::fs::create_dir_all(&blocked)?;
         let input = input.canonicalize()?;
         let output = root.path().join("input_optimized");
-        let marker = WorkingCopyMarker::new(input.clone(), output.clone(), 0);
+        let mut marker = WorkingCopyMarker::new(input.clone(), output.clone(), 0);
+        marker.processing_contract = Some(super::fast_img_active_processing_contract(
+            "jxl", false, false,
+        )?);
         foundation::pipeline::verification::write_marker_atomic(&marker)?;
         let marker_path = foundation::pipeline::verification::marker_path_for_working_copy(&output);
         let saved = std::fs::read(&marker_path)?;
@@ -14141,7 +14399,33 @@ mod fast_img_hardening_tests {
         std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
         let continued = continued.expect_err("continue must still perform source inventory");
         assert!(format!("{continued:#}").contains("fast-img scan read dir"));
-        assert_eq!(std::fs::read(marker_path)?, saved);
+        assert_eq!(std::fs::read(&marker_path)?, saved);
+        assert!(!output.exists());
+
+        let mut changed = foundation::runtime_config::RuntimeConfig::default();
+        changed.img.jpeg_effort_search = foundation::runtime_config::JpegEffortSearch::Fixed;
+        marker.processing_contract = Some(super::fast_img_processing_contract(
+            &changed, "jxl", false, false,
+        )?);
+        foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        let saved_changed = std::fs::read(&marker_path)?;
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
+        let changed = run(true);
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
+        let changed = changed.expect_err("changed settings must reject before recursive scanning");
+        assert!(format!("{changed:#}").contains("MFB_RESUME_CONFIG_CHANGED"));
+        assert_eq!(std::fs::read(&marker_path)?, saved_changed);
+        assert!(!output.exists());
+
+        marker.processing_contract = None;
+        foundation::pipeline::verification::write_marker_atomic(&marker)?;
+        let saved_legacy = std::fs::read(&marker_path)?;
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))?;
+        let legacy = run(true);
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700))?;
+        let legacy = legacy.expect_err("missing identity must not inherit today's settings");
+        assert!(format!("{legacy:#}").contains("MFB_RESUME_CONFIG_UNKNOWN"));
+        assert_eq!(std::fs::read(marker_path)?, saved_legacy);
         assert!(!output.exists());
         Ok(())
     }
@@ -15327,6 +15611,7 @@ mod fast_img_hardening_tests {
             expected_count: 1,
             library_handle: Some(handle),
             output_format: None,
+            metadata_policy: foundation::metadata::MetadataOutputPolicy::Preserve,
         };
 
         assert!(Gate2Import.run(&ctx).passed);
@@ -15429,6 +15714,7 @@ mod fast_img_hardening_tests {
             expected_count: 1,
             library_handle: Some(handle),
             output_format: None,
+            metadata_policy: foundation::metadata::MetadataOutputPolicy::Preserve,
         };
 
         assert!(Gate2Import.run(&ctx).passed);
@@ -15618,7 +15904,9 @@ mod fast_img_hardening_tests {
             flags: foundation::ConvertFlags::FORCE | foundation::ConvertFlags::AVIF_PROGRESSIVE,
             ..Default::default()
         };
-        let mut retry = img::lossless_converter::AvifencMetadataRetryState::strip_all();
+        let mut retry = img::lossless_converter::AvifencMetadataRetryState::for_policy(
+            super::fast_img_avif_metadata_policy(),
+        );
         let result = super::explore_avif_meme_quality(
             &source,
             FormatKind::Jpeg,

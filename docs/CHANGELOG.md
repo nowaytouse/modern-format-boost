@@ -23,6 +23,19 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Private Policy And Shared Session Boundaries (2026-10-31)
+
+- Resolve the existing Fast AVIF metadata policy explicitly through typed
+  configuration, candidate publication, custody verification and Gate 1. Native
+  settings display the effective policy without advertising an unsupported
+  preservation mode; standard JXL preservation remains separate.
+- Bind Fast IMG checkpoints to route-specific effective processing settings and
+  permissions. Changed or missing historical intent blocks reuse before media
+  inventory without assigning new settings to old evidence.
+- Move session leases, run identities, history execution, summary recording and archives
+  into the shared application layer, retaining worker drain and error behavior.
+  Full file-task manifests and post-cleanup failed-only retry remain separate.
+
 ### Background Build Observation (2026-10-31)
 
 - Keep external native-build observation separate from the app's in-process

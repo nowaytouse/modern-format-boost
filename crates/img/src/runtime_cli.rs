@@ -184,6 +184,9 @@ pub(super) struct RuntimeArgs {
     /// Final AVIF encoder speed for Fast IMG AVIF, in the backend's 0..10 range.
     #[arg(long, global = true, value_parser = clap::value_parser!(u8).range(0..=10))]
     avif_speed: Option<u8>,
+    /// Fast AVIF private policy: clear removable metadata; archival preservation is not supported by this route.
+    #[arg(long, global = true, value_enum)]
+    avif_metadata_policy: Option<runtime_config::AvifMetadataPolicy>,
     /// Permit supported compatibility retries or repairs; separate from tool permission and batch continuation.
     #[arg(long, global = true, value_enum)]
     fallback_policy: Option<FallbackPolicy>,
@@ -257,16 +260,22 @@ impl RuntimeArgs {
             "Fast IMG JXL reconstructs exact JPEG bytes and has no quality search"
         );
         anyhow::ensure!(
-            strategy != "jxl" || (self.avif_quality.is_none() && self.avif_speed.is_none()),
-            "AVIF quality and speed settings apply only to Fast IMG AVIF"
+            strategy != "jxl"
+                || (self.avif_quality.is_none()
+                    && self.avif_speed.is_none()
+                    && self.avif_metadata_policy.is_none()),
+            "AVIF quality, speed and metadata policy settings apply only to Fast IMG AVIF"
         );
         Ok(())
     }
 
     pub(crate) fn validate_avif_settings_scope(&self, fast_avif_or_config: bool) -> Result<()> {
         anyhow::ensure!(
-            fast_avif_or_config || (self.avif_quality.is_none() && self.avif_speed.is_none()),
-            "AVIF quality and speed flags require Fast IMG AVIF or img config"
+            fast_avif_or_config
+                || (self.avif_quality.is_none()
+                    && self.avif_speed.is_none()
+                    && self.avif_metadata_policy.is_none()),
+            "AVIF quality, speed and metadata policy flags require Fast IMG AVIF or img config"
         );
         Ok(())
     }
@@ -415,6 +424,13 @@ impl RuntimeArgs {
             "img.avif_speed",
         );
         apply(
+            self.avif_metadata_policy,
+            &mut config.img.avif_metadata_policy,
+            sources,
+            source_chain,
+            "img.avif_metadata_policy",
+        );
+        apply(
             self.fallback_policy,
             &mut config.img.fallback_policy,
             sources,
@@ -505,6 +521,10 @@ mod tests {
         assert_eq!(loaded.config.img.avif_quality, 100);
         assert_eq!(loaded.config.img.avif_speed, 0);
         assert_eq!(
+            loaded.config.img.avif_metadata_policy,
+            runtime_config::AvifMetadataPolicy::Clear
+        );
+        assert_eq!(
             loaded.config.img.jxl_effort_search,
             runtime_config::EffortSearch::Adaptive
         );
@@ -525,7 +545,7 @@ mod tests {
         let config = temp.path().join("image.json");
         std::fs::write(
             &config,
-            br#"{"config_version":1,"img":{"avif_quality":85,"avif_speed":4,"quality_search":"adaptive"}}"#,
+            br#"{"config_version":1,"img":{"avif_quality":85,"avif_speed":4,"avif_metadata_policy":"clear","quality_search":"adaptive"}}"#,
         )?;
         let path = config.to_str().context("test configuration path")?;
         let cli = crate::Cli::try_parse_from([
@@ -540,21 +560,32 @@ mod tests {
             "10",
             "--avif-speed",
             "10",
+            "--avif-metadata-policy",
+            "clear",
         ])?;
         let loaded = cli.policy.resolve(false)?;
         assert_eq!(loaded.config.img.avif_quality, 10);
         assert_eq!(loaded.config.img.avif_speed, 10);
+        assert_eq!(
+            loaded.config.img.avif_metadata_policy,
+            runtime_config::AvifMetadataPolicy::Clear
+        );
         assert_eq!(
             loaded.config.img.quality_search,
             runtime_config::QualitySearch::Adaptive
         );
         assert_eq!(loaded.sources["img.avif_quality"], "CLI");
         assert_eq!(loaded.sources["img.avif_speed"], "CLI");
+        assert_eq!(loaded.sources["img.avif_metadata_policy"], "CLI");
         assert_eq!(
             loaded.source_chain["img.avif_quality"],
             ["default", path, "CLI"]
         );
         assert_eq!(loaded.sources["img.quality_search"], path);
+        assert_eq!(
+            loaded.source_chain["img.avif_metadata_policy"],
+            ["default", path, "CLI"]
+        );
         assert!(cli.policy.validate_fast_strategy("avif").is_ok());
         assert!(cli.policy.validate_avif_settings_scope(true).is_ok());
         Ok(())
@@ -562,8 +593,12 @@ mod tests {
 
     #[test]
     fn fast_avif_flags_are_scoped_before_processing() -> Result<()> {
-        for flag in ["--avif-quality", "--avif-speed"] {
-            let run = crate::Cli::try_parse_from(["img", "run", "/unused", flag, "10"])?;
+        for (flag, value) in [
+            ("--avif-quality", "10"),
+            ("--avif-speed", "10"),
+            ("--avif-metadata-policy", "clear"),
+        ] {
+            let run = crate::Cli::try_parse_from(["img", "run", "/unused", flag, value])?;
             assert!(run.policy.validate_avif_settings_scope(false).is_err());
 
             let fast_jxl = crate::Cli::try_parse_from([
@@ -573,11 +608,11 @@ mod tests {
                 "--strategy",
                 "jxl",
                 flag,
-                "10",
+                value,
             ])?;
             assert!(fast_jxl.policy.validate_fast_strategy("jxl").is_err());
 
-            let config = crate::Cli::try_parse_from(["img", "config", "show", flag, "10"])?;
+            let config = crate::Cli::try_parse_from(["img", "config", "show", flag, value])?;
             assert!(config.policy.validate_avif_settings_scope(true).is_ok());
         }
         for (flag, invalid) in [
@@ -585,6 +620,9 @@ mod tests {
             ("--avif-quality", "9"),
             ("--avif-quality", "101"),
             ("--avif-speed", "11"),
+            ("--avif-metadata-policy", "preserve"),
+            ("--avif-metadata-policy", "unknown"),
+            ("--avif-metadata-policy", ""),
         ] {
             assert!(crate::Cli::try_parse_from(["img", "config", "show", flag, invalid]).is_err());
         }

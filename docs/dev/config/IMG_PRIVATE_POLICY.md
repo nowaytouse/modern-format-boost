@@ -185,9 +185,24 @@ also remain explicit; verified Photos local resource custody does not certify
 every visible Photos field or iCloud synchronization. The native question-mark
 guide explains these distinctions in its metadata topic.
 
+The existing intent is explicit in `img.avif_metadata_policy=clear`, shared by
+the encoder, candidate publication, existing-AVIF custody and local Gate 1.
+Unsupported preservation intent is rejected rather than represented by an
+unimplemented switch. Gate 1 requires an explicit supported metadata policy;
+container type alone cannot grant permission to clear metadata. Policy version
+3 remains part of AVIF output reuse, separate from source and delivery proofs.
+
 ## Fast IMG Saved-Task Choice And Recovery Boundaries
 
-Without an explicit resume/fresh selection, a saved Fast IMG task requires a
+Saved tasks must first have a valid, matching typed processing contract. Missing
+historical intent or changed effective encoding/permission settings blocks
+reuse before tool preparation, without assigning current settings to old
+evidence. The same comparison repeats under the output lock. Inactive manual E
+and Q values are normalized to the behavior of their selected search modes;
+irrelevant settings do not invalidate the task. This is not a complete source,
+sidecar, delivery or file-task manifest.
+
+Without an explicit resume/fresh selection, a compatible saved Fast IMG task requires a
 choice before recursive inventory, codec probes or source hashing. The native
 host owns that choice; a GUI launch cannot wait for terminal input even if output
 uses a PTY. Continue means revalidate and continue, not trust an old success flag.
@@ -426,7 +441,7 @@ acceptance. See the dated changelog for the executed validation scope.
 
 This correction establishes historical algorithm/configuration boundaries and
 native parameter semantics. Full per-file persistent execution plans, a complete
-private policy file/runtime binding, further AVIF metadata-policy configuration,
+private policy file/runtime binding,
 representative performance comparisons and full real-media/Photos acceptance
 remain separate work. Do not delete the temporary strategy requirements merely
 because this document or individual controls exist.

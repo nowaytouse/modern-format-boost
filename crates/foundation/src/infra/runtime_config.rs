@@ -147,6 +147,8 @@ pub struct ImgPolicy {
     pub avif_quality: u8,
     /// Final AVIF encoder speed used by Fast IMG AVIF delivery.
     pub avif_speed: u8,
+    /// Fast AVIF's private removable-metadata contract, independent of JXL preservation.
+    pub avif_metadata_policy: AvifMetadataPolicy,
     pub jpeg_effort: u8,
     /// Override distance only where the private media policy permits lossy encoding.
     pub jxl_distance: Option<f32>,
@@ -158,6 +160,43 @@ pub struct ImgPolicy {
     pub jpeg_effort_search: JpegEffortSearch,
     pub quality_search: QualitySearch,
     pub fallback_policy: FallbackPolicy,
+}
+
+/// Supported metadata intent for the private Fast AVIF processing route.
+///
+/// This route is deliberately not an archival-preservation mode. Unsupported
+/// policies must be rejected instead of changing encoder flags independently
+/// of final verification and checkpoint identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum AvifMetadataPolicy {
+    /// Remove removable embedded metadata and require the output clear-policy audit.
+    #[default]
+    Clear,
+}
+
+impl AvifMetadataPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+        }
+    }
+
+    #[must_use]
+    pub const fn output_policy(self) -> crate::metadata::MetadataOutputPolicy {
+        match self {
+            Self::Clear => crate::metadata::MetadataOutputPolicy::Clear,
+        }
+    }
+
+    /// Version of the existing cleanup contract required by reusable AVIF outputs.
+    #[must_use]
+    pub const fn version(self) -> u32 {
+        match self {
+            Self::Clear => 3,
+        }
+    }
 }
 
 /// Parse a final direct pixel JXL effort.
@@ -274,6 +313,7 @@ impl Default for ImgPolicy {
             size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             avif_quality: 100,
             avif_speed: 0,
+            avif_metadata_policy: AvifMetadataPolicy::Clear,
             jpeg_effort: 11,
             jxl_distance: None,
             jxl_effort: None,
@@ -1193,10 +1233,43 @@ mod tests {
         let defaults = RuntimeConfig::default();
         assert_eq!(defaults.img.avif_quality, 100);
         assert_eq!(defaults.img.avif_speed, 0);
+        assert_eq!(defaults.img.avif_metadata_policy, AvifMetadataPolicy::Clear);
+        assert_eq!(
+            defaults.img.avif_metadata_policy.output_policy(),
+            crate::metadata::MetadataOutputPolicy::Clear
+        );
+        assert_eq!(defaults.img.avif_metadata_policy.version(), 3);
         defaults.validate()?;
         let empty_config: RuntimeConfig = serde_json::from_value(json!({}))?;
         assert_eq!(empty_config.img.avif_quality, 100);
         assert_eq!(empty_config.img.avif_speed, 0);
+        assert_eq!(
+            empty_config.img.avif_metadata_policy,
+            AvifMetadataPolicy::Clear
+        );
+        let configured: RuntimeConfig = serde_json::from_value(json!({
+            "img": {"avif_metadata_policy": "clear"}
+        }))?;
+        configured.validate()?;
+        assert_eq!(configured.img.avif_metadata_policy, AvifMetadataPolicy::Clear);
+        assert_eq!(
+            serde_json::to_value(&configured)?["img"]["avif_metadata_policy"],
+            "clear"
+        );
+        for invalid in [
+            json!("preserve"),
+            json!("unknown"),
+            json!(""),
+            json!(false),
+            Value::Null,
+        ] {
+            assert!(
+                serde_json::from_value::<RuntimeConfig>(json!({
+                    "img": {"avif_metadata_policy": invalid}
+                }))
+                .is_err()
+            );
+        }
 
         for (quality, speed) in [(10, 0), (100, 10)] {
             let config: RuntimeConfig = serde_json::from_value(json!({

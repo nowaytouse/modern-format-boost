@@ -63,6 +63,9 @@ pub struct PipelineCtx {
     pub blake3_log: Blake3Log,
     pub expected_count: usize,
     pub library_handle: Option<LibraryHandle>,
+    /// Explicit private processing intent; container detection does not grant
+    /// permission to clear metadata.
+    pub metadata_policy: crate::metadata::MetadataOutputPolicy,
     /// Output format for this pipeline run, used to select the extension for
     /// output file collection. When `None`, falls back to filesystem detection.
     pub output_format: Option<crate::image::format_detect::FormatKind>,
@@ -783,14 +786,26 @@ fn check_blake3_logged_outputs(
     )
 }
 
-fn check_metadata_policy(
-    ctx: &PipelineCtx,
-    progress: &mut dyn FnMut(usize, usize),
-) -> CheckDetail {
-    if ctx.output_format == Some(crate::image::format_detect::FormatKind::Avif) {
-        return check_meme_metadata_policy(ctx, progress);
+fn check_metadata_policy(ctx: &PipelineCtx, progress: &mut dyn FnMut(usize, usize)) -> CheckDetail {
+    match (ctx.metadata_policy, ctx.output_format) {
+        (crate::metadata::MetadataOutputPolicy::Preserve, _) => {
+            check_exact_metadata_copies(ctx, progress)
+        }
+        (
+            crate::metadata::MetadataOutputPolicy::Clear,
+            Some(crate::image::format_detect::FormatKind::Avif),
+        ) => check_meme_metadata_policy(ctx, progress),
+        _ => detail(
+            "metadata",
+            false,
+            "explicit supported private metadata policy for the selected pipeline".to_owned(),
+            format!(
+                "unsupported metadata policy {:?} for {:?}",
+                ctx.metadata_policy, ctx.output_format
+            ),
+            Vec::new(),
+        ),
     }
-    check_exact_metadata_copies(ctx, progress)
 }
 
 fn check_meme_metadata_policy(
@@ -1575,6 +1590,7 @@ mod tests {
                 photos_library_path: None,
             }),
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         }
     }
 
@@ -1605,6 +1621,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let result = Gate1Local.run(&ctx);
 
@@ -2053,6 +2070,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let result = Gate2Import.run(&ctx);
 
@@ -2069,6 +2087,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let result = Gate3Deep.run(&ctx);
 
@@ -2169,6 +2188,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
 
         let mut attempts = Vec::new();
@@ -2211,6 +2231,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
 
         let check = super::check_orientation_policy_with_probes(
@@ -2245,6 +2266,7 @@ mod tests {
             expected_count: 2,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let mixed_files = vec![output.clone(), second_output];
         let mut rejected_attempts = Vec::new();
@@ -2270,6 +2292,7 @@ mod tests {
             expected_count: 0,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let mut attempts = Vec::new();
 
@@ -2303,6 +2326,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -2341,6 +2365,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -2389,6 +2414,7 @@ mod tests {
             expected_count: 2,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let mut attempts = Vec::new();
 
@@ -2424,6 +2450,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -2497,6 +2524,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         let result = super::check_exact_metadata_copies(&ctx, &mut |_, _| {});
         assert!(!result.passed);
@@ -2547,6 +2575,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -2567,6 +2596,35 @@ mod tests {
             "Gate 1 must expose embedded wrong-source metadata: {}",
             result.actual
         );
+    }
+
+    #[test]
+    fn gate1_metadata_requires_explicit_supported_intent() {
+        use crate::image::format_detect::FormatKind;
+        use crate::metadata::MetadataOutputPolicy;
+
+        let mut ctx = ctx_with_library(1, Vec::new());
+        ctx.output_format = Some(FormatKind::Avif);
+        let preserve = super::check_metadata_policy(&ctx, &mut |_, _| {});
+        assert!(!preserve.passed);
+        assert!(preserve.expected.contains("exact filesystem and embedded"));
+
+        ctx.metadata_policy = MetadataOutputPolicy::Clear;
+        let clear = super::check_metadata_policy(&ctx, &mut |_, _| {});
+        assert!(!clear.passed);
+        assert!(clear.expected.contains("cleared-metadata"));
+
+        for format in [None, Some(FormatKind::Jxl)] {
+            ctx.output_format = format;
+            let mut attempts = Vec::new();
+            let rejected = super::check_metadata_policy(&ctx, &mut |done, total| {
+                attempts.push((done, total));
+            });
+            assert!(!rejected.passed);
+            assert_eq!(rejected.failure_scope, super::CheckFailureScope::Shared);
+            assert!(rejected.actual.contains("unsupported metadata policy"));
+            assert!(attempts.is_empty());
+        }
     }
 
     #[test]
@@ -2591,6 +2649,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: Some(crate::image::format_detect::FormatKind::Avif),
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Clear,
         };
         ctx.blake3_log.insert(
             "a.png".to_string(),
@@ -2644,6 +2703,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: Some(crate::image::format_detect::FormatKind::Avif),
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Clear,
         };
         ctx.blake3_log.insert(
             "a.avif".to_string(),
@@ -2708,6 +2768,7 @@ mod tests {
             expected_count: 1,
             library_handle: None,
             output_format: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         };
         ctx.blake3_log.insert(
             "a.jpg".to_string(),
@@ -3030,6 +3091,67 @@ pub struct Gate3Checks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FastImgProcessingContract {
+    pub schema: u8,
+    pub tool_policy: crate::runtime_config::ToolPolicy,
+    pub fallback_policy: crate::runtime_config::FallbackPolicy,
+    pub encoding: FastImgEncodingParameters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "strategy", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum FastImgEncodingParameters {
+    Jxl {
+        jpeg_effort: u8,
+        jpeg_effort_search: crate::runtime_config::JpegEffortSearch,
+        archive: bool,
+        allow_expert_options: bool,
+    },
+    Avif {
+        avif_quality: u8,
+        avif_speed: u8,
+        quality_search: crate::runtime_config::QualitySearch,
+        avif_metadata_policy: crate::runtime_config::AvifMetadataPolicy,
+        allow_expert_options: bool,
+    },
+}
+
+impl FastImgProcessingContract {
+    /// Validate persisted processing intent without assigning missing historical
+    /// evidence the settings of the current attempt.
+    ///
+    /// # Errors
+    /// Rejects unknown schemas, a conflicting strategy, or invalid encoder values.
+    pub fn validate(&self, strategy: &str) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "unsupported fast-img processing contract schema {}; expected 1",
+                self.schema
+            ));
+        }
+        match &self.encoding {
+            FastImgEncodingParameters::Jxl { jpeg_effort, .. }
+                if strategy == "jxl" && (1..=11).contains(jpeg_effort) =>
+            {
+                Ok(())
+            }
+            FastImgEncodingParameters::Avif {
+                avif_quality,
+                avif_speed,
+                ..
+            } if strategy == "avif" && (10..=100).contains(avif_quality) && *avif_speed <= 10 => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "invalid fast-img processing contract for strategy {strategy}: {:?}",
+                self.encoding
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkingCopyMarker {
     pub schema: u8,
     pub src_dir: PathBuf,
@@ -3069,6 +3191,10 @@ pub struct WorkingCopyMarker {
     pub strategy: String,
     #[serde(default)]
     pub metadata_policy_version: u32,
+    /// Route-specific effective encoding intent, distinct from tool identity and
+    /// Photos delivery evidence. Missing historical intent is never filled in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_contract: Option<FastImgProcessingContract>,
     /// Exact private runtime authority used by this task; it is recovery state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_snapshot_manifest: Option<PathBuf>,
@@ -3149,6 +3275,7 @@ impl WorkingCopyMarker {
             error: None,
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,
+            processing_contract: None,
             tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.manifest_path.clone()),
             tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
@@ -3577,6 +3704,11 @@ pub fn marker_path_for_working_copy(working_copy: &Path) -> PathBuf {
 }
 
 pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    if let Some(contract) = &marker.processing_contract {
+        contract
+            .validate(&marker.strategy)
+            .map_err(std::io::Error::other)?;
+    }
     marker
         .validate_relative_path_contract()
         .map_err(std::io::Error::other)?;
@@ -3639,6 +3771,11 @@ fn parse_marker_for_working_copy(
             marker.schema, FAST_IMG_MARKER_SCHEMA_VERSION
         )));
     }
+    if let Some(contract) = &marker.processing_contract {
+        contract
+            .validate(&marker.strategy)
+            .map_err(std::io::Error::other)?;
+    }
     marker
         .validate_checkpoint_path_contract(working_copy)
         .map_err(std::io::Error::other)?;
@@ -3656,7 +3793,11 @@ pub fn read_marker(working_copy: &Path) -> std::io::Result<WorkingCopyMarker> {
             let legacy_path = working_copy.join(".mfb_wc");
             let data = std::fs::read(&legacy_path)?;
             let marker = parse_marker_for_working_copy(&data, working_copy)?;
-            write_marker_atomic(&marker)?;
+            // Legacy inspection must not mutate a checkpoint whose processing
+            // intent cannot be compared with the current request.
+            if marker.processing_contract.is_some() {
+                write_marker_atomic(&marker)?;
+            }
             Ok(marker)
         }
         Err(err) => Err(err),
@@ -3858,6 +3999,68 @@ mod working_copy_tests {
     use serial_test::serial;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn processing_contract() -> super::FastImgProcessingContract {
+        super::FastImgProcessingContract {
+            schema: 1,
+            tool_policy: crate::runtime_config::ToolPolicy::Fallback,
+            fallback_policy: crate::runtime_config::FallbackPolicy::Strict,
+            encoding: super::FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: crate::runtime_config::JpegEffortSearch::Full,
+                archive: false,
+                allow_expert_options: false,
+            },
+        }
+    }
+
+    #[test]
+    fn marker_processing_contract_rejects_unknown_or_invalid_evidence() {
+        let root = TempDir::new().unwrap();
+        let wc = root.path().join("Photos_optimized");
+        let mut marker = WorkingCopyMarker::new(root.path().join("Photos"), wc.clone(), 0);
+        marker.processing_contract = Some(processing_contract());
+        let valid = serde_json::to_value(&marker).unwrap();
+        let parsed =
+            parse_marker_for_working_copy(&serde_json::to_vec(&valid).unwrap(), &wc).unwrap();
+        assert_eq!(parsed.processing_contract, marker.processing_contract);
+
+        let mut legacy = valid.clone();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("processing_contract");
+        let parsed =
+            parse_marker_for_working_copy(&serde_json::to_vec(&legacy).unwrap(), &wc).unwrap();
+        assert!(parsed.processing_contract.is_none());
+
+        for (pointer, invalid) in [
+            ("/processing_contract/schema", serde_json::json!(2)),
+            (
+                "/processing_contract/encoding/jpeg_effort",
+                serde_json::json!(0),
+            ),
+            (
+                "/processing_contract/encoding/jpeg_effort",
+                serde_json::json!(12),
+            ),
+            ("/strategy", serde_json::json!("avif")),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                parse_marker_for_working_copy(&serde_json::to_vec(&changed).unwrap(), &wc).is_err()
+            );
+        }
+        let mut unknown = valid;
+        unknown["processing_contract"]["encoding"]["unknown_policy"] = serde_json::json!(true);
+        assert!(
+            parse_marker_for_working_copy(&serde_json::to_vec(&unknown).unwrap(), &wc).is_err()
+        );
+        marker.processing_contract.as_mut().unwrap().schema = 2;
+        assert!(write_marker_atomic(&marker).is_err());
+        assert!(!wc.exists());
+    }
 
     #[test]
     fn source_disposition_disjoint_rejects_overlap() {
@@ -4294,6 +4497,13 @@ mod working_copy_tests {
 
         let read = read_marker(&wc).unwrap();
 
+        assert!(read.processing_contract.is_none());
+        assert!(wc.join(".mfb_wc").exists());
+        assert!(!marker_path_for_working_copy(&wc).exists());
+
+        marker.processing_contract = Some(processing_contract());
+        std::fs::write(wc.join(".mfb_wc"), serde_json::to_vec(&marker).unwrap()).unwrap();
+        let read = read_marker(&wc).unwrap();
         assert_eq!(read.stage, FastImgStageName::OutputPrepared);
         assert!(!wc.join(".mfb_wc").exists());
         assert!(marker_path_for_working_copy(&wc).exists());

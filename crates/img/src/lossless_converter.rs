@@ -3064,13 +3064,15 @@ pub struct AvifencMetadataRetryState {
 }
 
 impl AvifencMetadataRetryState {
-    /// Disable all source metadata for clean Meme Mode AVIF delivery.
+    /// Apply the resolved private Fast AVIF metadata policy to every encoder probe.
     #[must_use]
-    pub const fn strip_all() -> Self {
-        Self {
-            ignore_exif: true,
-            ignore_xmp: true,
-            ignore_icc: true,
+    pub const fn for_policy(policy: runtime_config::AvifMetadataPolicy) -> Self {
+        match policy {
+            runtime_config::AvifMetadataPolicy::Clear => Self {
+                ignore_exif: true,
+                ignore_xmp: true,
+                ignore_icc: true,
+            },
         }
     }
     const fn policy(self) -> AvifencMetadataPolicy {
@@ -3858,6 +3860,7 @@ pub fn finalize_meme_avif_probe(
     temp_output: &Path,
     expected_content_blake3: &str,
     options: &ConvertOptions,
+    metadata_policy: runtime_config::AvifMetadataPolicy,
 ) -> Result<TaskResult> {
     let input_size = fs::metadata(source)?.len();
     let output = get_output_path(source, EXT_AVIF, options)?;
@@ -3883,7 +3886,7 @@ pub fn finalize_meme_avif_probe(
             foundation::metadata::verify_output_embedded_metadata(
                 source,
                 candidate,
-                foundation::metadata::MetadataOutputPolicy::Clear,
+                metadata_policy.output_policy(),
             )
             .map_err(|error| {
                 std::io::Error::other(format!(
@@ -6624,7 +6627,8 @@ mod tests {
             Path::new("test_out.avif"),
             Some(80),
             false,
-            AvifencMetadataRetryState::strip_all().policy(),
+            AvifencMetadataRetryState::for_policy(runtime_config::AvifMetadataPolicy::Clear)
+                .policy(),
             Some(0),
             true,
         );
@@ -6685,7 +6689,13 @@ mod tests {
         };
 
         let content_blake3 = foundation::common_utils::calculate_blake3_hash(&candidate)?;
-        let result = finalize_meme_avif_probe(&source, &candidate, &content_blake3, &options)?;
+        let result = finalize_meme_avif_probe(
+            &source,
+            &candidate,
+            &content_blake3,
+            &options,
+            runtime_config::AvifMetadataPolicy::Clear,
+        )?;
 
         assert!(result.success);
         assert!(
@@ -6713,8 +6723,14 @@ mod tests {
             "failed to add metadata to regression candidate"
         );
         let hash = foundation::common_utils::calculate_blake3_hash(&candidate)?;
-        let error = finalize_meme_avif_probe(&source, &candidate, &hash, &options)
-            .expect_err("residual metadata must reject publication");
+        let error = finalize_meme_avif_probe(
+            &source,
+            &candidate,
+            &hash,
+            &options,
+            runtime_config::AvifMetadataPolicy::Clear,
+        )
+        .expect_err("residual metadata must reject publication");
         assert!(error.to_string().contains("cleared-metadata"));
         assert_eq!(fs::read(output)?, previous);
         assert!(source.exists());
@@ -6745,8 +6761,14 @@ mod tests {
         };
         let output = get_output_path(&source, EXT_AVIF, &options)?;
 
-        let error = finalize_meme_avif_probe(&source, &candidate, &verified_blake3, &options)
-            .expect_err("changed candidate must not inherit prior pixel proof");
+        let error = finalize_meme_avif_probe(
+            &source,
+            &candidate,
+            &verified_blake3,
+            &options,
+            runtime_config::AvifMetadataPolicy::Clear,
+        )
+        .expect_err("changed candidate must not inherit prior pixel proof");
 
         assert!(
             error
@@ -6778,7 +6800,8 @@ mod tests {
         };
 
         let output = get_output_path(&png_input, EXT_AVIF, &options)?;
-        let mut metadata_retry = AvifencMetadataRetryState::strip_all();
+        let mut metadata_retry =
+            AvifencMetadataRetryState::for_policy(runtime_config::AvifMetadataPolicy::Clear);
         let (temp_avif, output_size, content_blake3) =
             convert_to_avif_verified_lossless_probe_from_encoder_input_with_speed_and_state(
                 &png_input,

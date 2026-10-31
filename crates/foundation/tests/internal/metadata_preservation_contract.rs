@@ -1113,12 +1113,20 @@ fn contract_meme_finalize_requires_cleared_embedded_metadata() {
         .and_then(|rest| rest.split("pub fn ").next())
         .expect("finalize_meme_avif_probe body");
     assert!(
-        finalize.contains("MetadataOutputPolicy::Clear"),
-        "CONTRACT: meme finalize must enforce Clear embedded metadata policy"
+        finalize.contains("metadata_policy: runtime_config::AvifMetadataPolicy")
+            && finalize.contains("metadata_policy.output_policy()"),
+        "CONTRACT: meme finalize must enforce the resolved typed AVIF metadata policy"
     );
     assert!(
         finalize.contains("verify_output_embedded_metadata("),
         "CONTRACT: meme finalize must run per-file cleared metadata verification"
+    );
+    let policy = fs::read_to_string(manifest_dir.join("src/infra/runtime_config.rs"))
+        .expect("runtime configuration source must be readable");
+    assert!(
+        policy.contains("Self::Clear => crate::metadata::MetadataOutputPolicy::Clear")
+            && policy.contains("Self::Clear => 3"),
+        "CONTRACT: the supported private AVIF policy must require the existing version-3 Clear audit"
     );
 }
 

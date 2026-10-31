@@ -157,6 +157,16 @@ not substitute for Q/Speed. Its metadata policy is separate from archival JXL.
   candidate is discarded and its coordinate must be re-probed at the selected
   final Speed. This is a speed selection, not Speed exploration or a JXL E value.
   No runtime or compression benefit is guaranteed by changing it.
+- **Fast AVIF metadata intent.** `img.avif_metadata_policy` explicitly records the
+  existing private `clear` policy. It is the only supported value; `preserve`,
+  unknown values and null are rejected. `--avif-metadata-policy clear` is scoped
+  to Fast AVIF and configuration inspection. The resolved policy binds candidate
+  preparation, publication, existing-AVIF custody, local Gate 1 and policy version
+  3 in recovery evidence. An AVIF extension alone never authorizes clearing.
+  The native Fast AVIF settings show this effective intent read-only, with
+  separate loading, unavailable and unsupported states. Standard JXL retains its
+  preservation policy. Removable metadata clearing does not waive pixel, color,
+  HDR, filesystem-property or source/sidecar deletion proofs.
 
 `--avif-quality` and `--avif-speed` are valid for `img fast-img --strategy avif`
 and `img config` inspection, not ordinary IMG, Fast JXL or unrelated commands.
@@ -451,6 +461,7 @@ remain subject to macOS behavior.
 | `img.jxl_effort_search` | `adaptive` | Verified E payload comparison at fixed quality, independent of D search. `fixed` is the manual opt-out. No cross-E auxiliary D screening. |
 | `img.jpeg_effort_search` | `full` | `fixed`: one selected E; `adaptive`: bounded comparison; `full`: independent E1..E11 comparison by complete metadata-enriched JXL size. Every potential winner needs exact reconstruction proof; no partial minimum on failure. |
 | `img.quality_search` | `adaptive` | Guarded standard D search or separate Fast AVIF Q search. `fixed` is the manual opt-out; explicit `mode-default` retains the historical trigger. Source/size admission remains mandatory. Not source-quality inference. |
+| `img.avif_metadata_policy` | `clear` | Explicit private Fast AVIF removable-metadata policy; currently the only supported value. Does not change standard JXL preservation or authorize source/sidecar deletion. |
 | `img.fallback_policy` | `strict` | `strict`: no compatibility/repair retries for a requested encode. `same-semantics`: allows compatibility retries and e11 to e10 on original JPEG bytes. `repair`: also permits the existing guarded repair paths. Full JPEG comparison never changes candidate parameters or repairs input. All delivery and exact reconstruction checks remain mandatory. |
 | `vid.codec` | `hevc` | Standard video-run output codec, `hevc` or `av1`. VID `--codec` overrides the file and marks its source CLI. Does not select the Fast GIF strategy. |
 | `tools.policy` | `fallback` | `single` forbids governed alternate image encoding/recovery tools. `fallback` permits alternatives only with the route's other required permissions; it does not itself authorize repair. Required detection, decoding, metadata and verification are unaffected. |
@@ -905,6 +916,45 @@ Automation uses `--history-directory`, `--history-cleanup-preview` and
 `--history-cleanup` with schema-1 JSON containing authoritative `session_id` and
 `run_id` pairs. Execution additionally requires the exact preview
 `snapshot_token` and `--yes`; `--json` returns the verified preview or receipt.
+
+## Shared Application Session
+
+`dev::app::session::AppSession` owns the session history lease, diagnostic scope,
+artifact registration, per-attempt run identity, tool bindings, result/summary
+recording and archive lifecycle. The launcher adapts CLI inputs to a typed `RunContext`
+and delegates history execution to this shared layer; worker startup, capture,
+drain and process-exit handling remain in `dev::app::worker`.
+
+Context persistence and the attempt output cursor are established before work.
+Context failure prevents worker execution. A terminal history-write failure is
+reported without replacing an existing processing error or inventing counts.
+Input scopes share the same lease and run identity; distinct attempts and
+independent sessions retain their own identities. This is session-level
+orchestration, not a complete persistent per-file task or delivery manifest.
+
+## Fast IMG Processing Identity
+
+New Fast IMG checkpoints bind a schema-1 typed `processing_contract` before the
+first write. It contains route-specific effective JPEG E/search/archive/expert
+or AVIF Q/Speed/search/metadata/expert settings, plus tool and recovery
+permissions. Inactive manual E during full JPEG comparison and inactive Q during
+automatic AVIF search are normalized to their actual execution semantics;
+unrelated standard IMG, video, cache and interface settings are excluded.
+
+Saved and requested contracts must agree before tool preparation, and again
+under the output lock before the recovery choice, recursive inventory or output
+preparation. `MFB_RESUME_CONFIG_CHANGED` reports a mismatch;
+`MFB_RESUME_CONFIG_UNKNOWN` reports missing historical intent. Neither assigns
+today's settings to old results or overwrites their recovery evidence. Restore
+the recorded settings to continue, or explicitly start an isolated new task.
+Legacy inspection without this intent does not migrate the marker as a side
+effect. Unknown contract schemas, fields, strategies and invalid values fail
+closed on read and write.
+
+This contract complements the existing source, tool-runtime, metadata-version
+and Photos-target checks. It does not establish complete sidecar/filesystem
+identity, a persistent per-file plan, or failed-only retry after successful local
+outputs have been cleaned up; those still require their own current evidence.
 
 ## Standard Worker Preflight Admission
 
