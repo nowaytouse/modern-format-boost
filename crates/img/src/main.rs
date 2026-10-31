@@ -15498,12 +15498,16 @@ mod fast_img_hardening_tests {
         let mut marker = WorkingCopyMarker::new(src_dir, working_copy.clone(), 2)
             .with_strategy("avif".to_string());
         for name in ["a", "b"] {
+            let source = marker.src_dir.join(format!("{name}.png"));
+            std::fs::write(&source, format!("source-{name}"))?;
             std::fs::write(working_copy.join(format!("{name}.AVIF")), name.as_bytes())?;
             marker.blake3_log.insert(
                 format!("{name}.png"),
                 Blake3Entry {
-                    src: format!("src-{name}"),
-                    out: format!("out-{name}"),
+                    src: foundation::common_utils::calculate_blake3_hash(&source)?,
+                    out: foundation::common_utils::calculate_blake3_hash(
+                        &working_copy.join(format!("{name}.AVIF")),
+                    )?,
                     out_rel: Some(format!("{name}.AVIF")),
                     library_asset: None,
                 },
@@ -15514,14 +15518,38 @@ mod fast_img_hardening_tests {
             .map(|name| foundation::fast_img::PhotosImportCandidate {
                 path: working_copy.join(format!("{name}.AVIF")),
                 rel_path: format!("{name}.AVIF"),
-                blake3: format!("out-{name}"),
+                blake3: marker.blake3_log[&format!("{name}.png")].out.clone(),
                 album_name: "test".to_string(),
             })
             .collect::<Vec<_>>();
+        let submissions = marker
+            .blake3_log
+            .iter()
+            .map(
+                |(rel, entry)| foundation::pipeline::verification::PhotosSubmissionIntent {
+                    kind: foundation::pipeline::verification::PhotosSubmissionKind::Encoded,
+                    source_rel: rel.clone(),
+                    source_blake3: entry.src.clone(),
+                    output_rel: entry.out_rel.clone().unwrap(),
+                    output_blake3: entry.out.clone(),
+                    album_name: "test".into(),
+                    photos_library_path: None,
+                    backend:
+                        foundation::pipeline::verification::PhotosSubmissionBackend::Applescript {
+                            request_id: "synthetic-photos-request".into(),
+                        },
+                },
+            )
+            .collect::<Vec<_>>();
+        marker
+            .record_photos_submissions(&submissions)
+            .map_err(anyhow::Error::msg)?;
+        let submission_history = marker.photos_submission_history().cloned();
+        let success_hash = marker.blake3_log["a.png"].out.clone();
         let mut library = foundation::pipeline::verification::LibraryHandle {
             imported_assets: vec![foundation::pipeline::verification::LibraryAssetRecord {
                 rel_path: "a.AVIF".to_string(),
-                blake3: "out-a".to_string(),
+                blake3: success_hash.clone(),
                 sync_status: "photos_local".to_string(),
                 quarantined: false,
                 photos_uuid: Some("UUID-A".to_string()),
@@ -15545,12 +15573,19 @@ mod fast_img_hardening_tests {
         assert!(marker.blake3_log.contains_key("a.png"));
         assert_eq!(
             marker.blake3_log["a.png"].library_asset.as_deref(),
-            Some("out-a")
+            Some(success_hash.as_str())
         );
         assert!(marker.failed_sources.contains_key("b.png"));
         assert!(working_copy.join("a.AVIF").is_file());
         assert!(!working_copy.join("b.AVIF").exists());
         assert_eq!(fast_img_effective_expected_count(&marker, 2, false), 1);
+        // A missing verified Photos receipt is not evidence that no request
+        // was submitted. Keep the rejected item's former output identity.
+        assert_eq!(
+            marker.photos_submission_history().cloned(),
+            submission_history
+        );
+        assert_eq!(marker.photos_submission_history().unwrap().intents.len(), 2);
         Ok(())
     }
 

@@ -9,6 +9,7 @@ use super::{
 use crate::image::photos_import_metrics;
 use crate::image::photos_import_schedule::{Schedule, Step};
 use crate::image::photos_native::{Client, committed_pairs};
+use crate::pipeline::verification::PhotosSubmissionKind;
 use crate::progress::{PhotosImportPhase, PhotosImportProgress};
 use crate::unified_error::PhotosDeliveryDeferred;
 use std::os::unix::fs::PermissionsExt;
@@ -60,6 +61,30 @@ fn startup_error(error: anyhow::Error, unresolved_journals: bool) -> anyhow::Err
     }
 }
 
+enum PhotosImportCheckpointUpdate<'a> {
+    SubmissionIntent(&'a serde_json::Value),
+    Verified(&'a [super::LibraryAssetRecord]),
+}
+
+fn begin_checkpointed_request<C, S>(
+    entries: &[PhotosImportPendingEntry],
+    request: &serde_json::Value,
+    checkpoint: &mut C,
+    mut send: S,
+) -> anyhow::Result<()>
+where
+    C: for<'a> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'a>) -> Result<()>,
+    S: FnMut(&serde_json::Value) -> anyhow::Result<()>,
+{
+    // A successful socket write may outlive this process. Bind the request to
+    // the task before IPC; the native journal still owns the commit outcome.
+    checkpoint(
+        entries,
+        PhotosImportCheckpointUpdate::SubmissionIntent(request),
+    )?;
+    send(request)
+}
+
 fn checkpoint_with_progress<C>(
     entries: &[PhotosImportPendingEntry],
     assets: &[super::LibraryAssetRecord],
@@ -67,9 +92,9 @@ fn checkpoint_with_progress<C>(
     progress: &mut PhotosImportProgress,
 ) -> anyhow::Result<()>
 where
-    C: FnMut(&[PhotosImportPendingEntry], &[super::LibraryAssetRecord]) -> Result<()>,
+    C: for<'a> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'a>) -> Result<()>,
 {
-    checkpoint(entries, assets)?;
+    checkpoint(entries, PhotosImportCheckpointUpdate::Verified(assets))?;
     progress.checkpointed(entries.iter().map(|entry| entry.rel_path.as_str()))
 }
 
@@ -228,15 +253,26 @@ pub(super) fn try_import_originals(
             &mut |ids| super::query_selected_photos_asset_probes(ids, library),
             &mut super::path_has_quarantine_xattr,
             library,
-            &mut |_entries, assets| {
-                let handle = LibraryHandle {
-                    imported_assets: assets.to_vec(),
-                    import_error_count: 0,
-                    photos_library_path: library.map(Path::to_path_buf),
-                };
-                super::checkpoint_tier2_library_assets(marker, &handle, enriched)?;
-                photos_import_metrics::verified(assets.len());
-                Ok(())
+            &mut |entries, update| match update {
+                PhotosImportCheckpointUpdate::SubmissionIntent(request) => {
+                    super::submission_checkpoint::record_native(
+                        marker,
+                        entries,
+                        request,
+                        PhotosSubmissionKind::Original,
+                        Some(enriched),
+                    )
+                }
+                PhotosImportCheckpointUpdate::Verified(assets) => {
+                    let handle = LibraryHandle {
+                        imported_assets: assets.to_vec(),
+                        import_error_count: 0,
+                        photos_library_path: library.map(Path::to_path_buf),
+                    };
+                    super::checkpoint_tier2_library_assets(marker, &handle, enriched)?;
+                    photos_import_metrics::verified(assets.len());
+                    Ok(())
+                }
             },
         )?;
         Ok(result.map(|mut handle| {
@@ -464,7 +500,20 @@ where
             query,
             quarantined,
             library,
-            &mut |entries, assets| checkpoint_photos_import_window(marker, entries, assets),
+            &mut |entries, update| match update {
+                PhotosImportCheckpointUpdate::SubmissionIntent(request) => {
+                    super::submission_checkpoint::record_native(
+                        marker,
+                        entries,
+                        request,
+                        PhotosSubmissionKind::Encoded,
+                        None,
+                    )
+                }
+                PhotosImportCheckpointUpdate::Verified(assets) => {
+                    checkpoint_photos_import_window(marker, entries, assets)
+                }
+            },
         )
     });
     if result
@@ -490,7 +539,7 @@ fn try_import_inner<Q, P, C>(
 where
     Q: FnMut(&[String]) -> Result<Vec<FastImgLibraryAssetProbe>>,
     P: FnMut(&Path) -> Result<bool>,
-    C: FnMut(&[PhotosImportPendingEntry], &[super::LibraryAssetRecord]) -> Result<()>,
+    C: for<'a> FnMut(&[PhotosImportPendingEntry], PhotosImportCheckpointUpdate<'a>) -> Result<()>,
 {
     let backend = if let Some(config) = crate::infra::runtime_config::active() {
         match config.photos.backend {
@@ -694,14 +743,17 @@ where
                 // A single helper write can run while this window is verified and checkpointed.
                 let next = schedule.next();
                 let prefetch = if let Some(Step::Import(import_range)) = &next {
+                    let import_entries = &pending[import_range.clone()];
                     let request = import_request(
-                        &pending[import_range.clone()],
+                        import_entries,
                         batch_index,
                         &albums,
                         &witnesses,
                         &journals,
                     )?;
-                    client.begin_request(&request)?;
+                    begin_checkpointed_request(import_entries, &request, checkpoint, |request| {
+                        client.begin_request(request)
+                    })?;
                     batch_index += 1;
                     Some(request)
                 } else {
@@ -768,9 +820,11 @@ where
             }
             Step::Import(range) => {
                 progress.phase(PhotosImportPhase::Importing)?;
-                let request =
-                    import_request(&pending[range], batch_index, &albums, &witnesses, &journals)?;
-                client.begin_request(&request)?;
+                let entries = &pending[range];
+                let request = import_request(entries, batch_index, &albums, &witnesses, &journals)?;
+                begin_checkpointed_request(entries, &request, checkpoint, |request| {
+                    client.begin_request(request)
+                })?;
                 batch_index += 1;
                 finish_import(&mut client, &request, &mut identifiers, library)?;
                 step = schedule.next();
@@ -797,7 +851,66 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::os::unix::process::ExitStatusExt as _;
+
+    #[test]
+    fn native_request_is_persisted_before_send_and_write_failure_prevents_submission()
+    -> anyhow::Result<()> {
+        let entries = [PhotosImportPendingEntry {
+            source_rel: "image.jpg".into(),
+            rel_path: "image.jxl".into(),
+            path: PathBuf::from("/synthetic/image.jxl"),
+            album_name: "Synthetic".into(),
+            blake3_entry: super::super::Blake3Entry::default(),
+        }];
+        let request = serde_json::json!({"version":1,"batchID":"synthetic-request"});
+        let sends = Cell::new(0);
+        let error = begin_checkpointed_request(
+            &entries,
+            &request,
+            &mut |_, update| {
+                assert!(matches!(
+                    update,
+                    PhotosImportCheckpointUpdate::SubmissionIntent(_)
+                ));
+                Err(ImgQualityError::AnalysisError(
+                    "synthetic submission-index write failure".into(),
+                ))
+            },
+            |_| {
+                sends.set(sends.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("submission-index write failure"));
+        assert_eq!(sends.get(), 0);
+
+        let persisted = Cell::new(false);
+        begin_checkpointed_request(
+            &entries,
+            &request,
+            &mut |recorded_entries, update| {
+                assert_eq!(recorded_entries[0].source_rel, entries[0].source_rel);
+                let PhotosImportCheckpointUpdate::SubmissionIntent(recorded_request) = update
+                else {
+                    panic!("submission must not be recorded as verified custody");
+                };
+                assert_eq!(recorded_request, &request);
+                persisted.set(true);
+                Ok(())
+            },
+            |sent_request| {
+                assert!(persisted.get(), "IPC must follow the durable task update");
+                assert_eq!(sent_request, &request);
+                sends.set(sends.get() + 1);
+                Ok(())
+            },
+        )?;
+        assert_eq!(sends.get(), 1);
+        Ok(())
+    }
 
     #[test]
     fn photos_progress_advances_only_after_checkpoint_persistence() -> anyhow::Result<()> {
@@ -814,7 +927,8 @@ mod tests {
             checkpoint_with_progress(
                 &entries,
                 &[],
-                &mut |_, _| {
+                &mut |_, update| {
+                    assert!(matches!(update, PhotosImportCheckpointUpdate::Verified(_)));
                     Err(ImgQualityError::AnalysisError(
                         "synthetic checkpoint write failure".into(),
                     ))
@@ -824,7 +938,15 @@ mod tests {
             .is_err()
         );
         assert!(progress.complete().is_err());
-        checkpoint_with_progress(&entries, &[], &mut |_, _| Ok(()), &mut progress)?;
+        checkpoint_with_progress(
+            &entries,
+            &[],
+            &mut |_, update| {
+                assert!(matches!(update, PhotosImportCheckpointUpdate::Verified(_)));
+                Ok(())
+            },
+            &mut progress,
+        )?;
         progress.complete()?;
         Ok(())
     }

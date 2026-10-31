@@ -3151,6 +3151,176 @@ impl FastImgProcessingContract {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhotosSubmissionKind {
+    Encoded,
+    Original,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "backend", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PhotosSubmissionBackend {
+    Native {
+        journal_path: PathBuf,
+        request_blake3: String,
+    },
+    Applescript {
+        request_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosSubmissionIntent {
+    pub kind: PhotosSubmissionKind,
+    pub source_rel: String,
+    pub source_blake3: String,
+    pub output_rel: String,
+    pub output_blake3: String,
+    pub album_name: String,
+    pub photos_library_path: Option<PathBuf>,
+    pub backend: PhotosSubmissionBackend,
+}
+
+/// Submission is evidence of a possible Photos side effect, not a delivery receipt.
+/// An incomplete history must never be interpreted as proof that an older asset
+/// was not submitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PhotosSubmissionHistory {
+    pub schema: u8,
+    pub complete_from_creation: bool,
+    pub intents: Vec<PhotosSubmissionIntent>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PhotosSubmissionRequest<'a> {
+    Native(&'a Path),
+    Applescript(&'a str),
+}
+
+impl PhotosSubmissionIntent {
+    fn request_identity(&self) -> PhotosSubmissionRequest<'_> {
+        match &self.backend {
+            PhotosSubmissionBackend::Native { journal_path, .. } => {
+                PhotosSubmissionRequest::Native(journal_path)
+            }
+            PhotosSubmissionBackend::Applescript { request_id } => {
+                PhotosSubmissionRequest::Applescript(request_id)
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (kind, rel) in [
+            ("Photos submission source", self.source_rel.as_str()),
+            ("Photos submission output", self.output_rel.as_str()),
+        ] {
+            validate_marker_relative_path(kind, rel)?;
+            validate_submission_path_normalized(kind, Path::new(rel))?;
+        }
+        validate_submission_blake3("source", &self.source_blake3)?;
+        validate_submission_blake3("output", &self.output_blake3)?;
+        if self.album_name.is_empty() || self.album_name.contains('\0') {
+            return Err("Photos submission album name must be non-empty and contain no NUL".into());
+        }
+        if let Some(path) = &self.photos_library_path {
+            validate_submission_absolute_path("Photos library", path)?;
+        }
+        match &self.backend {
+            PhotosSubmissionBackend::Native {
+                journal_path,
+                request_blake3,
+            } => {
+                validate_submission_absolute_path("native journal", journal_path)?;
+                validate_submission_blake3("native request", request_blake3)?;
+            }
+            PhotosSubmissionBackend::Applescript { request_id } => {
+                if request_id.is_empty() || request_id.chars().any(char::is_control) {
+                    return Err(
+                        "Photos submission request ID must be non-empty and contain no control characters"
+                            .into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_submission_blake3(kind: &str, hash: &str) -> Result<(), String> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "Photos submission {kind} BLAKE3 must contain exactly 64 lowercase hexadecimal digits"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_submission_path_normalized(kind: &str, path: &Path) -> Result<(), String> {
+    let normalized: PathBuf = path.components().collect();
+    if path.as_os_str().as_encoded_bytes().contains(&0)
+        || normalized.as_os_str() != path.as_os_str()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err(format!(
+            "Photos submission {kind} path must be normalized: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_submission_absolute_path(kind: &str, path: &Path) -> Result<(), String> {
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err(format!(
+            "Photos submission {kind} path must be an absolute non-root path: {}",
+            path.display()
+        ));
+    }
+    validate_submission_path_normalized(kind, path)
+}
+
+impl PhotosSubmissionHistory {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "unsupported Photos submission history schema {}; expected 1",
+                self.schema
+            ));
+        }
+        let mut requests = BTreeMap::new();
+        let mut entries = BTreeSet::new();
+        for intent in &self.intents {
+            intent.validate()?;
+            let request = intent.request_identity();
+            let scope = (&intent.backend, &intent.photos_library_path);
+            if let Some(previous) = requests.insert(request, scope)
+                && previous != scope
+            {
+                return Err(format!(
+                    "Photos submission request has conflicting request hash or library scope for {}",
+                    intent.output_rel
+                ));
+            }
+            if !entries.insert((request, intent.output_rel.as_str())) {
+                return Err(format!(
+                    "Photos submission history contains duplicate request entry {}",
+                    intent.output_rel
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkingCopyMarker {
     pub schema: u8,
@@ -3179,6 +3349,10 @@ pub struct WorkingCopyMarker {
     /// Primary fast-img Photos assets, including UUIDs needed for fresh resume verification.
     #[serde(default)]
     pub photos_imported_assets: Vec<LibraryAssetRecord>,
+    /// Append-only evidence survives failure isolation, cleanup, and retry.
+    /// Missing historical coverage is retained rather than upgraded on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    photos_submission_history: Option<PhotosSubmissionHistory>,
     /// Canonical Photos library selected for this marker's import custody proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub photos_library_path: Option<PathBuf>,
@@ -3270,6 +3444,11 @@ impl WorkingCopyMarker {
             tier2_imported_assets: Vec::new(),
             tier2_in_progress: false,
             photos_imported_assets: Vec::new(),
+            photos_submission_history: Some(PhotosSubmissionHistory {
+                schema: 1,
+                complete_from_creation: true,
+                intents: Vec::new(),
+            }),
             photos_library_path: None,
             photos_import_naming_policy: None,
             error: None,
@@ -3287,6 +3466,69 @@ impl WorkingCopyMarker {
     pub fn with_strategy(mut self, strategy: String) -> Self {
         self.strategy = strategy;
         self
+    }
+
+    #[must_use]
+    pub fn photos_submission_history(&self) -> Option<&PhotosSubmissionHistory> {
+        self.photos_submission_history.as_ref()
+    }
+
+    /// Record a batch before submitting it to Photos. Repeating an identical
+    /// request entry is idempotent; any changed identity or evidence is rejected.
+    /// This does not confer delivery or source-cleanup eligibility.
+    ///
+    /// # Errors
+    /// Rejects invalid or conflicting evidence without changing the marker.
+    pub fn record_photos_submissions(
+        &mut self,
+        intents: &[PhotosSubmissionIntent],
+    ) -> Result<(), String> {
+        if intents.is_empty() {
+            return self.validate_photos_submission_history();
+        }
+        let mut history =
+            self.photos_submission_history
+                .clone()
+                .unwrap_or_else(|| PhotosSubmissionHistory {
+                    schema: 1,
+                    complete_from_creation: false,
+                    intents: Vec::new(),
+                });
+        history.validate()?;
+        let mut entries = BTreeMap::new();
+        for intent in &history.intents {
+            entries.insert(
+                (intent.request_identity(), intent.output_rel.as_str()),
+                intent,
+            );
+        }
+        let mut additions = Vec::new();
+        for intent in intents {
+            let key = (intent.request_identity(), intent.output_rel.as_str());
+            if let Some(previous) = entries.get(&key) {
+                if *previous != intent {
+                    return Err(format!(
+                        "Photos submission request entry conflicts with existing evidence for {}",
+                        intent.output_rel
+                    ));
+                }
+            } else {
+                entries.insert(key, intent);
+                additions.push(intent.clone());
+            }
+        }
+        drop(entries);
+        history.intents.extend(additions);
+        history.validate()?;
+        self.photos_submission_history = Some(history);
+        Ok(())
+    }
+
+    fn validate_photos_submission_history(&self) -> Result<(), String> {
+        if let Some(history) = &self.photos_submission_history {
+            history.validate()?;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -3704,6 +3946,9 @@ pub fn marker_path_for_working_copy(working_copy: &Path) -> PathBuf {
 }
 
 pub fn write_marker_atomic(marker: &WorkingCopyMarker) -> std::io::Result<()> {
+    marker
+        .validate_photos_submission_history()
+        .map_err(std::io::Error::other)?;
     if let Some(contract) = &marker.processing_contract {
         contract
             .validate(&marker.strategy)
@@ -3771,6 +4016,9 @@ fn parse_marker_for_working_copy(
             marker.schema, FAST_IMG_MARKER_SCHEMA_VERSION
         )));
     }
+    marker
+        .validate_photos_submission_history()
+        .map_err(std::io::Error::other)?;
     if let Some(contract) = &marker.processing_contract {
         contract
             .validate(&marker.strategy)
@@ -3984,6 +4232,328 @@ pub fn summarize_checks(checks: &[CheckDetail]) -> String {
 #[must_use]
 pub fn marker_checks_from_result(result: &GateResult) -> String {
     summarize_checks(&result.checks)
+}
+
+#[cfg(test)]
+mod photos_submission_tests {
+    use super::{
+        FastImgStageName, PhotosSubmissionBackend, PhotosSubmissionIntent, PhotosSubmissionKind,
+        WorkingCopyMarker, parse_marker_for_working_copy, read_marker, write_marker_atomic,
+    };
+    use std::path::Path;
+
+    fn intent(root: &Path) -> PhotosSubmissionIntent {
+        PhotosSubmissionIntent {
+            kind: PhotosSubmissionKind::Encoded,
+            source_rel: "旅行/photo.jpeg".into(),
+            source_blake3: "a".repeat(64),
+            output_rel: "旅行/photo.JXL".into(),
+            output_blake3: "b".repeat(64),
+            album_name: "归档/旅行".into(),
+            photos_library_path: Some(root.join("Archive.photoslibrary")),
+            backend: PhotosSubmissionBackend::Native {
+                journal_path: root.join("native/batch.json"),
+                request_blake3: "c".repeat(64),
+            },
+        }
+    }
+
+    fn marker(root: &Path) -> WorkingCopyMarker {
+        WorkingCopyMarker::new(root.join("Photos"), root.join("Photos_optimized"), 1)
+    }
+
+    #[test]
+    fn photos_submission_history_preserves_unknown_legacy_coverage() {
+        let root = tempfile::tempdir().unwrap();
+        let current = marker(root.path());
+        let history = current.photos_submission_history().unwrap();
+        assert!(history.complete_from_creation);
+        assert!(history.intents.is_empty());
+
+        let mut legacy = serde_json::to_value(&current).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("photos_submission_history");
+        let mut legacy = parse_marker_for_working_copy(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &current.working_copy,
+        )
+        .unwrap();
+        assert!(legacy.photos_submission_history().is_none());
+        legacy.record_photos_submissions(&[]).unwrap();
+        assert!(legacy.photos_submission_history().is_none());
+        legacy
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        let history = legacy.photos_submission_history().unwrap();
+        assert!(!history.complete_from_creation);
+        assert_eq!(history.intents.len(), 1);
+        let parsed = parse_marker_for_working_copy(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &current.working_copy,
+        )
+        .unwrap();
+        assert_eq!(parsed, legacy);
+    }
+
+    #[test]
+    fn photos_submission_history_appends_idempotently_without_delivery_credit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        let native = intent(root.path());
+        let mut original = native.clone();
+        original.kind = PhotosSubmissionKind::Original;
+        original.output_rel = original.source_rel.clone();
+        original.output_blake3.clone_from(&original.source_blake3);
+        original.backend = PhotosSubmissionBackend::Applescript {
+            request_id: "d".repeat(64),
+        };
+        let batch = [native.clone(), native, original.clone()];
+        marker.record_photos_submissions(&batch).unwrap();
+        marker.record_photos_submissions(&batch).unwrap();
+        marker.record_photos_submissions(&[]).unwrap();
+        let history = marker.photos_submission_history().unwrap();
+        assert!(history.complete_from_creation);
+        assert_eq!(history.intents.len(), 2);
+        assert_eq!(history.intents[1], original);
+        assert_eq!(marker.stage, FastImgStageName::ScanComplete);
+        assert_eq!(marker.encoded_count, 0);
+        assert_eq!(marker.recorded_source_count(), 0);
+        assert!(marker.photos_imported_assets.is_empty());
+        assert!(marker.tier2_imported_assets.is_empty());
+        assert!(!marker.gate1_checks.blake3.0);
+        assert!(!marker.gate2_checks.blake3_sample.0);
+        assert!(!marker.gate3_checks.chain.0);
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_conflicts_without_partial_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let original = intent(root.path());
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(std::slice::from_ref(&original))
+            .unwrap();
+        let before = marker.clone();
+        let valid = serde_json::to_value(&original).unwrap();
+        for (pointer, value) in [
+            ("/kind", serde_json::json!("original")),
+            ("/source_rel", serde_json::json!("other.jpeg")),
+            ("/source_blake3", serde_json::json!("d".repeat(64))),
+            ("/output_blake3", serde_json::json!("e".repeat(64))),
+            ("/album_name", serde_json::json!("Different album")),
+            (
+                "/photos_library_path",
+                serde_json::json!(root.path().join("Other.photoslibrary")),
+            ),
+            ("/backend/request_blake3", serde_json::json!("f".repeat(64))),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            let conflict = serde_json::from_value(changed).unwrap();
+            let mut preceding = original.clone();
+            preceding.output_rel = "new.JXL".into();
+            assert!(
+                marker
+                    .record_photos_submissions(&[preceding, conflict])
+                    .is_err(),
+                "conflict at {pointer} must not mutate the marker"
+            );
+            assert_eq!(marker, before);
+        }
+
+        let mut conflicting_request = original.clone();
+        conflicting_request.output_rel = "new.JXL".into();
+        let PhotosSubmissionBackend::Native { request_blake3, .. } =
+            &mut conflicting_request.backend
+        else {
+            unreachable!()
+        };
+        *request_blake3 = "f".repeat(64);
+        assert!(
+            marker
+                .record_photos_submissions(&[conflicting_request])
+                .is_err()
+        );
+        assert_eq!(marker, before);
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_malformed_persisted_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        let valid = serde_json::to_value(&marker).unwrap();
+        for (pointer, value) in [
+            ("/photos_submission_history/schema", serde_json::json!(2)),
+            (
+                "/photos_submission_history/intents/0/kind",
+                serde_json::json!("unknown"),
+            ),
+            (
+                "/photos_submission_history/intents/0/source_rel",
+                serde_json::json!("../escape.jpeg"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("a/./photo.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("a//photo.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("photo.JXL/"),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_rel",
+                serde_json::json!("photo\0.JXL"),
+            ),
+            (
+                "/photos_submission_history/intents/0/source_blake3",
+                serde_json::json!("a".repeat(63)),
+            ),
+            (
+                "/photos_submission_history/intents/0/output_blake3",
+                serde_json::json!("B".repeat(64)),
+            ),
+            (
+                "/photos_submission_history/intents/0/album_name",
+                serde_json::json!(""),
+            ),
+            (
+                "/photos_submission_history/intents/0/photos_library_path",
+                serde_json::json!("relative.photoslibrary"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/backend",
+                serde_json::json!("unknown"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/journal_path",
+                serde_json::json!("relative-journal.json"),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/journal_path",
+                serde_json::json!(root.path().join("native/../batch.json")),
+            ),
+            (
+                "/photos_submission_history/intents/0/backend/request_blake3",
+                serde_json::json!("g".repeat(64)),
+            ),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                parse_marker_for_working_copy(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    &marker.working_copy,
+                )
+                .is_err(),
+                "invalid {pointer} must reject on read"
+            );
+            if let Ok(changed) = serde_json::from_value::<WorkingCopyMarker>(changed) {
+                assert!(write_marker_atomic(&changed).is_err());
+            }
+        }
+        for pointer in [
+            "/photos_submission_history",
+            "/photos_submission_history/intents/0",
+            "/photos_submission_history/intents/0/backend",
+        ] {
+            let mut changed = valid.clone();
+            changed.pointer_mut(pointer).unwrap()["unknown_field"] = serde_json::json!(true);
+            assert!(
+                parse_marker_for_working_copy(
+                    &serde_json::to_vec(&changed).unwrap(),
+                    &marker.working_copy,
+                )
+                .is_err()
+            );
+        }
+        let mut duplicate = valid;
+        let intents = duplicate["photos_submission_history"]["intents"]
+            .as_array_mut()
+            .unwrap();
+        intents.push(intents[0].clone());
+        assert!(
+            parse_marker_for_working_copy(
+                &serde_json::to_vec(&duplicate).unwrap(),
+                &marker.working_copy,
+            )
+            .is_err()
+        );
+        assert!(!marker.working_copy.exists());
+    }
+
+    #[test]
+    fn photos_submission_history_rejects_invalid_applescript_identity_and_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let mut marker = marker(root.path());
+        let mut original = intent(root.path());
+        original.backend = PhotosSubmissionBackend::Applescript {
+            request_id: "d".repeat(64),
+        };
+        marker
+            .record_photos_submissions(std::slice::from_ref(&original))
+            .unwrap();
+        let before = marker.clone();
+        let mut second = original.clone();
+        second.output_rel = "second.JXL".into();
+        second.photos_library_path = None;
+        assert!(marker.record_photos_submissions(&[second]).is_err());
+        assert_eq!(marker, before);
+        for id in ["", "bad\0id", "bad\nid"] {
+            let mut bad = original.clone();
+            bad.backend = PhotosSubmissionBackend::Applescript {
+                request_id: id.into(),
+            };
+            assert!(marker.record_photos_submissions(&[bad]).is_err());
+            assert_eq!(marker, before);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn photos_submission_history_survives_marker_roundtrip_and_outcome_reset() {
+        if crate::common_utils::isolated_test_process() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let _home_guard = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            state.path().to_str().unwrap(),
+        );
+        let mut marker = marker(root.path());
+        marker
+            .record_photos_submissions(&[intent(root.path())])
+            .unwrap();
+        write_marker_atomic(&marker).unwrap();
+        let mut resumed = read_marker(&marker.working_copy).unwrap();
+        assert_eq!(resumed, marker);
+        resumed.blake3_log.clear();
+        resumed.failed_sources.clear();
+        resumed.skipped_sources.clear();
+        resumed.photos_imported_assets.clear();
+        resumed.tier2_imported_assets.clear();
+        resumed.gate1_checks = super::Gate1Checks::default();
+        resumed.gate2_checks = super::Gate2Checks::default();
+        resumed.gate3_checks = super::Gate3Checks::default();
+        resumed.stage = FastImgStageName::CleanupComplete;
+        write_marker_atomic(&resumed).unwrap();
+        let after_cleanup = read_marker(&marker.working_copy).unwrap();
+        assert_eq!(
+            after_cleanup.photos_submission_history(),
+            marker.photos_submission_history()
+        );
+        assert!(!marker.working_copy.exists());
+        assert!(!marker.src_dir.exists());
+    }
 }
 
 #[cfg(test)]

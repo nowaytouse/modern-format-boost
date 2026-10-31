@@ -23,6 +23,19 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Photos Submission Identity And Reconciliation (2026-10-31)
+
+- Persist per-file request references before checkpointed native and AppleScript
+  media submission, including native prefetch. A failed write prevents sending;
+  unknown historical coverage remains unknown and references survive file-outcome
+  isolation without being promoted to delivery proofs.
+- Keep source bytes separate from XMP-enriched delivery bytes, and bind native
+  references to the exact request and journal. Reuse the existing checkpoint
+  store without creating another status database or per-file sidecars.
+- Propagate AppleScript reconciliation query errors and ambiguous targets rather
+  than returning a false not-found result. Post-cleanup failed-only child attempts
+  and full cross-attempt reconciliation remain separate unfinished work.
+
 ### Private Policy And Shared Session Boundaries (2026-10-31)
 
 - Resolve the existing Fast AVIF metadata policy explicitly through typed

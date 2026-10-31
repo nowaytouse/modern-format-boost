@@ -302,7 +302,7 @@ fn photos_pipeline_debug_benchmark() -> anyhow::Result<()> {
     validate_fast_img_marker_output_hashes(&marker)?;
     let started = std::time::Instant::now();
     let import = import_marker_outputs_with_photos_checkpoint_in_library(
-        &marker,
+        &mut marker,
         &output_paths,
         false,
         |uuids| query_osxphotos_asset_probes_from_library(uuids, &library),
@@ -340,10 +340,11 @@ fn photos_pipeline_debug_benchmark() -> anyhow::Result<()> {
         );
     }
 
-    // Resume from the original marker, before it held any imported UUID proof.
+    // Resume using the same caller-owned marker, including its submission and
+    // UUID checkpoints; a returned handle must not replace that authority.
     let resume_started = std::time::Instant::now();
     let resumed = import_marker_outputs_with_photos_checkpoint_in_library(
-        &marker,
+        &mut marker,
         &output_paths,
         true,
         |uuids| query_osxphotos_asset_probes_from_library(uuids, &library),

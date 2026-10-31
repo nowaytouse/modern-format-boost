@@ -956,6 +956,46 @@ and Photos-target checks. It does not establish complete sidecar/filesystem
 identity, a persistent per-file plan, or failed-only retry after successful local
 outputs have been cleaned up; those still require their own current evidence.
 
+## Photos Submission References
+
+Checkpointed Fast IMG imports persist schema-1 `photos_submission_history`
+before sending media. Each entry binds the source and output relative paths and
+full BLAKE3 identities, encoded/original route, album and selected library. Native
+entries also reference the exact journal path and complete request BLAKE3;
+AppleScript entries retain a task-scoped request identity. XMP-enriched original
+imports distinguish the original source bytes from the enriched delivery bytes.
+
+Both native import and prefetch, plus checkpointed AppleScript encoded/original
+submission, persist before their actual send. AppleScript reserves requests in
+the existing bounded groups, then consumes one matching in-memory permit per
+initial send. An unused reservation may remain when a query fails, a prior asset
+is recovered or the run stops. A retry needs a new persisted request reference.
+A reservation write failure prevents the group's sends in either error mode and
+does not advance the caller's in-memory checkpoint. The reference describes a
+possible side effect, not a verified asset, a successful send or a commit.
+Native journals and fresh UUID/original-resource verification
+remain authoritative. Submission records never grant deletion permission or
+increment media success counts.
+
+New checkpoints record complete coverage of their own checkpointed media
+submissions from creation; this is not a global Photos deduplication claim.
+Missing historical coverage remains unknown; appending new requests to an old checkpoint does not
+turn earlier unknown activity into an empty complete history. Invalid schemas,
+paths, hashes, duplicate entries and conflicting request scopes are rejected.
+Failure isolation and outcome resets retain these references after local outputs
+are removed. They share the existing checkpoint store; no second status database
+or per-file request sidecars are introduced. Grouping avoids a new full-checkpoint
+write per initial AppleScript media send; existing verified receipt persistence
+is retained. The checkpoint still serializes its complete JSON payload, so this
+is not a canonical per-row SQLite migration or a measured throughput claim.
+
+AppleScript reconciliation reports `MFB_NOT_FOUND` only after a successful query
+returns no match. Query failures and ambiguous folder/album or single-asset
+matches propagate instead of authorizing a new import. Discovery still does not
+replace original-resource identity verification. These references are a recovery
+building block; parent/child failed-only attempts, complete cross-attempt
+reconciliation and a full source/sidecar manifest remain unfinished.
+
 ## Standard Worker Preflight Admission
 
 Standard launcher runs submit one selected media file per IMG/VID invocation in
