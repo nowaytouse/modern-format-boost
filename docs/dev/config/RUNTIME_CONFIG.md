@@ -953,8 +953,8 @@ closed on read and write.
 
 This contract complements the existing source, tool-runtime, metadata-version
 and Photos-target checks. It does not establish complete sidecar/filesystem
-identity, a persistent per-file plan, or failed-only retry after successful local
-outputs have been cleaned up; those still require their own current evidence.
+identity or a complete persistent per-file plan. Failed-only child attempts add
+their own admission evidence, as described below.
 
 ## Photos Submission References
 
@@ -994,14 +994,78 @@ claim.
 AppleScript reconciliation reports `MFB_NOT_FOUND` only after a successful query
 returns no match. Query failures and ambiguous folder/album or single-asset
 matches propagate instead of authorizing a new import. Discovery still does not
-replace original-resource identity verification. These references are a recovery
-building block; parent/child failed-only attempts, complete cross-attempt
-reconciliation and a full source/sidecar manifest remain unfinished.
+replace original-resource identity verification. Failed-only children consume
+these references before any new submission. A complete source/sidecar execution
+manifest and general recovery of every interrupted stage remain separate work.
+
+## Failed-source Child Attempts
+
+Fast IMG distinguishes continuing an unfinished task (`--retry`), starting a new
+isolated task (`--no-resume`), and retrying retained failures (`--retry-failed`).
+The latter applies to a completed checkpoint with recorded failures and complete
+source dispositions. It creates a child attempt without resetting the completed
+parent's outcomes, gates or receipts. Successful parent media are outside the
+child's work set, including when their sources and local outputs have already
+been safely removed.
+
+The immutable Core relation binds the exact parent snapshot, processing
+contract, requested local/Photos delivery and admitted failed sources. Each
+admission retains the parent's source hash separately from the newly observed
+source hash and native identity, with explicit XMP/AAE presence or absence.
+Changed source bytes are a new admission, not an assertion that old evidence
+still matches. Unreadable, ambiguous or linked resources cannot be admitted by
+guessing. Current admission requires the entire selected failure set to be
+observable; per-file blocked admission is not implemented.
+
+One parent snapshot reserves one stable child location. Before creating that
+reservation, the processing entry holds the prospective output lease and refuses
+any existing filesystem object at that location, including an empty directory.
+Source input must name the recorded source directory or its sole failed file;
+selecting one file from a multi-failure parent cannot silently widen the request.
+New children use the current verified tool authority; resumed children retain
+their own authority. Changed processing or delivery intent blocks reuse.
+The default Photos library can bind to its actual selected identity once; it
+cannot subsequently change or be cleared.
+
+The child processes only its persisted admission list. Independent verification
+uses that same source scope and still checks the entire child output directory;
+unknown output files do not disappear from verification. Parent and sibling
+outputs are not swept by the child's post-processing cleanup. An unfinished
+child whose entire source root has disappeared cannot currently use a separate
+finish-only recovery path; it remains blocked rather than recreating the source
+or bypassing verification.
+
+Before importing, reconciliation examines all ancestor submission histories and
+the resumed child's own history. Missing historical coverage, uncertain native
+commits, conflicting targets, missing identifiers, ambiguous candidates and
+query/export errors prevent another send. Native recovery validates the full
+original journal request and unique identifier mapping before projecting only
+the child's selected sources. Fresh original-resource hashes and source/output/
+companion checks are still required before recording a child receipt. A
+successful filename lookup with no result cannot dismiss a possible prior send.
+Diagnostic wording never determines whether a query error is safe to ignore.
+
+Requesting the same completed child returns a historical reference through
+`MFB_FAST_IMG_RETRY_REUSED`, confirmed by the launcher against this invocation
+and durable Core relation. It performs no new media scan, encoding, Photos query,
+import or media cleanup; newly processed, delivered and saved-byte counts are
+zero. Missing old media directories are not recreated. This reference is not a
+fresh gate or Photos custody proof. To retry a completed child's remaining
+failures, the user must explicitly select that child as a new parent through
+History or `--retry-failed-parent`; the ordinary action never automatically
+creates grandchildren.
+
+The native recovery dialog offers only actions supported by the backend's
+validated availability record. History links the current request with its parent
+and child without presenting historical successes as new work. Debug windows
+retain their read-only restrictions. These contracts do not establish real
+Photos or iCloud acceptance, a complete execution manifest, or cross-filesystem/
+SQLite crash atomicity.
 
 ## Canonical Fast IMG State
 
 Fast IMG task headers, source outcomes, Photos request/entry references and
-verified receipt records use the existing Core SQLite store, schema 4. Large
+verified receipt records use the existing Core SQLite store, schema 5. Large
 per-file collections are normalized rows, not a second authoritative JSON blob.
 One IMMEDIATE transaction publishes a logical snapshot; failed writes and commits
 preserve the last committed snapshot. The writer validates the saved state first,
@@ -1051,16 +1115,16 @@ a new directory generation. These snapshots authorize neither media deletion
 nor Photos delivery, and do not establish complete crash atomicity across the
 rest of the processing pipeline.
 
-Core schema migrations from CRC32 v1 and BLAKE3 v2/v3 to v4 are transactional.
-Known v2/v3 databases remain inspectable read-only without pretending they already
-have the newer tables or directory evidence. Integrity inspection verifies all
-six Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
+Core schema migrations from CRC32 v1 and BLAKE3 v2/v3/v4 to v5 are transactional.
+Known v2/v3/v4 databases remain inspectable read-only without pretending they already
+have the newer tables, directory evidence or retry relations. Integrity inspection
+verifies all eight Fast IMG tables and migration backups in a consistent SQL snapshot. Durable
 directory evidence is parsed, hashed and scope-checked without revisiting media
 paths. It does not open media files or
 confer Photos custody or deletion permission. Cache management counts these as
 protected State and includes them in verified backups; cache pruning never
 deletes them. Reported payload bytes cover actual stored headers, legacy marker
-bytes and directory-snapshot payloads, not database pages, indexes or estimated
+bytes, directory snapshots and retry admission/request payloads, not database pages, indexes or estimated
 disk recovery.
 
 The formal Rust Core root is fixed for the process; invalid or unavailable
@@ -1070,9 +1134,8 @@ location is read before the resolved state root is bound, and cannot be used
 to rebind an already active state session. The store
 still lives at `cache/mfb_store.sqlite` and also contains protected legacy
 Checkpoint/processed records. This change does not physically separate Cache and
-State, implement a complete file-task Manifest, prove cross-filesystem crash
-atomicity, or finish post-cleanup failed-only retry and cross-attempt Photos
-reconciliation.
+State, implement a complete file-task Manifest or prove cross-filesystem crash
+atomicity. Failed-only child attempts provide the narrower recovery contract above.
 
 ## Standard Worker Preflight Admission
 

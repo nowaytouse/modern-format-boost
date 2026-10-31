@@ -42,8 +42,9 @@ areas of change are:
   bytes and hash preserved in the database before retiring the old file. Ordinary
   reads do not fall back to JSON, migrate or create empty state on errors.
 - Extend protected-state integrity and verified backups to the new tables;
-  reconstructable cache cleanup retains them. State/Cache physical separation,
-  full file-task manifests and post-cleanup failed-only retries remain unfinished.
+  reconstructable cache cleanup retains them. State/Cache physical separation
+  and full file-task manifests remain unfinished. Failed-only child attempts are
+  described below.
 
 ### Photos Submission Identity And Reconciliation (2026-10-31)
 
@@ -55,8 +56,8 @@ areas of change are:
   references to the exact request and journal. Reuse the existing checkpoint
   store without creating another status database or per-file sidecars.
 - Propagate AppleScript reconciliation query errors and ambiguous targets rather
-  than returning a false not-found result. Post-cleanup failed-only child attempts
-  and full cross-attempt reconciliation remain separate unfinished work.
+  than returning a false not-found result. References alone do not complete
+  recovery; the scoped failed-only child consumer is described below.
 
 ### Private Policy And Shared Session Boundaries (2026-10-31)
 
@@ -69,7 +70,22 @@ areas of change are:
   inventory without assigning new settings to old evidence.
 - Move session leases, run identities, history execution, summary recording and archives
   into the shared application layer, retaining worker drain and error behavior.
-  Full file-task manifests and post-cleanup failed-only retry remain separate.
+  Full file-task manifests remain separate.
+
+### Failed-source Child Attempts (2026-10-31)
+
+- Retry retained Fast IMG failures in an independent, persisted child attempt;
+  completed parent successes and gates remain unchanged after media cleanup.
+- Bind the exact parent snapshot, source/companion admissions, processing intent,
+  delivery target and tool authority. Reject user-owned output locations and
+  conflicting input scopes instead of claiming them as recovery state.
+- Reconcile prior Photos submission references and complete native journals
+  before sending again; uncertain evidence and query failures remain blocking.
+- Distinguish continue, start fresh and failed-only actions in the native dialog
+  and History. Reusing a completed child reports zero new processing, imports or
+  saved bytes, without touching old media or creating another attempt.
+- Protect normalized retry relations and admissions as Core State in schema 5,
+  including integrity inspection and verified backups.
 
 ### Background Build Observation (2026-10-31)
 

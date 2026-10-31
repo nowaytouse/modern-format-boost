@@ -569,6 +569,8 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
                 | "MFB_HISTORY_VERIFICATION"
                 | "MFB_HISTORY_OUTPUT_CLEANUP"
                 | "MFB_HISTORY_FAST_IMG_RESULT"
+                | "MFB_HISTORY_FAST_IMG_FAILED_RETRY_REQUEST"
+                | "MFB_HISTORY_FAST_IMG_RETRY_REUSED"
                 | "MFB_HISTORY_FAST_IMG_STATE_MIGRATION"
                 | "MFB_HISTORY_FINISHED"
         ),
@@ -657,6 +659,7 @@ fn read_selected_session_output(
     let mut statement = transaction.prepare(
         "SELECT line FROM history_output WHERE session_id=?1 AND sequence>?2
          AND (?3=0 OR instr(line,'MFB_FAST_IMG_RESULT=')>0
+              OR instr(line,'MFB_FAST_IMG_RETRY_REUSED=')>0
               OR instr(line,'MFB_CONVERTED_BYTES=')>0
               OR substr(ltrim(line),1,10)='[SIZE    ]'
               OR substr(ltrim(line),1,13)='[FAIL    ]   '
@@ -1521,7 +1524,7 @@ mod tests {
             "INSERT INTO history_output(session_id, ts, pipeline, line) VALUES ('batch','now','img',CAST(zeroblob(?1) AS TEXT))",
             [OUTPUT_READ_LIMIT as i64],
         ).unwrap();
-        let evidence = "MFB_FAST_IMG_RESULT=current-attempt\n[FAIL    ]   bad.jpeg: retained\n[SIZE    ] files_converted: 2\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":null,\"output_bytes\":null}";
+        let evidence = "MFB_FAST_IMG_RESULT=current-attempt\nMFB_FAST_IMG_RETRY_REUSED=current-request\n[FAIL    ]   bad.jpeg: retained\n[SIZE    ] files_converted: 2\nMFB_CONVERTED_BYTES={\"schema_version\":1,\"scope\":\"converted_this_run\",\"input_bytes\":null,\"output_bytes\":null}";
         for line in evidence.lines() {
             writer.push_line("img", line).unwrap();
         }

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::runtime_config::CachePolicy;
 
-pub const STORE_SCHEMA_VERSION: i32 = 4;
+pub const STORE_SCHEMA_VERSION: i32 = 5;
 pub const NS_PATH_TREE: &str = "path_tree";
 pub const NS_CHECKPOINT: &str = "checkpoint";
 pub const NS_PROCESSED: &str = "processed";
@@ -123,6 +123,41 @@ const FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA_SUFFIX: &str = "
                 AND length(directory_snapshot_blake3) = 32)
         )
     ) STRICT
+";
+
+const FAST_IMG_RETRY_SCHEMA: &str = "
+    CREATE TABLE fast_img_retry_tasks (
+        task_key TEXT NOT NULL PRIMARY KEY REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        parent_task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        parent_revision INTEGER NOT NULL CHECK(parent_revision >= 0),
+        parent_snapshot_blake3 BLOB NOT NULL CHECK(length(parent_snapshot_blake3) = 32),
+        parent_started_at TEXT NOT NULL,
+        logical_task_key TEXT NOT NULL REFERENCES fast_img_tasks(task_key) ON DELETE RESTRICT,
+        request_key TEXT NOT NULL UNIQUE,
+        manifest_blake3 BLOB NOT NULL CHECK(length(manifest_blake3) = 32),
+        source_count INTEGER NOT NULL CHECK(source_count > 0),
+        requested_delivery TEXT NOT NULL,
+        CHECK(task_key != parent_task_key)
+    ) STRICT;
+    CREATE INDEX idx_fast_img_retry_parent ON fast_img_retry_tasks(parent_task_key);
+    CREATE TABLE fast_img_retry_sources (
+        task_key TEXT NOT NULL REFERENCES fast_img_retry_tasks(task_key) ON DELETE RESTRICT,
+        source_rel TEXT NOT NULL,
+        parent_source_blake3 TEXT NOT NULL,
+        admitted_source_blake3 TEXT NOT NULL,
+        source_claim TEXT NOT NULL,
+        xmp_rel TEXT,
+        xmp_blake3 TEXT,
+        xmp_claim TEXT,
+        aae_rel TEXT,
+        aae_blake3 TEXT,
+        aae_claim TEXT,
+        PRIMARY KEY(task_key, source_rel),
+        CHECK((xmp_rel IS NULL AND xmp_blake3 IS NULL AND xmp_claim IS NULL)
+           OR (xmp_rel IS NOT NULL AND xmp_blake3 IS NOT NULL AND xmp_claim IS NOT NULL)),
+        CHECK((aae_rel IS NULL AND aae_blake3 IS NULL AND aae_claim IS NULL)
+           OR (aae_rel IS NOT NULL AND aae_blake3 IS NOT NULL AND aae_claim IS NOT NULL))
+    ) STRICT;
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -803,6 +838,108 @@ fn validate_fast_img_state_schema(conn: &Connection, version: i32) -> Result<()>
             "SQLite directory snapshot columns lack their paired evidence constraint; database retained without repair"
         );
     }
+    if version >= 5 {
+        for (table, expected) in [
+            (
+                "fast_img_retry_tasks",
+                &[
+                    "task_key",
+                    "parent_task_key",
+                    "parent_revision",
+                    "parent_snapshot_blake3",
+                    "parent_started_at",
+                    "logical_task_key",
+                    "request_key",
+                    "manifest_blake3",
+                    "source_count",
+                    "requested_delivery",
+                ][..],
+            ),
+            (
+                "fast_img_retry_sources",
+                &[
+                    "task_key",
+                    "source_rel",
+                    "parent_source_blake3",
+                    "admitted_source_blake3",
+                    "source_claim",
+                    "xmp_rel",
+                    "xmp_blake3",
+                    "xmp_claim",
+                    "aae_rel",
+                    "aae_blake3",
+                    "aae_claim",
+                ][..],
+            ),
+        ] {
+            let strict: Option<bool> = conn.query_row(
+                "SELECT strict FROM pragma_table_list WHERE schema='main' AND name=?1 AND type='table'",
+                [table], |row| row.get(0),
+            ).optional()?;
+            let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0"))?;
+            anyhow::ensure!(
+                strict == Some(true) && statement.column_names().eq(expected.iter().copied()),
+                "SQLite retry table {table} is missing or incomplete; state retained without repair"
+            );
+        }
+        for statement in [
+            "INSERT INTO fast_img_retry_tasks(task_key) VALUES (?1) ON CONFLICT(task_key) DO NOTHING",
+            "INSERT INTO fast_img_retry_tasks(request_key) VALUES (?1) ON CONFLICT(request_key) DO NOTHING",
+            "INSERT INTO fast_img_retry_sources(task_key,source_rel) VALUES (?1,?2) ON CONFLICT(task_key,source_rel) DO NOTHING",
+        ] {
+            conn.prepare(statement)?;
+        }
+        require_index(
+            conn,
+            "fast_img_retry_tasks",
+            "idx_fast_img_retry_parent",
+            &["parent_task_key"],
+            false,
+        )?;
+        for table in ["fast_img_retry_tasks", "fast_img_retry_sources"] {
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM pragma_foreign_key_list(?1)",
+                [table],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                count
+                    == if table == "fast_img_retry_tasks" {
+                        3
+                    } else {
+                        1
+                    },
+                "SQLite retry table {table} has incomplete foreign keys"
+            );
+        }
+        let actual = conn.prepare("SELECT \"table\",\"from\",\"to\",on_delete FROM pragma_foreign_key_list('fast_img_retry_tasks') ORDER BY \"from\"")?
+            .query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            actual
+                == ["logical_task_key", "parent_task_key", "task_key"].map(|column| (
+                    "fast_img_tasks".to_string(),
+                    column.to_string(),
+                    "task_key".to_string(),
+                    "RESTRICT".to_string()
+                )),
+            "SQLite retry task ancestry keys are incomplete"
+        );
+        require_foreign_key(
+            conn,
+            "fast_img_retry_sources",
+            "fast_img_retry_tasks",
+            &[("task_key", "task_key")],
+            "RESTRICT",
+        )?;
+    } else {
+        let reserved: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name IN ('fast_img_retry_tasks','fast_img_retry_sources','idx_fast_img_retry_parent'))", [], |row| row.get(0))?;
+        anyhow::ensure!(
+            !reserved,
+            "Older SQLite store contains conflicting retry objects; state retained without repair"
+        );
+    }
     Ok(())
 }
 
@@ -835,7 +972,7 @@ fn schema_version(conn: &Connection) -> Result<Option<i32>> {
     let version =
         current.context("SQLite store is missing its schema version; database retained")?;
     anyhow::ensure!(
-        matches!(version, 1 | 2 | 3 | STORE_SCHEMA_VERSION),
+        matches!(version, 1 | 2 | 3 | 4 | STORE_SCHEMA_VERSION),
         "mfb_store.sqlite schema version mismatch (db={version}, expected={STORE_SCHEMA_VERSION}); \
          database retained, use a compatible application or a verified backup"
     );
@@ -1014,7 +1151,20 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
             .context("Failed to extend Fast IMG directory snapshot evidence; database retained")?;
         tx.execute(
             "UPDATE store_metadata SET value = ?1 WHERE key = 'schema_version'",
-            params![STORE_SCHEMA_VERSION],
+            params![4],
+        )?;
+        version = 4;
+    }
+    if version == 4 {
+        anyhow::ensure!(
+            schema_version(&tx)? == Some(4),
+            "SQLite v4 migration precondition changed"
+        );
+        tx.execute_batch(FAST_IMG_RETRY_SCHEMA)
+            .context("Failed to create normalized failed-retry manifests; state retained")?;
+        tx.execute(
+            "UPDATE store_metadata SET value=?1 WHERE key='schema_version'",
+            [STORE_SCHEMA_VERSION],
         )?;
     }
     validate_current_store_schema(&tx)?;
@@ -1158,7 +1308,7 @@ fn preview_path_tree_at(
     anyhow::ensure!(
         matches!(
             schema_version(snapshot)?,
-            Some(2 | 3 | STORE_SCHEMA_VERSION)
+            Some(2 | 3 | 4 | STORE_SCHEMA_VERSION)
         ),
         "cache pruning preview requires a recognized BLAKE3 store schema; database retained without migration"
     );
@@ -2457,6 +2607,103 @@ mod tests {
         Ok(())
     }
 
+    fn seed_v4_store(store: &Path) -> Result<()> {
+        seed_v3_store(store)?;
+        let mut conn = Connection::open(store)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute_batch(FAST_IMG_DIRECTORY_SNAPSHOT_SCHEMA)?;
+        tx.execute(
+            "UPDATE store_metadata SET value=4 WHERE key='schema_version'",
+            [],
+        )?;
+        tx.commit()?;
+        assert_eq!(schema_version(&conn)?, Some(4));
+        Ok(())
+    }
+
+    #[test]
+    fn schema5_keeps_v4_readonly_and_migrates_without_inventing_retry_history() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = root.path().join(STORE_FILE_NAME);
+        seed_v4_store(&store)?;
+        let conn = Connection::open(&store)?;
+        seed_fast_img_schema_rows(&conn)?;
+        drop(conn);
+        let before = std::fs::read(&store)?;
+        let mut reader = Connection::open_with_flags(&store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        reader.pragma_update(None, "query_only", true)?;
+        let snapshot = reader.transaction()?;
+        assert_eq!(inspect_store_schema_version(&snapshot)?, Some(4));
+        preview_path_tree_at(&snapshot, CachePolicy::default(), || Ok(100))?;
+        assert!(
+            snapshot
+                .prepare("SELECT * FROM fast_img_retry_tasks")
+                .is_err()
+        );
+        snapshot.commit()?;
+        drop(reader);
+        assert_eq!(std::fs::read(&store)?, before);
+        let _guard = set_test_store_path_for_tests(store);
+        let conn = open_connection()?;
+        assert_eq!(inspect_store_schema_version(&conn)?, Some(5));
+        let counts:(i64,i64,i64)=conn.query_row("SELECT (SELECT count(*) FROM fast_img_tasks),
+            (SELECT count(*) FROM fast_img_retry_tasks),(SELECT count(*) FROM fast_img_retry_sources)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        assert_eq!(counts, (1, 0, 0));
+        let raw: Vec<u8> =
+            conn.query_row("SELECT source_json FROM fast_img_migrations", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!(raw, b"{}");
+        Ok(())
+    }
+
+    #[test]
+    fn schema5_failure_rolls_back_the_complete_chain_and_rejects_partial_family() -> Result<()> {
+        for version in 1..=4 {
+            let root = tempfile::tempdir()?;
+            let store = root.path().join(STORE_FILE_NAME);
+            match version {
+                1 => seed_v1_store(&store, NS_PATH_TREE),
+                2 => seed_v2_store(&store),
+                3 => seed_v3_store(&store)?,
+                4 => seed_v4_store(&store)?,
+                _ => unreachable!(),
+            }
+            let conn = Connection::open(&store)?;
+            conn.execute_batch(
+                "CREATE TRIGGER reject_retry_extension BEFORE UPDATE OF value ON store_metadata
+                WHEN NEW.value=5 BEGIN SELECT RAISE(ABORT,'synthetic retry schema failure'); END",
+            )?;
+            drop(conn);
+            let _guard = set_test_store_path_for_tests(store.clone());
+            assert!(
+                format!("{:#}", open_connection().unwrap_err())
+                    .contains("synthetic retry schema failure")
+            );
+            let conn = Connection::open(&store)?;
+            assert_eq!(inspect_store_schema_version(&conn)?, Some(version));
+            let rows:i64=conn.query_row("SELECT count(*) FROM sqlite_schema WHERE name IN ('fast_img_retry_tasks','fast_img_retry_sources')",[],|r|r.get(0))?;
+            assert_eq!(rows, 0);
+        }
+        for mutation in [
+            "DROP TABLE fast_img_retry_sources",
+            "DROP TABLE fast_img_retry_tasks",
+            "DROP INDEX idx_fast_img_retry_parent",
+        ] {
+            let root = tempfile::tempdir()?;
+            let store = root.path().join(STORE_FILE_NAME);
+            let _guard = set_test_store_path_for_tests(store.clone());
+            let conn = open_connection()?;
+            conn.execute_batch(mutation)?;
+            assert!(inspect_store_schema_version(&conn).is_err());
+            drop(conn);
+            let before = std::fs::read(&store)?;
+            assert!(open_connection().is_err());
+            assert_eq!(std::fs::read(&store)?, before);
+        }
+        Ok(())
+    }
+
     fn seed_fast_img_schema_rows(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "INSERT INTO fast_img_tasks VALUES('task', '/synthetic/out', '/synthetic/source',
@@ -2521,7 +2768,10 @@ mod tests {
         drop(conn);
         let _guard = set_test_store_path_for_tests(store);
         let conn = open_connection()?;
-        assert_eq!(inspect_store_schema_version(&conn)?, Some(4));
+        assert_eq!(
+            inspect_store_schema_version(&conn)?,
+            Some(STORE_SCHEMA_VERSION)
+        );
         for table in [
             "fast_img_tasks",
             "fast_img_source_outcomes",

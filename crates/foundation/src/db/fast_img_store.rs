@@ -19,6 +19,17 @@ use crate::pipeline::verification::{
 };
 
 mod migration;
+mod retry;
+mod retry_admission;
+pub use retry::{
+    FailedRetryAdmission, FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryParent,
+    FailedRetrySidecar, FailedRetryToolAuthority, create_or_resume_failed_retry,
+    failed_retry_context, find_failed_retry_child, inspect_failed_retry_parent,
+};
+pub use retry_admission::{
+    capture_failed_retry_admissions, verify_failed_retry_admission,
+    verify_failed_retry_retained_companions,
+};
 #[cfg(test)]
 mod tests;
 
@@ -115,7 +126,7 @@ fn open_readonly() -> Result<Option<Connection>> {
 
 fn current_family(conn: &Connection) -> Result<bool> {
     match inspect_store_schema_version(conn)? {
-        Some(3 | 4) => Ok(true),
+        Some(3 | 4 | 5) => Ok(true),
         Some(1 | 2) => Ok(false),
         None => {
             bail!("Existing formal database has no recognized schema; not treated as empty state")
@@ -138,7 +149,7 @@ struct TaskHeader {
     revision: i64,
 }
 
-fn read_snapshot(conn: &Connection, key: &str) -> Result<Option<WorkingCopyMarker>> {
+fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopyMarker>> {
     let header = conn
         .query_row(
             "SELECT working_copy,source_root,header_json,header_blake3,snapshot_blake3,revision
@@ -168,6 +179,7 @@ fn read_snapshot(conn: &Connection, key: &str) -> Result<Option<WorkingCopyMarke
                 "Fast IMG task header is missing but protected child evidence remains; state is not absent"
             );
         }
+        retry::reject_missing_task_evidence(conn, key)?;
         return Ok(None);
     };
     validate_locator(&header.wc)?;
@@ -386,6 +398,14 @@ fn read_snapshot(conn: &Connection, key: &str) -> Result<Option<WorkingCopyMarke
         "Fast IMG complete state snapshot failed BLAKE3 verification; no rows were reset"
     );
     Ok(Some(marker))
+}
+
+fn read_snapshot(conn: &Connection, key: &str) -> Result<Option<WorkingCopyMarker>> {
+    let marker = read_snapshot_base(conn, key)?;
+    if let Some(marker) = &marker {
+        retry::validate_task(conn, key, marker)?;
+    }
+    Ok(marker)
 }
 
 fn request_identity(backend: &PhotosSubmissionBackend) -> Result<String> {
@@ -738,32 +758,66 @@ fn write_receipts(
 
 /// Caller must own an IMMEDIATE transaction, including when migrating legacy state.
 fn write_snapshot(conn: &Connection, marker: &WorkingCopyMarker) -> Result<()> {
+    let wc = canonical_text(&marker.working_copy)?;
+    let source = canonical_text(&marker.src_dir)?;
+    let mut normalized = marker.clone();
+    normalized.working_copy = PathBuf::from(&wc);
+    normalized.src_dir = PathBuf::from(&source);
+    write_snapshot_at(conn, &normalized, &wc, &source, true)
+}
+
+fn write_snapshot_at(
+    conn: &Connection,
+    marker: &WorkingCopyMarker,
+    wc: &str,
+    source: &str,
+    validate_retry: bool,
+) -> Result<()> {
     ensure!(
         !conn.is_autocommit(),
         "Fast IMG snapshot requires an explicit transaction"
     );
     validate_marker_structure(marker)?;
-    marker
-        .validate_checkpoint_path_contract(&marker.working_copy)
-        .map_err(anyhow::Error::msg)?;
-    let wc = canonical_text(&marker.working_copy)?;
-    let source = canonical_text(&marker.src_dir)?;
-    validate_locator(&wc)?;
-    validate_locator(&source)?;
+    if validate_retry {
+        marker
+            .validate_checkpoint_path_contract(&marker.working_copy)
+            .map_err(anyhow::Error::msg)?;
+    } else {
+        // The new child has no media artifacts to inspect. Its canonical paths
+        // come from a verified parent and deterministic reservation, and its
+        // manifest is validated before this same transaction can commit.
+        ensure!(
+            marker.failed_retry_manifest_blake3.is_some()
+                && marker.stage == crate::pipeline::verification::FastImgStageName::ScanComplete
+                && marker.blake3_log.is_empty()
+                && marker.skipped_sources.is_empty()
+                && marker.failed_sources.is_empty()
+                && marker.photos_imported_assets.is_empty()
+                && marker.tier2_imported_assets.is_empty()
+                && marker
+                    .photos_submission_history()
+                    .is_some_and(|history| history.intents.is_empty()),
+            "A retry snapshot may only initialize an empty, manifest-bound child"
+        );
+    }
+    validate_locator(wc)?;
+    validate_locator(source)?;
     ensure!(
-        wc != source
-            && !Path::new(&wc).starts_with(&source)
-            && !Path::new(&source).starts_with(&wc),
+        marker.working_copy == Path::new(wc) && marker.src_dir == Path::new(source),
+        "Fast IMG snapshot paths differ from their canonical locators"
+    );
+    ensure!(
+        wc != source && !Path::new(wc).starts_with(source) && !Path::new(source).starts_with(wc),
         "Fast IMG source and output roots overlap"
     );
     // Persist one canonical path authority. Display spellings must not create
     // a second task identity hidden inside the header JSON.
-    let mut normalized = marker.clone();
-    normalized.working_copy = PathBuf::from(&wc);
-    normalized.src_dir = PathBuf::from(&source);
-    let marker = &normalized;
-    let key = key_for_canonical(&wc);
-    let previous = read_snapshot(conn, &key)?;
+    let key = key_for_canonical(wc);
+    let previous = if validate_retry {
+        read_snapshot(conn, &key)?
+    } else {
+        read_snapshot_base(conn, &key)?
+    };
     let revision = if let Some(old) = &previous {
         let (saved_source, revision): (String, i64) = conn.query_row(
             "SELECT source_root,revision FROM fast_img_tasks WHERE task_key=?1",
@@ -777,17 +831,22 @@ fn write_snapshot(conn: &Connection, marker: &WorkingCopyMarker) -> Result<()> {
             "Fast IMG output is reserved by a different task; saved state was not replaced"
         );
         preserve_history(old, marker)?;
+        retry::validate_update(old, marker)?;
         if old == marker {
             return Ok(());
         }
+        retry::require_parent_unmodified(conn, &key)?;
         revision
             .checked_add(1)
             .context("Fast IMG state revision overflow")?
     } else {
         0
     };
+    if validate_retry {
+        retry::validate_task(conn, &key, marker)?;
+    }
     let header = small_header(marker)?;
-    let digest = snapshot_digest(&wc, &source, marker)?;
+    let digest = snapshot_digest(wc, source, marker)?;
     let now = chrono::Utc::now().timestamp();
     ensure!(now >= 0, "Fast IMG state clock is before Unix epoch");
     conn.execute(
@@ -828,7 +887,13 @@ fn write_snapshot(conn: &Connection, marker: &WorkingCopyMarker) -> Result<()> {
         &marker.tier2_imported_assets,
     )?;
     ensure!(
-        read_snapshot(conn, &key)?.as_ref() == Some(marker),
+        (if validate_retry {
+            read_snapshot(conn, &key)?
+        } else {
+            read_snapshot_base(conn, &key)?
+        })
+        .as_ref()
+            == Some(marker),
         "Fast IMG SQL readback did not reproduce the requested snapshot; transaction must roll back"
     );
     Ok(())
@@ -863,6 +928,9 @@ fn row_count(conn: &Connection) -> Result<usize> {
             .checked_add(usize::try_from(rows)?)
             .context("Fast IMG state row count overflow")?;
     }
+    count = count
+        .checked_add(retry::row_count(conn)?)
+        .context("Fast IMG retry row count overflow")?;
     Ok(count)
 }
 

@@ -26,70 +26,8 @@ struct Locator {
     working_copy: PathBuf,
 }
 
-// Serde owns tokenization and depth limits; this visitor only rejects duplicate
-// members, including nested members that a locator deliberately does not read.
-struct UniqueMembers;
-impl<'de> Deserialize<'de> for UniqueMembers {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = UniqueMembers;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("JSON with unique object members")
-            }
-            fn visit_map<M: serde::de::MapAccess<'de>>(
-                self,
-                mut map: M,
-            ) -> std::result::Result<Self::Value, M::Error> {
-                let mut keys = BTreeSet::new();
-                while let Some(key) = map.next_key::<String>()? {
-                    if !keys.insert(key.clone()) {
-                        return Err(serde::de::Error::custom(format!(
-                            "duplicate legacy checkpoint member {key}"
-                        )));
-                    }
-                    map.next_value::<UniqueMembers>()?;
-                }
-                Ok(UniqueMembers)
-            }
-            fn visit_seq<S: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: S,
-            ) -> std::result::Result<Self::Value, S::Error> {
-                while seq.next_element::<UniqueMembers>()?.is_some() {}
-                Ok(UniqueMembers)
-            }
-            fn visit_bool<E: serde::de::Error>(
-                self,
-                _: bool,
-            ) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-            fn visit_i64<E: serde::de::Error>(self, _: i64) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-            fn visit_u64<E: serde::de::Error>(self, _: u64) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-            fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-            fn visit_str<E: serde::de::Error>(
-                self,
-                _: &str,
-            ) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
-                Ok(UniqueMembers)
-            }
-        }
-        d.deserialize_any(Visitor)
-    }
-}
-
 fn locator(bytes: &[u8]) -> Result<Locator> {
-    let _: UniqueMembers = serde_json::from_slice(bytes)?;
+    crate::common_utils::validate_unique_json_members(bytes)?;
     let value: Locator = serde_json::from_slice(bytes)?;
     ensure!(
         value.schema == FAST_IMG_MARKER_SCHEMA_VERSION,
@@ -389,7 +327,7 @@ fn read_backups(conn: &Connection, origin: Option<&Path>) -> Result<Vec<Backup>>
     let version = crate::db::mfb_sqlite_store::inspect_store_schema_version(conn)?;
     let snapshot_columns = match version {
         Some(3) => "NULL,NULL",
-        Some(4) => {
+        Some(4 | 5) => {
             "CASE WHEN length(directory_snapshot)<=?1 THEN directory_snapshot ELSE NULL END,directory_snapshot_blake3"
         }
         _ => bail!("Legacy migration backup requires a recognized structured state schema"),

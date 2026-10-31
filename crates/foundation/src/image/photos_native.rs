@@ -201,58 +201,7 @@ pub(super) fn committed_pairs(
     request: &Value,
     record: &Value,
 ) -> anyhow::Result<Vec<(String, String)>> {
-    use std::collections::{BTreeMap, BTreeSet};
-    anyhow::ensure!(
-        record["version"] == 1
-            && record["batchID"] == request["batchID"]
-            && record["request"] == *request,
-        "PhotoKit journal belongs to another request"
-    );
-    anyhow::ensure!(
-        matches!(
-            record["state"].as_str(),
-            Some("committed" | "identifier-known")
-        ),
-        "PhotoKit commit is uncertain without complete identifiers; original files retained"
-    );
-    let assets = request["assets"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing requested assets"))?;
-    let expected = assets
-        .iter()
-        .map(|asset| {
-            asset["entryID"]
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| anyhow::anyhow!("missing entry ID"))
-        })
-        .collect::<anyhow::Result<BTreeSet<_>>>()?;
-    anyhow::ensure!(expected.len() == assets.len(), "duplicate task entry IDs");
-    let mut pairs = BTreeMap::new();
-    let mut seen_ids = BTreeSet::new();
-    for identity in record["identities"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing durable asset identifiers"))?
-    {
-        let entry = identity["entryID"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing entry ID"))?;
-        let id = identity["localIdentifier"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing asset identifier"))?;
-        anyhow::ensure!(
-            expected.contains(entry)
-                && !id.is_empty()
-                && seen_ids.insert(id.to_owned())
-                && pairs.insert(entry.to_owned(), id.to_owned()).is_none(),
-            "ambiguous PhotoKit identity mapping"
-        );
-    }
-    anyhow::ensure!(
-        pairs.len() == expected.len(),
-        "partial PhotoKit identity mapping; do not reimport"
-    );
-    Ok(pairs.into_iter().collect())
+    super::fast_img::retry_checkpoint::native_committed_pairs(request, record)
 }
 
 #[cfg(test)]

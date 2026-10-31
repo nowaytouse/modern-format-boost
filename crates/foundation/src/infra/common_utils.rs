@@ -18,6 +18,9 @@ use crate::types::ProcessHistory;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+#[path = "json_evidence.rs"]
+mod json_evidence;
+pub(crate) use json_evidence::validate_unique_json_members;
 #[inline]
 #[must_use]
 pub fn get_extension_lowercase(path: &Path) -> String {

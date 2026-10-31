@@ -43,11 +43,7 @@ impl PlannedSource {
         Ok(encoded)
     }
 
-    /// Re-read the worker's actual input and match the launcher's bounded claim.
-    ///
-    /// # Errors
-    /// Rejects malformed claims, unavailable files and changed paths or complete bytes.
-    pub fn verify(encoded: &str, input: &Path) -> Result<()> {
+    fn parse(encoded: &str) -> Result<Self> {
         ensure!(
             encoded.len() <= MAX_PROOF_BYTES,
             "planned source exceeds transport bound"
@@ -69,6 +65,43 @@ impl PlannedSource {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "planned source hash is invalid"
         );
+        Ok(proof)
+    }
+
+    /// Check a persisted admission's exact path and content claim without reading media.
+    /// This is structural evidence inspection, not current custody or file availability.
+    ///
+    /// # Errors
+    /// Rejects malformed, unsupported or differently bound observations.
+    pub fn validate_identity(encoded: &str, input: &Path, expected_blake3: &str) -> Result<()> {
+        let proof = Self::parse(encoded)?;
+        for path in [&proof.source, &proof.resolved, input] {
+            ensure!(
+                path.is_absolute()
+                    && path.file_name().is_some()
+                    && !path.as_os_str().as_encoded_bytes().contains(&0)
+                    && path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+                    && !path.components().any(|part| matches!(
+                        part,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )),
+                "persisted source observation requires normalized absolute file paths"
+            );
+        }
+        ensure!(
+            proof.source.as_os_str() == input.as_os_str()
+                && proof.content_blake3 == expected_blake3,
+            "persisted source observation disagrees with its admission path or content hash"
+        );
+        Ok(())
+    }
+
+    /// Re-read the worker's actual input and match the launcher's bounded claim.
+    ///
+    /// # Errors
+    /// Rejects malformed claims, unavailable files and changed paths or complete bytes.
+    pub fn verify(encoded: &str, input: &Path) -> Result<()> {
+        let proof = Self::parse(encoded)?;
         let input = crate::media_conversion_gate::delivery_join_relative_to_cwd_or_err(
             input,
             "check planned worker input",
@@ -171,6 +204,32 @@ mod tests {
         };
         assert!(args.verify_for_input(None).is_err());
         PlannedSourceArgs::default().verify_for_input(None)?;
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_source_inspection_is_cold_and_binds_the_admitted_identity() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("observed.jpg");
+        std::fs::write(&input, b"complete observed source")?;
+        let observed = DiscoveredSource::from_metadata(&input, &std::fs::metadata(&input)?)?;
+        let encoded = PlannedSource::encode(&observed)?;
+        let hash = observed.content_blake3();
+        PlannedSource::validate_identity(&encoded, &input, &hash)?;
+        std::fs::remove_file(&input)?;
+        PlannedSource::validate_identity(&encoded, &input, &hash)?;
+        assert!(PlannedSource::verify(&encoded, &input).is_err());
+        assert!(PlannedSource::validate_identity(&encoded, &input, &"0".repeat(64)).is_err());
+        assert!(
+            PlannedSource::validate_identity(&encoded, &directory.path().join("other.jpg"), &hash)
+                .is_err()
+        );
+        let mut unknown: serde_json::Value = serde_json::from_str(&encoded)?;
+        unknown["identity"]["unknown_native_field"] = serde_json::json!(true);
+        assert!(
+            PlannedSource::validate_identity(&serde_json::to_string(&unknown)?, &input, &hash)
+                .is_err()
+        );
         Ok(())
     }
 

@@ -1272,6 +1272,8 @@ struct JxlFileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(unix)]
+    changed: (i64, i64),
 }
 
 fn jxl_file_identity(path: &Path) -> io::Result<JxlFileIdentity> {
@@ -1294,6 +1296,8 @@ fn jxl_file_identity(path: &Path) -> io::Result<JxlFileIdentity> {
         device: metadata.dev(),
         #[cfg(unix)]
         inode: metadata.ino(),
+        #[cfg(unix)]
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
     })
 }
 
@@ -1724,6 +1728,29 @@ pub(crate) fn verify_jxl_xmp_sidecar_custody(xmp_path: &Path, dst: &Path) -> io:
     Ok(())
 }
 
+/// Recheck a recorded final JXL and the complete last XMP packet when the
+/// original sidecar is no longer present. This is not permission to delete media.
+pub(crate) fn verify_jxl_xmp_digest_custody(
+    dst: &Path,
+    expected_output: &str,
+    expected_packet: &str,
+) -> io::Result<()> {
+    let before = jxl_file_identity(dst)?;
+    let container = validate_appendable_jxl_container(dst)?;
+    let packet = container.last_xml.ok_or_else(|| {
+        io::Error::other("recorded JXL has no final XMP overlay; sidecar custody is unknown")
+    })?;
+    if blake3_file_span(dst, packet.payload_offset, packet.payload_size)? != expected_packet
+        || blake3_file_hash(dst)? != expected_output
+        || jxl_file_identity(dst)? != before
+    {
+        return Err(io::Error::other(
+            "recorded JXL/XMP digest changed; sidecar custody is unknown",
+        ));
+    }
+    Ok(())
+}
+
 /// Append one authoritative XMP overlay to a JXL container without rewriting
 /// existing JBRD, Exif, ICC, XMP, JUMBF, unknown, or codestream bytes.
 ///
@@ -1991,19 +2018,22 @@ fn require_regular_sidecar(path: PathBuf, label: &str) -> io::Result<PathBuf> {
 
 /// Find an adjacent Apple Adjustment Envelope sidecar for a source asset.
 ///
-/// Exact `with_extension("AAE")`/`with_extension("aae")` candidates are checked
-/// first, then a case-insensitive directory scan catches mixed-case imports.
+/// A complete case-insensitive directory scan catches mixed-case imports.
+/// More than one candidate is ambiguous, never an instruction to choose one.
 ///
 /// # Errors
-/// Returns an error when a matching path exists but is not a regular file, or
-/// when the source parent cannot be scanned for case-insensitive matches.
+/// Returns an error for ambiguous/non-regular matches or incomplete discovery.
 pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
-    let Some(parent) = src.parent() else {
-        return Ok(None);
-    };
-    let Some(stem) = src.file_stem().and_then(|value| value.to_str()) else {
-        return Ok(None);
-    };
+    let parent = crate::media_conversion_gate::path_parent_or_dot(src);
+    let stem = src
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "AAE source has no supported file stem",
+            )
+        })?;
     let stem_lower = stem.to_lowercase();
     let mut matches = Vec::new();
     for entry in std::fs::read_dir(parent).map_err(|e| {
@@ -2041,6 +2071,15 @@ pub fn find_aae_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
         }
     }
     matches.sort_by_key(|path| path.file_name().map(std::ffi::OsStr::to_ascii_lowercase));
+    if matches.len() > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "ambiguous AAE sidecars for {}; originals retained",
+                src.display()
+            ),
+        ));
+    }
     if let Some(path) = matches.into_iter().next() {
         require_regular_sidecar(path, "AAE").map(Some)
     } else {

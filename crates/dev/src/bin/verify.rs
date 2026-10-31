@@ -413,6 +413,25 @@ fn run_fast_img_delivery_check(
         optimized_dir.to_path_buf()
     };
 
+    let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
+    let failed_retry = foundation::fast_img_store::failed_retry_context(&optimized_dir)?;
+    if let Some(context) = &failed_retry {
+        let typed = foundation::pipeline::verification::read_marker(&optimized_dir)?;
+        anyhow::ensure!(
+            typed.working_copy == optimized_dir
+                && typed.src_dir == source_dir
+                && typed.strategy == strategy
+                && context.parent().src_dir == source_dir
+                && typed.failed_retry_manifest_blake3.is_some()
+                && context.admissions().len() == typed.src_jpeg_count,
+            "failed-only verifier source/output/strategy does not match its immutable child manifest"
+        );
+        anyhow::ensure!(
+            marker_error.is_none() && marker_opt.as_ref() == Some(&serde_json::to_value(&typed)?),
+            "failed-only verifier task changed while binding its selected-source scope"
+        );
+    }
+
     report.push_str("── FAST-IMG DELIVERY VERIFICATION ─────────────────────────────\n");
     report.push_str(&format!("Source:    {}\n", source_dir.display()));
     report.push_str(&format!("Optimized: {}\n\n", optimized_dir.display()));
@@ -438,7 +457,28 @@ fn run_fast_img_delivery_check(
     let mut source_true_jpegs = Vec::new();
     let mut source_probe_errors = Vec::new();
     let source_files = if source_dir_exists {
-        collect_regular_files(&source_dir)?
+        if let Some(context) = &failed_retry {
+            let mut paths = Vec::new();
+            for admission in context.admissions().values() {
+                let path = source_dir.join(&admission.source_rel);
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                        paths.push(path)
+                    }
+                    Ok(_) => anyhow::bail!(
+                        "failed-only verifier source is not a regular non-symlink file: {}",
+                        path.display()
+                    ),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).context("inspect failed-only verification source");
+                    }
+                }
+            }
+            paths
+        } else {
+            collect_regular_files(&source_dir)?
+        }
     } else {
         Vec::new()
     };
@@ -491,7 +531,6 @@ fn run_fast_img_delivery_check(
         }
     }
 
-    let (marker_opt, _path_opt, marker_error) = load_fast_img_marker_for_optimized(&optimized_dir);
     let mut recorded_source_jpegs: u64 = 0;
     let mut skipped_source_rels = HashSet::new();
     let mut failed_source_rels = HashSet::new();
@@ -2982,6 +3021,175 @@ source_rel_hex\toutput_rel_hex\tsource_blake3\toutput_blake3\tsource_deleted
         assert_eq!(stats.source_remaining_files, 1);
         assert_eq!(stats.failed_sources, 1);
         assert_eq!(stats.integrity_failures, 0);
+    }
+
+    #[test]
+    #[serial]
+    fn test_failed_child_delivery_verifies_only_its_bound_sources_and_all_owned_outputs() {
+        if isolated_marker_test() {
+            return;
+        }
+        use foundation::fast_img_store::{
+            capture_failed_retry_admissions, create_or_resume_failed_retry,
+            inspect_failed_retry_parent,
+        };
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            SkippedSourceEntry, WorkingCopyMarker, write_marker_atomic,
+        };
+        let temporary = tempfile::tempdir().unwrap();
+        let _state = marker_test_state(temporary.path());
+        let source = temporary.path().join("Album");
+        fs::create_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        let parent_output = source.parent().unwrap().join("Album_optimized");
+        for name in ["retry.jpg", "still-failed.jpg", "parent-skipped.jpg"] {
+            fs::write(source.join(name), b"\xff\xd8\xff\xe0synthetic jpeg").unwrap();
+        }
+        let source_hash = calculate_blake3_hash(&source.join("retry.jpg")).unwrap();
+        let mut parent = WorkingCopyMarker::new(source.clone(), parent_output, 3);
+        parent.stage = FastImgStageName::CleanupComplete;
+        let defaults = foundation::runtime_config::RuntimeConfig::default();
+        parent.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: defaults.tools.policy,
+            fallback_policy: defaults.img.fallback_policy,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: defaults.img.jpeg_effort_search,
+                archive: false,
+                allow_expert_options: false,
+            },
+        });
+        for name in ["retry.jpg", "still-failed.jpg"] {
+            parent.failed_sources.insert(
+                name.into(),
+                SkippedSourceEntry {
+                    src: source_hash.clone(),
+                    reason: "synthetic parent failure".into(),
+                },
+            );
+        }
+        parent.skipped_sources.insert(
+            "parent-skipped.jpg".into(),
+            SkippedSourceEntry {
+                src: source_hash.clone(),
+                reason: "parent policy retained this media".into(),
+            },
+        );
+        write_marker_atomic(&parent).unwrap();
+        let parent_ref = inspect_failed_retry_parent(&parent.working_copy).unwrap();
+        let admissions = capture_failed_retry_admissions(&parent_ref).unwrap();
+        let manifest_path = source.parent().unwrap().join("synthetic-tool-state");
+        fs::write(&manifest_path, b"synthetic current tool-state fixture").unwrap();
+        let tools = foundation::fast_img_store::FailedRetryToolAuthority {
+            identity: calculate_blake3_hash(&manifest_path).unwrap(),
+            manifest_path,
+        };
+        let mut child = create_or_resume_failed_retry(
+            &parent_ref,
+            &admissions,
+            &foundation::fast_img_store::FailedRetryDeliveryIntent::Local,
+            Some(&tools),
+        )
+        .unwrap();
+        fs::create_dir(&child.working_copy).unwrap();
+        let output = child.working_copy.join("retry.JXL");
+        fs::write(&output, b"\xff\x0asynthetic output").unwrap();
+        child.blake3_log.insert(
+            "retry.jpg".into(),
+            Blake3Entry {
+                src: source_hash.clone(),
+                out: calculate_blake3_hash(&output).unwrap(),
+                out_rel: Some("retry.JXL".into()),
+                library_asset: None,
+            },
+        );
+        child.failed_sources.insert(
+            "still-failed.jpg".into(),
+            SkippedSourceEntry {
+                src: source_hash,
+                reason: "retained failure in this child".into(),
+            },
+        );
+        child.stage = FastImgStageName::CleanupComplete;
+        child.encoded_count = 1;
+        write_marker_atomic(&child).unwrap();
+        fs::remove_file(source.join("retry.jpg")).unwrap();
+        fs::write(
+            source.join("new-unselected.jpg"),
+            b"\xff\xd8\xff\xe0new jpeg",
+        )
+        .unwrap();
+        let check = |source: &Path| {
+            run_fast_img_delivery_check(
+                source,
+                &child.working_copy,
+                &mut String::new(),
+                "images_only",
+                "jxl",
+            )
+        };
+        let stats = check(&source).unwrap();
+        assert_eq!(
+            (
+                stats.source_files,
+                stats.optimized_files,
+                stats.failed_sources
+            ),
+            (2, 1, 1)
+        );
+        assert_eq!(stats.source_remaining_files, 1);
+        assert_eq!(
+            stats.integrity_failures, 0,
+            "parent-retained and newly-added media are outside this child"
+        );
+        assert!(
+            source.join("parent-skipped.jpg").is_file()
+                && source.join("new-unselected.jpg").is_file()
+        );
+
+        fs::write(
+            source.join("retry.jpg"),
+            b"\xff\xd8\xff\xe0source reappeared",
+        )
+        .unwrap();
+        assert!(
+            check(&source).unwrap().integrity_failures > 0,
+            "a selected successful source left behind must still fail"
+        );
+        fs::remove_file(source.join("retry.jpg")).unwrap();
+        fs::remove_file(source.join("still-failed.jpg")).unwrap();
+        assert!(
+            check(&source).unwrap().integrity_failures > 0,
+            "a selected failed source must remain present"
+        );
+        fs::write(
+            source.join("still-failed.jpg"),
+            b"\xff\xd8\xff\xe0synthetic jpeg",
+        )
+        .unwrap();
+        fs::write(child.working_copy.join("unowned.txt"), b"unowned bytes").unwrap();
+        assert!(
+            check(&source).unwrap().integrity_failures > 0,
+            "unknown child output must not be filtered by the source workset"
+        );
+        fs::remove_file(child.working_copy.join("unowned.txt")).unwrap();
+        let other_source = temporary.path().join("other-source");
+        fs::create_dir(&other_source).unwrap();
+        assert!(
+            check(&other_source).is_err(),
+            "child scope cannot be rebound to another source"
+        );
+        let conn = rusqlite::Connection::open(foundation::fast_img_store::database_path().unwrap())
+            .unwrap();
+        conn.execute("UPDATE fast_img_retry_sources SET admitted_source_blake3=?1 WHERE source_rel='retry.jpg'",
+            ["0".repeat(64)]).unwrap();
+        assert!(
+            check(&source).is_err(),
+            "a changed manifest must not become a source filter"
+        );
+        assert!(output.is_file() && source.join("parent-skipped.jpg").is_file());
     }
 
     #[test]

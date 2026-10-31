@@ -651,7 +651,7 @@ fn validate_cache_schema(conn: &Connection) -> Result<()> {
     anyhow::ensure!(
         matches!(
             version,
-            2 | 3 | foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION
+            2 | 3 | 4 | foundation::mfb_sqlite_store::STORE_SCHEMA_VERSION
         ),
         "unsupported cache store schema {version}; database retained"
     );
@@ -875,7 +875,16 @@ fn add_fast_img_state_namespace(
     }
     // These are the actual explicit evidence BLOBs. Relational columns are not
     // described as payload bytes; store_bytes remains the physical store size.
-    let payload_query = if cache_store_schema_version(conn)? >= 4 {
+    let version = cache_store_schema_version(conn)?;
+    let payload_query = if version >= 5 {
+        "SELECT COALESCE((SELECT SUM(length(header_json)) FROM fast_img_tasks),0)
+              + COALESCE((SELECT SUM(length(source_json)) FROM fast_img_migrations),0)
+              + COALESCE((SELECT SUM(length(directory_snapshot)) FROM fast_img_migrations),0)
+              + COALESCE((SELECT SUM(length(CAST(requested_delivery AS BLOB))) FROM fast_img_retry_tasks),0)
+              + COALESCE((SELECT SUM(length(CAST(source_claim AS BLOB))
+                    + COALESCE(length(CAST(xmp_claim AS BLOB)),0)
+                    + COALESCE(length(CAST(aae_claim AS BLOB)),0)) FROM fast_img_retry_sources),0)"
+    } else if version >= 4 {
         "SELECT COALESCE((SELECT SUM(length(header_json)) FROM fast_img_tasks),0)
               + COALESCE((SELECT SUM(length(source_json)) FROM fast_img_migrations),0)
               + COALESCE((SELECT SUM(length(directory_snapshot)) FROM fast_img_migrations),0)"
@@ -2185,7 +2194,9 @@ mod tests {
         let (cache, conn, _marker) = fast_img_state_fixture(&root);
         // Reproduce the exact previous release shape using only disposable data.
         conn.execute_batch(
-            "ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot_blake3;
+            "DROP TABLE fast_img_retry_sources;
+             DROP TABLE fast_img_retry_tasks;
+             ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot_blake3;
              ALTER TABLE fast_img_migrations DROP COLUMN directory_snapshot;
              UPDATE store_metadata SET value=3 WHERE key='schema_version';",
         )
@@ -2283,6 +2294,79 @@ mod tests {
             header_bytes + u64::try_from(raw_marker.len() + directory_snapshot.len()).unwrap()
         );
         assert!(!namespaces[0].rebuildable);
+    }
+
+    #[test]
+    fn fast_img_retry_manifest_is_protected_counted_and_included_in_verified_backup() {
+        let Some(root) = fast_img_state_test_root() else {
+            return;
+        };
+        let (cache, conn, mut marker) = fast_img_state_fixture(&root);
+        use foundation::pipeline::verification::{
+            FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+        };
+        marker.stage = FastImgStageName::CleanupComplete;
+        marker.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
+                archive: true,
+                allow_expert_options: false,
+            },
+        });
+        foundation::fast_img_store::write_marker(&marker).unwrap();
+        fs::create_dir(&marker.src_dir).unwrap();
+        fs::write(marker.src_dir.join("two.jpg"), b"synthetic failure").unwrap();
+        let parent =
+            foundation::fast_img_store::inspect_failed_retry_parent(&marker.working_copy).unwrap();
+        let admissions =
+            foundation::fast_img_store::capture_failed_retry_admissions(&parent).unwrap();
+        let child = foundation::fast_img_store::create_or_resume_failed_retry(
+            &parent,
+            &admissions,
+            &foundation::fast_img_store::FailedRetryDeliveryIntent::Local,
+            None,
+        )
+        .unwrap();
+        let status = cache_status_with_integrity(&cache, true).unwrap();
+        assert_eq!(status.integrity.as_ref().unwrap().status, "healthy");
+        assert_eq!(status.integrity.as_ref().unwrap().checked_fast_img_rows, 10);
+        let expected: u64 = conn
+            .query_row(
+                "SELECT (SELECT SUM(length(header_json)) FROM fast_img_tasks)
+            +(SELECT SUM(length(CAST(source_claim AS BLOB))) FROM fast_img_retry_sources)
+            +(SELECT SUM(length(CAST(requested_delivery AS BLOB))) FROM fast_img_retry_tasks)",
+                [],
+                |r| nonnegative_column(r, 0),
+            )
+            .unwrap();
+        let namespace = status
+            .namespaces
+            .iter()
+            .find(|n| n.name == "fast_img_state")
+            .unwrap();
+        assert_eq!((namespace.rows, namespace.payload_bytes), (10, expected));
+        let destination = root.join("verified-retry-backup.sqlite");
+        backup_local_store(&cache, &destination).unwrap();
+        let copy = open_cache_store(&destination, true).unwrap();
+        assert_eq!(
+            foundation::fast_img_store::inspect_integrity(&copy).unwrap(),
+            10
+        );
+        purge_local_cache(&cache, None).unwrap();
+        assert_eq!(
+            foundation::fast_img_store::read_marker(&parent.marker().working_copy).unwrap(),
+            *parent.marker()
+        );
+        assert!(
+            foundation::fast_img_store::failed_retry_context(&child.working_copy)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!child.working_copy.exists());
     }
 
     #[test]

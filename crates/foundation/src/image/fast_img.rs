@@ -1511,6 +1511,25 @@ fn selected_photos_library(bound: Option<&Path>) -> Result<Option<PathBuf>> {
     Ok(bound.or(explicit))
 }
 
+fn checkpoint_photos_library_with(
+    marker: &WorkingCopyMarker,
+    discover: impl FnOnce() -> Result<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
+    if selected.is_none() && marker.failed_retry_manifest_blake3.is_some() {
+        return discover().map(Some);
+    }
+    Ok(selected)
+}
+
+fn checkpoint_photos_library(marker: &WorkingCopyMarker) -> Result<Option<PathBuf>> {
+    checkpoint_photos_library_with(marker, || {
+        #[cfg(target_os = "macos")]
+        native_checkpoint::prepare_library_discovery()?;
+        active_photos_library_from_databases(&active_photos_library_databases()?)
+    })
+}
+
 fn require_selected_photos_database(
     selected: &Path,
     active_databases: &BTreeSet<PathBuf>,
@@ -1529,6 +1548,10 @@ fn require_active_photos_library(selected: Option<&Path>) -> Result<()> {
     let Some(selected) = selected else {
         return Ok(());
     };
+    require_selected_photos_database(selected, &active_photos_library_databases()?)
+}
+
+fn active_photos_library_databases() -> Result<BTreeSet<PathBuf>> {
     let output = run_fast_img_command_with_timeout(
         std::process::Command::new("/usr/sbin/lsof").args(["-a", "-c", "Photos", "-Fn"]),
         Duration::from_secs(30),
@@ -1552,7 +1575,25 @@ fn require_active_photos_library(selected: Option<&Path>) -> Result<()> {
     if let Some(home) = std::env::var_os("HOME") {
         remove_photos_system_side_database(&mut databases, Path::new(&home))?;
     }
-    require_selected_photos_database(selected, &databases)
+    Ok(databases)
+}
+
+fn active_photos_library_from_databases(databases: &BTreeSet<PathBuf>) -> Result<PathBuf> {
+    if databases.len() != 1 {
+        return Err(ImgQualityError::AnalysisError(format!(
+            "cannot bind the current Photos library: expected one active database, found {}; no import was submitted, sources retained",
+            databases.len()
+        )));
+    }
+    let database = databases.first().ok_or_else(|| {
+        ImgQualityError::AnalysisError("active Photos database evidence is empty".into())
+    })?;
+    let library = database.parent().and_then(Path::parent).ok_or_else(|| {
+        ImgQualityError::AnalysisError("active Photos database has no library root".into())
+    })?;
+    let library = crate::common_utils::validate_photos_library_path(library)?;
+    require_selected_photos_database(&library, databases)?;
+    Ok(library)
 }
 
 fn remove_photos_system_side_database(
@@ -1593,6 +1634,33 @@ fn bind_photos_import_naming_policy(marker: &mut WorkingCopyMarker) -> Result<bo
     bind_photos_import_naming_policy_with(marker, photos)
 }
 
+fn photos_import_naming_policy_with(
+    photos: Option<&crate::infra::runtime_config::PhotosPolicy>,
+) -> String {
+    serde_json::json!([
+        photos.and_then(|config| config.import_root.as_deref()),
+        photos.and_then(|config| config.album_name.as_deref()),
+        photos.is_none_or(|config| config.preserve_folder_structure)
+    ])
+    .to_string()
+}
+
+/// The current resolved naming intent, without querying or changing Photos.
+#[must_use]
+pub fn current_photos_import_naming_policy() -> String {
+    photos_import_naming_policy_with(
+        crate::infra::runtime_config::active().map(|config| &config.photos),
+    )
+}
+
+/// Serialize an explicitly resolved Photos policy using the importer's binding.
+#[must_use]
+pub fn photos_import_naming_policy_for(
+    photos: &crate::infra::runtime_config::PhotosPolicy,
+) -> String {
+    photos_import_naming_policy_with(Some(photos))
+}
+
 /// Check resume policy without Photos access or marker writes.
 pub fn validate_photos_import_naming_policy(marker: &WorkingCopyMarker) -> Result<()> {
     bind_photos_import_naming_policy(&mut marker.clone()).map(|_| ())
@@ -1605,7 +1673,7 @@ fn bind_photos_import_naming_policy_with(
     let root = photos.and_then(|config| config.import_root.as_deref());
     let album = photos.and_then(|config| config.album_name.as_deref());
     let preserve = photos.is_none_or(|config| config.preserve_folder_structure);
-    let policy = serde_json::json!([root, album, preserve]).to_string();
+    let policy = photos_import_naming_policy_with(photos);
     let legacy = root.is_none() && album.is_none() && preserve;
     match marker.photos_import_naming_policy.as_deref() {
         Some(bound) if bound != policy => Err(ImgQualityError::AnalysisError(
@@ -1632,7 +1700,7 @@ fn bind_photos_import_naming_policy_with(
 
 /// Bind a legacy marker only after its existing custody is proved in the selected library.
 pub fn bind_marker_to_selected_photos_library(marker: &mut WorkingCopyMarker) -> Result<()> {
-    let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
+    let selected = checkpoint_photos_library(marker)?;
     bind_marker_to_selected_photos_library_with(
         marker,
         selected.as_deref(),
@@ -1738,7 +1806,7 @@ pub fn import_media_outputs_with_checkpointed_library_verifier(
     reconcile_existing: bool,
 ) -> Result<LibraryHandle> {
     let _photos_import_lock = acquire_photos_import_lock()?;
-    let selected = selected_photos_library(marker.photos_library_path.as_deref())?;
+    let selected = checkpoint_photos_library(marker)?;
     require_active_photos_library(selected.as_deref())?;
     let output_paths = fast_img_marker_output_paths(marker)?;
     validate_fast_img_marker_output_hashes(marker)?;
@@ -2178,6 +2246,9 @@ pub fn import_modern_lossy_static_tier_checkpointed(
     marker: &mut WorkingCopyMarker,
     candidates: &[super::modern_lossy_static::ModernLossyStaticCandidate],
 ) -> Result<LibraryHandle> {
+    if marker.failed_retry_manifest_blake3.is_some() && !candidates.is_empty() {
+        bind_marker_to_selected_photos_library(marker)?;
+    }
     let source = marker.src_dir.clone();
     let library = marker.photos_library_path.clone();
     import_modern_lossy_static_tier_with_checkpoint(
@@ -2627,6 +2698,27 @@ fn import_or_reconcile_original_candidates_with(
         Option<submission_checkpoint::AppleScriptSubmissionPermit>,
     ) -> Result<LibraryHandle>,
 ) -> Result<LibraryHandle> {
+    if let Some(marker) = checkpoint.as_deref_mut() {
+        let plan = original_photos_checkpoint_plan(marker, candidates)?;
+        retry_checkpoint::reconcile(
+            marker,
+            &plan.pending_entries,
+            crate::pipeline::verification::PhotosSubmissionKind::Original,
+            enriched,
+            selected_library,
+            &mut |ids| query_selected_photos_asset_probes(ids, selected_library),
+            &mut |path| {
+                #[cfg(target_os = "macos")]
+                {
+                    path_has_quarantine_xattr(path)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Ok(path_has_quarantine_xattr(path))
+                }
+            },
+        )?;
+    }
     let (pending, mut imported_assets) = if let Some(marker) = checkpoint.as_deref() {
         let plan = original_photos_checkpoint_plan(marker, candidates)?;
         let pending_paths = plan
@@ -3348,7 +3440,7 @@ where
     P: FnMut(&Path) -> Result<bool>,
 {
     prepare_photos_import_output_paths(output_paths)?;
-    let plan = prepare_photos_import_binding_with(
+    let mut plan = prepare_photos_import_binding_with(
         marker,
         selected_library,
         reconcile_existing,
@@ -3357,6 +3449,18 @@ where
         &mut reverify_modern_lossy_static_photos_custody,
         write_marker_atomic,
     )?;
+    retry_checkpoint::reconcile(
+        marker,
+        &plan.pending_entries,
+        crate::pipeline::verification::PhotosSubmissionKind::Encoded,
+        &BTreeMap::new(),
+        selected_library,
+        &mut query_assets,
+        &mut is_quarantined,
+    )?;
+    if marker.failed_retry_manifest_blake3.is_some() {
+        plan = photos_import_checkpoint_plan(marker, &mut is_quarantined)?;
+    }
     #[cfg(target_os = "macos")]
     if let Some(handle) = native_checkpoint::try_import(
         marker,
@@ -6927,6 +7031,9 @@ mod photos_import_bench;
 #[path = "photos_submission.rs"]
 mod submission_checkpoint;
 
+#[path = "photos_retry.rs"]
+pub(super) mod retry_checkpoint;
+
 #[cfg(target_os = "macos")]
 #[path = "photos_native_checkpoint.rs"]
 mod native_checkpoint;
@@ -7440,6 +7547,14 @@ mod tests {
             album_name: Some("Selected".into()),
             ..Default::default()
         };
+        assert_eq!(
+            photos_import_naming_policy_for(&custom),
+            photos_import_naming_policy_with(Some(&custom))
+        );
+        assert_eq!(
+            photos_import_naming_policy_for(&crate::infra::runtime_config::PhotosPolicy::default()),
+            photos_import_naming_policy_with(None)
+        );
         assert_eq!(
             photos_import_album_name_with_policy(
                 &marker.working_copy,
@@ -9467,6 +9582,97 @@ mod tests {
                 .get("c.jpg")
                 .and_then(|entry| entry.library_asset.as_ref())
                 .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_retry_default_library_is_proved_and_bound_before_checkpointed_import() -> Result<()> {
+        if crate::common_utils::isolated_test_process() {
+            return Ok(());
+        }
+        // This isolated child never starts Photos; the injected set is the
+        // exact database evidence seam shared with the production guard.
+        unsafe { std::env::remove_var("MFB_PHOTOS_LIBRARY_PATH") };
+        let root = tempfile::tempdir()?;
+        let library = root.path().join("Synthetic.photoslibrary");
+        std::fs::create_dir_all(library.join("database"))?;
+        std::fs::write(
+            library.join("database/Photos.sqlite"),
+            b"synthetic database",
+        )?;
+        let library = library.canonicalize()?;
+        let database = library.join("database/Photos.sqlite");
+        let mut marker =
+            WorkingCopyMarker::new(root.path().join("source"), root.path().join("output"), 0);
+        assert!(
+            checkpoint_photos_library_with(&marker, || panic!("ordinary behavior is unchanged"))?
+                .is_none()
+        );
+        marker.failed_retry_manifest_blake3 = Some("a".repeat(64));
+        let before = marker.clone();
+        for databases in [
+            BTreeSet::new(),
+            BTreeSet::from([
+                database.clone(),
+                root.path()
+                    .join("Other.photoslibrary/database/Photos.sqlite"),
+            ]),
+        ] {
+            assert!(
+                checkpoint_photos_library_with(&marker, || active_photos_library_from_databases(
+                    &databases
+                ))
+                .is_err()
+            );
+            assert_eq!(marker, before);
+        }
+        assert!(
+            checkpoint_photos_library_with(&marker, || Err(ImgQualityError::AnalysisError(
+                "synthetic query denied".into()
+            )))
+            .is_err()
+        );
+        let selected = checkpoint_photos_library_with(&marker, || {
+            active_photos_library_from_databases(&BTreeSet::from([database]))
+        })?;
+        assert_eq!(selected.as_deref(), Some(library.as_path()));
+        let persisted = Cell::new(false);
+        prepare_photos_import_binding_with(
+            &mut marker,
+            selected.as_deref(),
+            false,
+            &mut |_| panic!("new child has no custody receipt to query"),
+            &mut |_| Ok(false),
+            &mut |_| panic!("new child has no parent custody proof"),
+            |prepared| {
+                assert_eq!(
+                    prepared.photos_library_path.as_deref(),
+                    Some(library.as_path())
+                );
+                assert!(prepared.photos_imported_assets.is_empty());
+                assert!(prepared.tier2_imported_assets.is_empty());
+                assert!(
+                    prepared
+                        .photos_submission_history()
+                        .unwrap()
+                        .intents
+                        .is_empty()
+                );
+                persisted.set(true);
+                Ok(())
+            },
+        )?;
+        assert!(persisted.get());
+        assert_eq!(
+            marker.photos_library_path.as_deref(),
+            Some(library.as_path())
+        );
+        assert_eq!(
+            checkpoint_photos_library_with(&marker, || panic!(
+                "a bound retry must not rediscover another target"
+            ))?,
+            Some(library)
         );
         Ok(())
     }

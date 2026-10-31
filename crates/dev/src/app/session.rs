@@ -35,6 +35,28 @@ pub struct AppSession {
 
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FastImgRetryReused {
+    schema_version: u8,
+    parent_task_key: String,
+    request_key: String,
+    child_working_copy: PathBuf,
+    newly_processed: u64,
+    newly_delivered: u64,
+    newly_saved_bytes: u64,
+}
+
+fn failed_retry_reference(
+    parent: &foundation::fast_img_store::FailedRetryParent,
+    delivery: &foundation::fast_img_store::FailedRetryDeliveryIntent,
+) -> serde_json::Value {
+    serde_json::json!({"schema_version":1,"parent_task_key":parent.task_key(),
+        "request_key":parent.request_key(),"parent_working_copy":parent.marker().working_copy,
+        "child_working_copy":parent.child_working_copy(),"source_directory":parent.marker().src_dir,
+        "strategy":parent.marker().strategy,"delivery_intent":delivery})
+}
+
 impl AppSession {
     /// Scope an execution attempt without releasing the shared history lease.
     ///
@@ -257,6 +279,109 @@ impl AppSession {
             );
         }
         self.append_history_event("MFB_HISTORY_FAST_IMG_RESULT", report)
+    }
+
+    /// Record the selected immutable parent before the worker can create a child.
+    ///
+    /// # Errors
+    /// Propagates missing run identity and history persistence errors.
+    pub fn record_fast_img_failed_retry_request(
+        &self,
+        parent: &foundation::fast_img_store::FailedRetryParent,
+        delivery: &foundation::fast_img_store::FailedRetryDeliveryIntent,
+    ) -> Result<()> {
+        let _ = foundation::fast_img_store::find_failed_retry_child(parent, delivery)?;
+        let mut report = failed_retry_reference(parent, delivery);
+        report["run_id"] = serde_json::json!(
+            self.run_id
+                .as_ref()
+                .context("failed-only request has no run identity")?
+        );
+        self.append_history_event("MFB_HISTORY_FAST_IMG_FAILED_RETRY_REQUEST", report.clone())?;
+        writeln!(
+            io::stdout().lock(),
+            "MFB_FAST_IMG_FAILED_RETRY_REQUEST={report}"
+        )?;
+        Ok(())
+    }
+
+    /// A completed child reference is a no-work outcome, not a fresh custody proof.
+    ///
+    /// # Errors
+    /// Rejects conflicting worker records, counts, request identity or Core state.
+    pub fn record_fast_img_retry_reused(
+        &self,
+        text: &str,
+        stats: &ProcessorStats,
+        parent: Option<&foundation::fast_img_store::FailedRetryParent>,
+        delivery: Option<&foundation::fast_img_store::FailedRetryDeliveryIntent>,
+    ) -> Result<bool> {
+        const PREFIX: &str = "MFB_FAST_IMG_RETRY_REUSED=";
+        let mut lines = text.lines().filter(|line| line.contains(PREFIX));
+        let Some(line) = lines.next() else {
+            return Ok(false);
+        };
+        let encoded = line
+            .strip_prefix(PREFIX)
+            .context("reused retry record has an invalid prefix")?;
+        anyhow::ensure!(
+            encoded.len() <= 16_384
+                && lines.next().is_none()
+                && !text.contains("MFB_FAST_IMG_RESULT=")
+                && !text.contains("MFB_CONVERTED_BYTES="),
+            "reused retry record is oversized, duplicated or mixed with fresh delivery evidence"
+        );
+        let receipt: FastImgRetryReused = serde_json::from_str(encoded)?;
+        let parent =
+            parent.context("reused retry record was not requested by this Fast IMG invocation")?;
+        let delivery =
+            delivery.context("reused retry record has no resolved current delivery intent")?;
+        anyhow::ensure!(
+            receipt.schema_version == 1
+                && receipt.newly_processed == 0
+                && receipt.newly_delivered == 0
+                && receipt.newly_saved_bytes == 0
+                && receipt.parent_task_key == parent.task_key()
+                && receipt.request_key == parent.request_key()
+                && receipt.child_working_copy == parent.child_working_copy()
+                && stats.exit_code == 0
+                && stats.counts_complete()
+                && !stats.converted_bytes_invalid
+                && stats.converted_bytes.is_none()
+                && stats.total() == 0
+                && stats.unprocessed == Some(0),
+            "reused retry record disagrees with the selected request or current worker outcome"
+        );
+        let child = foundation::fast_img_store::find_failed_retry_child(parent, delivery)?
+            .context("reused retry record has no durable child")?;
+        anyhow::ensure!(
+            child.working_copy == receipt.child_working_copy
+                && child.stage
+                    == foundation::pipeline::verification::FastImgStageName::CleanupComplete,
+            "reused retry record does not name its completed durable child"
+        );
+        let context = foundation::fast_img_store::failed_retry_context(&child.working_copy)?
+            .context("reused child lost its immutable parent relation")?;
+        anyhow::ensure!(
+            context.parent_task_key() == parent.task_key()
+                && context.requested_delivery() == delivery,
+            "reused child delivery intent or parent relation differs from the current request"
+        );
+        let mut report = failed_retry_reference(parent, delivery);
+        report["run_id"] = serde_json::json!(
+            self.run_id
+                .as_ref()
+                .context("reused retry has no run identity")?
+        );
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] {
+            report[key] = serde_json::json!(0);
+        }
+        self.append_history_event("MFB_HISTORY_FAST_IMG_RETRY_REUSED", report.clone())?;
+        writeln!(
+            io::stdout().lock(),
+            "MFB_FAST_IMG_RETRY_REUSED_CONFIRMED={report}"
+        )?;
+        Ok(true)
     }
 
     /// Record machine verification facts separately from processor outcome counts.

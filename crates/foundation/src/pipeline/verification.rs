@@ -3376,6 +3376,10 @@ pub struct WorkingCopyMarker {
     /// Photos delivery evidence. Missing historical intent is never filled in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub processing_contract: Option<FastImgProcessingContract>,
+    /// Binds a failed-only child to its immutable, normalized Core manifest.
+    /// A missing relation must not turn this child into an ordinary task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_retry_manifest_blake3: Option<String>,
     /// Exact private runtime authority used by this task; it is recovery state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_snapshot_manifest: Option<PathBuf>,
@@ -3495,6 +3499,7 @@ impl WorkingCopyMarker {
             strategy: "jxl".to_string(),
             metadata_policy_version: 0,
             processing_contract: None,
+            failed_retry_manifest_blake3: None,
             tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.manifest_path.clone()),
             tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
@@ -3883,6 +3888,9 @@ pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::
         contract
             .validate(&marker.strategy)
             .map_err(std::io::Error::other)?;
+    }
+    if let Some(hash) = &marker.failed_retry_manifest_blake3 {
+        validate_submission_blake3("failed-only manifest", hash).map_err(std::io::Error::other)?;
     }
     marker
         .validate_relative_path_contract()

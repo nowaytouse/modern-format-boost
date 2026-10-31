@@ -99,9 +99,31 @@ where
 }
 
 fn selected_library_witness_with_recovery(
+    query: impl FnMut(Duration) -> std::io::Result<std::process::Output>,
+    activate: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
+    readonly_library_query_with_recovery(query, activate, |bytes| {
+        let witness = String::from_utf8(bytes)?;
+        let witness = witness.trim();
+        let uuid = super::osxphotos_uuid_from_photos_import_identifier(witness)?;
+        anyhow::ensure!(
+            !witness.contains(['\r', '\n'])
+                && uuid.len() == 36
+                && uuid.bytes().enumerate().all(|(index, byte)| match index {
+                    8 | 13 | 18 | 23 => byte == b'-',
+                    _ => byte.is_ascii_hexdigit(),
+                }),
+            "Photos witness query returned an invalid asset identifier; target cannot be proven"
+        );
+        Ok(witness.to_owned())
+    })
+}
+
+fn readonly_library_query_with_recovery<T>(
     mut query: impl FnMut(Duration) -> std::io::Result<std::process::Output>,
     mut activate: impl FnMut() -> anyhow::Result<()>,
-) -> anyhow::Result<String> {
+    decode: impl Fn(Vec<u8>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
     // Read-only cold-start retries stop at eight minutes per query.
     let mut budget = Duration::from_secs(120);
     for attempt in 1..=3 {
@@ -116,22 +138,11 @@ fn selected_library_witness_with_recovery(
         );
         let error = match output {
             Ok(output) if output.status.success() => {
-                let witness = String::from_utf8(output.stdout)?;
-                let witness = witness.trim();
-                let uuid = super::osxphotos_uuid_from_photos_import_identifier(witness)?;
-                anyhow::ensure!(
-                    !witness.contains(['\r', '\n'])
-                        && uuid.len() == 36
-                        && uuid.bytes().enumerate().all(|(index, byte)| match index {
-                            8 | 13 | 18 | 23 => byte == b'-',
-                            _ => byte.is_ascii_hexdigit(),
-                        }),
-                    "Photos witness query returned an invalid asset identifier; target cannot be proven"
-                );
+                let decoded = decode(output.stdout)?;
                 if attempt > 1 {
-                    tracing::info!(target: "photos_import", attempt, "Photos library witness recovered; resuming target proof before import");
+                    tracing::info!(target: "photos_import", attempt, "Photos read-only library query recovered; resuming target proof before import");
                 }
-                return Ok(witness.to_owned());
+                return Ok(decoded);
             }
             Ok(output) => {
                 let detail = String::from_utf8_lossy(&output.stderr);
@@ -175,40 +186,68 @@ fn selected_library_witness_with_recovery(
 
 fn selected_library_witness(library: Option<&Path>) -> anyhow::Result<String> {
     selected_library_witness_with_recovery(
-        |budget| {
-            let script = format!(
-                "with timeout of {} seconds\ntell application \"Photos\" to return id of first media item\nend timeout",
-                budget.as_secs()
-            );
-            crate::process_runner::run_command_with_liveness_timeout(
-                std::process::Command::new(resolve_osascript_command()).args(["-e", &script]),
-                Duration::from_secs(30),
-                budget + Duration::from_secs(5),
-                WITNESS_QUERY_CONTEXT,
-            )
-        },
-        || {
-            let mut open = std::process::Command::new("/usr/bin/open");
-            open.args(["-a", "Photos"]);
-            if let Some(library) = library {
-                open.arg(library);
-            }
-            let output = crate::process_runner::run_command_with_liveness_timeout(
-                &mut open,
-                Duration::from_secs(15),
-                Duration::from_secs(120),
-                WITNESS_ACTIVATION_CONTEXT,
-            )
-            .map_err(photos_activation_error)?;
-            anyhow::ensure!(
-                output.status.success(),
-                "Photos activation failed: {}; delivery deferred, outputs retained",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            require_active_photos_library(library)?;
-            Ok(())
-        },
+        |budget| query_photos_library("return id of first media item", budget),
+        || activate_photos_library(library),
     )
+}
+
+fn query_photos_library(
+    statement: &str,
+    budget: Duration,
+) -> std::io::Result<std::process::Output> {
+    let script = format!(
+        "with timeout of {} seconds\ntell application \"Photos\" to {statement}\nend timeout",
+        budget.as_secs()
+    );
+    crate::process_runner::run_command_with_liveness_timeout(
+        std::process::Command::new(resolve_osascript_command()).args(["-e", &script]),
+        Duration::from_secs(30),
+        budget + Duration::from_secs(5),
+        WITNESS_QUERY_CONTEXT,
+    )
+}
+
+fn activate_photos_library(library: Option<&Path>) -> anyhow::Result<()> {
+    let mut open = std::process::Command::new("/usr/bin/open");
+    open.args(["-a", "Photos"]);
+    if let Some(library) = library {
+        open.arg(library);
+    }
+    let output = crate::process_runner::run_command_with_liveness_timeout(
+        &mut open,
+        Duration::from_secs(15),
+        Duration::from_secs(120),
+        WITNESS_ACTIVATION_CONTEXT,
+    )
+    .map_err(photos_activation_error)?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Photos activation failed: {}; delivery deferred, outputs retained",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    require_active_photos_library(library)?;
+    Ok(())
+}
+
+/// Establish read-only readiness before inspecting Photos' actual open database.
+/// A count of zero is valid; this is not an asset or delivery witness.
+pub(super) fn prepare_library_discovery() -> anyhow::Result<()> {
+    readonly_library_query_with_recovery(
+        |budget| query_photos_library("return count of media items", budget),
+        || activate_photos_library(None),
+        decode_library_readiness,
+    )
+}
+
+fn decode_library_readiness(bytes: Vec<u8>) -> anyhow::Result<()> {
+    let count = String::from_utf8(bytes)?;
+    let count = count.trim();
+    anyhow::ensure!(
+        !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
+        "Photos library readiness query returned invalid evidence"
+    );
+    count.parse::<u64>()?;
+    Ok(())
 }
 
 struct ImportTask {
@@ -239,7 +278,19 @@ pub(super) fn try_import_originals(
 ) -> Result<Option<LibraryHandle>> {
     let profile = photos_import_metrics::Profile::start("native");
     let result = (|| -> anyhow::Result<Option<LibraryHandle>> {
-        let plan = super::original_photos_checkpoint_plan(marker, candidates)?;
+        let mut plan = super::original_photos_checkpoint_plan(marker, candidates)?;
+        super::retry_checkpoint::reconcile(
+            marker,
+            &plan.pending_entries,
+            PhotosSubmissionKind::Original,
+            enriched,
+            library,
+            &mut |ids| super::query_selected_photos_asset_probes(ids, library),
+            &mut super::path_has_quarantine_xattr,
+        )?;
+        if marker.failed_retry_manifest_blake3.is_some() {
+            plan = super::original_photos_checkpoint_plan(marker, candidates)?;
+        }
         if let Some(proof) = super::library_handle_from_marker_tier2_proof(marker) {
             super::reverify_modern_lossy_static_photos_custody(&proof)?;
         }
@@ -964,6 +1015,27 @@ mod tests {
                 text.as_bytes().to_vec()
             },
         }
+    }
+
+    #[test]
+    fn library_discovery_readiness_accepts_an_empty_library_but_not_query_failures()
+    -> anyhow::Result<()> {
+        readonly_library_query_with_recovery(
+            |_| Ok(witness_reply(0, "0\n")),
+            || panic!("an empty library is ready without activation"),
+            decode_library_readiness,
+        )?;
+        for (code, text) in [(1, "Not authorized (-1743)"), (0, ""), (0, "0\n1")] {
+            assert!(
+                readonly_library_query_with_recovery(
+                    |_| Ok(witness_reply(code, text)),
+                    || panic!("a rejected query cannot be treated as a missing library"),
+                    decode_library_readiness,
+                )
+                .is_err()
+            );
+        }
+        Ok(())
     }
 
     #[test]

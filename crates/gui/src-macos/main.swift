@@ -274,6 +274,8 @@ private struct ProcessorRequest {
     var fresh = false
     var archive = false
     var retry = false
+    var retryFailed = false
+    var retryFailedParent: String? = nil
     var force = false
     var dryRun = false
     var plain = false
@@ -4430,6 +4432,11 @@ private enum ProcessorCommand {
         guard !((request.resume || request.retry) && request.fresh) else {
             throw HostError(message: localized("error.resume_conflict"))
         }
+        guard !request.retryFailed || (request.operationMode.backendMode == "fast-img"
+            && !request.resume && !request.retry && !request.fresh && !request.watch),
+              request.retryFailedParent == nil || request.retryFailed else {
+            throw HostError(message: localized("error.resume_conflict"))
+        }
         guard !request.archive || capabilities.supportsArchive,
               !request.retry || capabilities.supportsRetry,
               !(request.force || request.plain || request.inPlace) || capabilities.supportsStandardOptions
@@ -4481,6 +4488,11 @@ private enum ProcessorCommand {
         if request.verbose { arguments.append("--verbose") }
         if request.archive { arguments.append("--archive") }
         if request.retry { arguments.append("--retry") }
+        if request.retryFailed { arguments.append("--retry-failed") }
+        if let parent = request.retryFailedParent {
+            guard FastImgFailedRetryAvailable.path(parent) else { throw HostError(message: localized("retry.invalid")) }
+            arguments += ["--retry-failed-parent", parent]
+        }
         if request.force { arguments.append("--force") }
         if request.dryRun { arguments.append("--dry-run") }
         if request.plain { arguments.append("--plain") }
@@ -5201,7 +5213,47 @@ private struct BatchResults {
     private var workerExitCodes: [Int] = []
     private(set) var mandatoryEvidenceConflict = false
     private(set) var integrityIssueCount: Int?
+    private(set) var failedRetryRequest: FastImgRetryReference?
+    private(set) var failedRetryReused: FastImgRetryReference?
+    private(set) var failedRetryInvalid = false
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
+
+    mutating func ingestRetryReference(_ line: String, requested: Bool, source: String?, parent: String?, strategy: String?, photos: Bool?, runID: String?) -> Bool {
+        let raw = LogTone.message(line)
+        let isRequest = raw.hasPrefix(FastImgRetryReference.requestPrefix)
+        let isConfirmed = raw.hasPrefix(FastImgRetryReference.confirmedPrefix)
+        // The worker's unconfirmed no-work claim is intentionally not a result.
+        if raw.hasPrefix("MFB_FAST_IMG_RETRY_REUSED=") { return true }
+        guard isRequest || isConfirmed else { return false }
+        do {
+            guard requested, !failedRetryInvalid,
+                  let reference = try FastImgRetryReference.decode(raw,
+                    prefix: isRequest ? FastImgRetryReference.requestPrefix : FastImgRetryReference.confirmedPrefix, reused: isConfirmed),
+                  FastImgDeliveryReceipt.samePath(reference.sourceDirectory, source), reference.strategy == strategy,
+                  (reference.deliveryIntent.kind == "photos") == photos,
+                  parent.map({ FastImgDeliveryReceipt.samePath($0, reference.parentWorkingCopy) }) ?? true,
+                  runID.map({ $0 == reference.runId }) ?? isRequest else { throw HostError(message: localized("retry.invalid")) }
+            if isRequest {
+                guard failedRetryRequest == nil else { throw HostError(message: localized("retry.invalid")) }
+                failedRetryRequest = reference
+            } else {
+                guard let request = failedRetryRequest, request.sameRequest(as: reference), failedRetryReused == nil,
+                      fastDeliveries.isEmpty, outputCleanups.isEmpty else { throw HostError(message: localized("retry.invalid")) }
+                failedRetryReused = reference
+            }
+        } catch { failedRetryInvalid = true; mandatoryEvidenceConflict = true; failedRetryReused = nil }
+        return true
+    }
+
+    func retryReuseIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        guard !failedRetryInvalid, !mandatoryEvidenceConflict, !isIncomplete, !hasFailure, exitedNormally,
+              processExit == 0, let request = failedRetryRequest, let reused = failedRetryReused,
+              request.sameRequest(as: reused), reused.runId == runID, fastDeliveries.isEmpty,
+              outputCleanups.isEmpty, !outputCleanupInvalid, !fastDeliveryInvalid,
+              workerExitCodes == [0], totals.count == 1, totals["img"] == [0, 0, 0, 0],
+              pendingTotals.count == 1, (pendingTotals["img"] ?? nil) == 0 else { return false }
+        return true
+    }
 
     mutating func ingestTransportGap(_ line: String) -> Bool {
         let raw = LogTone.message(line)
@@ -6703,6 +6755,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var closeWhenFinished = false
     private var lastRequest: ProcessorRequest?
     private var sawResumeDecision = false
+    private var failedRetryAvailable: FastImgFailedRetryAvailable?
+    private var failedRetryAvailabilityInvalid = false
+    private var sawFailedRetryDecision = false
     private var sawProductionBusy = false
     private var configurationControlsEnabled = true
     private var processorStatus: ProcessorReadiness = .checking
@@ -7409,8 +7464,44 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     @objc private func openHistory() {
         if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory, preferences: preferences) }
+        if !isDebugWindow {
+            historyPanel?.canRetryFailed = { [weak self] in
+                guard let self else { return false }
+                return !isDebugWindow && !self.host.isRunning && self.configurationControlsEnabled && !self.restoreFixture
+            }
+            historyPanel?.onRetryFailed = { [weak self] selection in self?.runSelectedFailures(selection) }
+        }
         historyPanel?.refresh(directory: resolvedHistoryDirectory)
         historyPanel?.show()
+    }
+
+    private func runSelectedFailures(_ selection: FastImgFailedRetrySelection) {
+        guard !isDebugWindow, !restoreFixture, !host.isRunning, configurationControlsEnabled else { return }
+        do {
+            let operation: OperationMode = selection.strategy == "avif" ? .fastImgAvif : .fastImgJxl
+            guard let item = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == operation.rawValue })
+            else { throw HostError(message: localized("error.option_unavailable")) }
+            operationPopup.select(item)
+            operationChanged()
+            targetField.stringValue = selection.sourceDirectory
+            shortestPathCheck.state = selection.shortestPath ? .on : .off
+            dryRunCheck.state = .off; watchCheck.state = .off
+            var selected = try request()
+            selected.retryFailed = true; selected.retryFailedParent = selection.parentWorkingCopy
+            selected.retry = false; selected.resume = false; selected.fresh = false
+            selected.archive = selection.archive
+            lastRequest = selected
+            sawResumeDecision = false; sawFailedRetryDecision = false; failedRetryAvailable = nil
+            failedRetryAvailabilityInvalid = false
+            clearBatchLog()
+            try host.setControlState("running")
+            setProcessing(true)
+            appendLog(localized("retry.history.start"))
+            host.startProcessing(selected)
+        } catch {
+            setProcessing(false)
+            present(error)
+        }
     }
 
     @objc private func showDiagnostics() {
@@ -7564,6 +7655,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             let request = try request()
             lastRequest = request
             sawResumeDecision = false
+            failedRetryAvailable = nil
+            failedRetryAvailabilityInvalid = false
+            sawFailedRetryDecision = false
             clearBatchLog()
             try host.setControlState("running")
             setProcessing(true)
@@ -7808,6 +7902,38 @@ private final class AppController: NSObject, NSWindowDelegate {
         var rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if text.hasSuffix("\n"), !rawLines.isEmpty { rawLines.removeLast() }
         for line in rawLines {
+            let control = LogTone.message(line)
+            if control.hasPrefix(FastImgFailedRetryAvailable.prefix) {
+                do {
+                    guard !failedRetryAvailabilityInvalid, let available = try FastImgFailedRetryAvailable.decode(control),
+                          let request = lastRequest, request.operationMode.backendMode == "fast-img",
+                          !request.dryRun, FastImgDeliveryReceipt.samePath(request.targetPath, available.sourceDirectory),
+                          available.strategy == (request.operationMode.strategy ?? "jxl"),
+                          failedRetryAvailable == nil || failedRetryAvailable == available
+                    else { throw HostError(message: localized("retry.invalid")) }
+                    failedRetryAvailable = available
+                } catch {
+                    failedRetryAvailable = nil
+                    failedRetryAvailabilityInvalid = true
+                    let warning = "[WARN] " + localized("retry.invalid")
+                    displayLines.append(warning); privateLines.append(warning)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
+            if batchResults.ingestRetryReference(line, requested: lastRequest?.retryFailed == true,
+                source: lastRequest?.targetPath, parent: lastRequest?.retryFailedParent,
+                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.shortestPath, runID: workerExecution.latest?.run_id) {
+                if batchResults.failedRetryInvalid {
+                    let warning = "[WARN] " + localized("retry.invalid")
+                    displayLines.append(warning); privateLines.append(warning)
+                } else if control.hasPrefix(FastImgRetryReference.confirmedPrefix) {
+                    let notice = localized("retry.reused.info")
+                    displayLines.append(notice); privateLines.append(notice)
+                }
+                if developerMode { displayLines.append(line) }
+                continue
+            }
             if toolSnapshot.ingest(line) {
                 refreshToolSnapshot()
                 let blocked = toolSnapshot.invalid || toolSnapshot.event?.state == .blocked
@@ -7999,7 +8125,11 @@ private final class AppController: NSObject, NSWindowDelegate {
                 historyButton.toolTip = privacyEnabled ? localized("button.history") : path
             }
         }
-        if text.contains("MFB_RESUME_DECISION_REQUIRED") { sawResumeDecision = true }
+        for raw in text.split(separator: "\n") {
+            let message = LogTone.message(String(raw))
+            if ["MFB_RESUME_DECISION_REQUIRED:", "Error: MFB_RESUME_DECISION_REQUIRED:"].contains(where: message.hasPrefix) { sawResumeDecision = true }
+            if ["MFB_FAILED_RETRY_REQUIRED:", "Error: MFB_FAILED_RETRY_REQUIRED:"].contains(where: message.hasPrefix) { sawFailedRetryDecision = true }
+        }
         if text.split(separator: "\n").contains(where: { raw in
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let message = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
@@ -8167,12 +8297,21 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func applyResumeDecision(fresh: Bool, to request: inout ProcessorRequest) {
+        request.retryFailed = false
+        request.retryFailedParent = nil
         request.resume = !fresh
         request.fresh = fresh
         request.retry = !fresh && (request.retry || request.operationMode.backendMode == "fast-img")
         resumeCheck.state = request.resume ? .on : .off
         freshCheck.state = request.fresh ? .on : .off
         retryCheck.state = request.retry ? .on : .off
+        for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
+    }
+
+    private func applyFailedRetryDecision(_ available: FastImgFailedRetryAvailable, to request: inout ProcessorRequest) {
+        request.resume = false; request.retry = false; request.fresh = false
+        request.retryFailed = true; request.retryFailedParent = available.parentWorkingCopy
+        resumeCheck.state = .off; retryCheck.state = .off; freshCheck.state = .off
         for control in [resumeCheck, freshCheck, retryCheck] { saveOption(control) }
     }
 
@@ -8195,6 +8334,88 @@ private final class AppController: NSObject, NSWindowDelegate {
               !processEndedWithError, batchOverview.isHidden, latestDiagnostics.failure == nil,
               statusLabel.stringValue == localized("status.resume_choice_cancelled"), !host.isRunning else {
             throw HostError(message: "Saved-task choice lost its content, appeared during self-test or presented cancellation as a media failure")
+        }
+    }
+
+    func validateFailedRetryForSelfTest() throws {
+        func encoded(_ value: [String: Any]) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+        }
+        let source = "/synthetic/retry-source"
+        let parent = "/synthetic/retry-parent"
+        let child = "/synthetic/retry-child"
+        let parentKey = String(repeating: "a", count: 64)
+        let requestKey = String(repeating: "b", count: 64)
+        let base: [String: Any] = ["schema_version": 1, "source_directory": source,
+            "parent_working_copy": parent, "parent_task_key": parentKey, "failed_count": 17, "strategy": "jxl"]
+        for completed in [false, true] {
+            lastRequest = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl)
+            failedRetryAvailable = nil; failedRetryAvailabilityInvalid = false
+            sawResumeDecision = false; sawFailedRetryDecision = false
+            var availability = base
+            availability["existing_child_complete"] = completed
+            availability["existing_child_working_copy"] = completed ? child : NSNull()
+            appendLog(FastImgFailedRetryAvailable.prefix + (try encoded(availability)))
+            appendLog("ERR: Error: MFB_FAILED_RETRY_REQUIRED: synthetic completed task")
+            var inspected: NSAlert?
+            processingCompleted(.failure(HostError(message: "synthetic retry choice")), resumeDecision: { alert in
+                alert.layout(); inspected = alert
+                return .alertThirdButtonReturn
+            })
+            guard let inspected, inspected.buttons.first?.title == localized(completed ? "retry.reused.open" : "retry.only_failed"),
+                  !inspected.buttons.contains(where: { $0.title == localized("alert.resume.resume") }),
+                  !completed || !inspected.informativeText.contains("17"),
+                  !processEndedWithError, !host.isRunning, batchOverview.isHidden,
+                  statusLabel.stringValue == localized("status.resume_choice_cancelled"), !inspected.window.isVisible,
+                  NSApp.modalWindow == nil else { throw HostError(message: "Failed-only choice lost cancellation, distinct semantics, or no-work reuse wording") }
+        }
+        var request = ProcessorRequest(targetPath: source, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+            retryFailed: true, retryFailedParent: parent)
+        let arguments = try ProcessorCommand.arguments(from: request)
+        guard arguments.contains("--retry-failed"), arguments.contains("--retry-failed-parent"),
+              !arguments.contains("--retry"), !arguments.contains("--resume"), !arguments.contains("--no-resume")
+        else { throw HostError(message: "Failed-only request still aliases ordinary continue") }
+        request.resume = true
+        do { _ = try ProcessorCommand.arguments(from: request); throw HostError(message: "Conflicting recovery choices were admitted") }
+        catch let error as HostError where error.message == localized("error.resume_conflict") { }
+        request.resume = false
+        lastRequest = request
+        batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+        let reference: [String: Any] = ["schema_version": 1, "run_id": "run-retry", "source_directory": source,
+            "parent_working_copy": parent, "parent_task_key": parentKey, "request_key": requestKey,
+            "child_working_copy": child, "strategy": "jxl", "delivery_intent": ["kind": "local"]]
+        appendLog(FastImgRetryReference.requestPrefix + (try encoded(reference)))
+        for observation in ["spawned", "exited"] {
+            let event: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                "run_id": "run-retry", "pipeline": "img", "state": observation, "pid": 1234,
+                "exit_code": observation == "exited" ? 0 : NSNull(), "signal": NSNull()]
+            appendLog(LiveWorkerExecution.prefix + (try encoded(event)))
+        }
+        var reuse = reference
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] { reuse[key] = 0 }
+        appendLog(FastImgRetryReference.confirmedPrefix + (try encoded(reuse)))
+        appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+        refreshBatchOverview(processExit: 0, exitedNormally: true)
+        guard batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry"),
+              !batchResults.hasFastDelivery, batchResults.fastDeliveries.isEmpty,
+              batchOverviewTitle.stringValue == localized("retry.reused.title"), batchOverviewTitle.textColor == .labelColor,
+              batchOverviewCounts.stringValue == localized("retry.reused.counts"), batchOverviewCleanup.isHidden,
+              !batchResults.retryReuseIsConfirmed(processExit: 1, exitedNormally: true, runID: "run-retry"),
+              !batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: false, runID: "run-retry")
+        else { throw HostError(message: "Reused retry became unknown failure, fresh delivery, new savings, or crash success") }
+        let hidden = batchResults.failedRetryReused?.detail(privacy: true) ?? ""
+        guard !hidden.contains(parent), !hidden.contains(child), hidden.contains(localized("privacy.display.hidden")) else {
+            throw HostError(message: "Normal retry references leaked private paths")
+        }
+        for mutation in ["newly_processed", "run_id", "unknown_field"] {
+            var changed = reuse
+            changed[mutation] = mutation == "run_id" ? "another-run" : 1
+            var invalid = BatchResults()
+            _ = invalid.ingestRetryReference(FastImgRetryReference.requestPrefix + (try encoded(reference)), requested: true,
+                source: source, parent: parent, strategy: "jxl", photos: false, runID: nil)
+            _ = invalid.ingestRetryReference(FastImgRetryReference.confirmedPrefix + (try encoded(changed)), requested: true,
+                source: source, parent: parent, strategy: "jxl", photos: false, runID: "run-retry")
+            guard invalid.failedRetryInvalid, invalid.failedRetryReused == nil else { throw HostError(message: "Invalid reused retry evidence was accepted") }
         }
     }
 
@@ -8224,8 +8445,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         if case .failure = result { processEndedWithError = true } else { processEndedWithError = false }
         let resumeChoicePending: Bool
-        if case .failure = result, sawResumeDecision, let request = lastRequest {
-            resumeChoicePending = !request.resume && !request.fresh
+        if case .failure = result, sawResumeDecision || sawFailedRetryDecision, let request = lastRequest {
+            resumeChoicePending = !request.resume && !request.fresh && !request.retryFailed
         } else { resumeChoicePending = false }
         defer { if !resumeChoicePending { refreshBatchOverview() } }
         let countSummary = batchResults.summary.map { "\n[RESULT] \($0)" } ?? ""
@@ -8248,6 +8469,12 @@ private final class AppController: NSObject, NSWindowDelegate {
         switch result {
         case let .success(message):
             setProcessing(false)
+            if batchResults.retryReuseIsConfirmed(processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal,
+                runID: workerExecution.latest?.run_id) {
+                setLocalizedStatus("retry.reused.title")
+                appendLog(localized("retry.reused.info"), captureDiagnostics: false)
+                return
+            }
             if batchResults.hasFailure {
                 setLocalizedStatus(batchResults.hasPartialSuccess ? "result.partially_completed"
                     : (batchResults.hasFileFailures ? "result.finished_with_failures" : "result.stopped_with_error"))
@@ -8268,7 +8495,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         case let .failure(error):
             // A saved-task choice is a launch decision, not a media failure.
             // Present it before recording failed delivery or a red error summary.
-            if sawResumeDecision, var retry = lastRequest, !retry.resume, !retry.fresh {
+            if !isDebugWindow, (sawResumeDecision || sawFailedRetryDecision), var retry = lastRequest,
+                !retry.resume, !retry.fresh, !retry.retryFailed {
                 processEndedWithError = false
                 batchOverview.isHidden = true
                 latestDiagnostics = LatestDiagnostics()
@@ -8276,13 +8504,18 @@ private final class AppController: NSObject, NSWindowDelegate {
                 setProcessing(false)
                 let alert = NSAlert()
                 alert.messageText = localized("alert.resume.title")
-                alert.informativeText = localized("alert.resume.info")
-                alert.addButton(withTitle: localized("alert.resume.resume"))
+                let available = failedRetryAvailable
+                alert.informativeText = available.map { $0.existingChildComplete
+                    ? localized("retry.reused.choice_info") : localized("retry.choice.info", String($0.failedCount)) }
+                    ?? localized("alert.resume.info")
+                alert.addButton(withTitle: localized(available == nil ? "alert.resume.resume"
+                    : available?.existingChildComplete == true ? "retry.reused.open" : "retry.only_failed"))
                 alert.addButton(withTitle: localized("alert.resume.fresh"))
                 alert.addButton(withTitle: localized("alert.cancel"))
                 switch resumeDecision(alert) {
                 case .alertFirstButtonReturn:
-                    applyResumeDecision(fresh: false, to: &retry)
+                    if let available { applyFailedRetryDecision(available, to: &retry) }
+                    else { applyResumeDecision(fresh: false, to: &retry) }
                 case .alertSecondButtonReturn:
                     applyResumeDecision(fresh: true, to: &retry)
                 default:
@@ -8291,6 +8524,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 }
                 lastRequest = retry
                 sawResumeDecision = false
+                sawFailedRetryDecision = false
+                failedRetryAvailable = nil
+                failedRetryAvailabilityInvalid = false
                 batchResults = BatchResults()
                 workerExecution = LiveWorkerExecution()
                 batchOverview.isHidden = true
@@ -8353,6 +8589,23 @@ private final class AppController: NSObject, NSWindowDelegate {
         let interrupted = interruptedWithoutFileSummary
         let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
         let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
+        if batchResults.retryReuseIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
+            runID: workerExecution.latest?.run_id) {
+            batchOverviewTitle.stringValue = localized("retry.reused.title")
+            batchOverviewTitle.textColor = .labelColor
+            batchOverviewCounts.stringValue = localized("retry.reused.counts")
+            batchOverviewDelivery.stringValue = localized("retry.reused.info")
+            batchOverviewDelivery.isHidden = false
+            batchOverviewCleanup.isHidden = true
+            for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery] {
+                label.toolTip = label.stringValue; label.setAccessibilityLabel(label.stringValue)
+            }
+            batchOverview.isHidden = false
+            fileProgressRow.isHidden = true
+            setLocalizedStatus("retry.reused.title")
+            updateLogPresentation()
+            return
+        }
         let confirmed = batchResults.fastDeliveryIsConfirmed(photos: photos, processExit: terminalExit,
             exitedNormally: normalExit)
         let deferred = host.controlState != "cancelled" && batchResults.deliveryIsDeferred(photos: photos,
@@ -11327,6 +11580,7 @@ private func runSelfTest() -> Int32 {
             }
             try AppController(preferences: preferences).validatePrivacyForSelfTest()
             try AppController(preferences: preferences).validateResumeChoiceForSelfTest()
+            try AppController(preferences: preferences).validateFailedRetryForSelfTest()
             try AppController(preferences: preferences).validateProcessInterruptionForSelfTest()
             try AppController(preferences: preferences).validateInterfaceForSelfTest()
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/synthetic/privacy-history"), preferences: preferences).validatePrivacyForSelfTest()

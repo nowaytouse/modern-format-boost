@@ -20,6 +20,7 @@ pub mod planned_source;
 
 // Advisory discovery freshness, not a content hash or delivery proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CachedFileIdentity {
     size: u64,
     modified_time: SystemTime,
