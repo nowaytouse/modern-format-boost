@@ -1139,6 +1139,13 @@ Unknown, conflicting or changed legacy files remain protected. Interrupted
 retirement is resumable from its receipt; old configuration or submission gaps
 are never filled with current defaults.
 
+Legacy discovery matches the selected source or output without requiring every
+unrelated historical media tree to remain present. A normalized, unselected
+locator with an ordinary absent ancestor remains untouched and supplies no
+recovery evidence for this task. Existing aliases still undergo canonical
+comparison; dangling links, changed ancestors, access errors and invalid records
+remain errors. A matching legacy task still requires explicit migration.
+
 Before retiring each legacy marker, a separate transaction saves the original
 directory observations and their BLAKE3, then verifies committed readback before
 creating a holding directory or moving/removing the marker. Recovery reuses

@@ -822,6 +822,8 @@ pub fn run_unified_verification(
     if let Some(strategy) = flags.strategy {
         cmd.arg("--strategy").arg(strategy);
     }
+    foundation::production_lock::inherit_active_lease(&mut cmd)
+        .context("inherit the parent production-task lease for verification")?;
     let output = cmd
         .output()
         .with_context(|| format!("run {}", verify_bin.display()))?;
@@ -1672,6 +1674,174 @@ fn read_line(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn verification_lease_subprocess_helper() -> Result<()> {
+        let Some(operation) = std::env::var_os("MFB_TEST_VERIFY_OPERATION") else {
+            return Ok(());
+        };
+        let output_path =
+            PathBuf::from(std::env::var_os("MFB_TEST_VERIFY_REPLY").context("test reply path")?);
+        let optimized =
+            PathBuf::from(std::env::var_os("MFB_TEST_VERIFY_OUTPUT").context("test output path")?);
+        let reply = if operation == "marker" {
+            // Match verify's read-only early dispatch: inspect formal Core state
+            // without taking a production lease or creating a missing store.
+            let marker = match foundation::pipeline::verification::read_marker(&optimized) {
+                Ok(marker) => Some(marker),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            serde_json::to_string(&serde_json::json!({"marker": marker,
+                "marker_database_path": null, "marker_error": null}))?
+        } else {
+            anyhow::ensure!(operation == "verify", "unknown test verifier operation");
+            let _lease = foundation::production_lock::acquire_production_lease()?;
+            let source = PathBuf::from(
+                std::env::var_os("MFB_TEST_VERIFY_SOURCE").context("test source path")?,
+            );
+            let count = |path: &Path| -> Result<usize> {
+                Ok(fs::read_dir(path)?.collect::<io::Result<Vec<_>>>()?.len())
+            };
+            let source_count = count(&source)?;
+            let optimized_count = count(&optimized)?;
+            anyhow::ensure!(
+                source_count == 0 && optimized_count == 0,
+                "lease regression only accepts its empty synthetic directories"
+            );
+            format!(
+                "{INTEGRITY_SUMMARY_JSON_PREFIX}{}\n",
+                serde_json::json!({
+                    "has_warnings": false, "issue_count": 0, "source_count": source_count,
+                    "optimized_count": optimized_count, "skipped_count": 0, "failed_count": 0,
+                    "source_remaining_count": 0, "verified_deleted_count": 0, "count_status": "MATCH"
+                })
+            )
+        };
+        fs::write(output_path, reply)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verification_lease_is_inherited_only_by_authorized_verifier() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        const DRIVER: &str = "MFB_TEST_VERIFY_LEASE_DRIVER";
+        if std::env::var_os(DRIVER).is_none() {
+            // Environment and the process-local active-lease registry belong to
+            // this exact child, never other parallel unit tests.
+            let thread = std::thread::current();
+            let test = thread
+                .name()
+                .context("libtest must provide the exact test identity")?;
+            let output = Command::new(std::env::current_exe()?)
+                .args([test, "--exact", "--nocapture", "--test-threads=1"])
+                .env(DRIVER, "1")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "isolated verification lease regression failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().canonicalize()?;
+        let source = root.join("source");
+        let optimized = root.join("output");
+        let state = root.join("state");
+        fs::create_dir(&source)?;
+        fs::create_dir(&optimized)?;
+        let _state = foundation::common_utils::EnvGuard::set(
+            "MFB_HOME_ROOT",
+            state.to_str().context("test state path")?,
+        );
+        let _source = foundation::common_utils::EnvGuard::set(
+            "MFB_TEST_VERIFY_SOURCE",
+            source.to_str().context("test source path")?,
+        );
+        let _optimized = foundation::common_utils::EnvGuard::set(
+            "MFB_TEST_VERIFY_OUTPUT",
+            optimized.to_str().context("test output path")?,
+        );
+        let executable = std::env::current_exe()?;
+        let _executable = foundation::common_utils::EnvGuard::set(
+            "MFB_TEST_VERIFY_EXE",
+            executable.to_str().context("test executable path")?,
+        );
+        let _reply = foundation::common_utils::EnvGuard::set(
+            "MFB_TEST_VERIFY_REPLY",
+            root.join("reply").to_str().context("test reply path")?,
+        );
+        let _child_log = foundation::common_utils::EnvGuard::set(
+            "MFB_TEST_VERIFY_CHILD_LOG",
+            root.join("child.log")
+                .to_str()
+                .context("test child log path")?,
+        );
+        let adapter = root.join("verify-adapter");
+        fs::write(
+            &adapter,
+            r#"#!/bin/sh
+case "$1" in
+    --fast-img-marker-json) MFB_TEST_VERIFY_OPERATION=marker ;;
+    --verify) MFB_TEST_VERIFY_OPERATION=verify ;;
+    *) exit 2 ;;
+esac
+export MFB_TEST_VERIFY_OPERATION
+"$MFB_TEST_VERIFY_EXE" --exact infra::drag_drop::tests::verification_lease_subprocess_helper --nocapture --test-threads=1 > "$MFB_TEST_VERIFY_CHILD_LOG" 2>&1
+status=$?
+if [ "$status" -ne 0 ]; then
+    cat "$MFB_TEST_VERIFY_CHILD_LOG" >&2
+    exit "$status"
+fi
+cat "$MFB_TEST_VERIFY_REPLY"
+"#,
+        )?;
+        fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700))?;
+        let _lease = foundation::production_lock::acquire_production_lease()?;
+        let blocked = Command::new(&adapter)
+            .arg("--verify")
+            .env_remove("MFB_PRODUCTION_TASK_LEASE_FD")
+            .output()?;
+        anyhow::ensure!(
+            !blocked.status.success()
+                && String::from_utf8_lossy(&blocked.stderr).contains("MFB_PRODUCTION_TASK_BUSY"),
+            "an unrelated verifier must remain blocked by the production parent"
+        );
+        let (_, _, marker_error) = load_fast_img_marker_json(&adapter, &optimized)?;
+        anyhow::ensure!(
+            marker_error.is_none() && !state.exists(),
+            "a read-only marker query must not require a lease or create state"
+        );
+        let outcome = run_unified_verification(
+            &adapter,
+            &source,
+            Some(&optimized),
+            ProcessingFilter::ImagesOnly,
+            None,
+            &root,
+            "lease-regression",
+            VerificationFlags {
+                include_logs: false,
+                auto_mode: true,
+                fast_img: VerifyFastImgMode::None,
+                strategy: None,
+            },
+        )?;
+        assert_eq!(outcome.warnings, Some(false));
+        assert_eq!(outcome.issue_count, 0);
+        let summary = outcome
+            .integrity_summary
+            .context("delegated verifier omitted its actual result")?;
+        assert_eq!((summary.source_count, summary.optimized_count), (0, 0));
+        assert_eq!(summary.count_status.as_deref(), Some("MATCH"));
+        Ok(())
+    }
 
     #[test]
     #[serial_test::serial]

@@ -2281,7 +2281,10 @@ fn run_drag_drop_with_lease<L>(
                 let migration = foundation::fast_img_store::migrate_legacy_for_source(
                     &source,
                     args.output.as_deref(),
-                )?;
+                )
+                .with_context(|| {
+                    format!("inspect Fast IMG recovery state for {}", source.display())
+                })?;
                 if migration.migrated != 0 || migration.retired != 0 {
                     let report = serde_json::json!({"schema_version":1,
                         "migrated":migration.migrated,"retired":migration.retired});
@@ -3361,7 +3364,7 @@ fn interactive_menu(args: &Args, session: &mut AppSession) -> Result<()> {
             return Ok(());
         };
         safety_check(&path)?;
-        session.rename_log_to_project(&path)?;
+        session.set_project_label(&path);
         path
     } else {
         args.inputs[0].clone()
@@ -3764,7 +3767,7 @@ fn main() -> Result<()> {
                 });
             }
             let setup_result: Result<()> = (|| {
-                session.rename_log_to_project(&args.inputs[0])?;
+                session.set_project_label(&args.inputs[0]);
                 if args.in_place && !matches!(args.mode, LaunchMode::FastImg) {
                     dir_lock = Some(acquire_global_lock(args.inputs.first().expect("input"))?);
                 }

@@ -22,6 +22,10 @@ fn session_bundle_name(session_log: Option<&Path>, stamp: &str) -> String {
         .and_then(|name| name.strip_prefix("MFB_"))
         .and_then(|name| name.strip_suffix(&format!("_{stamp}.log")))
         .filter(|name| *name != "Session");
+    session_bundle_name_from_label(project, stamp)
+}
+
+fn session_bundle_name_from_label(project: Option<&str>, stamp: &str) -> String {
     let prefix: String = project
         .unwrap_or("")
         .chars()
@@ -429,6 +433,31 @@ pub fn archive_drag_drop_session_bundle(
     session_audit: Option<&Path>,
     session_started_at: Option<DateTime<Local>>,
 ) -> Result<Option<PathBuf>> {
+    archive_drag_drop_session_bundle_with_label(
+        log_dir,
+        session_stamp,
+        session_log,
+        verbose_log,
+        session_audit,
+        session_started_at,
+        None,
+    )
+}
+
+/// Archive the same session artifacts with an explicit display label for the bundle.
+/// The label changes neither the authoritative filenames nor their ownership.
+///
+/// # Errors
+/// Propagates invalid session identity and filesystem archive failures.
+pub fn archive_drag_drop_session_bundle_with_label(
+    log_dir: &Path,
+    session_stamp: &str,
+    session_log: Option<&Path>,
+    verbose_log: Option<&Path>,
+    session_audit: Option<&Path>,
+    session_started_at: Option<DateTime<Local>>,
+    project_label: Option<&str>,
+) -> Result<Option<PathBuf>> {
     let log_dir = log_dir.to_path_buf();
     if !log_dir.is_dir() {
         return Ok(None);
@@ -463,7 +492,10 @@ pub fn archive_drag_drop_session_bundle(
         mtime_dt >= session_dt - chrono::Duration::seconds(10)
     };
 
-    let bundle_name = session_bundle_name(session_log, stamp);
+    let bundle_name = project_label.map_or_else(
+        || session_bundle_name(session_log, stamp),
+        |label| session_bundle_name_from_label(Some(label), stamp),
+    );
     let mut bundle = log_dir.join(&bundle_name);
     let mut bundle_created = false;
     let mut moved = HashSet::new();

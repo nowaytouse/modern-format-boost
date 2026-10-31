@@ -12,7 +12,7 @@ use crate::app::worker::{ToolSnapshotBindings, WorkerSession};
 use crate::infra::drag_drop::OutputCleanupReceipt;
 use crate::infra::history_store::{self, HistorySessionLease};
 use crate::infra::log_paths::{
-    append_jsonl_audit_record, archive_drag_drop_session_bundle, ensure_unified_log_dir,
+    append_jsonl_audit_record, archive_drag_drop_session_bundle_with_label, ensure_unified_log_dir,
     format_session_stamp,
 };
 use crate::infra::process_stream::{ProcessorByteTotals, ProcessorStats};
@@ -29,6 +29,7 @@ pub struct AppSession {
     session_log: PathBuf,
     verbose_log: PathBuf,
     session_audit: PathBuf,
+    project_label: Option<String>,
     run_id: Option<String>,
     tool_snapshots: Arc<ToolSnapshotBindings>,
 }
@@ -153,6 +154,7 @@ impl AppSession {
             session_log: log_dir.join(format!("MFB_Session_{stamp}.log")),
             verbose_log: log_dir.join(format!("verbose_{stamp}.log")),
             session_audit: log_dir.join(format!("session_audit_{stamp}.jsonl")),
+            project_label: None,
             log_dir,
             stamp,
             run_id: None,
@@ -536,32 +538,12 @@ impl AppSession {
         }))
     }
 
-    /// Rename this session's diagnostic log using the selected input name.
-    ///
-    /// # Errors
-    /// Returns a filesystem rename failure without changing the recorded log path.
-    pub fn rename_log_to_project(&mut self, target: &Path) -> Result<()> {
-        let project_name = target.file_name().map_or_else(
+    /// Label the archive from the selected input without renaming authoritative logs.
+    pub fn set_project_label(&mut self, target: &Path) {
+        self.project_label = Some(target.file_name().map_or_else(
             || "project".to_string(),
             |n| n.to_string_lossy().into_owned(),
-        );
-        let new_name = self
-            .log_dir
-            .join(format!("MFB_{project_name}_{}.log", self.stamp));
-        if self.session_log == new_name {
-            return Ok(());
-        }
-        if self.session_log.is_file() {
-            fs::rename(&self.session_log, &new_name).with_context(|| {
-                format!(
-                    "rename session log {} -> {}",
-                    self.session_log.display(),
-                    new_name.display()
-                )
-            })?;
-            self.session_log = new_name;
-        }
-        Ok(())
+        ));
     }
 
     /// Persist the result summary and append its diagnostic representation.
@@ -691,13 +673,14 @@ impl AppSession {
         self.append_line(&self.session_log, "SESSION_ARCHIVE_BEGIN")?;
         self.append_line(&self.verbose_log, "SESSION_ARCHIVE_BEGIN")?;
         append_jsonl_audit_record(&self.session_audit, "SESSION_ARCHIVE_BEGIN")?;
-        let archived = archive_drag_drop_session_bundle(
+        let archived = archive_drag_drop_session_bundle_with_label(
             &self.log_dir,
             &self.stamp,
             Some(&self.session_log),
             Some(&self.verbose_log),
             Some(&self.session_audit),
             Some(self.started_at),
+            self.project_label.as_deref(),
         )?;
         if let Some(bundle) = &archived {
             let archived_audit = bundle.join(format!("session_audit_{}.jsonl", self.stamp));
@@ -910,6 +893,52 @@ pub fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_label_archives_canonical_session_artifacts_without_worker_output() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let logs = temp.path().join("logs");
+        let mut session = AppSession::start_in(&logs)?;
+        let canonical = session.session_log.clone();
+        let project = temp.path().join("合成媒体");
+        fs::create_dir(&project)?;
+        session.set_project_label(&project);
+        let bundle = session.archive()?.context("session bundle missing")?;
+        assert_eq!(
+            bundle.file_name().and_then(|name| name.to_str()),
+            Some(format!("合成媒体_Bundle_{}", session.stamp).as_str()),
+        );
+        assert_eq!(session.session_log, canonical);
+        let names = [
+            format!("MFB_Session_{}.log", session.stamp),
+            format!("verbose_{}.log", session.stamp),
+            format!("session_audit_{}.jsonl", session.stamp),
+        ];
+        for name in &names {
+            assert!(bundle.join(name).is_file(), "{name}");
+            assert!(!logs.join(name).exists(), "{name}");
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(bundle.join("manifest.json"))?)?;
+        let files = manifest["files"]
+            .as_array()
+            .context("manifest files missing")?;
+        assert_eq!(files.len(), names.len());
+        for name in names {
+            assert!(files.contains(&serde_json::Value::String(name)));
+        }
+        assert!(
+            fs::read_to_string(
+                bundle.join(
+                    canonical
+                        .file_name()
+                        .context("canonical log name missing")?
+                )
+            )?
+            .contains("SESSION_STARTED")
+        );
+        Ok(())
+    }
 
     #[test]
     fn finalized_retry_requires_the_pre_worker_snapshot_and_exact_durable_receipt() -> Result<()> {

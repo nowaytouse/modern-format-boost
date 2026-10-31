@@ -50,6 +50,48 @@ fn marker(bytes: &[u8]) -> Result<WorkingCopyMarker> {
     Ok(value)
 }
 
+/// Match a saved locator without requiring unrelated, vanished media trees to
+/// remain mounted. This is discovery only; no historical result is certified.
+fn locator_matches(saved: &Path, selected: &Path) -> Result<bool> {
+    super::validate_locator(text(saved)?)?;
+    match crate::pipeline::verification::canonical_working_copy_path(saved) {
+        Ok(resolved) => return Ok(resolved == selected),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && saved != selected => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Cannot resolve legacy task locator {}", saved.display())
+            });
+        }
+    }
+    // ENOENT can also mean a dangling link. Only an ordinary absent subtree
+    // may be excluded; links, inaccessible ancestors and replaced locators
+    // still require an explicit error instead of a guessed task identity.
+    for ancestor in saved.ancestors().skip(1) {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                ensure!(
+                    metadata.is_dir()
+                        && !metadata.file_type().is_symlink()
+                        && ancestor.canonicalize()?.as_os_str() == ancestor.as_os_str(),
+                    "Unavailable legacy task locator has a linked or non-directory ancestor: {}",
+                    saved.display()
+                );
+                return Ok(false);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Cannot inspect legacy task ancestor {}", ancestor.display())
+                });
+            }
+        }
+    }
+    bail!(
+        "Legacy task locator has no verifiable ancestor: {}",
+        saved.display()
+    )
+}
+
 fn central_dir() -> Result<PathBuf> {
     Ok(crate::process_lock::inspect_mfb_root_path()?.join("fast_img/markers"))
 }
@@ -281,7 +323,7 @@ pub(super) fn reject_unmigrated_for_working_copy(wc: &Path) -> Result<()> {
         let file = read_legacy(&path)?.context("Legacy checkpoint disappeared during discovery")?;
         let value = locator(&file.bytes)?;
         validate_origin(&file.path, &value)?;
-        if canonical_text(&value.working_copy)? == canonical {
+        if locator_matches(&value.working_copy, Path::new(&canonical))? {
             return Err(migration_required(&file.path));
         }
     }
@@ -294,7 +336,7 @@ pub(super) fn reject_unmigrated_for_source(source: &Path) -> Result<()> {
         let file = read_legacy(&path)?.context("Legacy checkpoint disappeared during discovery")?;
         let value = locator(&file.bytes)?;
         validate_origin(&file.path, &value)?;
-        if canonical_text(&value.src_dir)? == text(&source)? {
+        if locator_matches(&value.src_dir, &source)? {
             return Err(migration_required(&file.path));
         }
     }
@@ -742,7 +784,7 @@ pub(super) fn migrate_legacy_for_source(
                 working_copy: value.working_copy.clone(),
             },
         )?;
-        if canonical_text(&value.src_dir)? == text(&source)? {
+        if locator_matches(&value.src_dir, &source)? {
             paths.insert(file.path.clone());
             files.push((file, value));
         }
@@ -939,6 +981,109 @@ mod tests {
         let mut marker = WorkingCopyMarker::new(source.canonicalize()?, wc.canonicalize()?, 0);
         marker.started_at = "2026-10-31T00:00:00Z".into();
         Ok(marker)
+    }
+
+    #[test]
+    fn unrelated_missing_legacy_ancestors_do_not_block_selected_source() -> Result<()> {
+        if !isolated("unrelated_missing_legacy_ancestors_do_not_block_selected_source")? {
+            return Ok(());
+        }
+        let root = tempfile::tempdir()?;
+        let removed = root.path().join("removed-parent");
+        fs::create_dir(&removed)?;
+        let unrelated = fixture(&removed, "old-source")?;
+        let central = central_dir()?;
+        fs::create_dir_all(&central)?;
+        let origin = legacy_marker_path_for_working_copy(&unrelated.working_copy)?;
+        let original = serde_json::to_vec(&unrelated)?;
+        fs::write(&origin, &original)?;
+        fs::remove_dir(&unrelated.src_dir)?;
+        fs::remove_dir(&unrelated.working_copy)?;
+        fs::remove_dir(&removed)?;
+        let selected = fixture(root.path(), "current-source")?;
+
+        reject_unmigrated_for_source(&selected.src_dir)?;
+        reject_unmigrated_for_working_copy(&selected.working_copy)?;
+        assert!(
+            open_readonly()?.is_none(),
+            "discovery must remain read-only"
+        );
+        let report = migrate_legacy_for_source(&selected.src_dir, None)?;
+        assert_eq!((report.migrated, report.retired), (0, 0));
+        assert_eq!(fs::read(&origin)?, original);
+        assert!(
+            !removed.exists(),
+            "unrelated history must not recreate media paths"
+        );
+
+        // A genuinely selected legacy checkpoint still requires migration.
+        let selected_origin = legacy_marker_path_for_working_copy(&selected.working_copy)?;
+        fs::write(&selected_origin, serde_json::to_vec(&selected)?)?;
+        let error = reject_unmigrated_for_source(&selected.src_dir).unwrap_err();
+        assert!(error.to_string().contains("MFB_STATE_MIGRATION_REQUIRED"));
+        assert!(
+            error
+                .to_string()
+                .contains(selected_origin.to_str().unwrap())
+        );
+        let report = migrate_legacy_for_source(&selected.src_dir, None)?;
+        assert_eq!((report.migrated, report.retired), (1, 1));
+        assert_eq!(fs::read(&origin)?, original);
+        assert!(!selected_origin.exists());
+        assert!(!removed.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_discovery_keeps_missing_leaf_aliases_and_rejects_dangling_ancestors() -> Result<()> {
+        if !isolated("legacy_discovery_keeps_missing_leaf_aliases_and_rejects_dangling_ancestors")?
+        {
+            return Ok(());
+        }
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir()?;
+        let root = root.path().canonicalize()?;
+        let selected = fixture(&root, "selected")?;
+        let real = root.join("real-parent");
+        fs::create_dir(&real)?;
+        let alias = root.join("alias");
+        symlink(&real, &alias)?;
+        let mut legacy = selected.clone();
+        legacy.working_copy = alias.join("missing-output");
+        let central = central_dir()?;
+        fs::create_dir_all(&central)?;
+        let origin = legacy_marker_path_for_working_copy(&legacy.working_copy)?;
+        fs::write(&origin, serde_json::to_vec(&legacy)?)?;
+        let error = reject_unmigrated_for_working_copy(&real.join("missing-output")).unwrap_err();
+        assert!(error.to_string().contains("MFB_STATE_MIGRATION_REQUIRED"));
+        assert!(error.to_string().contains(origin.to_str().unwrap()));
+
+        fs::remove_file(&origin)?;
+        fs::remove_file(&alias)?;
+        symlink(root.join("missing-parent"), &alias)?;
+        legacy.src_dir = alias.join("old-source");
+        legacy.working_copy.clone_from(&selected.working_copy);
+        let origin = legacy_marker_path_for_working_copy(&legacy.working_copy)?;
+        let original = serde_json::to_vec(&legacy)?;
+        fs::write(&origin, &original)?;
+        for error in [
+            reject_unmigrated_for_source(&selected.src_dir).unwrap_err(),
+            migrate_legacy_for_source(&selected.src_dir, None).unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("linked or non-directory ancestor")
+            );
+            assert!(error.to_string().contains(legacy.src_dir.to_str().unwrap()));
+        }
+        assert_eq!(fs::read(&origin)?, original);
+        assert!(fs::symlink_metadata(&alias)?.file_type().is_symlink());
+        assert!(
+            open_readonly()?.is_none(),
+            "rejected discovery must not create state"
+        );
+        Ok(())
     }
 
     #[test]

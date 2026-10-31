@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Launcher Startup And Session Archival (2026-10-31)
+
+- Keep unavailable, unrelated legacy media trees from blocking a new task during
+  state discovery, while retaining exact task matching and rejecting invalid,
+  inaccessible or linked locators. Preserve the old checkpoint unchanged.
+- Keep session log filenames stable for their registered ownership; use the
+  project name only as the archive's display label. This fixes normal and early
+  failure archival without relaxing History's file-identity checks.
+- Pass the parent's existing production lease to the post-processing verifier.
+  Independent production tasks remain blocked; read-only state inspection keeps
+  its separate admission behavior.
+
 ### Verified Failed-child Finalization (2026-10-31)
 
 - Finalize eligible manifest-bound interrupted children after their source root
