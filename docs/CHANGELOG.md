@@ -23,6 +23,24 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Verified Failed-child Finalization (2026-10-31)
+
+- Finalize eligible manifest-bound interrupted children after their source root
+  disappears, only after fresh complete artifact, companion and applicable Photos
+  original-byte checks. Compare the exact old Core snapshot and verify transaction
+  readback; retain the parent and all media unchanged.
+- Distinguish current reverification from historical no-work reuse in launcher,
+  native results and History. Record actual rechecked artifacts separately from
+  zero newly processed/imported/saved-byte totals. Original delivery pending after
+  primary cleanup no longer qualifies as a terminal task.
+- Keep missing historical admissions, unresolved companions and the unfinished
+  original-format-only child route explicit; no new Photos/iCloud acceptance or
+  filesystem/database crash-atomicity claim is implied.
+- Repair Linux-only probe reachability, portable native lock conversions and
+  strict-check findings while retaining descriptor identity and formal-root
+  protections. Restore output-specific JXL/AVIF recovery instructions and isolate
+  temporary test authorities without resetting production state.
+
 ### Durable Legacy Directory Recovery (2026-10-31)
 
 - Persist and verify original directory observations before legacy-marker

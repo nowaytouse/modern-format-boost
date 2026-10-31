@@ -264,10 +264,67 @@ struct FastImgRetryReference: Decodable, Equatable {
         let libraryPath: String?
         let namingPolicy: String?
     }
+    struct ChildSnapshot: Decodable, Equatable {
+        let snapshotBlake3: String
+        let revision: Int64
+        let manifestBlake3: String
+        let taskKey: String
+
+        var valid: Bool {
+            revision >= 0 && [snapshotBlake3, manifestBlake3, taskKey].allSatisfy(FastImgFailedRetryAvailable.hash)
+        }
+    }
+    struct FinishEvidence: Decodable, Equatable {
+        let schema: Int
+        let taskKey: String
+        let requestKey: String
+        let manifestBlake3: String
+        let verifiedSnapshotBlake3: String
+        let verifiedRevision: Int64
+        let verifiedStage: String
+        let verifiedTier2InProgress: Bool
+        let verifiedError: String?
+        let sourceRootObservation: String
+        let verifiedOutputCount: UInt64
+        let verifiedPrimaryPhotosCount: UInt64
+        let verifiedOriginalPhotosCount: UInt64
+        let observedAt: String
+
+        func matches(_ reference: FastImgRetryReference) -> Bool {
+            guard let before = reference.childSnapshotBefore, before.valid,
+                  schema == 1, taskKey == before.taskKey, requestKey == reference.requestKey,
+                  manifestBlake3 == before.manifestBlake3, verifiedSnapshotBlake3 == before.snapshotBlake3,
+                  verifiedRevision == before.revision, sourceRootObservation == "not_found",
+                  ["gate1_passed", "gate3_passed", "cleanup_complete"].contains(verifiedStage),
+                  verifiedStage != "cleanup_complete" || verifiedTier2InProgress,
+                  [taskKey, requestKey, manifestBlake3, verifiedSnapshotBlake3].allSatisfy(FastImgFailedRetryAvailable.hash)
+            else { return false }
+            let date = ISO8601DateFormatter()
+            date.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if date.date(from: observedAt) == nil {
+                date.formatOptions = [.withInternetDateTime]
+                guard date.date(from: observedAt) != nil else { return false }
+            }
+            if reference.deliveryIntent.kind == "local" {
+                return verifiedStage == "gate1_passed" && !verifiedTier2InProgress
+                    && verifiedOutputCount > 0 && verifiedPrimaryPhotosCount == 0 && verifiedOriginalPhotosCount == 0
+            }
+            return (verifiedStage == "gate3_passed" || (verifiedStage == "cleanup_complete" && verifiedTier2InProgress))
+                && verifiedOutputCount == verifiedPrimaryPhotosCount
+                && (verifiedPrimaryPhotosCount > 0 || verifiedOriginalPhotosCount > 0)
+        }
+
+        var summary: String {
+            localized("retry.finalized.checked", String(verifiedOutputCount),
+                String(verifiedPrimaryPhotosCount), String(verifiedOriginalPhotosCount))
+        }
+    }
     static let requestPrefix = "MFB_FAST_IMG_FAILED_RETRY_REQUEST="
     static let confirmedPrefix = "MFB_FAST_IMG_RETRY_REUSED_CONFIRMED="
+    static let finalizedPrefix = "MFB_FAST_IMG_RETRY_FINALIZED_CONFIRMED="
     static let historyRequestPrefix = "MFB_HISTORY_FAST_IMG_FAILED_RETRY_REQUEST="
     static let historyReusedPrefix = "MFB_HISTORY_FAST_IMG_RETRY_REUSED="
+    static let historyFinalizedPrefix = "MFB_HISTORY_FAST_IMG_RETRY_FINALIZED="
     let schemaVersion: Int
     let runId: String
     let sourceDirectory: String
@@ -277,28 +334,52 @@ struct FastImgRetryReference: Decodable, Equatable {
     let childWorkingCopy: String
     let strategy: String
     let deliveryIntent: DeliveryIntent
+    let inputPath: String?
+    let childSnapshotBefore: ChildSnapshot?
     let newlyProcessed: Int?
     let newlyDelivered: Int?
     let newlySavedBytes: Int?
+    let evidence: FinishEvidence?
 
     func sameRequest(as other: Self) -> Bool {
         runId == other.runId && parentTaskKey == other.parentTaskKey && requestKey == other.requestKey
-            && strategy == other.strategy && deliveryIntent == other.deliveryIntent && FastImgDeliveryReceipt.samePath(sourceDirectory, other.sourceDirectory)
+            && strategy == other.strategy && deliveryIntent == other.deliveryIntent
+            && inputPath == other.inputPath && childSnapshotBefore == other.childSnapshotBefore
+            && FastImgDeliveryReceipt.samePath(sourceDirectory, other.sourceDirectory)
             && FastImgDeliveryReceipt.samePath(parentWorkingCopy, other.parentWorkingCopy)
             && FastImgDeliveryReceipt.samePath(childWorkingCopy, other.childWorkingCopy)
     }
-    static func decode(_ line: String, prefix: String, reused: Bool) throws -> Self? {
+    func matchesInput(_ input: String?) -> Bool {
+        FastImgDeliveryReceipt.samePath(inputPath ?? sourceDirectory, input)
+    }
+    static func decode(_ line: String, prefix: String, reused: Bool, finalized: Bool = false) throws -> Self? {
         guard line.hasPrefix(prefix) else { return nil }
         let data = Data(line.dropFirst(prefix.count).utf8)
         var fields: Set<String> = ["schema_version", "run_id", "source_directory", "parent_working_copy",
             "parent_task_key", "request_key", "child_working_copy", "strategy", "delivery_intent"]
-        if reused { fields.formUnion(["newly_processed", "newly_delivered", "newly_saved_bytes"]) }
-        guard data.count <= 16_384, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == fields,
+        if reused || finalized { fields.formUnion(["newly_processed", "newly_delivered", "newly_saved_bytes"]) }
+        if finalized { fields.insert("evidence") }
+        guard data.count <= 16_384, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw HostError(message: localized("retry.invalid")) }
+        let extended = object.keys.contains("input_path") || object.keys.contains("child_snapshot_before")
+        if extended { fields.formUnion(["input_path", "child_snapshot_before"]) }
+        guard Set(object.keys) == fields, !finalized || extended,
               let delivery = object["delivery_intent"] as? [String: Any], let kind = delivery["kind"] as? String,
               (kind == "local" && Set(delivery.keys) == ["kind"])
                 || (kind == "photos" && Set(delivery.keys) == ["kind", "library_path", "naming_policy"])
         else { throw HostError(message: localized("retry.invalid")) }
+        if let snapshot = object["child_snapshot_before"] as? [String: Any] {
+            guard Set(snapshot.keys) == ["snapshot_blake3", "revision", "manifest_blake3", "task_key"]
+            else { throw HostError(message: localized("retry.invalid")) }
+        }
+        if finalized {
+            let evidenceFields: Set<String> = ["schema", "task_key", "request_key", "manifest_blake3",
+                "verified_snapshot_blake3", "verified_revision", "verified_stage", "verified_tier2_in_progress",
+                "verified_error", "source_root_observation", "verified_output_count", "verified_primary_photos_count",
+                "verified_original_photos_count", "observed_at"]
+            guard let evidence = object["evidence"] as? [String: Any], Set(evidence.keys) == evidenceFields
+            else { throw HostError(message: localized("retry.invalid")) }
+        }
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
         let value = try decoder.decode(Self.self, from: data)
         guard value.schemaVersion == 1, validHistoryIdentity(value.runId),
@@ -307,14 +388,19 @@ struct FastImgRetryReference: Decodable, Equatable {
               value.parentWorkingCopy != value.childWorkingCopy, ["jxl", "avif"].contains(value.strategy),
               value.deliveryIntent.libraryPath.map(FastImgFailedRetryAvailable.path) ?? true,
               value.deliveryIntent.kind != "photos" || value.deliveryIntent.namingPolicy?.isEmpty == false,
-              !reused || (value.newlyProcessed == 0 && value.newlyDelivered == 0 && value.newlySavedBytes == 0)
+               !extended || value.inputPath.map(FastImgFailedRetryAvailable.path) == true,
+               value.childSnapshotBefore?.valid ?? true,
+               !(reused || finalized) || (value.newlyProcessed == 0 && value.newlyDelivered == 0 && value.newlySavedBytes == 0),
+               !finalized || value.evidence?.matches(value) == true
         else { throw HostError(message: localized("retry.invalid")) }
         return value
     }
     func detail(privacy: Bool) -> String {
-        localized("retry.reference") + "\n"
+        let reference = localized("retry.reference") + "\n"
             + localized("retry.parent", DisplayPrivacy.path(parentWorkingCopy, hidden: privacy)) + "\n"
             + localized("retry.child", DisplayPrivacy.path(childWorkingCopy, hidden: privacy))
+        guard let evidence else { return reference }
+        return reference + "\n\n" + evidence.summary + "\n" + localized("retry.finalized.source_absent")
     }
 }
 
@@ -666,6 +752,7 @@ private struct HistoryEntry {
     var fastDeliveryInvalid = false
     var failedRetryRequest: FastImgRetryReference?
     var failedRetryReused: FastImgRetryReference?
+    var failedRetryFinalized: FastImgRetryReference?
     var failedRetryInvalid = false
     var inputPlan: HistoryInputPlan?
     var inputVerifications: [String: HistoryVerification] = [:]
@@ -804,16 +891,30 @@ private struct HistoryEntry {
             archive: invocation.arguments.contains("--archive"))
     }
     var hasValidRetryReuse: Bool {
+        failedRetryReused != nil && hasValidRetryOutcome
+    }
+    var hasValidRetryFinalization: Bool {
+        failedRetryFinalized != nil && hasValidRetryOutcome
+    }
+    var retryOutcomeReference: FastImgRetryReference? {
+        guard failedRetryReused == nil || failedRetryFinalized == nil else { return nil }
+        return failedRetryFinalized ?? failedRetryReused
+    }
+    private var hasValidRetryOutcome: Bool {
         guard !failedRetryInvalid, issues.isEmpty, contradictoryFields.isEmpty,
-              let request = failedRetryRequest, let reused = failedRetryReused, request.sameRequest(as: reused),
+              let request = failedRetryRequest, let reused = retryOutcomeReference, request.sameRequest(as: reused),
               let context, context.mode == "fast-img", !context.dry_run, context.run_id == reused.runId,
-              context.inputs.count == 1, FastImgDeliveryReceipt.samePath(context.inputs.first, reused.sourceDirectory),
+              context.inputs.count == 1, reused.matchesInput(context.inputs.first),
               context.shortest_path == (reused.deliveryIntent.kind == "photos"),
+              let outputStart = context.output_sequence, let outputEnd = finished?.output_sequence,
+              outputStart >= 0, outputEnd >= outputStart,
               finished?.outcome == "completed", finished?.error == nil, let summary, summary.valid,
               summary.integrity.state == nil, summary.integrity.issue_count == nil, summary.size == nil,
               !summary.sizeInvalid, fastDeliveries.isEmpty, !fastDeliveryInvalid,
               outputCleanups.isEmpty, !outputCleanupInvalid, verification == nil, inputVerifications.isEmpty,
-              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid, workerExecutions.count == 1,
+              !workerExecutionEvidenceInvalid, !invocationEvidenceInvalid, workerExecutions.count == 1, invocations.count == 1,
+              invocations.first?.pipeline == "img",
+              invocations.first.map({ $0.arguments.contains("--retry-failed") || $0.arguments.contains("--retry") }) == true,
               workerExecutions.values.allSatisfy({ $0.last?.state == "exited" && $0.last?.signal == nil && $0.last?.exit_code == 0 })
         else { return false }
         return [summary.img, summary.vid].allSatisfy { media in
@@ -865,13 +966,14 @@ private struct HistoryEntry {
     var statusKey: String {
         if hasVerificationFailure { return "result.unconfirmed" }
         if finished?.outcome == "cancelled" { return "history.status.cancelled" }
+        if hasValidRetryFinalization { return "retry.finalized.title" }
         if hasValidRetryReuse { return "retry.reused.title" }
         if deliveryIsDeferred { return "result.delivery_deferred" }
         if hasPartialSuccess { return "history.status.partial" }
         if finished?.outcome == "failed" { return "history.status.failed" }
         if hasProcessorError { return "history.status.failed" }
         if hasFailures { return "history.status.file_failures" }
-        if failedRetryReused != nil || failedRetryInvalid { return "history.status.incomplete" }
+        if failedRetryReused != nil || failedRetryFinalized != nil || failedRetryInvalid { return "history.status.incomplete" }
         if legacy { return "history.status.legacy" }
         if issues.isEmpty, context?.dry_run == true, finished?.outcome == "completed" {
             return "history.status.preview"
@@ -896,7 +998,7 @@ private struct HistoryEntry {
         localized(statusKey) + (auxiliaryAttention.isEmpty ? "" : " · " + auxiliaryAttention)
     }
     var needsAttention: Bool {
-        !["history.status.completed", "history.status.preview", "retry.reused.title"].contains(statusKey)
+        !["history.status.completed", "history.status.preview", "retry.reused.title", "retry.finalized.title"].contains(statusKey)
             || hasVerificationWarnings || hasCleanupAttention || hasOutputStorageAttention
     }
     var statusColor: NSColor {
@@ -915,7 +1017,7 @@ private struct HistoryEntry {
             .joined(separator: " ")
     }
     var succeededLabel: String {
-        if hasValidRetryReuse { return "0" }
+        if hasValidRetryReuse || hasValidRetryFinalization { return "0" }
         guard let summary else { return localized("result.unknown") }
         let active = [summary.img, summary.vid].filter(\.active)
         guard !active.isEmpty, active.allSatisfy({ $0.succeeded != nil }) else { return localized("result.unknown") }
@@ -928,6 +1030,7 @@ private struct HistoryEntry {
         return String(total)
     }
     var sizeOutcome: String {
+        if hasValidRetryFinalization { return localized("retry.finalized.counts") }
         if hasValidRetryReuse { return localized("retry.reused.counts") }
         guard !isRestoreJpeg else { return localized("history.space.not_applicable_restore") }
         guard let input = summary?.size?.input_bytes, let output = summary?.size?.output_bytes else {
@@ -1278,14 +1381,18 @@ private enum HistoryStore {
                     guard let request = try FastImgRetryReference.decode(event, prefix: FastImgRetryReference.historyRequestPrefix, reused: false),
                           let context = current.context, context.mode == "fast-img", !context.dry_run,
                           context.run_id == request.runId, context.inputs.count == 1,
-                          FastImgDeliveryReceipt.samePath(context.inputs.first, request.sourceDirectory),
+                          request.matchesInput(context.inputs.first),
                           current.failedRetryRequest == nil, !current.failedRetryInvalid else { throw HistoryParseError.invalid }
                     current.failedRetryRequest = request
-                } else if event.hasPrefix(FastImgRetryReference.historyReusedPrefix) {
-                    guard let reused = try FastImgRetryReference.decode(event, prefix: FastImgRetryReference.historyReusedPrefix, reused: true),
+                } else if event.hasPrefix(FastImgRetryReference.historyReusedPrefix)
+                    || event.hasPrefix(FastImgRetryReference.historyFinalizedPrefix) {
+                    let finalized = event.hasPrefix(FastImgRetryReference.historyFinalizedPrefix)
+                    let prefix = finalized ? FastImgRetryReference.historyFinalizedPrefix : FastImgRetryReference.historyReusedPrefix
+                    guard let reused = try FastImgRetryReference.decode(event, prefix: prefix, reused: !finalized, finalized: finalized),
                           let request = current.failedRetryRequest, request.sameRequest(as: reused),
-                          current.failedRetryReused == nil, !current.failedRetryInvalid else { throw HistoryParseError.invalid }
-                    current.failedRetryReused = reused
+                          current.failedRetryReused == nil, current.failedRetryFinalized == nil,
+                          !current.failedRetryInvalid else { throw HistoryParseError.invalid }
+                    if finalized { current.failedRetryFinalized = reused } else { current.failedRetryReused = reused }
                 } else if event.hasPrefix(FastImgDeliveryReceipt.historyPrefix) {
                     guard let receipt = try FastImgDeliveryReceipt.decode(event, prefix: FastImgDeliveryReceipt.historyPrefix),
                           let context = current.context, context.mode == "fast-img", !context.dry_run,
@@ -1388,9 +1495,11 @@ private enum HistoryStore {
                     throw HistoryParseError.invalid
                 }
             } catch {
-                if event.hasPrefix(FastImgRetryReference.historyRequestPrefix) || event.hasPrefix(FastImgRetryReference.historyReusedPrefix) {
+                if event.hasPrefix(FastImgRetryReference.historyRequestPrefix) || event.hasPrefix(FastImgRetryReference.historyReusedPrefix)
+                    || event.hasPrefix(FastImgRetryReference.historyFinalizedPrefix) {
                     current.failedRetryInvalid = true
                     current.failedRetryReused = nil
+                    current.failedRetryFinalized = nil
                 }
                 if event.hasPrefix(FastImgDeliveryReceipt.historyPrefix) {
                     current.fastDeliveries.removeAll()
@@ -3371,9 +3480,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     private static func renderPrivate(_ entry: HistoryEntry) -> String {
-        if entry.hasValidRetryReuse, let reference = entry.failedRetryReused {
+        if entry.hasValidRetryReuse || entry.hasValidRetryFinalization, let reference = entry.retryOutcomeReference {
+            let prefix = entry.hasValidRetryFinalization ? "retry.finalized" : "retry.reused"
             return [entry.statusLabel, timestampLabel(entry.timestamp), localized("privacy.display.scope"),
-                localized("retry.reused.info"), localized("retry.reused.counts"), reference.detail(privacy: true)].joined(separator: "\n\n")
+                localized(prefix + ".info"), localized(prefix + ".counts"), reference.detail(privacy: true)].joined(separator: "\n\n")
         }
         let unknown = localized("result.unknown")
         func count(_ value: Int?) -> String { value.map(String.init) ?? unknown }
@@ -3446,8 +3556,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
              row("deleted_inventory", String(verification.verified_deleted_count))]
         }
         var lines = [entry.statusLabel, Self.timestampLabel(entry.timestamp), ""]
-        if entry.hasValidRetryReuse, let reference = entry.failedRetryReused {
-            return (lines + [localized("retry.reused.info"), localized("retry.reused.counts"), reference.detail(privacy: false)]).joined(separator: "\n\n")
+        if entry.hasValidRetryReuse || entry.hasValidRetryFinalization, let reference = entry.retryOutcomeReference {
+            let prefix = entry.hasValidRetryFinalization ? "retry.finalized" : "retry.reused"
+            return (lines + [localized(prefix + ".info"), localized(prefix + ".counts"), reference.detail(privacy: false)]).joined(separator: "\n\n")
         }
         if let reference = entry.failedRetryRequest {
             lines += [reference.detail(privacy: false)]
@@ -4928,6 +5039,88 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         var nonzero = zero; nonzero["succeeded"] = 1; summary["img"] = nonzero
         guard !(try parse(before + [reuseEvent, try event("MFB_HISTORY_SUMMARY=", summary), finished])).hasValidRetryReuse
         else { throw HostError(message: "History counted old results as newly processed media") }
+
+        let selectedInput = source + "/only-failed.jpeg"
+        let beforeSnapshot: [String: Any] = ["snapshot_blake3": String(repeating: "d", count: 64), "revision": 4,
+            "manifest_blake3": String(repeating: "e", count: 64), "task_key": String(repeating: "f", count: 64)]
+        var finalReference = reference
+        finalReference["input_path"] = selectedInput
+        finalReference["child_snapshot_before"] = beforeSnapshot
+        let evidence: [String: Any] = ["schema": 1, "task_key": String(repeating: "f", count: 64),
+            "request_key": String(repeating: "b", count: 64), "manifest_blake3": String(repeating: "e", count: 64),
+            "verified_snapshot_blake3": String(repeating: "d", count: 64), "verified_revision": 4,
+            "verified_stage": "gate3_passed", "verified_tier2_in_progress": false, "verified_error": NSNull(),
+            "source_root_observation": "not_found", "verified_output_count": 2, "verified_primary_photos_count": 2,
+            "verified_original_photos_count": 0, "observed_at": "2026-10-31T01:02:03.123Z"]
+        var finalReceipt = finalReference
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] { finalReceipt[key] = 0 }
+        finalReceipt["evidence"] = evidence
+        var finalContext = context; finalContext["inputs"] = [selectedInput]
+        var finalInvocation = invocation
+        finalInvocation["arguments"] = ["fast-img", selectedInput, "--retry", "--output", child, "--strategy", "jxl"]
+        let finalBefore = [try event("MFB_HISTORY_CONTEXT=", finalContext),
+            try event(FastImgRetryReference.historyRequestPrefix, finalReference),
+            try event("MFB_HISTORY_INVOCATION=", finalInvocation)] + Array(before.dropFirst(3))
+        var finalSummary = summary; finalSummary["img"] = zero
+        let finalTail = [try event("MFB_HISTORY_SUMMARY=", finalSummary), finished]
+        let finalEvent = try event(FastImgRetryReference.historyFinalizedPrefix, finalReceipt)
+        let finalized = try parse(finalBefore + [finalEvent] + finalTail)
+        let finalChecks: [(String, Bool)] = [
+            ("separate finalization", finalized.hasValidRetryFinalization && !finalized.hasValidRetryReuse),
+            ("neutral finalization", finalized.statusKey == "retry.finalized.title" && !finalized.needsAttention),
+            ("no old success counts", finalized.succeededLabel == "0"),
+            ("no old space savings", finalized.sizeOutcome == localized("retry.finalized.counts")),
+            ("actual reverification", Self.render(finalized).contains(localized("retry.finalized.checked", "2", "2", "0"))),
+            ("observed absence", Self.render(finalized).contains(localized("retry.finalized.source_absent"))),
+            ("private paths", !Self.render(finalized, privacy: true).contains("/synthetic/retry")),
+            ("no new delivery", finalized.fastDeliveries.isEmpty && finalized.failedRetrySelection == nil)]
+        guard finalChecks.allSatisfy({ $0.1 }) else {
+            throw HostError(message: "History finish-only invariant failed: "
+                + finalChecks.filter { !$0.1 }.map(\.0).joined(separator: ", "))
+        }
+        let evidenceMutations: [(String, Any)] = [("verified_revision", 5), ("task_key", String(repeating: "a", count: 64)),
+            ("manifest_blake3", String(repeating: "a", count: 64)), ("verified_snapshot_blake3", String(repeating: "a", count: 64)),
+            ("source_root_observation", "removed_by_mfb"), ("verified_stage", "aborted"), ("observed_at", "yesterday"),
+            ("verified_primary_photos_count", 1)]
+        for (key, value) in evidenceMutations {
+            var alteredEvidence = evidence; alteredEvidence[key] = value
+            var altered = finalReceipt; altered["evidence"] = alteredEvidence
+            let invalidFinal = try parse(finalBefore + [try event(FastImgRetryReference.historyFinalizedPrefix, altered)] + finalTail)
+            guard invalidFinal.failedRetryInvalid, !invalidFinal.hasValidRetryFinalization
+            else { throw HostError(message: "History accepted mismatched finish-only evidence: \(key)") }
+        }
+        var noBefore = finalReceipt; noBefore["child_snapshot_before"] = NSNull()
+        var newSavings = finalReceipt; newSavings["newly_saved_bytes"] = 1
+        var unknownField = finalReceipt; unknownField["unverified"] = true
+        for altered in [noBefore, newSavings, unknownField] {
+            guard !(try parse(finalBefore + [try event(FastImgRetryReference.historyFinalizedPrefix, altered)] + finalTail)).hasValidRetryFinalization
+            else { throw HostError(message: "History accepted incomplete or invented finish-only work") }
+        }
+        let rawOnly = try parse(finalBefore + [try event("MFB_FAST_IMG_RETRY_FINALIZED=", finalReceipt)] + finalTail)
+        let missingExit = try parse(Array(finalBefore.dropLast()) + [finalEvent] + finalTail)
+        let mixed = try parse(finalBefore + [finalEvent, finalEvent] + finalTail)
+        guard !rawOnly.hasValidRetryFinalization, !missingExit.hasValidRetryFinalization,
+              mixed.failedRetryInvalid, !mixed.hasValidRetryFinalization else {
+            throw HostError(message: "History accepted raw, incomplete lifecycle or duplicated finish-only authority")
+        }
+        var noCursorContext = finalContext; noCursorContext.removeValue(forKey: "output_sequence")
+        var noCursorFinish = finishedValue; noCursorFinish.removeValue(forKey: "output_sequence")
+        let noCursorBefore = [try event("MFB_HISTORY_CONTEXT=", noCursorContext)] + Array(finalBefore.dropFirst())
+        let missingBothCursors = try parse(noCursorBefore + [finalEvent, try event("MFB_HISTORY_SUMMARY=", finalSummary),
+            try event("MFB_HISTORY_FINISHED=", noCursorFinish)])
+        guard !missingBothCursors.hasValidRetryFinalization else {
+            throw HostError(message: "History accepted finish-only confirmation without either output boundary")
+        }
+        var oldNoCursorContext = context; oldNoCursorContext.removeValue(forKey: "output_sequence")
+        let oldNoCursorBefore = [try event("MFB_HISTORY_CONTEXT=", oldNoCursorContext)] + Array(before.dropFirst())
+        let reuseWithoutBoundaries = try parse(oldNoCursorBefore + [reuseEvent, try event("MFB_HISTORY_SUMMARY=", finalSummary),
+            try event("MFB_HISTORY_FINISHED=", noCursorFinish)])
+        guard !reuseWithoutBoundaries.hasValidRetryReuse else {
+            throw HostError(message: "History accepted an old retry reference without its output boundaries")
+        }
+        let oldSingleFile = try parse([try event("MFB_HISTORY_CONTEXT=", finalContext)] + Array(before.dropFirst()) + [reuseEvent] + finalTail)
+        guard oldSingleFile.failedRetryInvalid, !oldSingleFile.hasValidRetryReuse
+        else { throw HostError(message: "History guessed a missing single-file scope from an old source-directory reference") }
     }
 
     func validateForSelfTest() throws {

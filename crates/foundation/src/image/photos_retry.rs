@@ -20,7 +20,7 @@ fn unresolved(detail: impl std::fmt::Display) -> ImgQualityError {
 
 /// Full native transactions are checked before selecting any retry entries.
 /// Neither a request reference nor this identity mapping proves custody.
-pub(crate) fn native_committed_pairs(
+pub(in crate::image) fn native_committed_pairs(
     request: &Value,
     record: &Value,
 ) -> anyhow::Result<Vec<(String, String)>> {
@@ -728,7 +728,7 @@ mod tests {
             fixture.parent.working_copy.clone(),
             1,
         );
-        assert!(
+        assert_eq!(
             prior_intents(
                 &[fresh],
                 &fixture.admitted,
@@ -736,8 +736,8 @@ mod tests {
                 PhotosSubmissionKind::Encoded,
                 &BTreeMap::new(),
                 None
-            )?[0]
-                .is_empty()
+            )?[0],
+            [] as [&PhotosSubmissionIntent; 0]
         );
         Ok(())
     }

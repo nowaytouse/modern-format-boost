@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 #[path = "json_evidence.rs"]
 mod json_evidence;
-pub(crate) use json_evidence::validate_unique_json_members;
+
+pub(crate) fn validate_unique_json_members(bytes: &[u8]) -> Result<()> {
+    json_evidence::validate_unique_json_members(bytes)
+}
 #[inline]
 #[must_use]
 pub fn get_extension_lowercase(path: &Path) -> String {
@@ -1180,6 +1183,7 @@ fn verify_tool_runtime_after_failure_with_budget(
 
 /// Probe one selected executable with the existing external-probe budget.
 /// A slow or incomplete observation never proves that the tool is damaged.
+#[cfg(target_os = "macos")]
 pub(crate) fn probe_tool_runtime(program: &Path, name: &str) -> Result<()> {
     probe_tool_runtime_with_budget(
         program,
@@ -1199,10 +1203,8 @@ fn probe_tool_runtime_with_budget(
         "exiftool" => "-ver",
         "jxlinfo" => "--help",
         "avifgainmaputil" => "help",
-        "opj_decompress" => "-h",
-        "pngcheck" => "-h",
-        "sf" => "-version",
-        "ffmpeg" | "ffprobe" | "magick" | "convert" | "identify" | "cwebp" | "dwebp"
+        "opj_decompress" | "pngcheck" => "-h",
+        "sf" | "ffmpeg" | "ffprobe" | "magick" | "convert" | "identify" | "cwebp" | "dwebp"
         | "webpmux" | "gif2webp" => "-version",
         _ => "--version",
     };

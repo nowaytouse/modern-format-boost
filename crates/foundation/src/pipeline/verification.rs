@@ -2625,7 +2625,7 @@ mod tests {
             assert!(!rejected.passed);
             assert_eq!(rejected.failure_scope, super::CheckFailureScope::Shared);
             assert!(rejected.actual.contains("unsupported metadata policy"));
-            assert!(attempts.is_empty());
+            assert_eq!(attempts, [] as [(usize, usize); 0]);
         }
     }
 
@@ -3327,6 +3327,53 @@ impl PhotosSubmissionHistory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FailedRetrySourceRootObservation {
+    NotFound,
+}
+
+/// Fresh finish-only observations bound to the exact pre-finalization state.
+/// Missing source data is observed, never attributed to an MFB deletion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FailedRetryFinishEvidence {
+    pub schema: u8,
+    pub task_key: String,
+    pub request_key: String,
+    pub manifest_blake3: String,
+    pub verified_snapshot_blake3: String,
+    pub verified_revision: i64,
+    pub verified_stage: FastImgStageName,
+    pub verified_tier2_in_progress: bool,
+    pub verified_error: Option<String>,
+    pub source_root_observation: FailedRetrySourceRootObservation,
+    pub verified_output_count: u64,
+    pub verified_primary_photos_count: u64,
+    pub verified_original_photos_count: u64,
+    pub observed_at: String,
+}
+
+impl FailedRetryFinishEvidence {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 || self.verified_revision < 0 {
+            return Err("Unsupported failed-only finalization evidence schema/revision".into());
+        }
+        for (name, hash) in [
+            ("finish task", &self.task_key),
+            ("finish request", &self.request_key),
+            ("finish manifest", &self.manifest_blake3),
+            ("finish snapshot", &self.verified_snapshot_blake3),
+        ] {
+            validate_submission_blake3(name, hash)?;
+        }
+        chrono::DateTime::parse_from_rfc3339(&self.observed_at).map_err(|error| {
+            format!("Invalid failed-only finalization observation time: {error}")
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkingCopyMarker {
     pub schema: u8,
@@ -3380,6 +3427,9 @@ pub struct WorkingCopyMarker {
     /// A missing relation must not turn this child into an ordinary task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_retry_manifest_blake3: Option<String>,
+    /// Only the compare-and-finalize operation can establish this observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failed_retry_finish_evidence: Option<FailedRetryFinishEvidence>,
     /// Exact private runtime authority used by this task; it is recovery state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_snapshot_manifest: Option<PathBuf>,
@@ -3500,6 +3550,7 @@ impl WorkingCopyMarker {
             metadata_policy_version: 0,
             processing_contract: None,
             failed_retry_manifest_blake3: None,
+            failed_retry_finish_evidence: None,
             tool_snapshot_manifest: crate::common_utils::active_tool_snapshot()
                 .map(|snapshot| snapshot.manifest_path.clone()),
             tool_snapshot_identity: crate::common_utils::active_tool_snapshot()
@@ -3513,8 +3564,19 @@ impl WorkingCopyMarker {
         self
     }
 
+    /// Primary cleanup is not terminal while original-format delivery is pending.
     #[must_use]
-    pub fn photos_submission_history(&self) -> Option<&PhotosSubmissionHistory> {
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self.stage, FastImgStageName::CleanupComplete) && !self.tier2_in_progress
+    }
+
+    #[must_use]
+    pub const fn failed_retry_finish_evidence(&self) -> Option<&FailedRetryFinishEvidence> {
+        self.failed_retry_finish_evidence.as_ref()
+    }
+
+    #[must_use]
+    pub const fn photos_submission_history(&self) -> Option<&PhotosSubmissionHistory> {
         self.photos_submission_history.as_ref()
     }
 
@@ -3892,6 +3954,14 @@ pub(crate) fn validate_marker_structure(marker: &WorkingCopyMarker) -> std::io::
     if let Some(hash) = &marker.failed_retry_manifest_blake3 {
         validate_submission_blake3("failed-only manifest", hash).map_err(std::io::Error::other)?;
     }
+    if let Some(evidence) = &marker.failed_retry_finish_evidence {
+        evidence.validate().map_err(std::io::Error::other)?;
+        if !marker.is_terminal() || marker.failed_retry_manifest_blake3.is_none() {
+            return Err(std::io::Error::other(
+                "Failed-only finalization evidence requires a terminal manifest-bound child",
+            ));
+        }
+    }
     marker
         .validate_relative_path_contract()
         .map_err(std::io::Error::other)?;
@@ -4142,12 +4212,29 @@ mod photos_submission_tests {
     }
 
     #[test]
+    fn cleanup_complete_with_original_delivery_pending_is_not_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let mut current = marker(root.path());
+        current.stage = FastImgStageName::CleanupComplete;
+        current.tier2_in_progress = true;
+        assert!(!current.is_terminal());
+        current.tier2_in_progress = false;
+        assert!(current.is_terminal());
+        current.stage = FastImgStageName::Gate3Passed;
+        assert!(!current.is_terminal());
+        let encoded = serde_json::to_value(&current).unwrap();
+        assert!(encoded.get("failed_retry_finish_evidence").is_none());
+        let older: WorkingCopyMarker = serde_json::from_value(encoded).unwrap();
+        assert!(older.failed_retry_finish_evidence().is_none());
+    }
+
+    #[test]
     fn photos_submission_history_preserves_unknown_legacy_coverage() {
         let root = tempfile::tempdir().unwrap();
         let current = marker(root.path());
         let history = current.photos_submission_history().unwrap();
         assert!(history.complete_from_creation);
-        assert!(history.intents.is_empty());
+        assert_eq!(history.intents, []);
 
         let mut legacy = serde_json::to_value(&current).unwrap();
         legacy
@@ -4199,8 +4286,8 @@ mod photos_submission_tests {
         assert_eq!(marker.stage, FastImgStageName::ScanComplete);
         assert_eq!(marker.encoded_count, 0);
         assert_eq!(marker.recorded_source_count(), 0);
-        assert!(marker.photos_imported_assets.is_empty());
-        assert!(marker.tier2_imported_assets.is_empty());
+        assert_eq!(marker.photos_imported_assets, []);
+        assert_eq!(marker.tier2_imported_assets, []);
         assert!(!marker.gate1_checks.blake3.0);
         assert!(!marker.gate2_checks.blake3_sample.0);
         assert!(!marker.gate3_checks.chain.0);

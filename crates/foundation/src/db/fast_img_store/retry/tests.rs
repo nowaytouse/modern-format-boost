@@ -1,6 +1,10 @@
+use super::super::{inspect_integrity, read_marker, write_marker};
 use super::*;
 use crate::batch::DiscoveredSource;
-use crate::pipeline::verification::{FastImgEncodingParameters, FastImgProcessingContract};
+use crate::pipeline::verification::{
+    Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+    SkippedSourceEntry,
+};
 
 fn fixture(root: &Path) -> Result<(WorkingCopyMarker, FailedRetryParent, FailedRetryAdmission)> {
     fixture_with(root, |_| {})
@@ -110,7 +114,12 @@ fn failed_retry_is_independent_idempotent_and_preserves_parent_after_cleanup() -
         parent.snapshot_blake3()
     );
     assert_eq!(
-        create_or_resume_failed_retry(&parent, &[admission.clone()], &delivery, Some(&tools))?,
+        create_or_resume_failed_retry(
+            &parent,
+            std::slice::from_ref(&admission),
+            &delivery,
+            Some(&tools),
+        )?,
         child
     );
     std::fs::remove_file(original.src_dir.join("failed.jpg"))?;
@@ -339,7 +348,7 @@ fn failed_retry_delivery_request_is_immutable_and_first_photos_binding_is_allowe
         .path()
         .canonicalize()?
         .join("Currently selected.photoslibrary");
-    child.photos_library_path = Some(selected.clone());
+    child.photos_library_path = Some(selected);
     write_marker(&child)?;
     assert_eq!(child.failed_retry_manifest_blake3, anchor);
     assert_eq!(
@@ -406,7 +415,7 @@ fn failed_retry_new_avif_attempt_derives_metadata_version_without_rewriting_fail
     assert_eq!(original.metadata_policy_version, 0);
     let mut child = create_or_resume_failed_retry(
         &parent,
-        &[admission.clone()],
+        std::slice::from_ref(&admission),
         &FailedRetryDeliveryIntent::Local,
         None,
     )?;

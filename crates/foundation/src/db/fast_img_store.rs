@@ -17,10 +17,18 @@ use crate::pipeline::verification::{
     PhotosSubmissionKind, SkippedSourceEntry, WorkingCopyMarker, canonical_working_copy_path,
     validate_marker_structure,
 };
+pub use crate::pipeline::verification::{
+    FailedRetryFinishEvidence, FailedRetrySourceRootObservation,
+};
 
+mod finish;
 mod migration;
 mod retry;
 mod retry_admission;
+pub use finish::{
+    FailedRetryFinishSnapshot, finalize_failed_retry_finish, inspect_failed_retry_finish,
+    resolve_failed_retry_child_for_source,
+};
 pub use retry::{
     FailedRetryAdmission, FailedRetryContext, FailedRetryDeliveryIntent, FailedRetryParent,
     FailedRetrySidecar, FailedRetryToolAuthority, create_or_resume_failed_retry,
@@ -126,7 +134,7 @@ fn open_readonly() -> Result<Option<Connection>> {
 
 fn current_family(conn: &Connection) -> Result<bool> {
     match inspect_store_schema_version(conn)? {
-        Some(3 | 4 | 5) => Ok(true),
+        Some(3..=5) => Ok(true),
         Some(1 | 2) => Ok(false),
         None => {
             bail!("Existing formal database has no recognized schema; not treated as empty state")
@@ -397,6 +405,7 @@ fn read_snapshot_base(conn: &Connection, key: &str) -> Result<Option<WorkingCopy
             == header.snapshot_hash,
         "Fast IMG complete state snapshot failed BLAKE3 verification; no rows were reset"
     );
+    finish::validate_persisted(conn, key, &marker, header.revision)?;
     Ok(Some(marker))
 }
 
@@ -485,21 +494,41 @@ pub fn matching_markers(source: &Path, strategy: &str) -> io::Result<Vec<Working
     (|| -> Result<Vec<WorkingCopyMarker>> {
         migration::reject_unmigrated_for_source(source)?;
         let source = canonical_text(source)?;
-        let Some(conn) = open_readonly()? else { return Ok(Vec::new()); };
+        let Some(conn) = open_readonly()? else {
+            return Ok(Vec::new());
+        };
         in_snapshot(&conn, |conn| {
-            if !current_family(conn)? { return Ok(Vec::new()); }
-            ensure_no_orphans(conn)?;
-            let paths = conn.prepare("SELECT working_copy FROM fast_img_tasks WHERE source_root=?1 ORDER BY working_copy")?
-                .query_map([&source], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            let mut found = Vec::new();
-            for path in paths {
-                let marker = checked_marker(conn, &path)?.context("Indexed Fast IMG task disappeared in a read snapshot")?;
-                if marker.strategy == strategy { found.push(marker); }
+            if !current_family(conn)? {
+                return Ok(Vec::new());
             }
-            Ok(found)
+            matching_markers_in_snapshot(conn, &source, strategy, checked_marker)
         })
-    })().map_err(as_io)
+    })()
+    .map_err(as_io)
+}
+
+fn matching_markers_in_snapshot(
+    conn: &Connection,
+    source: &str,
+    strategy: &str,
+    mut inspect: impl FnMut(&Connection, &str) -> Result<Option<WorkingCopyMarker>>,
+) -> Result<Vec<WorkingCopyMarker>> {
+    ensure_no_orphans(conn)?;
+    let paths = conn
+        .prepare(
+            "SELECT working_copy FROM fast_img_tasks WHERE source_root=?1 ORDER BY working_copy",
+        )?
+        .query_map([source], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut found = Vec::new();
+    for path in paths {
+        let marker = inspect(conn, &path)?
+            .context("Indexed Fast IMG task disappeared in a read snapshot")?;
+        if marker.strategy == strategy {
+            found.push(marker);
+        }
+    }
+    Ok(found)
 }
 
 /// A missing output directory does not release its durable task reservation.
@@ -773,16 +802,27 @@ fn write_snapshot_at(
     source: &str,
     validate_retry: bool,
 ) -> Result<()> {
+    write_snapshot_at_with_finish(conn, marker, wc, source, validate_retry, None)
+}
+
+fn write_snapshot_at_with_finish(
+    conn: &Connection,
+    marker: &WorkingCopyMarker,
+    wc: &str,
+    source: &str,
+    validate_retry: bool,
+    finalization: Option<(&FailedRetryFinishSnapshot, &FailedRetryFinishEvidence)>,
+) -> Result<()> {
     ensure!(
         !conn.is_autocommit(),
         "Fast IMG snapshot requires an explicit transaction"
     );
     validate_marker_structure(marker)?;
-    if validate_retry {
+    if validate_retry && finalization.is_none() {
         marker
             .validate_checkpoint_path_contract(&marker.working_copy)
             .map_err(anyhow::Error::msg)?;
-    } else {
+    } else if !validate_retry {
         // The new child has no media artifacts to inspect. Its canonical paths
         // come from a verified parent and deterministic reservation, and its
         // manifest is validated before this same transaction can commit.
@@ -830,6 +870,7 @@ fn write_snapshot_at(
                 && old.strategy == marker.strategy,
             "Fast IMG output is reserved by a different task; saved state was not replaced"
         );
+        finish::validate_write(old, marker, revision, finalization)?;
         preserve_history(old, marker)?;
         retry::validate_update(old, marker)?;
         if old == marker {
@@ -840,6 +881,10 @@ fn write_snapshot_at(
             .checked_add(1)
             .context("Fast IMG state revision overflow")?
     } else {
+        ensure!(
+            finalization.is_none() && marker.failed_retry_finish_evidence().is_none(),
+            "Finish-only evidence cannot initialize or replace a missing task"
+        );
         0
     };
     if validate_retry {

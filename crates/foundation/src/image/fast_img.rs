@@ -3941,8 +3941,8 @@ fn import_photos_batch_with_recovery<Q, P, R>(
     window_start: usize,
     batch_number: usize,
     batch_count: usize,
-    query_assets: &mut Q,
-    is_quarantined: &mut P,
+    query_assets: Q,
+    is_quarantined: P,
     run_import_batch: &mut R,
 ) -> Result<PhotosImportBatchOutcome>
 where
@@ -3950,6 +3950,8 @@ where
     P: FnMut(&Path) -> Result<bool>,
     R: FnMut(&[(PathBuf, String)]) -> Result<String>,
 {
+    #[cfg(all(target_os = "macos", not(test)))]
+    let (mut query_assets, mut is_quarantined) = (query_assets, is_quarantined);
     let output_paths = batch_entries
         .iter()
         .map(|entry| (entry.rel_path.clone(), entry.path.clone()))
@@ -4029,8 +4031,8 @@ where
                     if let Some(recovered_assets) = reconcile_photos_batch_after_session_failure(
                         marker,
                         batch_entries,
-                        query_assets,
-                        is_quarantined,
+                        &mut query_assets,
+                        &mut is_quarantined,
                     )? {
                         return Ok(PhotosImportBatchOutcome::Recovered(recovered_assets));
                     }
@@ -4254,8 +4256,8 @@ where
                             window.start,
                             batch_number,
                             batch_count,
-                            query_assets,
-                            is_quarantined,
+                            &mut *query_assets,
+                            &mut *is_quarantined,
                             run_import_batch,
                         )
                     });
@@ -7028,6 +7030,10 @@ pub fn prompt_user_confirm(message: &str) -> Result<bool> {
 #[path = "photos_import_bench.rs"]
 mod photos_import_bench;
 
+#[path = "fast_img_finish.rs"]
+mod finish_checkpoint;
+pub use finish_checkpoint::{VerifiedFailedRetryFinish, verify_failed_retry_finish};
+
 #[path = "photos_submission.rs"]
 mod submission_checkpoint;
 
@@ -8302,7 +8308,7 @@ mod tests {
                 );
                 assert_eq!(intent.source_blake3, source_hash);
                 assert_eq!(intent.output_blake3, candidate.blake3);
-                assert!(saved.tier2_imported_assets.is_empty());
+                assert_eq!(saved.tier2_imported_assets, []);
                 Err(ImgQualityError::AnalysisError(
                     "synthetic runner failure".into(),
                 ))
@@ -8312,7 +8318,7 @@ mod tests {
         assert!(error.to_string().contains("synthetic runner failure"));
         assert_eq!(sends, 1);
         assert_eq!(marker.photos_submission_history().unwrap().intents.len(), 1);
-        assert!(marker.tier2_imported_assets.is_empty());
+        assert_eq!(marker.tier2_imported_assets, []);
         Ok(())
     }
 
@@ -9252,9 +9258,8 @@ mod tests {
                 &mut |_| panic!("failed discovery must not advance custody verification"),
                 &mut |_| Err(ImgQualityError::AnalysisError(detail.into())),
             )
-            .and_then(|_| {
+            .map(|_| {
                 admitted = true;
-                Ok(())
             });
             assert!(result.unwrap_err().to_string().contains(detail));
             assert!(
@@ -9650,15 +9655,9 @@ mod tests {
                     prepared.photos_library_path.as_deref(),
                     Some(library.as_path())
                 );
-                assert!(prepared.photos_imported_assets.is_empty());
-                assert!(prepared.tier2_imported_assets.is_empty());
-                assert!(
-                    prepared
-                        .photos_submission_history()
-                        .unwrap()
-                        .intents
-                        .is_empty()
-                );
+                assert_eq!(prepared.photos_imported_assets, []);
+                assert_eq!(prepared.tier2_imported_assets, []);
+                assert_eq!(prepared.photos_submission_history().unwrap().intents, []);
                 persisted.set(true);
                 Ok(())
             },
@@ -10075,7 +10074,7 @@ mod tests {
                     queries += 1;
                     Ok(Vec::new())
                 },
-                &mut |_| Ok(false),
+                &mut |_path: &Path| Ok(false),
                 &mut |_entries: &[(PathBuf, String)]| {
                     sends += 1;
                     Ok("UUID-A".into())

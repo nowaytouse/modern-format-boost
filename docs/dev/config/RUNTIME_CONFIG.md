@@ -1030,10 +1030,37 @@ cannot subsequently change or be cleared.
 The child processes only its persisted admission list. Independent verification
 uses that same source scope and still checks the entire child output directory;
 unknown output files do not disappear from verification. Parent and sibling
-outputs are not swept by the child's post-processing cleanup. An unfinished
-child whose entire source root has disappeared cannot currently use a separate
-finish-only recovery path; it remains blocked rather than recreating the source
-or bypassing verification.
+outputs are not swept by the child's post-processing cleanup.
+
+A manifest-bound unfinished child can use finish-only recovery when its entire
+recorded source root is explicitly observed as absent. Both `--retry-failed` and
+`--retry` with the exact selected child take this path before source scanning,
+source-directory locks and ordinary tool preparation. Without an explicit output,
+ordinary continue accepts only one verified child for the exact saved source
+root; multiple children require explicit selection. A missing single file needs
+an explicit saved locator and is never assigned to a task by guessing its parent
+directory. Recovery does not recreate the
+source, encode candidates, submit media or delete media. A primary
+`CleanupComplete` stage with original-format delivery still pending is not a
+terminal task and cannot return a completed-child reference.
+
+Finish-only recovery requires complete successful admission coverage and the
+applicable historical Gate boundary. It rechecks the complete current artifact
+bytes, exact recorded output inventory, companion custody and, for Photos, the
+bound library's unique UUID mapping and full original-resource bytes. Missing
+local output can be accounted for only by those same exact Photos artifact bytes;
+pixel similarity is not a substitute. Missing AAE custody, unknown output items,
+links, failed queries, changed identities and missing Gate evidence block finish.
+Historical Gate records remain historical: missing sources do not authorize
+inventing a new source comparison or a source-deletion receipt.
+
+Core finalization accepts only the verifier's sealed result, compares the exact
+pre-verification snapshot and revision in one transaction, and validates complete
+readback before committing. Ordinary writers cannot fabricate, change or clear
+the finish receipt. The stored receipt binds the original snapshot, manifest,
+request and actual reverified artifact/Photos counts. It records source absence
+as an observation, not proof of who removed the source or restoration of
+pre-interruption directory metadata.
 
 Before importing, reconciliation examines all ancestor submission histories and
 the resumed child's own history. Missing historical coverage, uncertain native
@@ -1055,12 +1082,32 @@ failures, the user must explicitly select that child as a new parent through
 History or `--retry-failed-parent`; the ordinary action never automatically
 creates grandchildren.
 
+Fresh finish-only recovery instead emits `MFB_FAST_IMG_RETRY_FINALIZED`. Before
+starting the worker, the launcher records the exact selected input, parent/child
+relation and nonterminal child snapshot. It confirms the returned evidence
+against that snapshot and the durable Core receipt before emitting
+`MFB_FAST_IMG_RETRY_FINALIZED_CONFIRMED` and the corresponding History event.
+Duplicate, mixed, stale or mismatched outcomes are rejected. GUI and History
+distinguish this current reverification from historical reuse: newly processed,
+delivered and saved-byte totals are zero, while actual reverified converted
+artifacts and Photos originals are reported separately. An absent or unconfirmed
+receipt cannot be promoted from log wording into success. Live confirmation also
+requires the unique IMG worker's complete normal exit, not only a launch record
+or the outer launcher's exit code. History requires both start and end output
+boundaries for a confirmed recovery outcome.
+
 The native recovery dialog offers only actions supported by the backend's
 validated availability record. History links the current request with its parent
 and child without presenting historical successes as new work. Debug windows
 retain their read-only restrictions. These contracts do not establish real
 Photos or iCloud acceptance, a complete execution manifest, or cross-filesystem/
 SQLite crash atomicity.
+
+This closes the manifest-bound converted-artifact finish path, not every missing
+source case. Older ordinary tasks without durable admissions remain blocked.
+The ordinary failed-source admission/count model does not yet provide a complete
+original-format-only child execution path; injected Photos verifier fixtures do
+not establish that production route or real Photos acceptance.
 
 ## Canonical Fast IMG State
 

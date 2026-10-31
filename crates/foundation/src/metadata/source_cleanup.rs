@@ -33,14 +33,14 @@ impl NativeTime {
         Ok(time)
     }
 
-    fn from_filetime(time: filetime::FileTime) -> Self {
+    const fn from_filetime(time: filetime::FileTime) -> Self {
         Self {
             seconds: time.unix_seconds(),
             nanoseconds: time.nanoseconds(),
         }
     }
 
-    fn filetime(self) -> filetime::FileTime {
+    const fn filetime(self) -> filetime::FileTime {
         filetime::FileTime::from_unix_time(self.seconds, self.nanoseconds)
     }
 
@@ -77,7 +77,7 @@ struct NativeObservation {
 }
 
 impl NativeObservation {
-    fn has_native_identity(&self) -> bool {
+    const fn has_native_identity(&self) -> bool {
         #[cfg(unix)]
         {
             self.unix.is_some()
@@ -406,12 +406,13 @@ impl SourceDirectoryCleanupSnapshot {
                 }
             }
             if path != &self.canonical_root {
+                let name = path.file_name().ok_or_else(|| {
+                    io::Error::other("durable child directory has no native filename")
+                })?;
                 let parent = path
                     .parent()
                     .and_then(|parent| self.directories.get(parent));
-                if parent
-                    .is_none_or(|parent| !parent.entries.contains_key(path.file_name().unwrap()))
-                {
+                if parent.is_none_or(|parent| !parent.entries.contains_key(name)) {
                     return Err(io::Error::other(
                         "durable child directory has no parent entry",
                     ));
@@ -774,7 +775,7 @@ mod tests {
             serde_json::to_value(OsString::from("/unrelated/directory"))
                 .map_err(io::Error::other)?;
         invalid.push(changed);
-        let mut changed = value.clone();
+        let mut changed = value;
         changed["directories"][0]["entries"][0]["name"] =
             serde_json::to_value(OsString::from("../escape")).map_err(io::Error::other)?;
         invalid.push(changed);

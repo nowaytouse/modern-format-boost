@@ -196,13 +196,7 @@ fn complete_dto_roundtrip_uses_normalized_collection_rows() -> Result<()> {
             && header.photos_imported_assets.is_empty()
             && header.tier2_imported_assets.is_empty()
     );
-    assert!(
-        header
-            .photos_submission_history()
-            .unwrap()
-            .intents
-            .is_empty()
-    );
+    assert_eq!(header.photos_submission_history().unwrap().intents, []);
     assert_eq!(matching_markers(&marker.src_dir, "jxl")?, [marker]);
     Ok(())
 }
@@ -463,7 +457,7 @@ fn readonly_absence_does_not_create_or_initialize_storage() -> Result<()> {
         read_marker(&output).unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
-    assert!(matching_markers(&source, "jxl")?.is_empty());
+    assert_eq!(matching_markers(&source, "jxl")?, []);
     assert!(!is_reserved(&output)?);
     assert_eq!(resolve_fresh_working_copy_dir(&source)?, output);
     assert!(!database.exists());

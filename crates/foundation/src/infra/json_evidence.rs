@@ -68,7 +68,7 @@ impl<'de> Deserialize<'de> for UniqueMembers {
 
 /// Call before deserializing evidence into `Value` or another partial view.
 /// Callers retain their own byte limits and schema/identity validation.
-pub(crate) fn validate_unique_json_members(bytes: &[u8]) -> anyhow::Result<()> {
+pub(super) fn validate_unique_json_members(bytes: &[u8]) -> anyhow::Result<()> {
     let _: UniqueMembers = serde_json::from_slice(bytes)?;
     Ok(())
 }

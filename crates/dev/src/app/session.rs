@@ -47,6 +47,44 @@ struct FastImgRetryReused {
     newly_saved_bytes: u64,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FastImgRetryFinalized {
+    schema_version: u8,
+    parent_task_key: String,
+    request_key: String,
+    child_working_copy: PathBuf,
+    newly_processed: u64,
+    newly_delivered: u64,
+    newly_saved_bytes: u64,
+    evidence: foundation::pipeline::verification::FailedRetryFinishEvidence,
+}
+
+/// The exact request and Core state observed before starting its worker.
+pub struct FastImgRetryRequest {
+    run_id: String,
+    parent: foundation::fast_img_store::FailedRetryParent,
+    delivery: foundation::fast_img_store::FailedRetryDeliveryIntent,
+    input: PathBuf,
+    before: Option<foundation::fast_img_store::FailedRetryFinishSnapshot>,
+}
+
+impl FastImgRetryRequest {
+    fn reference(&self) -> serde_json::Value {
+        let mut value = failed_retry_reference(&self.parent, &self.delivery);
+        value["input_path"] = serde_json::json!(self.input);
+        value["child_snapshot_before"] =
+            self.before
+                .as_ref()
+                .map_or(serde_json::Value::Null, |before| {
+                    serde_json::json!({"snapshot_blake3":before.snapshot_blake3(),
+                "revision":before.revision(),"manifest_blake3":before.manifest_blake3(),
+                "task_key":before.task_key()})
+                });
+        value
+    }
+}
+
 fn failed_retry_reference(
     parent: &foundation::fast_img_store::FailedRetryParent,
     delivery: &foundation::fast_img_store::FailedRetryDeliveryIntent,
@@ -289,9 +327,38 @@ impl AppSession {
         &self,
         parent: &foundation::fast_img_store::FailedRetryParent,
         delivery: &foundation::fast_img_store::FailedRetryDeliveryIntent,
-    ) -> Result<()> {
+        input: &Path,
+    ) -> Result<FastImgRetryRequest> {
         let _ = foundation::fast_img_store::find_failed_retry_child(parent, delivery)?;
-        let mut report = failed_retry_reference(parent, delivery);
+        let input = std::path::absolute(input)?;
+        anyhow::ensure!(
+            !input.components().any(|component| matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )) && (input == parent.marker().src_dir
+                || (parent.marker().failed_sources.len() == 1
+                    && parent
+                        .marker()
+                        .failed_sources
+                        .keys()
+                        .next()
+                        .is_some_and(|relative| parent.marker().src_dir.join(relative) == input))),
+            "retry request input does not match the selected parent's exact saved scope"
+        );
+        let request = FastImgRetryRequest {
+            run_id: self
+                .run_id
+                .as_ref()
+                .context("retry request has no run identity")?
+                .clone(),
+            parent: parent.clone(),
+            delivery: delivery.clone(),
+            input,
+            before: foundation::fast_img_store::inspect_failed_retry_finish(
+                parent.child_working_copy(),
+            )?,
+        };
+        let mut report = request.reference();
         report["run_id"] = serde_json::json!(
             self.run_id
                 .as_ref()
@@ -302,40 +369,69 @@ impl AppSession {
             io::stdout().lock(),
             "MFB_FAST_IMG_FAILED_RETRY_REQUEST={report}"
         )?;
-        Ok(())
+        Ok(request)
     }
 
-    /// A completed child reference is a no-work outcome, not a fresh custody proof.
+    /// Confirm either a historical reference or fresh finish-only evidence against Core.
+    /// Both have zero new media work; only finalization carries current custody observations.
     ///
     /// # Errors
     /// Rejects conflicting worker records, counts, request identity or Core state.
-    pub fn record_fast_img_retry_reused(
+    pub fn record_fast_img_retry_outcome(
         &self,
         text: &str,
         stats: &ProcessorStats,
-        parent: Option<&foundation::fast_img_store::FailedRetryParent>,
-        delivery: Option<&foundation::fast_img_store::FailedRetryDeliveryIntent>,
+        request: Option<&FastImgRetryRequest>,
     ) -> Result<bool> {
-        const PREFIX: &str = "MFB_FAST_IMG_RETRY_REUSED=";
-        let mut lines = text.lines().filter(|line| line.contains(PREFIX));
+        const REUSED: &str = "MFB_FAST_IMG_RETRY_REUSED=";
+        const FINALIZED: &str = "MFB_FAST_IMG_RETRY_FINALIZED=";
+        let mut lines = text
+            .lines()
+            .filter(|line| line.contains(REUSED) || line.contains(FINALIZED));
         let Some(line) = lines.next() else {
             return Ok(false);
         };
-        let encoded = line
-            .strip_prefix(PREFIX)
-            .context("reused retry record has an invalid prefix")?;
+        let (encoded, finalized) = if let Some(encoded) = line.strip_prefix(FINALIZED) {
+            (encoded, true)
+        } else {
+            (
+                line.strip_prefix(REUSED)
+                    .context("retry outcome has an invalid prefix")?,
+                false,
+            )
+        };
         anyhow::ensure!(
             encoded.len() <= 16_384
                 && lines.next().is_none()
                 && !text.contains("MFB_FAST_IMG_RESULT=")
                 && !text.contains("MFB_CONVERTED_BYTES="),
-            "reused retry record is oversized, duplicated or mixed with fresh delivery evidence"
+            "retry outcome is oversized, duplicated or mixed with fresh delivery evidence"
         );
-        let receipt: FastImgRetryReused = serde_json::from_str(encoded)?;
-        let parent =
-            parent.context("reused retry record was not requested by this Fast IMG invocation")?;
-        let delivery =
-            delivery.context("reused retry record has no resolved current delivery intent")?;
+        let (receipt, evidence) = if finalized {
+            let value: FastImgRetryFinalized = serde_json::from_str(encoded)?;
+            (
+                FastImgRetryReused {
+                    schema_version: value.schema_version,
+                    parent_task_key: value.parent_task_key,
+                    request_key: value.request_key,
+                    child_working_copy: value.child_working_copy,
+                    newly_processed: value.newly_processed,
+                    newly_delivered: value.newly_delivered,
+                    newly_saved_bytes: value.newly_saved_bytes,
+                },
+                Some(value.evidence),
+            )
+        } else {
+            (serde_json::from_str::<FastImgRetryReused>(encoded)?, None)
+        };
+        let request =
+            request.context("retry outcome was not requested by this Fast IMG invocation")?;
+        anyhow::ensure!(
+            self.run_id.as_ref() == Some(&request.run_id),
+            "retry outcome belongs to a different execution attempt"
+        );
+        let parent = &request.parent;
+        let delivery = &request.delivery;
         anyhow::ensure!(
             receipt.schema_version == 1
                 && receipt.newly_processed == 0
@@ -350,14 +446,12 @@ impl AppSession {
                 && stats.converted_bytes.is_none()
                 && stats.total() == 0
                 && stats.unprocessed == Some(0),
-            "reused retry record disagrees with the selected request or current worker outcome"
+            "retry outcome disagrees with the selected request or current worker outcome"
         );
         let child = foundation::fast_img_store::find_failed_retry_child(parent, delivery)?
             .context("reused retry record has no durable child")?;
         anyhow::ensure!(
-            child.working_copy == receipt.child_working_copy
-                && child.stage
-                    == foundation::pipeline::verification::FastImgStageName::CleanupComplete,
+            child.working_copy == receipt.child_working_copy && child.is_terminal(),
             "reused retry record does not name its completed durable child"
         );
         let context = foundation::fast_img_store::failed_retry_context(&child.working_copy)?
@@ -367,7 +461,25 @@ impl AppSession {
                 && context.requested_delivery() == delivery,
             "reused child delivery intent or parent relation differs from the current request"
         );
-        let mut report = failed_retry_reference(parent, delivery);
+        if let Some(evidence) = &evidence {
+            let before = request
+                .before
+                .as_ref()
+                .context("finalized retry has no pre-worker Core snapshot")?;
+            anyhow::ensure!(
+                child.failed_retry_finish_evidence() == Some(evidence)
+                    && evidence.task_key == before.task_key()
+                    && evidence.request_key == before.request_key()
+                    && evidence.manifest_blake3 == before.manifest_blake3()
+                    && evidence.verified_snapshot_blake3 == before.snapshot_blake3()
+                    && evidence.verified_revision == before.revision()
+                    && evidence.verified_stage == before.marker().stage
+                    && evidence.verified_tier2_in_progress == before.marker().tier2_in_progress
+                    && evidence.verified_error == before.marker().error,
+                "finalized retry does not match its pre-worker snapshot and durable Core evidence"
+            );
+        }
+        let mut report = request.reference();
         report["run_id"] = serde_json::json!(
             self.run_id
                 .as_ref()
@@ -376,10 +488,17 @@ impl AppSession {
         for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] {
             report[key] = serde_json::json!(0);
         }
-        self.append_history_event("MFB_HISTORY_FAST_IMG_RETRY_REUSED", report.clone())?;
+        if let Some(evidence) = evidence {
+            report["evidence"] = serde_json::to_value(evidence)?;
+        }
+        let kind = if finalized { "FINALIZED" } else { "REUSED" };
+        self.append_history_event(
+            &format!("MFB_HISTORY_FAST_IMG_RETRY_{kind}"),
+            report.clone(),
+        )?;
         writeln!(
             io::stdout().lock(),
-            "MFB_FAST_IMG_RETRY_REUSED_CONFIRMED={report}"
+            "MFB_FAST_IMG_RETRY_{kind}_CONFIRMED={report}"
         )?;
         Ok(true)
     }
@@ -791,6 +910,179 @@ pub fn history_summary_payload(summary: &PipelineSummary) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finalized_retry_requires_the_pre_worker_snapshot_and_exact_durable_receipt() -> Result<()> {
+        let thread = std::thread::current();
+        let name = thread.name().context("test name unavailable")?;
+        if std::env::var("MFB_SESSION_STATE_TEST").as_deref() != Ok(name) {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([name, "--exact", "--nocapture", "--test-threads=1"])
+                .env("MFB_SESSION_STATE_TEST", name)
+                .output()?;
+            anyhow::ensure!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "isolated session-state regression failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        use foundation::fast_img_store::{
+            FailedRetryDeliveryIntent, capture_failed_retry_admissions,
+            create_or_resume_failed_retry, finalize_failed_retry_finish,
+            inspect_failed_retry_finish, inspect_failed_retry_parent,
+        };
+        use foundation::pipeline::verification::{
+            Blake3Entry, FastImgEncodingParameters, FastImgProcessingContract, FastImgStageName,
+            Gate1Checks, SkippedSourceEntry, WorkingCopyMarker, write_marker_atomic,
+        };
+        let temp = tempfile::tempdir()?;
+        let _state = foundation::common_utils::EnvGuard::set(
+            foundation::constants::ENV_MFB_HOME_ROOT,
+            temp.path().join("state").to_str().unwrap(),
+        );
+        let root = temp.path().canonicalize()?;
+        let source = root.join("source");
+        fs::create_dir(&source)?;
+        fs::write(source.join("failed.jpg"), b"synthetic retained source")?;
+        let source_hash =
+            foundation::common_utils::calculate_blake3_hash(&source.join("failed.jpg"))?;
+        let mut parent = WorkingCopyMarker::new(source.clone(), root.join("source_optimized"), 1);
+        parent.stage = FastImgStageName::CleanupComplete;
+        parent.processing_contract = Some(FastImgProcessingContract {
+            schema: 1,
+            tool_policy: foundation::runtime_config::ToolPolicy::Single,
+            fallback_policy: foundation::runtime_config::FallbackPolicy::Strict,
+            encoding: FastImgEncodingParameters::Jxl {
+                jpeg_effort: 11,
+                jpeg_effort_search: foundation::runtime_config::JpegEffortSearch::Full,
+                archive: true,
+                allow_expert_options: false,
+            },
+        });
+        parent.failed_sources.insert(
+            "failed.jpg".into(),
+            SkippedSourceEntry {
+                src: source_hash.clone(),
+                reason: "synthetic failure".into(),
+            },
+        );
+        write_marker_atomic(&parent)?;
+        let reference = inspect_failed_retry_parent(&parent.working_copy)?;
+        let delivery = FailedRetryDeliveryIntent::Local;
+        let mut child = create_or_resume_failed_retry(
+            &reference,
+            &capture_failed_retry_admissions(&reference)?,
+            &delivery,
+            None,
+        )?;
+        fs::create_dir(&child.working_copy)?;
+        // This models a prior verified Gate, testing the request/receipt binding.
+        // It is not a media decode test or proof of a newly executed Gate.
+        let output = [0xff, 0x0a, 0x31, 0x45, 0x59, 0x26];
+        fs::write(child.working_copy.join("failed.JXL"), output)?;
+        child.blake3_log.insert(
+            "failed.jpg".into(),
+            Blake3Entry {
+                src: source_hash,
+                out: blake3::hash(&output).to_hex().to_string(),
+                out_rel: Some("failed.JXL".into()),
+                library_asset: None,
+            },
+        );
+        child.encoded_count = 1;
+        child.stage = FastImgStageName::Gate1Passed;
+        child.gate1_checks = Gate1Checks {
+            count: true.into(),
+            blake3: true.into(),
+            metadata: true.into(),
+            size: true.into(),
+            orient: true.into(),
+            decode: true.into(),
+        };
+        write_marker_atomic(&child)?;
+        let session = AppSession::start_in(&root.join("logs"))?.for_run()?;
+        let request =
+            session.record_fast_img_failed_retry_request(&reference, &delivery, &source)?;
+        let snapshot = inspect_failed_retry_finish(&child.working_copy)?
+            .context("fixture snapshot missing")?;
+        fs::remove_dir_all(&source)?;
+        let stats = ProcessorStats {
+            reported: [true; 4],
+            unprocessed: Some(0),
+            ..ProcessorStats::default()
+        };
+        let finished = finalize_failed_retry_finish(
+            &snapshot,
+            foundation::fast_img::verify_failed_retry_finish(&snapshot)?,
+        )?;
+        let payload = serde_json::json!({"schema_version":1,"parent_task_key":reference.task_key(),
+            "request_key":reference.request_key(),"child_working_copy":child.working_copy,
+            "newly_processed":0,"newly_delivered":0,"newly_saved_bytes":0,"evidence":finished.failed_retry_finish_evidence()});
+        let line = format!("MFB_FAST_IMG_RETRY_FINALIZED={payload}");
+        assert!(
+            session
+                .record_fast_img_retry_outcome(&line, &stats, None)
+                .is_err()
+        );
+        assert!(
+            session
+                .for_run()?
+                .record_fast_img_retry_outcome(&line, &stats, Some(&request))
+                .is_err()
+        );
+        let late = session.record_fast_img_failed_retry_request(&reference, &delivery, &source)?;
+        assert!(
+            session
+                .record_fast_img_retry_outcome(&line, &stats, Some(&late))
+                .is_err()
+        );
+        let mut altered = payload.clone();
+        altered["evidence"]["verified_revision"] = serde_json::json!(snapshot.revision() + 1);
+        assert!(
+            session
+                .record_fast_img_retry_outcome(
+                    &format!("MFB_FAST_IMG_RETRY_FINALIZED={altered}"),
+                    &stats,
+                    Some(&request)
+                )
+                .is_err()
+        );
+        let mut mixed = payload.clone();
+        mixed.as_object_mut().unwrap().remove("evidence");
+        assert!(
+            session
+                .record_fast_img_retry_outcome(
+                    &format!("{line}\nMFB_FAST_IMG_RETRY_REUSED={mixed}"),
+                    &stats,
+                    Some(&request)
+                )
+                .is_err()
+        );
+        let mut nonzero = stats.clone();
+        nonzero.succeeded = 1;
+        assert!(
+            session
+                .record_fast_img_retry_outcome(&line, &nonzero, Some(&request))
+                .is_err()
+        );
+        assert!(session.record_fast_img_retry_outcome(&line, &stats, Some(&request))?);
+        let conn = rusqlite::Connection::open(session.log_dir().join("history.sqlite3"))?;
+        let event:String=conn.query_row("SELECT event FROM history_events WHERE session_id=?1 AND event LIKE 'MFB_HISTORY_FAST_IMG_RETRY_FINALIZED=%'",[session.stamp()],|row|row.get(0))?;
+        let report: serde_json::Value = serde_json::from_str(event.split_once('=').unwrap().1)?;
+        assert_eq!(report["input_path"], serde_json::json!(source));
+        assert_eq!(report["evidence"]["verified_output_count"], 1);
+        assert_eq!(report["newly_processed"], 0);
+        assert_eq!(
+            foundation::pipeline::verification::read_marker(&parent.working_copy)?,
+            parent
+        );
+        assert_eq!(fs::read(child.working_copy.join("failed.JXL"))?, output);
+        assert!(!source.exists());
+        Ok(())
+    }
 
     #[test]
     fn application_attempts_and_input_scopes_keep_the_session_lease() -> Result<()> {

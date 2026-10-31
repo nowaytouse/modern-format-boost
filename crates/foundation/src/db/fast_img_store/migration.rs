@@ -646,7 +646,7 @@ fn retire_files(backup: &Backup, parent: &Path, holding: &Path, moved: &Path) ->
     }
     if real_directory(holding)? {
         ensure!(
-            real_directory(&holding)?,
+            real_directory(holding)?,
             "Invalid migration holding directory"
         );
         let members = fs::read_dir(holding)?
@@ -820,7 +820,7 @@ pub(super) fn migrate_legacy_for_source(
         } else {
             let mut normalized = value.clone();
             normalized.working_copy = PathBuf::from(&wc);
-            normalized.src_dir = source.clone();
+            normalized.src_dir.clone_from(&source);
             if let Some(previous) = new_tasks.get(&key) {
                 ensure!(
                     previous == &normalized,

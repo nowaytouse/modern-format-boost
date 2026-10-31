@@ -140,7 +140,7 @@ pub(super) fn record_native(
 /// receipt, and unused reservations remain possible-submission references.
 #[derive(Debug)]
 pub(super) struct AppleScriptSubmissionPermit {
-    source_dir: PathBuf,
+    src_dir: PathBuf,
     working_copy: PathBuf,
     started_at: String,
     photos_library_path: Option<PathBuf>,
@@ -155,7 +155,7 @@ impl AppleScriptSubmissionPermit {
         marker: &WorkingCopyMarker,
         entry: &PhotosImportPendingEntry,
     ) -> Result<(PathBuf, String)> {
-        let owner_matches = marker.src_dir == self.source_dir
+        let owner_matches = marker.src_dir == self.src_dir
             && marker.working_copy == self.working_copy
             && marker.started_at == self.started_at
             && marker.photos_library_path == self.photos_library_path;
@@ -258,7 +258,7 @@ fn prepare_applescript_with(
         .zip(intents)
         .enumerate()
         .map(|(offset, (entry, intent))| AppleScriptSubmissionPermit {
-            source_dir: marker.src_dir.clone(),
+            src_dir: marker.src_dir.clone(),
             working_copy: marker.working_copy.clone(),
             started_at: marker.started_at.clone(),
             photos_library_path: marker.photos_library_path.clone(),
@@ -324,7 +324,7 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(identities.len(), 10);
-        assert!(marker.photos_imported_assets.is_empty());
+        assert_eq!(marker.photos_imported_assets, []);
         // Later outcome/progress writes and appended requests do not invalidate
         // the earlier group's exact durable reservation positions.
         marker.stage = crate::pipeline::verification::FastImgStageName::Importing;

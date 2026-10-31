@@ -1,9 +1,18 @@
 //! Immutable failed-source admission manifests; mutable outcomes remain in the task store.
 
-use super::*;
+use super::{
+    as_io, canonical_bytes, canonical_text, in_snapshot, inspect_store_schema_version,
+    key_for_canonical, open_readonly, open_store_connection, read_snapshot, read_snapshot_base,
+    source_outcomes, text, validate_locator, write_snapshot_at,
+};
 use crate::batch::planned_source::PlannedSource;
-use crate::pipeline::verification::FastImgStageName;
+use crate::pipeline::verification::WorkingCopyMarker;
+use anyhow::{Context, Result, ensure};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
@@ -56,7 +65,7 @@ pub struct FailedRetryParent {
 
 impl FailedRetryParent {
     #[must_use]
-    pub fn marker(&self) -> &WorkingCopyMarker {
+    pub const fn marker(&self) -> &WorkingCopyMarker {
         &self.marker
     }
     #[must_use]
@@ -95,7 +104,7 @@ impl FailedRetryContext {
         &self.ancestors
     }
     #[must_use]
-    pub fn admissions(&self) -> &BTreeMap<String, FailedRetryAdmission> {
+    pub const fn admissions(&self) -> &BTreeMap<String, FailedRetryAdmission> {
         &self.admissions
     }
     #[must_use]
@@ -103,7 +112,7 @@ impl FailedRetryContext {
         &self.parent_key
     }
     #[must_use]
-    pub fn requested_delivery(&self) -> &FailedRetryDeliveryIntent {
+    pub const fn requested_delivery(&self) -> &FailedRetryDeliveryIntent {
         &self.delivery
     }
 }
@@ -189,7 +198,7 @@ fn relative(value: &str) -> Result<&Path> {
 
 fn validate_parent(marker: &WorkingCopyMarker) -> Result<()> {
     ensure!(
-        marker.stage == FastImgStageName::CleanupComplete && !marker.failed_sources.is_empty(),
+        marker.is_terminal() && !marker.failed_sources.is_empty(),
         "Only a completed task with retained failures can create a failed-only child"
     );
     ensure!(
@@ -527,7 +536,7 @@ fn validate_child_delivery(
     Ok(())
 }
 
-fn context_for(
+pub(super) fn context_for(
     conn: &Connection,
     key: &str,
     marker: &WorkingCopyMarker,
@@ -625,7 +634,7 @@ fn context_for(
         validate_child_delivery(&current, &row.delivery)?;
         if ancestors.is_empty() {
             first_admissions = values;
-            parent_key = row.parent.clone();
+            parent_key.clone_from(&row.parent);
             delivery = Some(row.delivery.clone());
         }
         if let Some(logical) = &logical_key {
@@ -807,10 +816,10 @@ pub fn create_or_resume_failed_retry(
         let key=key_for_canonical(text(&parent.child)?);
         ensure!(read_snapshot(&tx,&key)?.is_none(),"Stable retry output is already reserved by another task");
         let mut child=WorkingCopyMarker::new(parent.marker.src_dir.clone(),parent.child.clone(),values.len()).with_strategy(parent.marker.strategy.clone());
-        child.processing_contract=parent.marker.processing_contract.clone();
+        child.processing_contract.clone_from(&parent.marker.processing_contract);
         child.metadata_policy_version=metadata_policy_version(&child)?;
         if let FailedRetryDeliveryIntent::Photos{library_path,naming_policy}=delivery {
-            child.photos_library_path=library_path.clone();
+            child.photos_library_path.clone_from(library_path);
             child.photos_import_naming_policy=Some(naming_policy.clone());
         }
         child.tool_snapshot_manifest=tools.map(|tools|tools.manifest_path.clone());

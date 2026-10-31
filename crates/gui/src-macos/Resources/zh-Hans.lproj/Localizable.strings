@@ -229,7 +229,7 @@
 "alert.resume.resume" = "核验并继续";
 "alert.resume.fresh" = "重新开始";
 "alert.cancel" = "取消";
-"retry.invalid" = "无法核对重试记录。请刷新处理记录后再试，已有文件未改动。";
+"retry.invalid" = "无法核对本次恢复记录。请打开处理记录查看详情，结果暂未确认。";
 "retry.only_failed" = "仅处理失败项";
 "retry.choice.info" = "这份记录保留了 %@ 个失败项。MFB 会独立核验并处理这些原件，已成功的文件不会重复处理或导入；若已有完成的重试记录，将直接复用。";
 "retry.reference" = "失败项独立重试记录";
@@ -240,6 +240,11 @@
 "retry.reused.choice_info" = "这份记录已有结束的独立重试。查看已有结果不会重新处理、导入或清理媒体，本次新增处理和节省均为 0。若要再次处理那次重试保留的失败项，请到处理记录明确选择那份记录。";
 "retry.reused.info" = "已复用既有重试记录；本次未重新处理或导入。请到处理记录查看原结果，本次没有重新核验旧交付。";
 "retry.reused.counts" = "本次处理 0 · 导入 0 · 新增节省 0";
+"retry.finalized.title" = "已有交付已复核，收尾完成";
+"retry.finalized.info" = "已重新核对已有产物并完成收尾，本次未重新编码或导入。";
+"retry.finalized.counts" = "本次编码 0 · 导入 0 · 新增节省 0";
+"retry.finalized.checked" = "已复核转换产物 %@ 项 · 照片库转换原件 %@ 项 · 原格式原件 %@ 项";
+"retry.finalized.source_absent" = "来源目录当前不存在；此记录只确认观察到的缺失，不确认此前由谁删除，也不证明原目录时间已恢复。";
 "retry.history.action" = "重试此记录的失败项…";
 "retry.history.title" = "处理这份记录保留的失败项？";
 "retry.history.info" = "将这份记录明确选作新一次重试的来源，单独预检并处理它保留的失败原件。已成功的文件不会重复处理，原记录保持不变。已有同一重试结果时会直接复用。";

@@ -4807,6 +4807,14 @@ private struct LiveWorkerExecution {
         return signal
     }
 
+    var singleSuccessfulImageRunID: String? {
+        guard !invalid, !sawOtherFailure, active.isEmpty, recentlyClosed.count == 1,
+              let latest, latest.state == "exited", latest.pipeline == "img",
+              latest.signal == nil, latest.exit_code == 0,
+              recentlyClosed.first == latest.invocation_id else { return nil }
+        return latest.run_id
+    }
+
     static func signalDescription(_ signal: Int32) -> String {
         let name: String?
         switch signal {
@@ -5215,6 +5223,7 @@ private struct BatchResults {
     private(set) var integrityIssueCount: Int?
     private(set) var failedRetryRequest: FastImgRetryReference?
     private(set) var failedRetryReused: FastImgRetryReference?
+    private(set) var failedRetryFinalized: FastImgRetryReference?
     private(set) var failedRetryInvalid = false
     var hasFastDelivery: Bool { fastDeliveryInvalid || !fastDeliveries.isEmpty }
 
@@ -5222,14 +5231,16 @@ private struct BatchResults {
         let raw = LogTone.message(line)
         let isRequest = raw.hasPrefix(FastImgRetryReference.requestPrefix)
         let isConfirmed = raw.hasPrefix(FastImgRetryReference.confirmedPrefix)
-        // The worker's unconfirmed no-work claim is intentionally not a result.
-        if raw.hasPrefix("MFB_FAST_IMG_RETRY_REUSED=") { return true }
-        guard isRequest || isConfirmed else { return false }
+        let isFinalized = raw.hasPrefix(FastImgRetryReference.finalizedPrefix)
+        // Only the launcher's Core-bound confirmation can describe a result.
+        if raw.hasPrefix("MFB_FAST_IMG_RETRY_REUSED=") || raw.hasPrefix("MFB_FAST_IMG_RETRY_FINALIZED=") { return true }
+        guard isRequest || isConfirmed || isFinalized else { return false }
         do {
+            let prefix = isRequest ? FastImgRetryReference.requestPrefix
+                : (isFinalized ? FastImgRetryReference.finalizedPrefix : FastImgRetryReference.confirmedPrefix)
             guard requested, !failedRetryInvalid,
-                  let reference = try FastImgRetryReference.decode(raw,
-                    prefix: isRequest ? FastImgRetryReference.requestPrefix : FastImgRetryReference.confirmedPrefix, reused: isConfirmed),
-                  FastImgDeliveryReceipt.samePath(reference.sourceDirectory, source), reference.strategy == strategy,
+                  let reference = try FastImgRetryReference.decode(raw, prefix: prefix, reused: isConfirmed, finalized: isFinalized),
+                  reference.matchesInput(source), reference.strategy == strategy,
                   (reference.deliveryIntent.kind == "photos") == photos,
                   parent.map({ FastImgDeliveryReceipt.samePath($0, reference.parentWorkingCopy) }) ?? true,
                   runID.map({ $0 == reference.runId }) ?? isRequest else { throw HostError(message: localized("retry.invalid")) }
@@ -5238,16 +5249,29 @@ private struct BatchResults {
                 failedRetryRequest = reference
             } else {
                 guard let request = failedRetryRequest, request.sameRequest(as: reference), failedRetryReused == nil,
+                      failedRetryFinalized == nil,
                       fastDeliveries.isEmpty, outputCleanups.isEmpty else { throw HostError(message: localized("retry.invalid")) }
-                failedRetryReused = reference
+                if isFinalized { failedRetryFinalized = reference } else { failedRetryReused = reference }
             }
-        } catch { failedRetryInvalid = true; mandatoryEvidenceConflict = true; failedRetryReused = nil }
+        } catch {
+            failedRetryInvalid = true; mandatoryEvidenceConflict = true
+            failedRetryReused = nil; failedRetryFinalized = nil
+        }
         return true
     }
 
     func retryReuseIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        failedRetryReused != nil && retryOutcomeIsConfirmed(processExit: processExit, exitedNormally: exitedNormally, runID: runID)
+    }
+
+    func retryFinalizationIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
+        failedRetryFinalized != nil && retryOutcomeIsConfirmed(processExit: processExit, exitedNormally: exitedNormally, runID: runID)
+    }
+
+    private func retryOutcomeIsConfirmed(processExit: Int32?, exitedNormally: Bool, runID: String?) -> Bool {
         guard !failedRetryInvalid, !mandatoryEvidenceConflict, !isIncomplete, !hasFailure, exitedNormally,
-              processExit == 0, let request = failedRetryRequest, let reused = failedRetryReused,
+              failedRetryReused == nil || failedRetryFinalized == nil,
+              processExit == 0, let request = failedRetryRequest, let reused = failedRetryFinalized ?? failedRetryReused,
               request.sameRequest(as: reused), reused.runId == runID, fastDeliveries.isEmpty,
               outputCleanups.isEmpty, !outputCleanupInvalid, !fastDeliveryInvalid,
               workerExitCodes == [0], totals.count == 1, totals["img"] == [0, 0, 0, 0],
@@ -7921,14 +7945,15 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if developerMode { displayLines.append(line) }
                 continue
             }
-            if batchResults.ingestRetryReference(line, requested: lastRequest?.retryFailed == true,
+            let recoveryRequested = lastRequest.map { $0.retryFailed || $0.retry || $0.resume } ?? false
+            if batchResults.ingestRetryReference(line, requested: recoveryRequested,
                 source: lastRequest?.targetPath, parent: lastRequest?.retryFailedParent,
-                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.shortestPath, runID: workerExecution.latest?.run_id) {
+                strategy: lastRequest?.operationMode.strategy ?? "jxl", photos: lastRequest?.shortestPath, runID: workerExecution.singleSuccessfulImageRunID) {
                 if batchResults.failedRetryInvalid {
                     let warning = "[WARN] " + localized("retry.invalid")
                     displayLines.append(warning); privateLines.append(warning)
-                } else if control.hasPrefix(FastImgRetryReference.confirmedPrefix) {
-                    let notice = localized("retry.reused.info")
+                } else if control.hasPrefix(FastImgRetryReference.confirmedPrefix) || control.hasPrefix(FastImgRetryReference.finalizedPrefix) {
+                    let notice = localized(control.hasPrefix(FastImgRetryReference.finalizedPrefix) ? "retry.finalized.info" : "retry.reused.info")
                     displayLines.append(notice); privateLines.append(notice)
                 }
                 if developerMode { displayLines.append(line) }
@@ -8417,6 +8442,96 @@ private final class AppController: NSObject, NSWindowDelegate {
                 source: source, parent: parent, strategy: "jxl", photos: false, runID: "run-retry")
             guard invalid.failedRetryInvalid, invalid.failedRetryReused == nil else { throw HostError(message: "Invalid reused retry evidence was accepted") }
         }
+        let selectedInput = source + "/one.jpeg"
+        let snapshot: [String: Any] = ["snapshot_blake3": String(repeating: "c", count: 64), "revision": 2,
+            "manifest_blake3": String(repeating: "d", count: 64), "task_key": String(repeating: "e", count: 64)]
+        var finalRequest = reference
+        finalRequest["input_path"] = selectedInput; finalRequest["child_snapshot_before"] = snapshot
+        let finishEvidence: [String: Any] = ["schema": 1, "task_key": String(repeating: "e", count: 64),
+            "request_key": requestKey, "manifest_blake3": String(repeating: "d", count: 64),
+            "verified_snapshot_blake3": String(repeating: "c", count: 64), "verified_revision": 2,
+            "verified_stage": "gate1_passed", "verified_tier2_in_progress": false, "verified_error": NSNull(),
+            "source_root_observation": "not_found", "verified_output_count": 3,
+            "verified_primary_photos_count": 0, "verified_original_photos_count": 0,
+            "observed_at": "2026-10-31T01:02:03Z"]
+        var finalized = finalRequest; finalized["evidence"] = finishEvidence
+        for key in ["newly_processed", "newly_delivered", "newly_saved_bytes"] { finalized[key] = 0 }
+        for useResume in [false, true] {
+            lastRequest = ProcessorRequest(targetPath: selectedInput, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                resume: useResume, retry: !useResume)
+            batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+            appendLog(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)))
+            appendLog("MFB_FAST_IMG_RETRY_FINALIZED=" + (try encoded(finalized)))
+            guard batchResults.failedRetryFinalized == nil, !batchResults.failedRetryInvalid else {
+                throw HostError(message: "Raw worker finish-only claim became authoritative")
+            }
+            for observation in ["spawned", "exited"] {
+                let event: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                    "run_id": "run-retry", "pipeline": "img", "state": observation, "pid": 1234,
+                    "exit_code": observation == "exited" ? 0 : NSNull(), "signal": NSNull()]
+                appendLog(LiveWorkerExecution.prefix + (try encoded(event)))
+            }
+            appendLog(FastImgRetryReference.finalizedPrefix + (try encoded(finalized)))
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+            refreshBatchOverview(processExit: 0, exitedNormally: true)
+            let confirmed = batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry")
+            guard confirmed, !batchResults.retryReuseIsConfirmed(processExit: 0, exitedNormally: true, runID: "run-retry"),
+                  !batchResults.hasFastDelivery, batchOverviewTitle.stringValue == localized("retry.finalized.title"),
+                  batchOverviewTitle.textColor == .labelColor, batchOverviewCounts.stringValue == localized("retry.finalized.counts"),
+                  batchOverviewDelivery.stringValue.contains(localized("retry.finalized.checked", "3", "0", "0")),
+                  batchOverviewCleanup.isHidden,
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 1, exitedNormally: true, runID: "run-retry"),
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: false, runID: "run-retry"),
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true, runID: "another-run")
+            else { throw HostError(message: "Finish-only recovery lost zero-work, actual reverification, scope or process identity") }
+            let privateDetail = batchResults.failedRetryFinalized?.detail(privacy: true) ?? ""
+            guard !privateDetail.contains(parent), !privateDetail.contains(child),
+                  privateDetail.contains(localized("retry.finalized.source_absent")) else {
+                throw HostError(message: "Finish-only details leaked paths or attributed missing source data to MFB")
+            }
+        }
+        for childOutcome in ["spawn-only", "signal", "nonzero"] {
+            lastRequest = ProcessorRequest(targetPath: selectedInput, processingMode: .imagesOnly, operationMode: .fastImgJxl,
+                retry: true)
+            batchResults = BatchResults(); workerExecution = LiveWorkerExecution()
+            appendLog(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)))
+            let spawned: [String: Any] = ["schema_version": 1, "scope": "os_child_process", "invocation_id": "retry-invocation",
+                "run_id": "run-retry", "pipeline": "img", "state": "spawned", "pid": 1234,
+                "exit_code": NSNull(), "signal": NSNull()]
+            appendLog(LiveWorkerExecution.prefix + (try encoded(spawned)))
+            if childOutcome != "spawn-only" {
+                var exited = spawned; exited["state"] = "exited"
+                if childOutcome == "signal" { exited["signal"] = Int(SIGKILL) }
+                else { exited["exit_code"] = 1 }
+                appendLog(LiveWorkerExecution.prefix + (try encoded(exited)))
+            }
+            // A parent's exit 0 and a zero-count summary cannot replace the
+            // missing or unsuccessful OS-child lifecycle evidence.
+            appendLog(FastImgRetryReference.finalizedPrefix + (try encoded(finalized)))
+            appendLog(#"MFB_BATCH_RESULT={"schema_version":1,"media":"img","succeeded":0,"skipped":0,"failed":0,"ignored":0,"unprocessed":0,"exit_code":0}"#)
+            refreshBatchOverview(processExit: 0, exitedNormally: true)
+            guard workerExecution.singleSuccessfulImageRunID == nil, batchResults.failedRetryInvalid,
+                  !batchResults.retryFinalizationIsConfirmed(processExit: 0, exitedNormally: true,
+                    runID: workerExecution.singleSuccessfulImageRunID),
+                  batchOverviewTitle.stringValue != localized("retry.finalized.title") else {
+                throw HostError(message: "Finish-only GUI accepted parent exit 0 over \(childOutcome) worker evidence")
+            }
+        }
+        let evidenceMutations: [(String, Any)] = [("verified_revision", 3), ("task_key", parentKey),
+            ("manifest_blake3", parentKey), ("verified_snapshot_blake3", parentKey),
+            ("source_root_observation", "mfb_deleted"), ("verified_output_count", 0)]
+        for (key, value) in evidenceMutations {
+            var evidence = finishEvidence; evidence[key] = value
+            var altered = finalized; altered["evidence"] = evidence
+            var invalid = BatchResults()
+            _ = invalid.ingestRetryReference(FastImgRetryReference.requestPrefix + (try encoded(finalRequest)), requested: true,
+                source: selectedInput, parent: parent, strategy: "jxl", photos: false, runID: nil)
+            _ = invalid.ingestRetryReference(FastImgRetryReference.finalizedPrefix + (try encoded(altered)), requested: true,
+                source: selectedInput, parent: parent, strategy: "jxl", photos: false, runID: "run-retry")
+            guard invalid.failedRetryInvalid, invalid.failedRetryFinalized == nil else {
+                throw HostError(message: "Finish-only recovery accepted mismatched before-snapshot or evidence: \(key)")
+            }
+        }
     }
 
     func validateProductionBusyForSelfTest() throws {
@@ -8469,8 +8584,14 @@ private final class AppController: NSObject, NSWindowDelegate {
         switch result {
         case let .success(message):
             setProcessing(false)
+            if batchResults.retryFinalizationIsConfirmed(processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal,
+                runID: workerExecution.singleSuccessfulImageRunID) {
+                setLocalizedStatus("retry.finalized.title")
+                appendLog(localized("retry.finalized.info"), captureDiagnostics: false)
+                return
+            }
             if batchResults.retryReuseIsConfirmed(processExit: host.lastExitStatus, exitedNormally: host.lastExitWasNormal,
-                runID: workerExecution.latest?.run_id) {
+                runID: workerExecution.singleSuccessfulImageRunID) {
                 setLocalizedStatus("retry.reused.title")
                 appendLog(localized("retry.reused.info"), captureDiagnostics: false)
                 return
@@ -8589,12 +8710,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         let interrupted = interruptedWithoutFileSummary
         let terminalExit = processExit ?? host.lastExitStatus ?? (deliveryFixture ? 1 : nil)
         let normalExit = exitedNormally ?? (deliveryFixture || host.lastExitWasNormal)
-        if batchResults.retryReuseIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
-            runID: workerExecution.latest?.run_id) {
-            batchOverviewTitle.stringValue = localized("retry.reused.title")
+        let finalizedRetry = batchResults.retryFinalizationIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
+            runID: workerExecution.singleSuccessfulImageRunID)
+        if finalizedRetry || batchResults.retryReuseIsConfirmed(processExit: terminalExit, exitedNormally: normalExit,
+            runID: workerExecution.singleSuccessfulImageRunID) {
+            let prefix = finalizedRetry ? "retry.finalized" : "retry.reused"
+            batchOverviewTitle.stringValue = localized(prefix + ".title")
             batchOverviewTitle.textColor = .labelColor
-            batchOverviewCounts.stringValue = localized("retry.reused.counts")
-            batchOverviewDelivery.stringValue = localized("retry.reused.info")
+            batchOverviewCounts.stringValue = localized(prefix + ".counts")
+            batchOverviewDelivery.stringValue = localized(prefix + ".info")
+            if let evidence = batchResults.failedRetryFinalized?.evidence {
+                batchOverviewDelivery.stringValue += "\n" + evidence.summary
+            }
             batchOverviewDelivery.isHidden = false
             batchOverviewCleanup.isHidden = true
             for label in [batchOverviewTitle, batchOverviewCounts, batchOverviewDelivery] {
@@ -8602,7 +8729,10 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             batchOverview.isHidden = false
             fileProgressRow.isHidden = true
-            setLocalizedStatus("retry.reused.title")
+            if finalizedRetry {
+                batchOverviewDelivery.toolTip = batchOverviewDelivery.stringValue + "\n" + localized("retry.finalized.source_absent")
+            }
+            setLocalizedStatus(prefix + ".title")
             updateLogPresentation()
             return
         }

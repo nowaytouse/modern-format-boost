@@ -160,6 +160,7 @@ pub fn verify_failed_retry_admission(root: &Path, admission: &FailedRetryAdmissi
 
 /// For a source whose recorded cleanup is separately checked by the caller,
 /// verify retained companions without inventing a new live source observation.
+///
 /// Missing XMP needs exact final-output custody; AAE has no implicit deletion permission.
 ///
 /// # Errors

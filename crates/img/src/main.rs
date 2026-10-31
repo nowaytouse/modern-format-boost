@@ -783,6 +783,14 @@ fn main_inner() -> anyhow::Result<()> {
         &mut cli.command,
         foundation::checkpoint::resolve_resume_choice,
     )?;
+    // A manifest-bound child can finish after its source tree has disappeared.
+    // Inspect this before source canonicalization, legacy migration or tool
+    // preparation; the actual custody recheck and commit happen in run_fast_img.
+    let missing_source_retry = FastImgRunOptions::for_command(&cli.command)
+        .map(fast_img_missing_source_retry_selection)
+        .transpose()?
+        .flatten()
+        .is_some();
     let tool_preparation = (|| -> anyhow::Result<()> {
         match &cli.command {
             Commands::Run {
@@ -815,6 +823,9 @@ fn main_inner() -> anyhow::Result<()> {
                 strategy,
                 ..
             } => {
+                if missing_source_retry {
+                    return Ok(());
+                }
                 let src = if *retry_failed {
                     fast_img_failed_retry_source_root(
                         input,
@@ -853,10 +864,7 @@ fn main_inner() -> anyhow::Result<()> {
                     if let Some(marker) = &child {
                         fast_img_validate_processing_contract(marker, &contract)?;
                     }
-                    if child
-                        .as_ref()
-                        .is_some_and(|child| child.stage == FastImgStageName::CleanupComplete)
-                    {
+                    if child.as_ref().is_some_and(WorkingCopyMarker::is_terminal) {
                         return Ok(());
                     }
                     child.as_ref().map(|marker| {
@@ -997,38 +1005,9 @@ fn main_inner() -> anyhow::Result<()> {
             ingest_quality_samples(input, label.as_deref())?;
         }
 
-        Commands::FastImg {
-            input,
-            output,
-            delete_source,
-            dry_run,
-            recursive,
-            shortest_path,
-            archive,
-            retry,
-            retry_failed,
-            retry_failed_parent,
-            no_resume,
-            allow_expert_options,
-            strategy,
-            extreme_precision,
-        } => {
-            let options = FastImgRunOptions {
-                input: &input,
-                output_dir: output.as_deref(),
-                delete_source: DeleteSourceFlag(delete_source),
-                dry_run: DryRunFlag(dry_run),
-                recursive: RecursiveFlag(recursive),
-                shortest_path: ShortestPathFlag(shortest_path),
-                retry: RetryFlag(retry),
-                retry_failed: RetryFlag(retry_failed),
-                retry_failed_parent: retry_failed_parent.as_deref(),
-                fresh: FreshFlag(no_resume),
-                archive,
-                allow_expert_options,
-                strategy: &strategy,
-                extreme_precision,
-            };
+        command @ Commands::FastImg { .. } => {
+            let options = FastImgRunOptions::for_command(&command)
+                .context("fast-img command omitted its run options")?;
             if let Err(error) = run_fast_img(options) {
                 eprintln!("Error: {error:#}");
                 std::process::exit(if error.is::<fast_img_result::FileFailures>() {
@@ -3600,6 +3579,46 @@ struct FastImgRunOptions<'a> {
     extreme_precision: bool,
 }
 
+impl<'a> FastImgRunOptions<'a> {
+    fn for_command(command: &'a Commands) -> Option<Self> {
+        let Commands::FastImg {
+            input,
+            output,
+            delete_source,
+            dry_run,
+            recursive,
+            shortest_path,
+            archive,
+            retry,
+            retry_failed,
+            retry_failed_parent,
+            no_resume,
+            allow_expert_options,
+            strategy,
+            extreme_precision,
+        } = command
+        else {
+            return None;
+        };
+        Some(Self {
+            input,
+            output_dir: output.as_deref(),
+            delete_source: DeleteSourceFlag(*delete_source),
+            dry_run: DryRunFlag(*dry_run),
+            recursive: RecursiveFlag(*recursive),
+            shortest_path: ShortestPathFlag(*shortest_path),
+            retry: RetryFlag(*retry),
+            retry_failed: RetryFlag(*retry_failed),
+            retry_failed_parent: retry_failed_parent.as_deref(),
+            fresh: FreshFlag(*no_resume),
+            archive: *archive,
+            allow_expert_options: *allow_expert_options,
+            strategy,
+            extreme_precision: *extreme_precision,
+        })
+    }
+}
+
 fn fast_img_processing_contract(
     config: &foundation::runtime_config::RuntimeConfig,
     strategy: &str,
@@ -3843,6 +3862,10 @@ fn fast_img_report_completed_failed_retry(
     parent: &foundation::fast_img_store::FailedRetryParent,
     child: &WorkingCopyMarker,
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        child.is_terminal(),
+        "saved failed-only retry still has unfinished delivery or cleanup; no terminal result was reported"
+    );
     println!(
         "MFB_FAST_IMG_RETRY_REUSED={}",
         serde_json::json!({
@@ -3857,6 +3880,148 @@ fn fast_img_report_completed_failed_retry(
     println!(
         "[REUSED  ] previous attempt retained {} failure(s); its saved result is being shown, not a new custody verification",
         child.failed_sources.len()
+    );
+    println!("[Summary] succeeded=0 failed=0 skipped=0 ignored=0");
+    println!("Unprocessed: 0");
+    Ok(())
+}
+
+fn fast_img_source_root_is_missing(source: &Path) -> anyhow::Result<bool> {
+    match std::fs::symlink_metadata(source) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error).context("inspect saved failed-only source root"),
+        Ok(_) => Ok(false),
+    }
+}
+
+/// Select existing Core authority only. This neither prepares tools nor makes a
+/// missing source tree into proof of deletion, verification or task completion.
+fn fast_img_missing_source_retry_selection(
+    options: FastImgRunOptions<'_>,
+) -> anyhow::Result<
+    Option<(
+        foundation::fast_img_store::FailedRetryParent,
+        WorkingCopyMarker,
+    )>,
+> {
+    if options.dry_run.0
+        || options.fresh.0
+        || (!options.retry.0 && !options.retry_failed.0)
+        || !fast_img_source_root_is_missing(options.input)?
+    {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !(options.retry.0 && options.retry_failed.0),
+        "--retry-failed cannot be combined with ordinary continue"
+    );
+    let inferred_output = if !options.retry_failed.0 && options.output_dir.is_none() {
+        // Without a saved locator only the exact recorded source root may
+        // select a unique child. A missing file is never replaced by its parent.
+        let source = fast_img_failed_retry_requested_path(options.input)?;
+        let Some(child) = foundation::fast_img_store::resolve_failed_retry_child_for_source(
+            &source,
+            options.strategy,
+        )?
+        else {
+            return Ok(None);
+        };
+        Some(child.working_copy)
+    } else {
+        None
+    };
+    let requested_output = options.output_dir.or(inferred_output.as_deref());
+    if !options.retry_failed.0 {
+        // Ordinary continue consumes only the selected child, never a parent's
+        // failed set or an invented admission plan for a historical task.
+        let Some(output) = requested_output else {
+            return Ok(None);
+        };
+        let output = fast_img_failed_retry_requested_path(output)?;
+        if foundation::fast_img_store::failed_retry_context(&output)?.is_none() {
+            return Ok(None);
+        }
+    }
+    let source_root = fast_img_failed_retry_source_root(
+        options.input,
+        requested_output,
+        options.retry_failed_parent,
+        options.strategy,
+    )?;
+    if !fast_img_source_root_is_missing(&source_root)? {
+        return Ok(None);
+    }
+    let delivery = fast_img_failed_retry_delivery(options.shortest_path)?;
+    let (parent, child) = fast_img_failed_retry_selection(
+        &source_root,
+        requested_output,
+        options.retry_failed_parent,
+        options.strategy,
+        &delivery,
+    )?;
+    let Some(child) = child else {
+        return Ok(None);
+    };
+    fast_img_validate_failed_retry_input(options.input, parent.marker())?;
+    let contract = fast_img_active_processing_contract(
+        options.strategy,
+        options.archive,
+        options.allow_expert_options,
+    )?;
+    fast_img_validate_processing_contract(parent.marker(), &contract)?;
+    fast_img_validate_processing_contract(&child, &contract)?;
+    anyhow::ensure!(
+        child.src_dir == source_root && child.failed_retry_manifest_blake3.is_some(),
+        "finish-only selection has no exact immutable failed-only source scope"
+    );
+    Ok(Some((parent, child)))
+}
+
+fn fast_img_complete_missing_source_retry(
+    parent: &foundation::fast_img_store::FailedRetryParent,
+    child: &WorkingCopyMarker,
+) -> anyhow::Result<()> {
+    if child.is_terminal() {
+        return fast_img_report_completed_failed_retry(parent, child);
+    }
+    let _output_lease = foundation::process_lock::acquire_output_dir_lock(&child.working_copy)
+        .context("lock failed-only output before fresh finish verification")?;
+    let snapshot = foundation::fast_img_store::inspect_failed_retry_finish(&child.working_copy)?
+        .context("finish-only child changed or lost its immutable task authority")?;
+    anyhow::ensure!(
+        snapshot.marker() == child
+            && snapshot.context().parent() == parent.marker()
+            && snapshot.request_key() == parent.request_key(),
+        "MFB_FINISH_STATE_CHANGED: failed-only task changed before fresh verification; no finalization committed"
+    );
+    foundation::batch_control::checkpoint()?;
+    let proof = foundation::fast_img::verify_failed_retry_finish(&snapshot)?;
+    foundation::batch_control::checkpoint()?;
+    let completed = foundation::fast_img_store::finalize_failed_retry_finish(&snapshot, proof)?;
+    let evidence = completed
+        .failed_retry_finish_evidence()
+        .context("committed failed-only finalization has no verification receipt")?;
+    anyhow::ensure!(
+        completed.is_terminal(),
+        "verified failed-only finalization did not reach a terminal task state"
+    );
+    println!(
+        "MFB_FAST_IMG_RETRY_FINALIZED={}",
+        serde_json::json!({
+            "schema_version":1,"parent_task_key":parent.task_key(),
+            "request_key":parent.request_key(),"child_working_copy":completed.working_copy,
+            "newly_processed":0,"newly_delivered":0,"newly_saved_bytes":0,
+            "evidence":evidence
+        })
+    );
+    println!(
+        "[CONFIRMED] existing failed-only results reverified and finalization committed: outputs={} primary_photos={} original_photos={}; the source root was observed absent, not attributed to an MFB deletion",
+        evidence.verified_output_count,
+        evidence.verified_primary_photos_count,
+        evidence.verified_original_photos_count
+    );
+    println!(
+        "[DONE    ] no new encoding, import, source creation, deletion or byte savings during this request"
     );
     println!("[Summary] succeeded=0 failed=0 skipped=0 ignored=0");
     println!("Unprocessed: 0");
@@ -3918,7 +4083,7 @@ fn fast_img_emit_failed_retry_available(
             "schema_version":1,"source_directory":marker.src_dir,
             "parent_working_copy":marker.working_copy,"parent_task_key":parent.task_key(),
             "failed_count":marker.failed_sources.len(),"strategy":marker.strategy,
-            "existing_child_complete":existing_child.as_ref().is_some_and(|child| child.stage == FastImgStageName::CleanupComplete),
+            "existing_child_complete":existing_child.as_ref().is_some_and(WorkingCopyMarker::is_terminal),
             "existing_child_working_copy":existing_child.as_ref().map(|child| &child.working_copy)
         })
     );
@@ -3963,6 +4128,9 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
         !options.fresh.0 && !options.retry.0,
         "--retry-failed cannot be combined with ordinary continue or a fresh task"
     );
+    if let Some((parent, child)) = fast_img_missing_source_retry_selection(options)? {
+        return fast_img_complete_missing_source_retry(&parent, &child);
+    }
     let source_root = fast_img_failed_retry_source_root(
         options.input,
         options.output_dir,
@@ -3987,10 +4155,7 @@ fn run_fast_img_failed_retry(options: FastImgRunOptions<'_>) -> anyhow::Result<(
     if let Some(child) = &child {
         fast_img_validate_processing_contract(child, &contract)?;
     }
-    if let Some(child) = child
-        .as_ref()
-        .filter(|child| child.stage == FastImgStageName::CleanupComplete)
-    {
+    if let Some(child) = child.as_ref().filter(|child| child.is_terminal()) {
         return fast_img_report_completed_failed_retry(&parent, child);
     }
     let child = {
@@ -4639,7 +4804,7 @@ fn fast_img_prepare_retry_plan(
     retry_requested: bool,
 ) -> anyhow::Result<Option<FastImgRetryPlan>> {
     if let Some(marker) = existing_marker.as_ref()
-        && marker.stage == FastImgStageName::CleanupComplete
+        && marker.is_terminal()
         && !marker.failed_sources.is_empty()
     {
         anyhow::bail!(
@@ -4668,7 +4833,7 @@ fn fast_img_prepare_retry_plan(
     };
 
     let resume_local_delivery = if let Some(marker) = existing_marker.as_ref()
-        && marker.stage == FastImgStageName::CleanupComplete
+        && marker.is_terminal()
     {
         let should_resume =
             fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path);
@@ -4723,8 +4888,11 @@ fn fast_img_prepare_retry_plan(
 
 fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
     foundation::batch_control::checkpoint()?;
-    runtime_cli::check_tool_runtime()?;
     validate_fast_img_options(&options);
+    if let Some((parent, child)) = fast_img_missing_source_retry_selection(options)? {
+        return fast_img_complete_missing_source_retry(&parent, &child);
+    }
+    runtime_cli::check_tool_runtime()?;
     if options.retry_failed.0 {
         return run_fast_img_failed_retry(options);
     }
@@ -4815,9 +4983,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
                 foundation::common_utils::emit_tool_runtime_status("blocked", Some(&shared))?;
                 return Err(shared.into());
             }
-            if marker.stage == FastImgStageName::CleanupComplete
-                && !marker.failed_sources.is_empty()
-            {
+            if marker.is_terminal() && !marker.failed_sources.is_empty() {
                 fast_img_emit_failed_retry_available(marker, shortest_path)?;
                 if retry_requested {
                     anyhow::bail!(
@@ -5237,8 +5403,7 @@ fn fast_img_requires_resume_decision(
     marker: &WorkingCopyMarker,
     shortest_path: ShortestPathFlag,
 ) -> bool {
-    marker.tier2_in_progress
-        || marker.stage != FastImgStageName::CleanupComplete
+    !marker.is_terminal()
         || !marker.failed_sources.is_empty()
         || fast_img_cleanup_complete_should_resume_shortest_path_import(marker, shortest_path)
 }
@@ -5256,13 +5421,11 @@ fn fast_img_require_interactive_confirmation(prompt: &str, declined: &str) -> an
     }
 }
 
-fn fast_img_completed_marker_has_new_tier2_work(
+const fn fast_img_completed_marker_has_new_tier2_work(
     marker: &WorkingCopyMarker,
     modern_lossy_candidate_count: usize,
 ) -> bool {
-    marker.stage == FastImgStageName::CleanupComplete
-        && !marker.tier2_in_progress
-        && modern_lossy_candidate_count != 0
+    marker.is_terminal() && modern_lossy_candidate_count != 0
 }
 
 fn fast_img_marker_has_complete_import_proof(marker: &WorkingCopyMarker) -> bool {
@@ -10207,9 +10370,21 @@ fn validate_cleanup_complete_deleted_source_state(
                 continue;
             }
             Err(err) => {
+                let action = if err.kind() == std::io::ErrorKind::NotFound {
+                    let format = if marker.strategy == "avif" {
+                        "AVIF"
+                    } else {
+                        "JXL"
+                    };
+                    format!(
+                        "Before continuing, restore this optimized {format} from a verified backup or restore the original source backup."
+                    )
+                } else {
+                    "Check access to the saved output before continuing; an inspection failure is not proof that the output is absent.".to_owned()
+                };
                 return Err(err).with_context(|| {
                     format!(
-                        "fast-img cleanup state cannot stat output {}; source JPEGs are already absent. Restore this verified output or the source backup before continuing. The saved task for {} was retained; use --no-resume only for an explicitly isolated new task, never delete the Core state database to reset it",
+                        "fast-img cleanup state cannot stat output {}; source files are already absent. {action} The saved task for {} was retained; use --no-resume only for an explicitly isolated new task, never delete the Core state database to reset it",
                         output.display(),
                         marker.working_copy.display()
                     )
@@ -12550,6 +12725,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_preflight_does_not_reject_healthy_siblings() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::CjxlBuilder::new().check_available()
             || !foundation::DjxlBuilder::new().check_available()
             || !foundation::tool_builders::JxlinfoBuilder::new().check_available()
@@ -12618,6 +12796,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_preserves_exact_jpeg_and_delivers_xmp_sidecar() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -12720,6 +12901,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_staged_xmp_rejects_source_or_sidecar_changes() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
         {
@@ -12806,6 +12990,9 @@ mod fast_img_hardening_tests {
     #[test]
     fn restore_jpeg_conflicting_xmp_rejects_delivery_and_preserves_existing_files()
     -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
         {
@@ -12951,6 +13138,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_cleanup_deletes_only_verified_source_jxl_and_xmp() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -12986,6 +13176,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_cleanup_prunes_empty_source_tree_including_root() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("redone");
@@ -13011,6 +13204,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_proof_refuses_malformed_xmp_sidecar() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -13039,6 +13235,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_cleanup_refuses_missing_or_non_jpeg_output() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -13163,6 +13362,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_proof_refuses_same_pixels_with_different_bytes() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -13207,6 +13409,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn restore_jpeg_proof_refuses_output_that_differs_from_fresh_decode() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input_root = root.path().join("Album_optimized");
@@ -13342,6 +13547,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn cleanup_marker_with_restored_sources_restarts_dry_run() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let src_root_raw = root.path().join("Photos");
@@ -13389,6 +13597,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn empty_fast_img_input_does_not_create_a_false_success_pipeline() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let input = root.path().join("empty");
@@ -13610,6 +13821,277 @@ mod fast_img_hardening_tests {
         Ok(())
     }
 
+    fn failed_retry_finish_test_child(
+        root: &Path,
+        delivery: &foundation::fast_img_store::FailedRetryDeliveryIntent,
+    ) -> anyhow::Result<(
+        WorkingCopyMarker,
+        foundation::fast_img_store::FailedRetryParent,
+        WorkingCopyMarker,
+        PathBuf,
+    )> {
+        let source_root = root.join("Photos");
+        std::fs::create_dir(&source_root)?;
+        let source_root = source_root.canonicalize()?;
+        let source = source_root.join("failed.jpg");
+        write_real_jpeg(&source, [17, 43, 91])?;
+        let output = source_root.parent().unwrap().join("Photos_optimized");
+        let mut parent = WorkingCopyMarker::new(source_root, output.clone(), 1);
+        parent.stage = FastImgStageName::CleanupComplete;
+        parent.processing_contract = Some(super::fast_img_processing_contract(
+            &foundation::runtime_config::RuntimeConfig::default(),
+            "jxl",
+            false,
+            false,
+        )?);
+        parent.failed_sources.insert(
+            "failed.jpg".into(),
+            SkippedSourceEntry {
+                src: calculate_blake3_hash(&source)?,
+                reason: "synthetic retained source for finish-only recovery".into(),
+            },
+        );
+        foundation::pipeline::verification::write_marker_atomic(&parent)?;
+        let reference = foundation::fast_img_store::inspect_failed_retry_parent(&output)?;
+        let tools = failed_retry_test_tools(root, "finish-only-tool-state")?;
+        let child = super::fast_img_prepare_failed_retry_child(&reference, delivery, Some(&tools))?;
+        Ok((parent, reference, child, source))
+    }
+
+    #[test]
+    fn failed_retry_tier2_pending_cleanup_is_not_a_reused_terminal_result() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        let temporary = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(temporary.path());
+        let delivery = super::fast_img_failed_retry_delivery(ShortestPathFlag(true))?;
+        let (parent, reference, mut child, source) =
+            failed_retry_finish_test_child(temporary.path(), &delivery)?;
+        child.stage = FastImgStageName::CleanupComplete;
+        child.failed_sources = parent.failed_sources.clone();
+        child.tier2_in_progress = true;
+        foundation::pipeline::verification::write_marker_atomic(&child)?;
+        let before = child.clone();
+
+        assert!(
+            super::fast_img_report_completed_failed_retry(&reference, &child).is_err(),
+            "a pending original-media transaction must not be reported as a terminal zero-work result"
+        );
+        let sources = [source.clone()];
+        let hashes = super::fast_img_source_hash_set(&child.src_dir, &sources)?;
+        let marker_context = super::FastImgMarkerContext {
+            src_dir: &child.src_dir,
+            working_copy: &child.working_copy,
+            source_jpegs: &sources,
+            source_hashes: &hashes,
+            modern_lossy_candidates: &[],
+            remove_selected_root: true,
+            strategy: "jxl",
+        };
+        let mut continued = Some(child.clone());
+        assert!(
+            super::fast_img_prepare_retry_plan(
+                &mut continued,
+                &marker_context,
+                ShortestPathFlag(true),
+                true,
+            )?
+            .is_some(),
+            "primary cleanup cannot silently terminate a pending original-media transaction"
+        );
+        assert_eq!(continued.as_ref(), Some(&before));
+        assert_eq!(super::read_marker(&child.working_copy)?, before);
+        assert_eq!(super::read_marker(&parent.working_copy)?, parent);
+        assert_eq!(
+            calculate_blake3_hash(&source)?,
+            parent.failed_sources["failed.jpg"].src
+        );
+        Ok(())
+    }
+
+    fn assert_failed_retry_finishes_verified_local_outputs(
+        ordinary_continue: bool,
+        default_output: bool,
+    ) -> anyhow::Result<()> {
+        let temporary = TempDir::new()?;
+        let _env = fast_img_marker_state_test_env(temporary.path());
+        let delivery = foundation::fast_img_store::FailedRetryDeliveryIntent::Local;
+        let (parent, _, mut child, source) =
+            failed_retry_finish_test_child(temporary.path(), &delivery)?;
+        std::fs::create_dir(&child.working_copy)?;
+        let output = child.working_copy.join("failed.JXL");
+        let encoded = std::process::Command::new(
+            foundation::common_utils::resolve_tool_path(foundation::constants::TOOL_CJXL)
+                .context("resolve cjxl for the legal synthetic finish-only fixture")?,
+        )
+        .arg(&source)
+        .arg(&output)
+        .args(["--lossless_jpeg=1", "--effort=7"])
+        .output()?;
+        anyhow::ensure!(
+            encoded.status.success(),
+            "synthetic finish-only encoding failed: {}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        let output_bytes = std::fs::read(&output)?;
+        child.blake3_log.insert(
+            "failed.jpg".into(),
+            Blake3Entry {
+                src: calculate_blake3_hash(&source)?,
+                out: calculate_blake3_hash(&output)?,
+                out_rel: Some("failed.JXL".into()),
+                library_asset: None,
+            },
+        );
+        child.encoded_count = 1;
+        child.stage = FastImgStageName::Gate1Passed;
+        child.gate1_checks = Gate1Checks {
+            count: true.into(),
+            blake3: true.into(),
+            metadata: true.into(),
+            size: true.into(),
+            orient: true.into(),
+            decode: true.into(),
+        };
+        foundation::pipeline::verification::write_marker_atomic(&child)?;
+        let before = foundation::fast_img_store::inspect_failed_retry_finish(&child.working_copy)?
+            .context("finish-only fixture has no prospective verification snapshot")?;
+        let context = foundation::fast_img_store::failed_retry_context(&child.working_copy)?
+            .context("finish-only fixture lost its immutable source admissions")?;
+        std::fs::remove_file(&source)?;
+        std::fs::remove_dir(&child.src_dir)?;
+        let options = FastImgRunOptions {
+            input: &child.src_dir,
+            output_dir: if default_output {
+                None
+            } else if ordinary_continue {
+                Some(&child.working_copy)
+            } else {
+                Some(&parent.working_copy)
+            },
+            delete_source: DeleteSourceFlag(false),
+            dry_run: DryRunFlag(false),
+            recursive: RecursiveFlag(true),
+            shortest_path: ShortestPathFlag(false),
+            retry: RetryFlag(ordinary_continue),
+            retry_failed: RetryFlag(!ordinary_continue),
+            retry_failed_parent: None,
+            fresh: FreshFlag(false),
+            archive: false,
+            allow_expert_options: false,
+            strategy: "jxl",
+            extreme_precision: false,
+        };
+        let run = |options| {
+            if ordinary_continue {
+                super::run_fast_img(options)
+            } else {
+                super::run_fast_img_failed_retry(options)
+            }
+        };
+        let unrelated = child.src_dir.join("not-admitted.jpg");
+        let mut wrong_scope = options;
+        wrong_scope.input = &unrelated;
+        assert!(
+            run(wrong_scope).is_err(),
+            "finish-only recovery cannot expand its saved input scope"
+        );
+        if default_output {
+            let mut missing_file_without_locator = options;
+            missing_file_without_locator.input = &source;
+            assert!(
+                run(missing_file_without_locator).is_err(),
+                "a missing single file cannot guess its parent as a saved source root"
+            );
+        }
+        {
+            let library = temporary.path().join("Unrequested.photoslibrary");
+            std::fs::create_dir_all(library.join("database"))?;
+            std::fs::write(library.join("database/Photos.sqlite"), b"synthetic library")?;
+            let _selected = TestEnvGuard::set_os("MFB_PHOTOS_LIBRARY_PATH", library.as_os_str());
+            let mut wrong_delivery = options;
+            wrong_delivery.shortest_path = ShortestPathFlag(true);
+            assert!(
+                run(wrong_delivery).is_err(),
+                "a saved local result must not satisfy a different Photos request"
+            );
+        }
+        let mut wrong_contract = options;
+        wrong_contract.archive = true;
+        let error = run(wrong_contract).unwrap_err();
+        assert!(format!("{error:#}").contains("MFB_RESUME_CONFIG_CHANGED"));
+        assert_eq!(super::read_marker(&child.working_copy)?, child);
+        assert_eq!(super::read_marker(&parent.working_copy)?, parent);
+        run(options)?;
+
+        let completed = super::read_marker(&child.working_copy)?;
+        assert_eq!(completed.stage, FastImgStageName::CleanupComplete);
+        assert_eq!(completed.blake3_log, child.blake3_log);
+        assert_eq!(completed.gate1_checks, child.gate1_checks);
+        assert!(!completed.tier2_in_progress);
+        assert_eq!(completed.photos_imported_assets, []);
+        let evidence = completed
+            .failed_retry_finish_evidence()
+            .context("finish-only result must preserve its actual re-verification receipt")?;
+        assert_eq!(evidence.verified_snapshot_blake3, before.snapshot_blake3());
+        assert_eq!(evidence.verified_revision, before.revision());
+        assert_eq!(evidence.verified_stage, FastImgStageName::Gate1Passed);
+        assert_eq!(evidence.verified_output_count, 1);
+        assert_eq!(evidence.verified_primary_photos_count, 0);
+        assert_eq!(evidence.verified_original_photos_count, 0);
+        assert_eq!(
+            evidence.source_root_observation,
+            foundation::pipeline::verification::FailedRetrySourceRootObservation::NotFound
+        );
+        assert!(
+            !child.src_dir.exists(),
+            "finish-only recovery must not recreate the source root"
+        );
+        assert_eq!(std::fs::read(&output)?, output_bytes);
+        assert_eq!(
+            foundation::fast_img_store::failed_retry_context(&child.working_copy)?
+                .context("finish-only recovery lost its immutable source admissions")?
+                .admissions(),
+            context.admissions()
+        );
+        assert_eq!(super::read_marker(&parent.working_copy)?, parent);
+        run(options)?;
+        assert_eq!(
+            super::read_marker(&child.working_copy)?,
+            completed,
+            "reopening the confirmed result must not repeat fresh finalization"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_retry_finishes_verified_local_outputs_after_the_source_root_is_gone()
+    -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        assert_failed_retry_finishes_verified_local_outputs(false, false)
+    }
+
+    #[test]
+    fn failed_retry_ordinary_continue_finishes_without_recreating_the_source_root()
+    -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        assert_failed_retry_finishes_verified_local_outputs(true, false)
+    }
+
+    #[test]
+    fn failed_retry_ordinary_continue_without_output_uses_only_the_exact_unique_saved_root()
+    -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
+        assert_failed_retry_finishes_verified_local_outputs(true, true)
+    }
+
     #[test]
     fn cleanup_failed_retry_preserves_the_completed_parent_after_success_outputs_were_cleaned()
     -> anyhow::Result<()> {
@@ -13739,7 +14221,10 @@ mod fast_img_hardening_tests {
             b"new source is not a retry member",
         )?;
         let inputs = super::fast_img_failed_retry_input_plan(&child, &context)?;
-        assert_eq!(inputs.candidates, [failed_source.clone()]);
+        assert_eq!(
+            inputs.candidates.as_slice(),
+            std::slice::from_ref(&failed_source)
+        );
         assert_eq!(
             super::fast_img_prepare_failed_retry_child(&reference, &delivery, None)?,
             child,
@@ -14014,6 +14499,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn cleanup_marker_with_changed_restored_sources_restarts_dry_run() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let src_root_raw = root.path().join("Photos");
@@ -14064,6 +14552,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn reused_fast_img_jxl_refresh_embeds_xmp_and_preserves_reconstruction() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -14154,6 +14645,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn marker_refresh_reencodes_when_source_changed_after_jxl_encode() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_DJXL)
@@ -14258,6 +14752,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn resume_reused_fast_img_output_keeps_recorded_collision_path() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
         {
@@ -14337,6 +14834,9 @@ mod fast_img_hardening_tests {
     /// producing `a (1).JXL`.
     #[test]
     fn stale_proof_reencode_keeps_marker_out_rel_path() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if !foundation::ExiftoolBuilder::check_available()
             || !foundation::common_utils::is_command_available(foundation::constants::TOOL_CJXL)
         {
@@ -14515,6 +15015,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn stale_fast_img_marker_is_archived_before_fresh_run() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let src_root_raw = root.path().join("Photos");
@@ -14624,6 +15127,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn explicit_fast_img_output_must_match_live_marker_state() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(&root.path().join("state"));
         let source_dir = root.path().join("Photos");
@@ -15070,31 +15576,44 @@ mod fast_img_hardening_tests {
     #[test]
     fn cleanup_marker_missing_output_reports_restore_action() -> anyhow::Result<()> {
         let root = TempDir::new()?;
-        let src_root = root.path().join("Photos");
-        let wc = root.path().join("Photos_optimized");
-        let src = src_root.join("a.jpg");
-        write_jpeg(&src, b"old")?;
-        let mut marker = WorkingCopyMarker::new(src_root.clone(), wc, 1);
-        marker.stage = FastImgStageName::CleanupComplete;
-        marker.blake3_log.insert(
-            "a.jpg".to_string(),
-            Blake3Entry {
-                out_rel: Some("a.JXL".to_string()),
-                src: foundation::common_utils::calculate_blake3_hash(&src)?,
-                out: "missing-output-hash".to_string(),
-                library_asset: None,
-            },
-        );
-        std::fs::remove_file(&src)?;
-        let current_hashes = BTreeMap::new();
+        for (strategy, format) in [("jxl", "JXL"), ("avif", "AVIF")] {
+            let src_root = root.path().join(format!("Photos_{strategy}"));
+            let wc = root.path().join(format!("Photos_{strategy}_optimized"));
+            let src = src_root.join("a.jpg");
+            let output = wc.join(format!("a.{format}"));
+            write_jpeg(&src, b"old")?;
+            let mut marker =
+                WorkingCopyMarker::new(src_root.clone(), wc, 1).with_strategy(strategy.to_owned());
+            marker.stage = FastImgStageName::CleanupComplete;
+            marker.blake3_log.insert(
+                "a.jpg".to_string(),
+                Blake3Entry {
+                    out_rel: Some(format!("a.{format}")),
+                    src: foundation::common_utils::calculate_blake3_hash(&src)?,
+                    out: "missing-output-hash".to_string(),
+                    library_asset: None,
+                },
+            );
+            std::fs::remove_file(&src)?;
+            let current_hashes = BTreeMap::new();
 
-        let Err(err) = validate_cleanup_complete_marker(&marker, &src_root, 0, &current_hashes)
-        else {
-            anyhow::bail!("cleanup marker unexpectedly accepted a missing output");
-        };
+            let Err(err) = validate_cleanup_complete_marker(&marker, &src_root, 0, &current_hashes)
+            else {
+                anyhow::bail!("cleanup marker unexpectedly accepted a missing output");
+            };
 
-        let message = format!("{err:#}");
-        assert!(message.contains("restore this optimized JXL"));
+            let message = format!("{err:#}");
+            if strategy == "jxl" {
+                assert!(message.contains("restore this optimized JXL"));
+            } else {
+                assert!(message.contains("restore this optimized AVIF"));
+                assert!(!message.contains("restore this optimized JXL"));
+            }
+            assert!(message.contains(&output.display().to_string()));
+            assert!(message.contains("original source backup"));
+            assert!(message.contains("never delete the Core state database"));
+            assert!(!src.exists() && !marker.working_copy.exists());
+        }
         Ok(())
     }
 
@@ -15942,6 +16461,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn fast_img_primary_cleanup_survives_later_backend_failure() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _state = fast_img_marker_state_test_env(root.path());
         let source = root.path().join("source");
@@ -16481,6 +17003,9 @@ mod fast_img_hardening_tests {
     #[test]
     fn local_gate_isolation_preserves_sources_and_only_removes_owned_failed_outputs()
     -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _home = fast_img_marker_state_test_env(root.path());
         let src = root.path().join("source");
@@ -17300,6 +17825,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn malformed_gif_is_recorded_failed_before_fast_img_encode() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         foundation::tools::require(&["avifenc", "avifdec"]).map_err(anyhow::Error::msg)?;
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
@@ -17326,7 +17854,10 @@ mod fast_img_hardening_tests {
         })
         .expect_err("malformed GIF must remain an explicit failed source");
 
-        assert!(run_error.is::<super::fast_img_result::FileFailures>());
+        assert!(
+            run_error.is::<super::fast_img_result::FileFailures>(),
+            "malformed GIF must retain its explicit file-failure result: {run_error:#}"
+        );
         assert!(run_error.to_string().contains("1 failed source(s)"));
         let working_copy = foundation::pipeline::verification::working_copy_dir(&src_root);
         let markers =
@@ -17350,6 +17881,9 @@ mod fast_img_hardening_tests {
 
     #[test]
     fn mislabeled_png_completes_local_avif_encode_and_pixel_verification() -> anyhow::Result<()> {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         if foundation::tools::require(&["avifenc", "avifdec"]).is_err() {
             return Ok(());
         }
@@ -17847,6 +18381,9 @@ mod fast_img_hardening_tests {
     #[test]
     fn test_resume_preserves_valid_entries_and_only_requeues_drifted_output() -> anyhow::Result<()>
     {
+        if isolated_failed_retry_test()? {
+            return Ok(());
+        }
         let root = TempDir::new()?;
         let _env = fast_img_marker_state_test_env(root.path());
         let src_dir = root.path().join("src");

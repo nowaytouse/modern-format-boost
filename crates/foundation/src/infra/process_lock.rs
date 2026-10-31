@@ -80,14 +80,15 @@ impl BoundMfbRoot {
 
 impl MfbRootIdentity {
     fn capture(path: &Path) -> Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
         let canonical_path = path
             .canonicalize()
             .with_context(|| format!("resolve formal MFB root {}", path.display()))?;
         let metadata = fs::metadata(&canonical_path)
             .with_context(|| format!("inspect formal MFB root {}", path.display()))?;
         anyhow::ensure!(metadata.is_dir(), "formal MFB root is not a directory");
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
         Ok(Self {
             canonical_path,
             #[cfg(unix)]
@@ -301,6 +302,7 @@ pub fn get_mfb_root() -> Result<PathBuf> {
     let root = BoundMfbRoot::new(configured_mfb_root()?)?;
     let path = root.path.clone();
     *binding = Some(root);
+    drop(binding);
     Ok(path)
 }
 
@@ -324,10 +326,12 @@ pub fn inspect_mfb_root_path() -> Result<PathBuf> {
     let root = BoundMfbRoot::inspect(configured_mfb_root()?)?;
     let path = root.path.clone();
     *binding = Some(root);
+    drop(binding);
     Ok(path)
 }
 
 /// Locate startup environment configuration before formal state is selected.
+///
 /// This neither creates nor binds a state directory. Only single-threaded
 /// bootstrap may use it; normal state and lock readers must use the bound APIs.
 ///
@@ -341,7 +345,11 @@ pub fn configuration_bootstrap_root() -> Result<PathBuf> {
         binding.is_none(),
         "local environment must be loaded before formal state or locks are bound"
     );
-    configured_mfb_root()
+    // Keep the bootstrap check and configuration read under the same binding
+    // lock; another thread must not establish an authority between them.
+    let root = configured_mfb_root();
+    drop(binding);
+    root
 }
 
 fn absolute_root_setting(name: &str, value: String) -> Result<PathBuf> {

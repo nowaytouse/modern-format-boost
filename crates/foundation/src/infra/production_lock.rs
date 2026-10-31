@@ -1,8 +1,8 @@
 //! Per-user, cross-process exclusion for real media-processing tasks.
 
+use anyhow::Result;
 #[cfg(unix)]
 use anyhow::{Context, bail};
-use anyhow::Result;
 #[cfg(unix)]
 use std::fs::{self, File, OpenOptions};
 #[cfg(unix)]
@@ -114,7 +114,8 @@ pub fn inherit_active_lease(command: &mut Command) -> Result<()> {
         let Some(active) = active else {
             return Ok(());
         };
-        attach_lease(command, &active)
+        attach_lease(command, &active);
+        Ok(())
     }
     #[cfg(not(unix))]
     {
@@ -124,7 +125,7 @@ pub fn inherit_active_lease(command: &mut Command) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn attach_lease(command: &mut Command, active: &LeaseInner) -> Result<()> {
+fn attach_lease(command: &mut Command, active: &LeaseInner) {
     use std::os::unix::process::CommandExt;
 
     let descriptor = active.descriptor();
@@ -143,7 +144,6 @@ fn attach_lease(command: &mut Command, active: &LeaseInner) -> Result<()> {
         });
     }
     command.env(LEASE_FD_ENV, descriptor.to_string());
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -301,12 +301,22 @@ fn try_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
 }
 
 #[cfg(unix)]
+fn native_lock_short<T: TryInto<libc::c_short>>(value: T) -> std::io::Result<libc::c_short> {
+    value.try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native record-lock constant does not fit c_short",
+        )
+    })
+}
+
+#[cfg(unix)]
 fn try_native_writer_lock(fd: std::os::fd::RawFd) -> std::io::Result<bool> {
     let mut lock = std::mem::MaybeUninit::<libc::flock>::zeroed();
     let lock = unsafe {
         let lock = lock.assume_init_mut();
-        lock.l_type = libc::F_WRLCK as _;
-        lock.l_whence = libc::SEEK_SET as _;
+        lock.l_type = native_lock_short(libc::F_WRLCK)?;
+        lock.l_whence = native_lock_short(libc::SEEK_SET)?;
         lock
     };
     if unsafe { libc::fcntl(fd, libc::F_SETLK, lock) } == 0 {
@@ -325,8 +335,8 @@ fn unlock_native_writer_lock(fd: std::os::fd::RawFd) -> std::io::Result<()> {
     let mut lock = std::mem::MaybeUninit::<libc::flock>::zeroed();
     let lock = unsafe {
         let lock = lock.assume_init_mut();
-        lock.l_type = libc::F_UNLCK as _;
-        lock.l_whence = libc::SEEK_SET as _;
+        lock.l_type = native_lock_short(libc::F_UNLCK)?;
+        lock.l_whence = native_lock_short(libc::SEEK_SET)?;
         lock
     };
     if unsafe { libc::fcntl(fd, libc::F_SETLK, lock) } == 0 {
@@ -384,7 +394,6 @@ fn acquire_new(global_path: &Path, native_writer_path: &Path) -> Result<Producti
 fn acquire_inherited(path: &Path, value: &std::ffi::OsStr) -> Result<ProductionLease> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::MetadataExt;
 
     let text = std::str::from_utf8(value.as_bytes())
         .context("invalid inherited production task descriptor marker")?;
@@ -406,12 +415,14 @@ fn acquire_inherited(path: &Path, value: &std::ffi::OsStr) -> Result<ProductionL
     );
 
     let probe = open_lock_file(path)?;
-    let expected = probe
-        .metadata()
-        .context("inspect production task lock identity")?;
+    let mut expected = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe { libc::fstat(probe.as_raw_fd(), expected.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("inspect production task lock identity");
+    }
+    let expected = unsafe { expected.assume_init() };
     anyhow::ensure!(
-        u64::try_from(inherited_stat.st_dev)? == expected.dev()
-            && inherited_stat.st_ino == expected.ino(),
+        inherited_stat.st_dev == expected.st_dev && inherited_stat.st_ino == expected.st_ino,
         "inherited production task descriptor does not identify the stable lock"
     );
     if try_lock(probe.as_raw_fd()).context("verify inherited production task lock")? {

@@ -1251,7 +1251,10 @@ mod tests {
             "img": {"avif_metadata_policy": "clear"}
         }))?;
         configured.validate()?;
-        assert_eq!(configured.img.avif_metadata_policy, AvifMetadataPolicy::Clear);
+        assert_eq!(
+            configured.img.avif_metadata_policy,
+            AvifMetadataPolicy::Clear
+        );
         assert_eq!(
             serde_json::to_value(&configured)?["img"]["avif_metadata_policy"],
             "clear"
