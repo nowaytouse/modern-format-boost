@@ -5962,10 +5962,15 @@ private func readBoundedProcessOutput(
     precondition(limit >= 0 && limit < Int.max)
     let sentinelLimit = limit + 1
     var data = Data()
-    while let chunk = try handle.read(upToCount: maxProcessLogChunkBytes), !chunk.isEmpty {
-        if data.count < sentinelLimit {
-            data.append(chunk.prefix(sentinelLimit - data.count))
+    while true {
+        let hasData = try autoreleasepool {
+            guard let chunk = try handle.read(upToCount: maxProcessLogChunkBytes), !chunk.isEmpty else { return false }
+            if data.count < sentinelLimit {
+                data.append(chunk.prefix(sentinelLimit - data.count))
+            }
+            return true
         }
+        if !hasData { break }
     }
     let exceeded = data.count > limit
     if exceeded {
@@ -11850,6 +11855,31 @@ private func runSelfTest() -> Int32 {
             fputs("native-host self-test process output bound failed\n", stderr)
             return 1
         }
+        let floodPipe = Pipe()
+        let floodWriter = DispatchGroup()
+        var heapBefore = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapBefore)
+        floodWriter.enter()
+        DispatchQueue.global(qos: .utility).async {
+            defer { floodPipe.fileHandleForWriting.closeFile(); floodWriter.leave() }
+            let chunk = Data(repeating: 0x61, count: 65_536)
+            for _ in 0..<1_024 {
+                autoreleasepool { floodPipe.fileHandleForWriting.write(chunk) }
+            }
+        }
+        let floodCapture = try readBoundedProcessOutput(floodPipe.fileHandleForReading, limit: 32)
+        floodWriter.wait()
+        var heapAfter = malloc_statistics_t()
+        malloc_zone_statistics(nil, &heapAfter)
+        guard floodCapture.exceeded, floodCapture.data == Data(repeating: 0x61, count: 32),
+              heapAfter.size_in_use <= heapBefore.size_in_use + 8 * 1_024 * 1_024 else {
+            throw HostError(message: "Bounded process capture retained discarded output or failed to drain the pipe")
+        }
+        try floodPipe.fileHandleForReading.close()
+        var readFailed = false
+        do { _ = try readBoundedProcessOutput(floodPipe.fileHandleForReading, limit: 32) }
+        catch { readFailed = true }
+        guard readFailed else { throw HostError(message: "Process capture concealed a read failure") }
         let backpressure = ProcessLogBackpressure(maxBytes: 32, maxEntries: 2)
         let processingPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"processing"}"#
         let verificationPhase = #"MFB_LOG_PHASE={"schema_version":1,"phase":"verification"}"#

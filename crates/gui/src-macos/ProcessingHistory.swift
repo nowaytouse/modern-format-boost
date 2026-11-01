@@ -2855,6 +2855,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private let preferences: UserDefaults
     private var privacyEnabled: Bool { DisplayPrivacy.enabled(in: preferences) }
     private var generation = UUID()
+    private var loadingDirectory: URL?
+    private var pendingRefreshDirectory: URL?
+    private var historyQuery = HistoryStore.loadForDisplay
     private var outputGeneration = UUID()
     private var exportGeneration = UUID()
     private var exportBusy = false
@@ -2920,6 +2923,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     func refresh(directory: URL) {
         guard !removalBusy else { return }
+        if let loadingDirectory {
+            pendingRefreshDirectory = directory == loadingDirectory ? nil : directory
+            return
+        }
+        loadingDirectory = directory
         exportGeneration = UUID()
         exportBusy = false
         resetOutput()
@@ -2931,9 +2939,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         refreshButton.isEnabled = false
         updateActions()
         let source = directory
+        let query = historyQuery
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Swift.Result {
-                try HistoryStore.loadForDisplay(directory: source) {
+                try query(source) {
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.generation == token else { return }
                         self.status.stringValue = localized("history.preparing_read")
@@ -2942,7 +2951,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 }
             }
             DispatchQueue.main.async {
-                guard let self, self.generation == token else { return }
+                guard let self else { return }
+                self.loadingDirectory = nil
+                if let pending = self.pendingRefreshDirectory {
+                    self.pendingRefreshDirectory = nil
+                    self.refresh(directory: pending)
+                    return
+                }
+                guard self.generation == token else { return }
                 self.progress.stopAnimation(nil)
                 self.refreshButton.isEnabled = true
                 switch result {
@@ -3747,6 +3763,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func windowWillClose(_ notification: Notification) {
+        pendingRefreshDirectory = nil
         clearCleanupDetails()
         clearFailureDetails()
         cancelIssueScan()
@@ -5124,6 +5141,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     func validateForSelfTest() throws {
+        try validateRefreshCoalescingForSelfTest()
         try validateFailedRetryHistoryForSelfTest()
         let savedRetryAction = onRetryFailed
         onRetryFailed = { _ in }
@@ -5338,6 +5356,70 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.deselectAll(nil)
         showSelected()
         window?.setFrame(original, display: false)
+    }
+
+    private func validateRefreshCoalescingForSelfTest() throws {
+        let first = URL(fileURLWithPath: "/synthetic/history-a")
+        let middle = URL(fileURLWithPath: "/synthetic/history-b")
+        let latest = URL(fileURLWithPath: "/synthetic/history-c")
+        let reopened = URL(fileURLWithPath: "/synthetic/history-d")
+        let panel = ProcessingHistoryPanel(directory: first, preferences: preferences)
+        let lock = NSLock()
+        var started: [URL] = []
+        let released = DispatchSemaphore(value: 0)
+        defer { for _ in 0..<4 { released.signal() } }
+        panel.historyQuery = { source, _ in
+            lock.lock(); started.append(source); lock.unlock()
+            released.wait()
+            if source == first { throw HostError(message: "Synthetic superseded load failure") }
+            return HistoryStore.Result(entries: [], issues: [source.path], limited: false)
+        }
+        func observed() -> [URL] {
+            lock.lock(); defer { lock.unlock() }
+            return started
+        }
+        func awaitResult(_ condition: () -> Bool) throws {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            guard condition() else { throw HostError(message: "Synthetic history refresh did not drain") }
+        }
+        panel.removalBusy = true
+        panel.refresh(directory: first)
+        guard panel.loadingDirectory == nil, observed().isEmpty else {
+            throw HostError(message: "History refresh ran during removal")
+        }
+        panel.removalBusy = false
+        panel.refresh(directory: first)
+        try awaitResult { observed().count == 1 }
+        for _ in 0..<100 { panel.refresh(directory: first) }
+        panel.refresh(directory: middle)
+        panel.refresh(directory: first)
+        guard panel.pendingRefreshDirectory == nil else { throw HostError(message: "Returning to the active history directory left a stale request") }
+        panel.refresh(directory: middle)
+        panel.refresh(directory: latest)
+        guard observed() == [first], panel.loadingDirectory == first, panel.pendingRefreshDirectory == latest else {
+            throw HostError(message: "Repeated history requests started overlapping scans")
+        }
+        released.signal()
+        try awaitResult { observed().count == 2 }
+        guard observed() == [first, latest], panel.directory == latest else {
+            throw HostError(message: "History did not retain only the latest requested directory")
+        }
+        panel.refresh(directory: reopened)
+        panel.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: panel.window))
+        released.signal()
+        try awaitResult { panel.loadingDirectory == nil }
+        guard observed().count == 2, panel.pendingRefreshDirectory == nil,
+              panel.loadIssues == [latest.path], panel.refreshButton.isEnabled else {
+            throw HostError(message: "Closing history started queued scans or applied a superseded failure")
+        }
+        panel.refresh(directory: reopened)
+        try awaitResult { observed().count == 3 }
+        released.signal()
+        try awaitResult { panel.loadingDirectory == nil }
+        guard observed() == [first, latest, reopened], panel.loadIssues == [reopened.path] else {
+            throw HostError(message: "History could not refresh after reopening")
+        }
     }
 
     func validateDatabaseLoadForSelfTest(expectedStatuses: [String]) throws {

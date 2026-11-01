@@ -25,6 +25,12 @@ areas of change are:
 
 ### Long-running Native Log Display (2026-11-02)
 
+- Release discarded query-output buffers per read even after the retained-output
+  budget is full. A pipe-flood regression checks bounded heap growth, complete
+  draining, explicit truncation and read-error propagation.
+- Keep one History list scan active per panel and only the latest different
+  directory pending. Reopening the same list reuses its active scan; closing
+  drops queued work without abandoning the current bounded read.
 - Reuse each delivery's parsed lines and classification, and render progress and
   count widgets once per delivery. Every event still undergoes ordered validation;
   contradictory progress retains its batch evidence conflict and diagnostic.
