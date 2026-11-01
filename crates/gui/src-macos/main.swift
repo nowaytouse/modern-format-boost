@@ -4560,6 +4560,7 @@ private func conciseProcessLog(_ text: String) -> String? {
 }
 
 private func countStatusValue(in line: String) -> String? {
+    guard line.range(of: "Count status:", options: .caseInsensitive) != nil else { return nil }
     guard let range = line.range(of: #"^\s*(?:ERR:\s*)?Count status:\s*\S+"#, options: [.regularExpression, .caseInsensitive]) else {
         return nil
     }
@@ -5760,9 +5761,10 @@ enum LogTone: Equatable {
     case muted, normal, stage, result, warning, failure
 
     static func message(_ line: String) -> String {
-        var text = line.replacingOccurrences(of: #"\x1B\[[0-?]*[ -/]*[@-~]"#,
-                                             with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let uncolored = line.contains("\u{1B}")
+            ? line.replacingOccurrences(of: #"\x1B\[[0-?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+            : line
+        var text = uncolored.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("ERR:") { text = String(text.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
         return text
     }
@@ -5931,19 +5933,21 @@ private func processingRequiresPhotosAutomation(_ request: ProcessorRequest) -> 
 
 private func drainProcessLogChunks(_ buffer: inout Data, flush: Bool) -> [String] {
     var chunks: [String] = []
-    while !buffer.isEmpty {
-        if let newline = buffer.firstIndex(of: 0x0A),
-           buffer.distance(from: buffer.startIndex, to: newline) <= maxProcessLogChunkBytes
+    var start = buffer.startIndex
+    while start < buffer.endIndex {
+        if let newline = buffer[start...].firstIndex(of: 0x0A),
+           buffer.distance(from: start, to: newline) <= maxProcessLogChunkBytes
         {
-            chunks.append(String(decoding: buffer[..<newline], as: UTF8.self))
-            buffer.removeSubrange(...newline)
+            chunks.append(String(decoding: buffer[start..<newline], as: UTF8.self))
+            start = buffer.index(after: newline)
             continue
         }
-        guard buffer.count >= maxProcessLogChunkBytes else { break }
-        let end = buffer.index(buffer.startIndex, offsetBy: maxProcessLogChunkBytes)
-        chunks.append(String(decoding: buffer[..<end], as: UTF8.self))
-        buffer.removeSubrange(..<end)
+        guard buffer.distance(from: start, to: buffer.endIndex) >= maxProcessLogChunkBytes else { break }
+        let end = buffer.index(start, offsetBy: maxProcessLogChunkBytes)
+        chunks.append(String(decoding: buffer[start..<end], as: UTF8.self))
+        start = end
     }
+    buffer.removeSubrange(buffer.startIndex..<start)
     if flush, !buffer.isEmpty {
         chunks.append(String(decoding: buffer, as: UTF8.self))
         buffer.removeAll(keepingCapacity: false)
@@ -6020,10 +6024,11 @@ private final class ProcessLogBackpressure: @unchecked Sendable {
         if raw.hasPrefix("MFB_") || raw.hasPrefix("[PHOTOS PROFILE]")
             || raw.hasPrefix("[PHOTOS PROGRESS]") || countStatusValue(in: raw) != nil
             || raw.hasPrefix("Integrity:") || raw.hasPrefix("Integrity Issues:")
-            || raw.hasPrefix("[GATE") || hasSeriousProcessingDiagnostic(raw) {
+            || raw.hasPrefix("[GATE") {
             return .control
         }
         let tone = LogTone.classify(text)
+        if tone == .failure && hasSeriousProcessingDiagnostic(raw) { return .control }
         return tone == .warning || tone == .failure || tone == .result ? .diagnostic : .ordinary
     }
 
@@ -6668,13 +6673,37 @@ private final class NativeHost {
 
     private func flushProcessLogs() {
         guard let payload = processLogs.takeDelivery() else { return }
-        onLog?(payload)
+        autoreleasepool { onLog?(payload) }
         if processLogs.finishDelivery() {
             DispatchQueue.main.async { [weak self] in self?.flushProcessLogs() }
         } else if let completion = pendingProcessCompletion {
             pendingProcessCompletion = nil
             completion()
         }
+    }
+
+    func validateLogDrainForSelfTest() throws {
+        let started = ProcessInfo.processInfo.systemUptime
+        let pipe = Pipe()
+        let group = DispatchGroup()
+        stream(pipe.fileHandleForReading, prefix: "", group: group)
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            defer {
+                pipe.fileHandleForWriting.closeFile()
+                group.leave()
+            }
+            let chunk = Data((String(repeating: "synthetic 🧪 detail\n", count: 2_048)).utf8)
+            for _ in 0..<4 {
+                autoreleasepool { pipe.fileHandleForWriting.write(chunk) }
+            }
+        }
+        // Deliberately keep the main queue busy while the real pipe reader drains a flood.
+        guard group.wait(timeout: .now() + 15) == .success else {
+            throw HostError(message: "Log pipe reader failed to drain a flood while the main queue was busy")
+        }
+        pipe.fileHandleForReading.closeFile()
+        print("runtime log drain: 8192 lines with main queue busy, \(ProcessInfo.processInfo.systemUptime - started)s")
     }
 
     private func stream(_ handle: FileHandle, prefix: String, group: DispatchGroup) {
@@ -6684,14 +6713,19 @@ private final class NativeHost {
             defer { group.leave() }
             var buffer = Data()
             while true {
-                let chunk = handle.availableData
-                if chunk.isEmpty { break }
-                buffer.append(chunk)
-                for line in drainProcessLogChunks(&buffer, flush: false) {
-                    if processLogs.enqueue(prefix + line) {
-                        DispatchQueue.main.async { self?.flushProcessLogs() }
+                // The reader lives for the entire batch; drain Cocoa temporaries per read.
+                let hasData = autoreleasepool {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { return false }
+                    buffer.append(chunk)
+                    for line in drainProcessLogChunks(&buffer, flush: false) {
+                        if processLogs.enqueue(prefix + line) {
+                            DispatchQueue.main.async { self?.flushProcessLogs() }
+                        }
                     }
+                    return true
                 }
+                if !hasData { break }
             }
             for line in drainProcessLogChunks(&buffer, flush: true) {
                 if processLogs.enqueue(prefix + line) {
@@ -6767,7 +6801,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let inPlaceCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let watchCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let commandField = NSTextField()
-    private let logView = NSTextView()
+    private let logView = NSTextView(usingTextLayoutManager: false)
     private let fullLogPresentation = NSMutableAttributedString(string: "")
     private let privateLogPresentation = NSMutableAttributedString(string: "")
     private let privacyButton = NSButton()
@@ -7221,6 +7255,13 @@ private final class AppController: NSObject, NSWindowDelegate {
 
         logView.isEditable = false
         logView.isSelectable = true
+        logView.isContinuousSpellCheckingEnabled = false
+        logView.isGrammarCheckingEnabled = false
+        logView.isAutomaticTextCompletionEnabled = false
+        logView.isAutomaticLinkDetectionEnabled = false
+        logView.isAutomaticDataDetectionEnabled = false
+        logView.allowsUndo = false
+        logView.layoutManager?.allowsNonContiguousLayout = true
         logView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         logView.textContainerInset = NSSize(width: 8, height: 8)
         logView.backgroundColor = .textBackgroundColor
@@ -8198,7 +8239,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 } else if !replacePresentation,
                           let range = trailingLogLineRange(raw, in: fullLogPresentation.string as NSString) {
                     let storage = fullLogPresentation
-                    storage.replaceCharacters(in: range, with: styledLog(repeated))
+                    let replacement = styledLog(repeated)
+                    storage.replaceCharacters(in: range, with: replacement)
+                    if !privacyEnabled { logView.textStorage?.replaceCharacters(in: range, with: replacement) }
                     presentationChanged = true
                 } else {
                     diagnosticLogFolder.reset()
@@ -8242,21 +8285,53 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         guard !displayText.isEmpty || presentationChanged else { return }
+        let followsTail = logScroll.contentView.bounds.maxY >= logView.bounds.maxY - 2
+        logView.textStorage?.beginEditing()
         appendPresentation(displayText, to: fullLogPresentation, replace: replacePresentation)
         appendPresentation(privateLines.joined(separator: "\n"), to: privateLogPresentation, replace: replacePresentation)
-        logView.textStorage?.setAttributedString(privacyEnabled ? privateLogPresentation : fullLogPresentation)
-        logView.scrollToEndOfDocument(nil)
+        logView.textStorage?.endEditing()
+        if followsTail { logView.scrollToEndOfDocument(nil) }
     }
 
     private func appendPresentation(_ text: String, to storage: NSMutableAttributedString, replace: Bool) {
-        if replace { storage.setAttributedString(NSAttributedString(string: "")) }
+        let visible = storage === (privacyEnabled ? privateLogPresentation : fullLogPresentation) ? logView.textStorage : nil
+        if replace {
+            storage.setAttributedString(NSAttributedString(string: ""))
+            visible?.setAttributedString(NSAttributedString(string: ""))
+        }
         guard !text.isEmpty else { return }
-        if !storage.string.isEmpty { storage.append(NSAttributedString(string: "\n")) }
-        storage.append(styledLog(text))
-        let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
-        if lines.count > 3_000 {
+        if storage.length > 0 {
+            let separator = NSAttributedString(string: "\n")
+            storage.append(separator)
+            visible?.append(separator)
+        }
+        let addition = styledLog(text)
+        storage.append(addition)
+        visible?.append(addition)
+        let lineCount = storage.string.utf8.reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
+        var removed = 0
+        if lineCount > 3_000 {
+            let lines = storage.string.split(separator: "\n", omittingEmptySubsequences: false)
             let retained = lines.suffix(2_999).joined(separator: "\n")
-            storage.setAttributedString(styledLog(localized("log.visible_tail") + "\n" + retained))
+            removed = storage.length - (retained as NSString).length
+        }
+        let marker = localized("log.visible_tail") + "\n"
+        let budget = 262_144 - (marker as NSString).length
+        if storage.length - removed > budget {
+            let start = storage.length - budget
+            let boundary = (storage.string as NSString).rangeOfComposedCharacterSequence(at: start)
+            removed = max(removed, NSMaxRange(boundary))
+            let newline = (storage.string as NSString).range(of: "\n", options: [],
+                range: NSRange(location: removed, length: storage.length - removed))
+            if newline.location != NSNotFound { removed = NSMaxRange(newline) }
+        }
+        if removed > 0 {
+            let range = NSRange(location: 0, length: removed)
+            let notice = styledLog(marker)
+            storage.deleteCharacters(in: range)
+            storage.insert(notice, at: 0)
+            visible?.deleteCharacters(in: range)
+            visible?.insert(notice, at: 0)
         }
     }
 
@@ -10385,6 +10460,29 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
 
         clearBatchLog()
+        appendLog(String(repeating: "🧪 long diagnostic ", count: 40_000) + "\nretained tail")
+        guard fullLogPresentation.length <= 262_144,
+              privateLogPresentation.length <= 262_144,
+              logView.string.hasSuffix("retained tail"),
+              logView.textLayoutManager == nil,
+              !logView.isContinuousSpellCheckingEnabled,
+              !logView.isGrammarCheckingEnabled else {
+            throw HostError(message: "Runtime log presentation exceeded its character budget or enabled text checking")
+        }
+        let stressStart = ProcessInfo.processInfo.systemUptime
+        for batch in 0..<500 {
+            autoreleasepool {
+                appendLog((0..<8).map { "detail 🧪 batch=\(batch) row=\($0) " + String(repeating: "x", count: 80) }.joined(separator: "\n"))
+            }
+        }
+        guard fullLogPresentation.length <= 262_144,
+              logView.string == fullLogPresentation.string,
+              logView.string.hasSuffix(String(repeating: "x", count: 80)),
+              !batchResults.hasFailure else {
+            throw HostError(message: "Sustained runtime logs lost their bounded tail or changed result evidence")
+        }
+        print("runtime log stress: 500 batches, \(fullLogPresentation.length) UTF-16 units, \(ProcessInfo.processInfo.systemUptime - stressStart)s")
+        clearBatchLog()
         appendLog((0..<3_001).map { "detail \($0)" }.joined(separator: "\n"))
         let visibleTail = logView.string.components(separatedBy: "\n")
         guard visibleTail.count == 3_000, visibleTail.first == localized("log.visible_tail"),
@@ -12019,6 +12117,7 @@ private func runSelfTest() -> Int32 {
             try MediaSettings().save(to: preferences)
             let controlHost = NativeHost()
             try controlHost.validateControlForSelfTest()
+            try controlHost.validateLogDrainForSelfTest()
             try AppController(preferences: preferences).validateProductionBusyForSelfTest()
             let readOnlyHost = NativeHost(readOnly: true)
             var rejectedReadOnly = false

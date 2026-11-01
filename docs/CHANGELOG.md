@@ -23,6 +23,16 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Long-running Native Log Display (2026-11-02)
+
+- Drain temporary Cocoa objects during each background log read rather than
+  retaining them for the lifetime of a production batch.
+- Bound the visible log by characters as well as lines, preserve retained text
+  styling, and update the changed suffix instead of resetting the entire view.
+- Use native noncontiguous log layout without spelling, grammar or automatic
+  text detection. Keep background pipe draining independent of UI delivery;
+  existing result-evidence and transport-gap checks remain authoritative.
+
 ### Launcher Startup And Session Archival (2026-10-31)
 
 - Keep saved-task configuration admission separate from tool-snapshot health.
