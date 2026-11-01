@@ -25,6 +25,9 @@ areas of change are:
 
 ### Long-running Native Log Display (2026-11-02)
 
+- Reuse each delivery's parsed lines and classification, and render progress and
+  count widgets once per delivery. Every event still undergoes ordered validation;
+  contradictory progress retains its batch evidence conflict and diagnostic.
 - Drain temporary Cocoa objects during each background log read rather than
   retaining them for the lifetime of a production batch.
 - Bound the visible log by characters as well as lines, preserve retained text

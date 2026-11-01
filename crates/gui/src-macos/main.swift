@@ -8024,6 +8024,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func appendLog(_ text: String, captureDiagnostics: Bool = true,
                            now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         var latestChanged = false
+        var progressChanged = false
         var replacePresentation = false
         var presentationChanged = false
         var displayLines: [String] = []
@@ -8126,7 +8127,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                     }
                     displayLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
                     privateLines.append("[PHASE] " + localized("log.phase.\(phase.rawValue)"))
-                    refreshFileProgress(now: now)
+                    progressChanged = true
                 case .invalid:
                     let warning = "[WARN] " + localized("log.phase.invalid")
                     displayLines.append(warning)
@@ -8143,7 +8144,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                     fileProgress = FileStageProgress()
                     gateActivity = GateCheckActivity()
                 }
-                refreshFileProgress(now: now)
+                progressChanged = true
                 if developerMode { displayLines.append(line) }
                 if photosImportProgress.invalid {
                     let warning = "[WARN] " + localized("photos.progress.invalid")
@@ -8157,7 +8158,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 if gateActivity.invalid || gateActivity.event?.state == "failed" { batchResults.markMandatoryEvidenceConflict() }
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
-                refreshFileProgress(now: now)
+                progressChanged = true
                 if gateActivity.invalid {
                     let warning = "[WARN] " + localized("gate.activity.invalid")
                     displayLines.append(warning)
@@ -8169,7 +8170,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             if fileProgress.ingest(line) {
                 diagnosticLogFolder.reset()
                 lastBufferedDiagnostic = nil
-                refreshFileProgress()
+                progressChanged = true
                 continue
             }
             if let summary = batchResults.ingest(line) {
@@ -8226,7 +8227,8 @@ private final class AppController: NSObject, NSWindowDelegate {
             case .append(let raw):
                 displayLines.append(raw)
                 let index = displayLines.count - 1
-                if LogTone.classify(raw) == .warning || LogTone.classify(raw) == .failure {
+                let tone = LogTone.classify(raw)
+                if tone == .warning || tone == .failure {
                     lastBufferedDiagnostic = (raw, index)
                 } else {
                     lastBufferedDiagnostic = nil
@@ -8251,16 +8253,17 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
         let displayText = displayLines.joined(separator: "\n")
+        if progressChanged { refreshFileProgress(now: now) }
         if latestChanged { refreshLatestDiagnostics() }
         var diagnosticsChanged = false
-        for line in text.split(separator: "\n") {
-            if photosDiagnostics.ingest(String(line)) {
+        for line in rawLines where !line.isEmpty {
+            if photosDiagnostics.ingest(line) {
                 diagnosticsChanged = true
                 if photosDiagnostics.failed { batchResults.markMandatoryEvidenceConflict() }
             }
         }
         if diagnosticsChanged { refreshDiagnostics() }
-        for line in text.split(separator: "\n") where line.hasPrefix("MFB_LOG_DIRECTORY=") {
+        for line in rawLines where line.hasPrefix("MFB_LOG_DIRECTORY=") {
             let encoded = Data(line.dropFirst("MFB_LOG_DIRECTORY=".count).utf8)
             if let path = try? JSONDecoder().decode(String.self, from: encoded), path.hasPrefix("/") {
                 resolvedHistoryDirectory = URL(fileURLWithPath: path, isDirectory: true)
@@ -8268,22 +8271,24 @@ private final class AppController: NSObject, NSWindowDelegate {
                 historyButton.toolTip = privacyEnabled ? localized("button.history") : path
             }
         }
-        for raw in text.split(separator: "\n") {
-            let message = LogTone.message(String(raw))
+        for raw in rawLines where !raw.isEmpty {
+            let message = LogTone.message(raw)
             if ["MFB_RESUME_DECISION_REQUIRED:", "Error: MFB_RESUME_DECISION_REQUIRED:"].contains(where: message.hasPrefix) { sawResumeDecision = true }
             if ["MFB_FAILED_RETRY_REQUIRED:", "Error: MFB_FAILED_RETRY_REQUIRED:"].contains(where: message.hasPrefix) { sawFailedRetryDecision = true }
         }
-        if text.split(separator: "\n").contains(where: { raw in
+        if rawLines.contains(where: { raw in
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let message = line.hasPrefix("ERR: ") ? String(line.dropFirst(5)) : line
             return message.hasPrefix("Error: MFB_PRODUCTION_TASK_BUSY:")
         }) { sawProductionBusy = true }
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if let value = countStatusValue(in: String(line)) {
+        var countChanged = false
+        for line in rawLines {
+            if let value = countStatusValue(in: line) {
                 countStatus = value
-                refreshCountStatus()
+                countChanged = true
             }
         }
+        if countChanged { refreshCountStatus() }
         guard !displayText.isEmpty || presentationChanged else { return }
         let followsTail = logScroll.contentView.bounds.maxY >= logView.bounds.maxY - 2
         logView.textStorage?.beginEditing()
@@ -9612,6 +9617,29 @@ private final class AppController: NSObject, NSWindowDelegate {
         var invalid = GateCheckActivity()
         _ = invalid.ingest(try Self.gateFileFixtureEvent(check: "count", processed: 0), now: 1)
         guard invalid.invalid else { throw HostError(message: "An unmeasured Gate check accepted invented file counts") }
+
+        gateActivity = GateCheckActivity()
+        batchResults = BatchResults()
+        appendLog(phase + "\n" + (try Self.gateFileFixtureEvent(check: "metadata", processed: 0, total: 1_024)), now: 20)
+        let events = try (1...1_024).map { try Self.gateFileFixtureEvent(check: "metadata", processed: $0, total: 1_024) }
+        let started = ProcessInfo.processInfo.systemUptime
+        for offset in stride(from: 0, to: events.count, by: 64) {
+            autoreleasepool { appendLog(events[offset..<(offset + 64)].joined(separator: "\n"), now: 21) }
+        }
+        guard !gateActivity.invalid, gateActivity.event?.file_progress?.processed == 1_024,
+              fileProgressIndicator.doubleValue == 99.99, batchResults.totals.isEmpty,
+              !batchResults.mandatoryEvidenceConflict else {
+            throw HostError(message: "Batched Gate progress lost attempts or fabricated completed media")
+        }
+        print("runtime progress stress: 1024 events in 16 deliveries, \(ProcessInfo.processInfo.systemUptime - started)s")
+        gateActivity = GateCheckActivity()
+        let contradictory = try [0, 2, 1, 3].map { try Self.gateFileFixtureEvent(check: "metadata", processed: $0) }
+        appendLog(contradictory.joined(separator: "\n"), now: 22)
+        guard batchResults.mandatoryEvidenceConflict,
+              latestDiagnostics.warning == "[WARN] " + localized("gate.activity.invalid"),
+              logView.string.contains(localized("gate.activity.invalid")) else {
+            throw HostError(message: "Batched progress discarded contradictory evidence or its diagnostic")
+        }
     }
 
     func showGateFileProgressFixture(caseName: String = "metadata") throws {
