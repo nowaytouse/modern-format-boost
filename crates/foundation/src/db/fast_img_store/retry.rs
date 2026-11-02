@@ -543,7 +543,7 @@ pub(super) fn context_for(
 ) -> Result<Option<FailedRetryContext>> {
     let mut seen = BTreeSet::from([key.to_owned()]);
     let mut current_key = key.to_owned();
-    let mut current = marker.clone();
+    let mut current = std::borrow::Cow::Borrowed(marker);
     let mut ancestors = Vec::new();
     let mut first_admissions = BTreeMap::new();
     let mut parent_key = String::new();
@@ -643,7 +643,7 @@ pub(super) fn context_for(
         logical_key = Some(row.logical);
         ancestors.push(parent.clone());
         current_key = row.parent;
-        current = parent;
+        current = std::borrow::Cow::Owned(parent);
     }
     if ancestors.is_empty() {
         return Ok(None);

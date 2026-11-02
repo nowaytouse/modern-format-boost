@@ -6070,12 +6070,20 @@ pub fn apply_library_assets_to_marker(
     library: &LibraryHandle,
 ) -> Result<()> {
     bind_photos_library_proof(marker, library.photos_library_path.as_deref())?;
+    let mut by_output = BTreeMap::new();
+    for (source_rel, entry) in &mut marker.blake3_log {
+        let output_rel = marker_entry_out_rel(source_rel, entry);
+        if by_output
+            .insert(output_rel.clone(), (source_rel, entry))
+            .is_some()
+        {
+            return Err(ImgQualityError::AnalysisError(format!(
+                "Photos verifier output maps to multiple marker sources: {output_rel}"
+            )));
+        }
+    }
     for asset in &library.imported_assets {
-        let Some((source_rel, entry)) = marker
-            .blake3_log
-            .iter_mut()
-            .find(|(source_rel, entry)| marker_entry_out_rel(source_rel, entry) == asset.rel_path)
-        else {
+        let Some((source_rel, entry)) = by_output.get_mut(&asset.rel_path) else {
             return Err(ImgQualityError::AnalysisError(format!(
                 "Photos verifier asset has no marker output: {}",
                 asset.rel_path
@@ -9924,6 +9932,70 @@ mod tests {
             marker.photos_submission_history(),
             before.photos_submission_history()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn library_proofs_bind_large_reordered_inventory_without_changing_hashes() -> Result<()> {
+        let count = 10_000;
+        let mut marker = WorkingCopyMarker::new(
+            "/synthetic/source".into(),
+            "/synthetic/output".into(),
+            count,
+        );
+        let mut assets = Vec::with_capacity(count);
+        for index in 0..count {
+            let source = format!("source-{index:05}.jpg");
+            let output = format!("output-{index:05}.JXL");
+            let hash = blake3::hash(source.as_bytes()).to_hex().to_string();
+            marker.blake3_log.insert(
+                source,
+                Blake3Entry {
+                    out_rel: Some(output.clone()),
+                    src: hash.clone(),
+                    out: hash.clone(),
+                    library_asset: None,
+                },
+            );
+            assets.push(LibraryAssetRecord {
+                rel_path: output,
+                blake3: hash,
+                sync_status: "verified".into(),
+                quarantined: false,
+                photos_uuid: None,
+                library_blake3: None,
+                xmp_sidecar_blake3: None,
+            });
+        }
+        assets.reverse();
+        let library = LibraryHandle {
+            imported_assets: assets,
+            ..LibraryHandle::default()
+        };
+        let started = std::time::Instant::now();
+        apply_library_assets_to_marker(&mut marker, &library)?;
+        eprintln!(
+            "library proof binding: {count} entries in {:?}",
+            started.elapsed()
+        );
+        assert_eq!(marker.photos_imported_assets, library.imported_assets);
+        assert!(
+            marker
+                .blake3_log
+                .values()
+                .all(|entry| entry.library_asset.as_ref() == Some(&entry.out))
+        );
+
+        let mut bad = library.clone();
+        bad.imported_assets[0].blake3 = "f".repeat(64);
+        assert!(apply_library_assets_to_marker(&mut marker, &bad).is_err());
+        bad.imported_assets[0].rel_path = "missing.JXL".into();
+        assert!(apply_library_assets_to_marker(&mut marker, &bad).is_err());
+        let duplicate = marker.blake3_log.values().next().unwrap().clone();
+        marker
+            .blake3_log
+            .insert("duplicate-source.jpg".into(), duplicate);
+        assert!(apply_library_assets_to_marker(&mut marker, &library).is_err());
         Ok(())
     }
 

@@ -1398,3 +1398,56 @@ labels this as an overview choice, independently from missing-schema support or
 a failed read. `--history-stats --check-integrity` still scans the records and
 returns exact output totals alongside its read-only structural checks. Those
 checks do not establish media, event-JSON or Photos correctness.
+
+## Large-batch Local Verification and Recovery
+
+Fast IMG saves successful per-file Gate 1 checks in the existing SQLite store.
+Recovery rehashes the complete source, output and adjacent XMP contents before
+reusing embedded-metadata, orientation/reconstruction or decode evidence.
+The proof also binds the exact task, explicit output mapping, processing
+contract, metadata policy, fixed tool snapshot, check schema and actual worker
+executable hash. A different worker build, changed content or changed authority
+requires fresh verification. Tasks without complete authority run all checks
+again; historical progress is never guessed into a new proof.
+
+Count, nonzero size, current source/output BLAKE3 and filesystem metadata remain
+fresh checks. Failures, cancelled probes, changed inputs and failed commits do
+not create successful receipts. A receipt is committed after its individual
+check, so interruption leaves earlier completed work reusable. Logs distinguish
+reused, fresh and invalidated checks. Gate 2/3 Photos custody, current library
+state and final source-deletion requirements still need their existing evidence.
+
+The `gate1_verified_file` namespace is reconstructable cache, separate from
+formal task/checkpoint state. Cache Settings and `cache_cleaner` report it as
+rebuildable and can clear it globally or for an exact source root. Clearing or
+evicting it requires rechecking the affected files. The existing
+`cache.path_tree_max_bytes` value applies independently to directory snapshots
+and Gate 1 proof payloads; it is not a combined database or disk-size limit.
+`cache.path_tree_ttl_seconds` is the idle lifetime for directory snapshots and
+the age since successful verification for Gate proofs. Gate proof maintenance
+runs at session boundaries and every 256 new receipts; it can transiently
+exceed its payload budget by that bounded write interval. SQLite free pages
+remain reusable after deletion.
+
+Gate metadata audits capture each parent directory's XMP namespace once and
+recheck the complete namespace before accepting the phase. Directory timestamps
+only trigger an earlier rescan; they never prove XMP bytes. Ambiguous candidates,
+links and namespace changes remain explicit errors. Photos proof-to-output
+binding uses an output index instead of repeatedly scanning the full manifest;
+hash and library identity checks remain mandatory.
+
+On macOS, scheduling combines available RAM with the kernel's native memory
+pressure signal. RAM and pressure samples use native APIs with a shared short
+cache rather than repeatedly launching `sysctl` and `vm_stat`. The RAM formula
+preserves the existing free-minus-speculative-plus-inactive definition and
+uses the kernel page size. Warning/critical pressure tightens every requested tier,
+including explicit Balanced. Unknown pressure remains unknown. Each Gate
+decoder uses the existing conservative thread budget at launch, leaving room
+for the desktop; pressure does not weaken checks or forcibly kill in-flight work.
+
+PTY master and spare slave descriptors are close-on-exec. A worker cannot keep
+its own disconnected terminal alive after the launcher exits. The production
+lease still belongs to live workers: closing a window alone never authorizes
+a second media task. App artifact refresh also requires this lease and refuses
+to replace active workers. This is not a promise of automatic GUI reconnection or
+months-long production acceptance.

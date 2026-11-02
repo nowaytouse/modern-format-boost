@@ -1,5 +1,6 @@
 //! Shared verification gate model for fast/full media pipelines.
 
+use super::gate1_resume::Gate1ProofCache;
 use crate::common_utils::{calculate_blake3_hash, is_command_available, resolve_tool_path};
 use crate::ui::progress::{GateActivity, GateActivityKind, GateActivityState};
 use serde::{Deserialize, Serialize};
@@ -257,6 +258,79 @@ impl VerificationGate for Gate1Local {
 }
 
 impl Gate1Local {
+    /// Resume only independently bound per-file work; aggregate gates stay fresh.
+    #[must_use]
+    pub fn run_with_error_mode_and_resume(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        marker: &WorkingCopyMarker,
+    ) -> GateResult {
+        let resume = match Gate1ProofCache::for_marker(ctx, marker) {
+            Ok(Some(resume)) => resume,
+            Ok(None) => return self.run_with_error_mode(ctx, error_mode),
+            Err(error) => {
+                let activity = GateActivity::new(GateActivityKind::Local);
+                activity.emit(
+                    "inventory",
+                    0,
+                    LOCAL_REQUIRED_CHECKS.len(),
+                    GateActivityState::Failed,
+                    None,
+                );
+                return gate_result(vec![detail(
+                    "metadata",
+                    false,
+                    "stable Gate 1 recovery authority".into(),
+                    error.to_string(),
+                    Vec::new(),
+                )]);
+            }
+        };
+        self.run_with_proof_cache(ctx, error_mode, &resume)
+    }
+
+    fn run_with_proof_cache(
+        &self,
+        ctx: &PipelineCtx,
+        error_mode: crate::BatchErrorMode,
+        shared: &Gate1ProofCache<'_>,
+    ) -> GateResult {
+        let activity = GateActivity::new(GateActivityKind::Local);
+        let probes = LOCAL_REQUIRED_CHECKS.map(|(name, probe)| {
+            (
+                name,
+                move |ctx: &PipelineCtx,
+                      files: &[PathBuf],
+                      progress: &mut dyn FnMut(usize, usize)| {
+                    match name {
+                        "metadata" => {
+                            check_metadata_policy_with_resume(ctx, progress, Some(shared))
+                        }
+                        "orient" => {
+                            check_orientation_policy_with_resume(ctx, files, progress, Some(shared))
+                        }
+                        "decode" => {
+                            let checked = check_decode_probe_with_resume(files, progress, shared);
+                            finish_local_proof_phase(checked, shared)
+                        }
+                        _ => probe(ctx, files, progress),
+                    }
+                },
+            )
+        });
+        crate::ui::progress::emit_log_phase(crate::ui::progress::LogPhase::Verification);
+        run_local_checks_with_probes(
+            &probes,
+            ctx,
+            || collect_delivery_output_files(&ctx.working_copy, None),
+            |check, completed, total, state, files| {
+                activity.emit(check, completed, total, state, files)
+            },
+            error_mode,
+        )
+    }
+
     #[must_use]
     pub fn run_with_error_mode(
         &self,
@@ -276,7 +350,36 @@ impl Gate1Local {
     }
 }
 
+fn finish_local_proof_phase(checked: CheckDetail, resume: &Gate1ProofCache<'_>) -> CheckDetail {
+    if let Err(error) = resume.finish() {
+        return detail(
+            "decode",
+            false,
+            "decoded outputs and unchanged Gate 1 verification inputs/tools".into(),
+            format!("shared Gate 1 completion guard failed: {error}"),
+            Vec::new(),
+        );
+    }
+    checked
+}
+
 fn run_local_checks(
+    ctx: &PipelineCtx,
+    inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
+    emit: impl FnMut(
+        &'static str,
+        usize,
+        usize,
+        GateActivityState,
+        Option<crate::ui::progress::GateFileProgress>,
+    ),
+    error_mode: crate::BatchErrorMode,
+) -> GateResult {
+    run_local_checks_with_probes(&LOCAL_REQUIRED_CHECKS, ctx, inventory, emit, error_mode)
+}
+
+fn run_local_checks_with_probes<F>(
+    probes: &[(&'static str, F)],
     ctx: &PipelineCtx,
     inventory: impl FnOnce() -> anyhow::Result<Vec<PathBuf>>,
     mut emit: impl FnMut(
@@ -287,8 +390,11 @@ fn run_local_checks(
         Option<crate::ui::progress::GateFileProgress>,
     ),
     error_mode: crate::BatchErrorMode,
-) -> GateResult {
-    let total = LOCAL_REQUIRED_CHECKS.len();
+) -> GateResult
+where
+    F: Fn(&PipelineCtx, &[PathBuf], &mut dyn FnMut(usize, usize)) -> CheckDetail,
+{
+    let total = probes.len();
     emit("inventory", 0, total, GateActivityState::Running, None);
     let jxl_files = match inventory() {
         Ok(files) => files,
@@ -304,7 +410,7 @@ fn run_local_checks(
         }
     };
     // Reject cheap structural failures before launching metadata/decoder tools.
-    run_required_checks(&LOCAL_REQUIRED_CHECKS, ctx, &jxl_files, emit, error_mode)
+    run_required_checks(probes, ctx, &jxl_files, emit, error_mode)
 }
 
 fn run_required_checks<F>(
@@ -789,9 +895,17 @@ fn check_blake3_logged_outputs(
 }
 
 fn check_metadata_policy(ctx: &PipelineCtx, progress: &mut dyn FnMut(usize, usize)) -> CheckDetail {
+    check_metadata_policy_with_resume(ctx, progress, None)
+}
+
+fn check_metadata_policy_with_resume(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail {
     match (ctx.metadata_policy, ctx.output_format) {
         (crate::metadata::MetadataOutputPolicy::Preserve, _) => {
-            check_exact_metadata_copies(ctx, progress)
+            check_exact_metadata_copies_with_resume(ctx, progress, resume)
         }
         (
             crate::metadata::MetadataOutputPolicy::Clear,
@@ -882,9 +996,18 @@ fn check_meme_metadata_policy(
     )
 }
 
+#[cfg(test)]
 fn check_exact_metadata_copies(
     ctx: &PipelineCtx,
     progress: &mut dyn FnMut(usize, usize),
+) -> CheckDetail {
+    check_exact_metadata_copies_with_resume(ctx, progress, None)
+}
+
+fn check_exact_metadata_copies_with_resume(
+    ctx: &PipelineCtx,
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
 ) -> CheckDetail {
     let mut failures = Vec::new();
     let mut file_local = ctx.blake3_log.len() == ctx.expected_count;
@@ -906,12 +1029,30 @@ fn check_exact_metadata_copies(
             if !check.passed {
                 return Ok(check);
             }
-            crate::metadata::verify_output_embedded_metadata(
-                &src,
-                &out,
-                crate::metadata::MetadataOutputPolicy::Preserve,
-            )
-            .map(|_| check)
+            let embedded = || {
+                if let Some(resume) = resume {
+                    crate::metadata::verify_output_embedded_metadata_with_index(
+                        &src,
+                        &out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                        resume.sidecars(),
+                    )
+                    .map(|_| ())
+                } else {
+                    crate::metadata::verify_output_embedded_metadata(
+                        &src,
+                        &out,
+                        crate::metadata::MetadataOutputPolicy::Preserve,
+                    )
+                    .map(|_| ())
+                }
+            };
+            if let Some(resume) = resume {
+                resume.verify("embedded_metadata", &src, &out, embedded)?;
+            } else {
+                embedded()?;
+            }
+            Ok(check)
         }) {
             Ok(check) if check.passed => {}
             Ok(check) => {
@@ -1041,6 +1182,15 @@ fn check_orientation_policy(
     files: &[PathBuf],
     progress: &mut dyn FnMut(usize, usize),
 ) -> CheckDetail {
+    check_orientation_policy_with_resume(ctx, files, progress, None)
+}
+
+fn check_orientation_policy_with_resume(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    resume: Option<&Gate1ProofCache<'_>>,
+) -> CheckDetail {
     if !is_command_available("exiftool") {
         return detail(
             "orient",
@@ -1063,7 +1213,7 @@ fn check_orientation_policy(
             );
         }
     };
-    check_orientation_policy_with_probes(
+    check_orientation_policy_with_probes_and_resume(
         ctx,
         files,
         progress,
@@ -1089,15 +1239,39 @@ fn check_orientation_policy(
                 })
                 .map_err(|err| std::io::Error::other(err.to_string()))
         },
+        resume,
     )
 }
 
+#[cfg(test)]
 fn check_orientation_policy_with_probes<F, R>(
+    ctx: &PipelineCtx,
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    orientation_probe: F,
+    reconstruction_probe: R,
+) -> CheckDetail
+where
+    F: FnMut(&Path) -> std::io::Result<bool>,
+    R: FnMut(&Path, &Path) -> std::io::Result<bool>,
+{
+    check_orientation_policy_with_probes_and_resume(
+        ctx,
+        files,
+        progress,
+        orientation_probe,
+        reconstruction_probe,
+        None,
+    )
+}
+
+fn check_orientation_policy_with_probes_and_resume<F, R>(
     ctx: &PipelineCtx,
     files: &[PathBuf],
     progress: &mut dyn FnMut(usize, usize),
     mut orientation_probe: F,
     mut reconstruction_probe: R,
+    resume: Option<&Gate1ProofCache<'_>>,
 ) -> CheckDetail
 where
     F: FnMut(&Path) -> std::io::Result<bool>,
@@ -1137,7 +1311,23 @@ where
                     }
                     continue;
                 };
-                match reconstruction_probe(source, path) {
+                let reconstructed = if let Some(resume) = resume {
+                    resume
+                        .verify("orientation_reconstruction", source, path, || {
+                            if reconstruction_probe(source, path)? {
+                                Ok(())
+                            } else {
+                                Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "Orientation lacks exact JPEG reconstruction proof",
+                                ))
+                            }
+                        })
+                        .map(|()| true)
+                } else {
+                    reconstruction_probe(source, path)
+                };
+                match reconstructed {
                     Ok(true) => reconstructible_count += 1,
                     Ok(false) => failures.push(path.clone()),
                     Err(err) => {
@@ -1198,6 +1388,41 @@ fn check_decode_probe_observed(
     files: &[PathBuf],
     progress: &mut dyn FnMut(usize, usize),
 ) -> CheckDetail {
+    check_decode_probe_with_probe(files, progress, decode_output_probe)
+}
+
+fn check_decode_probe_with_resume(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    resume: &Gate1ProofCache<'_>,
+) -> CheckDetail {
+    check_decode_probe_with_probe(files, progress, |path, format| {
+        let source = resume.source_for_output(path)?;
+        resume.verify("decode", &source, path, || {
+            decode_output_probe(path, format)
+        })
+    })
+}
+
+fn decode_output_probe(
+    path: &Path,
+    format: crate::image::format_detect::FormatKind,
+) -> std::io::Result<()> {
+    match format {
+        crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(path),
+        crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(path),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("unsupported delivery output format: {format:?}"),
+        )),
+    }
+}
+
+fn check_decode_probe_with_probe(
+    files: &[PathBuf],
+    progress: &mut dyn FnMut(usize, usize),
+    mut probe: impl FnMut(&Path, crate::image::format_detect::FormatKind) -> std::io::Result<()>,
+) -> CheckDetail {
     let mut detected = Vec::with_capacity(files.len());
     for path in files {
         match crate::image::format_detect::detect_true_format(path) {
@@ -1244,14 +1469,7 @@ fn check_decode_probe_observed(
         .into_iter()
         .enumerate()
         .filter_map(|(index, (path, format))| {
-            let error = match format {
-                crate::image::format_detect::FormatKind::Avif => avifdec_decode_probe(&path),
-                crate::image::format_detect::FormatKind::Jxl => djxl_decode_probe(&path),
-                _ => Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("unsupported delivery output format: {format:?}"),
-                )),
-            };
+            let error = probe(&path, format);
             progress(index + 1, files.len());
             error.err().map(|err| (path, err))
         })
@@ -1385,6 +1603,22 @@ fn ensure_exiftool_success(path: &Path, status: ExitStatus, stderr: &[u8]) -> st
     )))
 }
 
+fn decode_probe_command(
+    executable: &Path,
+    input: &Path,
+    output: &Path,
+    thread_argument: &str,
+    threads: usize,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg(input)
+        .arg(output)
+        .arg(thread_argument)
+        .arg(threads.max(1).to_string());
+    command
+}
+
 fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
     let temp = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "fast_img_gate1_decode_probe",
@@ -1399,8 +1633,15 @@ fn avifdec_decode_probe(path: &Path) -> std::io::Result<()> {
     let avifdec = resolve_tool_path("avifdec").ok_or_else(|| {
         std::io::Error::other("avifdec was not found or failed its runtime health check")
     })?;
-    let mut command = std::process::Command::new(avifdec);
-    command.arg(path).arg(temp.path());
+    let mut command = decode_probe_command(
+        &avifdec,
+        path,
+        temp.path(),
+        "--jobs",
+        crate::thread_manager::calculate_optimal_threads(
+            &crate::thread_manager::ThreadConfig::conservative(),
+        ),
+    );
     let output = crate::process_runner::run_command_with_liveness_timeout(
         &mut command,
         std::time::Duration::from_secs(120),
@@ -1448,8 +1689,10 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
     let djxl = resolve_tool_path("djxl").ok_or_else(|| {
         std::io::Error::other("djxl was not found or failed its runtime health check")
     })?;
-    let mut command = std::process::Command::new(&djxl);
-    command.arg(path).arg(temp.path());
+    let threads = crate::thread_manager::calculate_optimal_threads(
+        &crate::thread_manager::ThreadConfig::conservative(),
+    );
+    let mut command = decode_probe_command(&djxl, path, temp.path(), "--num_threads", threads);
     let output = crate::process_runner::run_command_with_liveness_timeout(
         &mut command,
         std::time::Duration::from_secs(120),
@@ -1482,8 +1725,15 @@ fn djxl_decode_probe(path: &Path) -> std::io::Result<()> {
         .map_err(|err| {
             std::io::Error::other(format!("decode probe JPEG scratch tempfile failed: {err}"))
         })?;
-        let mut jpeg_command = std::process::Command::new(&djxl);
-        jpeg_command.arg(path).arg(jpeg_temp.path());
+        let mut jpeg_command = decode_probe_command(
+            &djxl,
+            path,
+            jpeg_temp.path(),
+            "--num_threads",
+            crate::thread_manager::calculate_optimal_threads(
+                &crate::thread_manager::ThreadConfig::conservative(),
+            ),
+        );
         let jpeg_output = crate::process_runner::run_command_with_liveness_timeout(
             &mut jpeg_command,
             std::time::Duration::from_secs(120),
@@ -1575,7 +1825,7 @@ mod tests {
     use std::collections::BTreeMap;
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn ctx_with_library(
         expected_count: usize,
@@ -1594,6 +1844,183 @@ mod tests {
             output_format: None,
             metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
         }
+    }
+
+    #[test]
+    fn gate1_resume_orchestration_reuses_real_media_proofs_but_rechecks_filesystem_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("store.sqlite"),
+        );
+        let src_dir = root.path().join("source");
+        let working_copy = root.path().join("output");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::create_dir(&working_copy).unwrap();
+        let source = src_dir.join("synthetic.jpg");
+        let output = working_copy.join("synthetic.JXL");
+        image::RgbImage::from_pixel(4, 3, image::Rgb([20, 40, 60]))
+            .save_with_format(&source, image::ImageFormat::Jpeg)
+            .unwrap();
+        let tags = crate::ExiftoolBuilder::new()
+            .arg("-overwrite_original")
+            .arg("-EXIF:Orientation#=6")
+            .arg(crate::path_safety::exiftool_path_arg(&source).as_ref())
+            .build()
+            .output()
+            .unwrap();
+        assert!(
+            tags.status.success(),
+            "{}",
+            String::from_utf8_lossy(&tags.stderr)
+        );
+        let encoder = crate::common_utils::resolve_tool_path("cjxl")
+            .expect("cjxl is required for the real Gate 1 resume regression");
+        let encoded = std::process::Command::new(encoder)
+            .args(["--lossless_jpeg=1", "--effort=1"])
+            .arg(&source)
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+        crate::metadata::preserve_filesystem_for_delivery(&source, &output).unwrap();
+        let ctx = PipelineCtx {
+            src_dir,
+            working_copy,
+            expected_count: 1,
+            library_handle: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+            output_format: Some(crate::image::format_detect::FormatKind::Jxl),
+            blake3_log: BTreeMap::from([(
+                "synthetic.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("synthetic.JXL".into()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+        };
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let first_started = std::time::Instant::now();
+        let first =
+            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        let fresh_duration = first_started.elapsed();
+        assert!(first.passed, "{first:?}");
+        assert_eq!(
+            cache.counts(),
+            (0, 3, 0),
+            "metadata, tagged orientation reconstruction and decode must each commit"
+        );
+        drop(cache);
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let resumed_started = std::time::Instant::now();
+        let second =
+            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        let resumed_duration = resumed_started.elapsed();
+        assert!(second.passed, "{second:?}");
+        assert_eq!(cache.counts(), (3, 0, 0));
+        assert_eq!(
+            first.checks, second.checks,
+            "cached and fresh Gate results must remain identical"
+        );
+        eprintln!(
+            "synthetic Gate 1: fresh={fresh_duration:?}, resumed={resumed_duration:?}, complete checks unchanged"
+        );
+        drop(cache);
+        filetime::set_file_mtime(
+            &output,
+            filetime::FileTime::from_unix_time(1_600_000_000, 0),
+        )
+        .unwrap();
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
+        let changed =
+            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+        assert!(
+            !changed.passed,
+            "a prior embedded-metadata receipt must not mask changed filesystem metadata"
+        );
+        assert!(
+            changed
+                .checks
+                .iter()
+                .any(|check| check.name == "metadata" && !check.passed)
+        );
+    }
+
+    #[test]
+    fn gate1_resume_shared_completion_failure_overrides_isolatable_decode_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let _store = crate::db::mfb_sqlite_store::set_test_store_path_for_tests(
+            root.path().join("store.sqlite"),
+        );
+        let source_root = root.path().join("source");
+        let output_root = root.path().join("output");
+        std::fs::create_dir(&source_root).unwrap();
+        std::fs::create_dir(&output_root).unwrap();
+        let source = source_root.join("a.jpg");
+        let output = output_root.join("a.JXL");
+        std::fs::write(&source, b"synthetic source").unwrap();
+        std::fs::write(&output, b"synthetic output").unwrap();
+        let ctx = PipelineCtx {
+            src_dir: source_root,
+            working_copy: output_root,
+            expected_count: 1,
+            library_handle: None,
+            metadata_policy: crate::metadata::MetadataOutputPolicy::Preserve,
+            output_format: None,
+            blake3_log: BTreeMap::from([(
+                "a.jpg".into(),
+                Blake3Entry {
+                    out_rel: Some("a.JXL".into()),
+                    src: calculate_blake3_hash(&source).unwrap(),
+                    out: calculate_blake3_hash(&output).unwrap(),
+                    library_asset: None,
+                },
+            )]),
+        };
+        let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic authority").unwrap();
+        let files_failed = super::file_failures(
+            super::detail(
+                "decode",
+                false,
+                "one decode".into(),
+                "invalid media".into(),
+                vec![output.clone()],
+            ),
+            true,
+        );
+        std::fs::write(
+            source.with_extension("xmp"),
+            b"new relationship during verification",
+        )
+        .unwrap();
+        let result = super::finish_local_proof_phase(files_failed, &cache);
+        assert!(!result.passed);
+        assert_eq!(result.failure_scope, super::CheckFailureScope::Shared);
+        assert!(
+            result
+                .actual
+                .contains("shared Gate 1 completion guard failed")
+        );
+        let mut states = Vec::new();
+        let probe =
+            |_: &PipelineCtx, _: &[PathBuf], _: &mut dyn FnMut(usize, usize)| result.clone();
+        let gate = super::run_required_checks(
+            &[("decode", probe)],
+            &ctx,
+            &[output],
+            |_, _, _, state, _| states.push(state),
+            crate::BatchErrorMode::LogAndContinue,
+        );
+        assert!(!gate.passed);
+        assert!(matches!(
+            states.last(),
+            Some(crate::ui::progress::GateActivityState::Failed)
+        ));
     }
 
     #[test]
@@ -1890,6 +2317,31 @@ mod tests {
         }
         ctx.blake3_log.get_mut("bad.jpg").unwrap().src.clear();
         assert!(result.isolated_source_failures(&ctx).is_err());
+    }
+
+    #[test]
+    fn gate_decode_commands_bound_threads_without_changing_decode_semantics() {
+        for flag in ["--num_threads", "--jobs"] {
+            for threads in [0, 1, 3] {
+                let command = super::decode_probe_command(
+                    Path::new("/synthetic/decoder"),
+                    Path::new("/synthetic/input"),
+                    Path::new("/synthetic/output.png"),
+                    flag,
+                    threads,
+                );
+                let expected = threads.max(1).to_string();
+                assert_eq!(
+                    command.get_args().collect::<Vec<_>>(),
+                    [
+                        std::ffi::OsStr::new("/synthetic/input"),
+                        std::ffi::OsStr::new("/synthetic/output.png"),
+                        std::ffi::OsStr::new(flag),
+                        std::ffi::OsStr::new(&expected),
+                    ],
+                );
+            }
+        }
     }
 
     #[test]

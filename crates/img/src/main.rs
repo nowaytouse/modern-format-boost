@@ -11589,7 +11589,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
         println!("[GATE 1  ] verifying local outputs");
         let mode = foundation::BatchErrorMode::current();
         let ctx = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
-        let mut gate1 = Gate1Local.run_with_error_mode(&ctx, mode);
+        let mut gate1 = Gate1Local.run_with_error_mode_and_resume(&ctx, mode, marker);
         if gate1.passed {
             runtime_cli::check_tool_runtime_snapshot()?;
         } else {
@@ -11620,7 +11620,7 @@ fn fast_img_run_verification_and_delivery_pipeline(
                 );
             }
             let remaining = fast_img_pipeline_ctx(marker, expected_count, None, output_format);
-            gate1 = Gate1Local.run_with_error_mode(&remaining, mode);
+            gate1 = Gate1Local.run_with_error_mode_and_resume(&remaining, mode, marker);
             if gate1.passed {
                 runtime_cli::check_tool_runtime_snapshot()?;
             } else {

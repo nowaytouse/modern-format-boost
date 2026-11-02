@@ -4,8 +4,8 @@
 //! memory pressure, multi-instance contention, or explicit low-memory mode.
 //!
 //! **Stability:** absolute parallelism ceilings, minimum OS core reserve, and
-//! compute fan-out caps prevent OOM / UI freezes even when tier is `relaxed` or
-//! env requests `wide`.
+//! compute fan-out caps limit CPU and memory demand even when tier is `relaxed`
+//! or env requests `wide`; they do not bound every codec's peak allocation.
 
 use crate::system_memory::{self, MemoryPressure};
 use crate::thread_manager;
@@ -131,15 +131,19 @@ pub fn perf_tier_uncapped() -> PerfGovernorTier {
 /// guard).
 #[must_use]
 pub fn clamp_tier_for_stability(tier: PerfGovernorTier) -> PerfGovernorTier {
+    clamp_tier_with_pressure(tier, system_memory::memory_pressure_level())
+}
+
+fn clamp_tier_with_pressure(
+    tier: PerfGovernorTier,
+    pressure: Option<MemoryPressure>,
+) -> PerfGovernorTier {
+    if matches!(pressure, Some(MemoryPressure::High)) {
+        return PerfGovernorTier::Tight;
+    }
     let env_override = perf_tier_from_env().is_some();
     match tier {
         PerfGovernorTier::Relaxed => {
-            if matches!(
-                system_memory::memory_pressure_level(),
-                Some(MemoryPressure::High)
-            ) {
-                return PerfGovernorTier::Tight;
-            }
             if env_override {
                 return PerfGovernorTier::Relaxed;
             }
@@ -514,6 +518,27 @@ pub fn apply_delivery_parallel_cap(
 mod tests {
     use super::*;
     use crate::common_utils::EnvGuard;
+
+    #[test]
+    fn high_pressure_caps_every_requested_tier() {
+        for tier in [
+            PerfGovernorTier::Relaxed,
+            PerfGovernorTier::Balanced,
+            PerfGovernorTier::Tight,
+        ] {
+            assert_eq!(
+                clamp_tier_with_pressure(tier, Some(MemoryPressure::High)),
+                PerfGovernorTier::Tight,
+                "high pressure must override {tier:?}"
+            );
+        }
+        for pressure in [Some(MemoryPressure::Low), Some(MemoryPressure::Normal), None] {
+            assert_eq!(
+                clamp_tier_with_pressure(PerfGovernorTier::Balanced, pressure),
+                PerfGovernorTier::Balanced,
+            );
+        }
+    }
 
     #[test]
     fn perf_tier_parse_env_aliases() {

@@ -730,8 +730,11 @@ fn inspect_store_integrity(
     }
     *phase = "blob_hashes";
     let mut statement =
-        conn.prepare("SELECT namespace = ?1, payload, payload_blake3 FROM blob_store")?;
-    let mut rows = statement.query([foundation::mfb_sqlite_store::NS_PATH_TREE])?;
+        conn.prepare("SELECT namespace IN (?1, ?2), payload, payload_blake3 FROM blob_store")?;
+    let mut rows = statement.query([
+        foundation::mfb_sqlite_store::NS_PATH_TREE,
+        foundation::mfb_sqlite_store::NS_GATE1_PROOF,
+    ])?;
     while let Some(row) = rows.next()? {
         let rebuildable = row.get::<_, Option<bool>>(0)?.unwrap_or(false);
         if rebuildable {
@@ -994,7 +997,11 @@ fn cache_status_with_options(
                     .query_map([], |row| {
                         let name: String = row.get(0)?;
                         Ok(CacheNamespace {
-                            rebuildable: name == foundation::mfb_sqlite_store::NS_PATH_TREE,
+                            rebuildable: matches!(
+                                name.as_str(),
+                                foundation::mfb_sqlite_store::NS_PATH_TREE
+                                    | foundation::mfb_sqlite_store::NS_GATE1_PROOF
+                            ),
                             name,
                             rows: nonnegative_column(row, 1)?,
                             payload_bytes: nonnegative_column(row, 2)?,
@@ -1062,13 +1069,17 @@ fn purge_local_cache(cache_dir: &Path, target: Option<&Path>) -> Result<CacheSta
                 .context("target path is not valid UTF-8")?;
             let prefix = format!("{}/", absolute.trim_end_matches('/'));
             tx.execute(
-                "DELETE FROM blob_store WHERE namespace = ?1 AND (root_path = ?2 OR substr(root_path, 1, length(?3)) = ?3)",
-                params![foundation::mfb_sqlite_store::NS_PATH_TREE, absolute, prefix],
+                "DELETE FROM blob_store WHERE namespace IN (?1, ?2) AND (root_path = ?3 OR substr(root_path, 1, length(?4)) = ?4)",
+                params![foundation::mfb_sqlite_store::NS_PATH_TREE,
+                    foundation::mfb_sqlite_store::NS_GATE1_PROOF, absolute, prefix],
             )?
         } else {
             tx.execute(
-                "DELETE FROM blob_store WHERE namespace = ?1",
-                [foundation::mfb_sqlite_store::NS_PATH_TREE],
+                "DELETE FROM blob_store WHERE namespace IN (?1, ?2)",
+                [
+                    foundation::mfb_sqlite_store::NS_PATH_TREE,
+                    foundation::mfb_sqlite_store::NS_GATE1_PROOF,
+                ],
             )?
         };
         removed_rows = u64::try_from(rows).context("cache deletion count overflow")?;
@@ -2908,6 +2919,61 @@ mod tests {
         assert_eq!(fs::read(history).unwrap(), history_before);
         let again = purge_local_cache(&cache, None).unwrap();
         assert_eq!((again.removed_rows, again.removed_files), (0, 0));
+    }
+
+    #[test]
+    fn gate_verification_cache_cleanup_preserves_other_tasks_and_formal_state() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = cache_fixture(root.path());
+        let target = root.path().join("source_100%");
+        fs::create_dir(&target).unwrap();
+        let target = target.canonicalize().unwrap();
+        let store = cache.join("mfb_store.sqlite");
+        let conn = Connection::open(&store).unwrap();
+        for (key, source) in [
+            ("one", target.clone()),
+            ("two", root.path().join("other-source")),
+        ] {
+            conn.execute(
+                "INSERT INTO blob_store VALUES (?1, ?2, 1, ?3, ?4, ?5, 123)",
+                params![
+                    foundation::mfb_sqlite_store::NS_GATE1_PROOF,
+                    key,
+                    source.to_str().unwrap(),
+                    b"proof",
+                    blake3::hash(b"proof").as_bytes()
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let before = cache_status(&cache).unwrap();
+        assert!(before.namespaces.iter().any(|row| {
+            row.name == foundation::mfb_sqlite_store::NS_GATE1_PROOF
+                && row.rebuildable
+                && row.rows == 2
+        }));
+        assert_eq!(
+            purge_local_cache(&cache, Some(&target))
+                .unwrap()
+                .removed_rows,
+            1
+        );
+        let conn = Connection::open(&store).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT cache_key FROM blob_store WHERE namespace=?1",
+                [foundation::mfb_sqlite_store::NS_GATE1_PROOF],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "two"
+        );
+        drop(conn);
+        assert_eq!(purge_local_cache(&cache, None).unwrap().removed_rows, 2);
+        let after = cache_status(&cache).unwrap();
+        assert!(after.namespaces.iter().all(|row| !row.rebuildable));
+        assert_eq!(after.namespaces.len(), 3);
     }
 
     #[test]

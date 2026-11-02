@@ -14,6 +14,7 @@ use crate::runtime_config::CachePolicy;
 
 pub const STORE_SCHEMA_VERSION: i32 = 5;
 pub const NS_PATH_TREE: &str = "path_tree";
+pub const NS_GATE1_PROOF: &str = "gate1_verified_file";
 pub const NS_CHECKPOINT: &str = "checkpoint";
 pub const NS_PROCESSED: &str = "processed";
 

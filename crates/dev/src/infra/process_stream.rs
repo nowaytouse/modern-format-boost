@@ -522,7 +522,7 @@ where
     P: FnMut(ChildProcessObservation),
 {
     use std::io;
-    use std::os::unix::io::FromRawFd;
+    use std::os::fd::{AsRawFd, FromRawFd};
 
     let mut log_file = open_stream_log(log_path, "open PTY stream log")?;
     let mut master_fd: libc::c_int = 0;
@@ -539,6 +539,18 @@ where
     if ret != 0 {
         bail!("openpty failed");
     }
+    let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
+    let slave_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+    // A worker retaining its own PTY master can block forever after its launcher exits.
+    for descriptor in [master_file.as_raw_fd(), slave_file.as_raw_fd()] {
+        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+        if flags < 0
+            || unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("restrict PTY descriptors to the launcher");
+        }
+    }
 
     let winsize = pty_winsize();
     let ioctl_ret = unsafe { libc::ioctl(slave_fd, libc::TIOCSWINSZ, &winsize) };
@@ -546,12 +558,8 @@ where
         eprintln!("[PROCESS] PTY winsize sync failed");
     }
 
-    let stderr_fd = unsafe { libc::dup(slave_fd) };
-    if stderr_fd < 0 {
-        bail!("dup PTY slave failed");
-    }
-    let stdout = unsafe { Stdio::from_raw_fd(slave_fd) };
-    let stderr = unsafe { Stdio::from_raw_fd(stderr_fd) };
+    let stderr = Stdio::from(slave_file.try_clone().context("duplicate PTY slave")?);
+    let stdout = Stdio::from(slave_file);
 
     let mut command = Command::new(&cmd[0]);
     apply_env_overrides(&mut command, env_overrides);
@@ -566,7 +574,6 @@ where
     let pid = child.id();
     observer(ChildProcessObservation::Spawned { pid });
 
-    let mut master_file = unsafe { std::fs::File::from_raw_fd(master_fd) };
     let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFL) };
     if flags >= 0 {
         let _ = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
@@ -1061,6 +1068,104 @@ mod tests {
         let log = std::fs::read_to_string(log_path)?;
         assert!(log.contains("first"));
         assert!(log.contains("second"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_disconnect_subprocess() -> Result<()> {
+        let Some(role) = std::env::var_os("MFB_TEST_PTY_DISCONNECT_ROLE") else {
+            return Ok(());
+        };
+        let directory =
+            std::path::PathBuf::from(std::env::var_os("MFB_TEST_PTY_DISCONNECT_DIR").unwrap());
+        if role == "launcher" {
+            let command = vec![
+                std::env::current_exe()?.to_string_lossy().into_owned(),
+                "--exact".to_owned(),
+                format!(
+                    "{}::pty_disconnect_subprocess",
+                    module_path!().split_once("::").unwrap().1
+                ),
+                "--nocapture".to_owned(),
+            ];
+            stream_process_with_pty_with_env(
+                &command,
+                None,
+                &[("MFB_TEST_PTY_DISCONNECT_ROLE", Some("worker"))],
+                |_| {},
+                || {},
+            )?;
+            return Ok(());
+        }
+        assert_eq!(role, "worker");
+        assert_eq!(unsafe { libc::isatty(1) }, 1);
+        assert_eq!(unsafe { libc::isatty(2) }, 1);
+        let mut inherited_ttys = Vec::new();
+        for entry in std::fs::read_dir("/dev/fd")? {
+            let entry = entry?;
+            if let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>()
+                && fd > 2
+                && unsafe { libc::isatty(fd) } == 1
+            {
+                inherited_ttys.push(fd);
+            }
+        }
+        std::fs::write(directory.join("ready"), std::process::id().to_string())?;
+        unsafe { libc::alarm(5) };
+        while !directory.join("release").exists() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let disconnected = io::stderr()
+            .write_all(&vec![b'x'; 1024 * 1024])
+            .is_err();
+        std::fs::write(
+            directory.join("result"),
+            format!("{disconnected}:{inherited_ttys:?}"),
+        )?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_worker_does_not_keep_terminal_alive_after_launcher_exit() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut launcher = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                &format!(
+                    "{}::pty_disconnect_subprocess",
+                    module_path!().split_once("::").unwrap().1
+                ),
+                "--nocapture",
+            ])
+            .env("MFB_TEST_PTY_DISCONNECT_ROLE", "launcher")
+            .env("MFB_TEST_PTY_DISCONNECT_DIR", temp.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !temp.path().join("ready").exists() {
+            if Instant::now() >= deadline {
+                launcher.kill()?;
+                launcher.wait()?;
+                bail!("PTY worker did not become ready");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        launcher.kill()?;
+        launcher.wait()?;
+        std::fs::write(temp.path().join("release"), b"go")?;
+        while !temp.path().join("result").exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let result = std::fs::read_to_string(temp.path().join("result"))
+            .context("worker remained blocked on its disconnected PTY")?;
+        assert_eq!(
+            result, "true:[]",
+            "worker inherited terminal descriptors or could still write after launcher exit"
+        );
         Ok(())
     }
 

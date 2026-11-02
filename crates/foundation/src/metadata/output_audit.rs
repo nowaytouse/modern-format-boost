@@ -11,7 +11,7 @@ use crate::path_safety::exiftool_path_arg;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Delivery policy for embedded (and sidecar-derived) metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +122,24 @@ pub fn verify_output_embedded_metadata(
     dst: &Path,
     policy: MetadataOutputPolicy,
 ) -> io::Result<OutputMetadataAudit> {
+    verify_output_embedded_metadata_with_discovery(src, dst, policy, &super::find_xmp_sidecar)
+}
+
+pub(crate) fn verify_output_embedded_metadata_with_index(
+    src: &Path,
+    dst: &Path,
+    policy: MetadataOutputPolicy,
+    index: &super::XmpSidecarIndex,
+) -> io::Result<OutputMetadataAudit> {
+    verify_output_embedded_metadata_with_discovery(src, dst, policy, &|path| index.find(path))
+}
+
+fn verify_output_embedded_metadata_with_discovery(
+    src: &Path,
+    dst: &Path,
+    policy: MetadataOutputPolicy,
+    find_sidecar: &dyn Fn(&Path) -> io::Result<Option<PathBuf>>,
+) -> io::Result<OutputMetadataAudit> {
     if !crate::ExiftoolBuilder::check_available() {
         return Err(io::Error::other(
             "exiftool was not found or failed its runtime health check; output metadata \
@@ -131,15 +149,16 @@ pub fn verify_output_embedded_metadata(
 
     let (source_payload_bytes, output_payload_bytes) = match policy {
         MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => (0, 0),
-        MetadataOutputPolicy::Clear => {
-            (removable_payload_bytes(src)?, removable_payload_bytes(dst)?)
-        }
+        MetadataOutputPolicy::Clear => (
+            removable_payload_bytes_with_discovery(src, find_sidecar)?,
+            removable_payload_bytes_with_discovery(dst, find_sidecar)?,
+        ),
     };
 
     let mismatches = match policy {
         MetadataOutputPolicy::Preserve | MetadataOutputPolicy::PreserveSource => {
-            let src_sidecar = super::find_xmp_sidecar(src)?;
-            let dst_sidecar = super::find_xmp_sidecar(dst)?;
+            let src_sidecar = find_sidecar(src)?;
+            let dst_sidecar = find_sidecar(dst)?;
             let jpeg_archive = is_jpeg_archive_pair(src, dst)?;
             let [mut src_tags, mut dst_tags, mut source_xmp, output_xmp] =
                 preservable_delivery_tag_maps(
@@ -910,6 +929,13 @@ fn preserve_audit_excludes_tag(key: &str) -> bool {
 }
 
 fn removable_payload_bytes(path: &Path) -> io::Result<u64> {
+    removable_payload_bytes_with_discovery(path, &super::find_xmp_sidecar)
+}
+
+fn removable_payload_bytes_with_discovery(
+    path: &Path,
+    find_sidecar: &dyn Fn(&Path) -> io::Result<Option<PathBuf>>,
+) -> io::Result<u64> {
     let mut total = match reclaimable_embedded_metadata_bytes(path) {
         Ok(bytes) => bytes,
         Err(strip_error) => {
@@ -933,7 +959,7 @@ fn removable_payload_bytes(path: &Path) -> io::Result<u64> {
             logical_bytes
         }
     };
-    if let Some(sidecar) = super::find_xmp_sidecar(path)? {
+    if let Some(sidecar) = find_sidecar(path)? {
         total = total.saturating_add(std::fs::metadata(&sidecar)?.len());
     }
     Ok(total)
@@ -2303,6 +2329,18 @@ mod tests {
         let audit = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .expect("correct source metadata must pass");
         assert!(audit.passed);
+        let index = super::super::XmpSidecarIndex::capture(&[src.clone(), dst.clone()]).unwrap();
+        assert_eq!(
+            verify_output_embedded_metadata_with_index(
+                &src,
+                &dst,
+                MetadataOutputPolicy::Preserve,
+                &index
+            )
+            .unwrap(),
+            audit
+        );
+        index.verify_unchanged().unwrap();
     }
 
     #[test]
@@ -2324,6 +2362,16 @@ mod tests {
 
         let error = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Preserve)
             .expect_err("foreign output sidecar must fail");
+        let index = super::super::XmpSidecarIndex::capture(&[src.clone(), dst.clone()]).unwrap();
+        assert!(
+            verify_output_embedded_metadata_with_index(
+                &src,
+                &dst,
+                MetadataOutputPolicy::Preserve,
+                &index
+            )
+            .is_err()
+        );
         assert!(
             error.to_string().contains("output sidecar")
                 && error.to_string().contains("Description"),
@@ -2404,6 +2452,19 @@ mod tests {
 
         let audit = verify_output_embedded_metadata(&src, &dst, MetadataOutputPolicy::Clear)
             .expect("cleared output must pass");
+
+        let index = super::super::XmpSidecarIndex::capture(&[src.clone(), dst.clone()]).unwrap();
+        assert_eq!(
+            verify_output_embedded_metadata_with_index(
+                &src,
+                &dst,
+                MetadataOutputPolicy::Clear,
+                &index
+            )
+            .unwrap(),
+            audit
+        );
+        index.verify_unchanged().unwrap();
 
         assert_eq!(audit.source_payload_bytes, 12);
         assert_eq!(audit.output_payload_bytes, 0);

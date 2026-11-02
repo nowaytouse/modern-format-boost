@@ -4,24 +4,27 @@
 //! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder
 //! processes).
 
-use crate::builder_base::ToolBuilder;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const MEMORY_SAMPLE_MAX_AGE: Duration = Duration::from_millis(250);
-static MEMORY_SAMPLE: Mutex<Option<MemorySample>> = Mutex::new(None);
+static MEMORY_SAMPLE: Mutex<Option<MemorySample<Option<(u64, u64)>>>> = Mutex::new(None);
+#[cfg(target_os = "macos")]
+static NATIVE_PRESSURE_SAMPLE: Mutex<Option<MemorySample<Option<MemoryPressure>>>> = Mutex::new(None);
+#[cfg(target_os = "macos")]
+static NATIVE_PRESSURE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
-struct MemorySample {
+struct MemorySample<T> {
     sampled_at: Instant,
-    memory: Option<(u64, u64)>,
+    memory: T,
 }
 
-fn sample_memory(
-    cache: &Mutex<Option<MemorySample>>,
+fn sample_memory<T: Copy>(
+    cache: &Mutex<Option<MemorySample<T>>>,
     now: Instant,
-    probe: impl FnOnce() -> Option<(u64, u64)>,
-) -> Option<(u64, u64)> {
+    probe: impl FnOnce() -> T,
+) -> T {
     let Ok(mut sample) = cache.lock() else {
         return probe();
     };
@@ -38,14 +41,14 @@ fn sample_memory(
     memory
 }
 
-/// Memory pressure level derived from available vs total RAM.
+/// Scheduling pressure derived from RAM headroom and native macOS pressure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPressure {
     /// Plenty of RAM: no cap beyond CPU-based limits.
     Low,
     /// Moderate: slightly reduce parallelism.
     Normal,
-    /// Low available: strongly cap parallelism to avoid OOM.
+    /// Low RAM or native pressure: strongly cap parallelism to avoid OOM.
     High,
 }
 
@@ -58,13 +61,15 @@ pub fn get_memory_mb() -> Option<(u64, u64)> {
 }
 
 fn probe_memory_mb() -> Option<(u64, u64)> {
-    let (available, total) = if cfg!(target_os = "macos") {
-        get_memory_macos()
-    } else if cfg!(target_os = "linux") {
-        get_memory_linux()
-    } else {
+    #[cfg(target_os = "macos")]
+    let (available, total) = get_memory_macos();
+    #[cfg(target_os = "linux")]
+    let (available, total) = get_memory_linux();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
         return None;
-    };
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     Some((available?, total?))
 }
 
@@ -80,10 +85,27 @@ pub fn get_total_memory_mb() -> Option<u64> {
     get_memory_mb().map(|(_, total)| total)
 }
 
-/// Classify current memory pressure from available/total. None if unknown.
-/// Enhanced thresholds to prevent OOM kills during heavy image processing.
+/// Combine RAM headroom with native pressure; neither can hide the other's warning.
+/// Unknown native pressure is retained unless low RAM independently requires tightening.
 #[must_use]
 pub fn memory_pressure_level() -> Option<MemoryPressure> {
+    let ram = ram_pressure_level();
+    #[cfg(target_os = "macos")]
+    {
+        let native = sample_memory(
+            &NATIVE_PRESSURE_SAMPLE,
+            Instant::now(),
+            probe_macos_memory_pressure,
+        );
+        combine_native_pressure(ram, native)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ram
+    }
+}
+
+fn ram_pressure_level() -> Option<MemoryPressure> {
     let (available_mb, total_mb) = get_memory_mb()?;
     if total_mb == 0 {
         return None;
@@ -106,6 +128,83 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
     Some(level)
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn combine_native_pressure(
+    ram: Option<MemoryPressure>,
+    native: Option<MemoryPressure>,
+) -> Option<MemoryPressure> {
+    match (ram, native) {
+        (Some(MemoryPressure::High), _) | (_, Some(MemoryPressure::High)) => {
+            Some(MemoryPressure::High)
+        }
+        (ram, Some(MemoryPressure::Low)) => ram,
+        (_, Some(MemoryPressure::Normal)) => Some(MemoryPressure::Normal),
+        (_, None) => None,
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_pressure_from_dispatch_flags(flags: u32) -> Option<MemoryPressure> {
+    // XNU's sysctl returns dispatch flags (1/2/4), not its internal pressure enum.
+    match flags {
+        1 => Some(MemoryPressure::Low),
+        2 | 4 => Some(MemoryPressure::High),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_macos_memory_pressure() -> Option<MemoryPressure> {
+    use std::sync::atomic::Ordering;
+
+    let result = (|| -> std::io::Result<MemoryPressure> {
+        let mut flags = 0_u32;
+        let mut size = std::mem::size_of_val(&flags);
+        let status = unsafe {
+            libc::sysctlbyname(
+                c"kern.memorystatus_vm_pressure_level".as_ptr(),
+                (&raw mut flags).cast(),
+                &raw mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if size != std::mem::size_of_val(&flags) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "macOS memory pressure returned an unexpected size",
+            ));
+        }
+        macos_pressure_from_dispatch_flags(flags).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("macOS memory pressure returned unknown dispatch flags: {flags}"),
+            )
+        })
+    })();
+    match result {
+        Ok(pressure) => {
+            NATIVE_PRESSURE_FAILED.store(false, Ordering::Relaxed);
+            Some(pressure)
+        }
+        Err(error) => {
+            if !NATIVE_PRESSURE_FAILED.swap(true, Ordering::Relaxed) {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "native_memory_pressure",
+                    format!(
+                        "macOS memory pressure unavailable: {error}; pressure remains unknown \
+                         unless low RAM independently requires tightening"
+                    ),
+                );
+            }
+            None
+        }
+    }
+}
+
 /// True if user requested low-memory mode via env (e.g. `MFB_LOW_MEMORY=1`).
 #[must_use]
 pub fn is_low_memory_env() -> bool {
@@ -125,110 +224,120 @@ pub fn is_low_memory_env() -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn get_memory_macos() -> (Option<u64>, Option<u64>) {
-    let total = match crate::tool_builders::SysctlBuilder::new()
-        .arg("-n")
-        .arg("hw.memsize")
-        .build()
-        .output()
-    {
-        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-            Ok(stdout) => match stdout.trim().parse::<u64>() {
-                Ok(bytes) => Some(bytes / (1024 * 1024)),
-                Err(err) => {
-                    crate::media_conversion_gate::delivery_runtime_batch_audit(
-                        "delivery_system",
-                        format!(
-                            "SYSTEM AUDIT: Failed to parse macOS total memory from sysctl | \
-                             Forensic: Error '{err}'"
-                        ),
-                    );
-                    None
-                }
-            },
-            Err(err) => {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAILED: AtomicBool = AtomicBool::new(false);
+    match native_macos_memory_mb() {
+        Ok((available, total)) => {
+            FAILED.store(false, Ordering::Relaxed);
+            (Some(available), Some(total))
+        }
+        Err(error) => {
+            if !FAILED.swap(true, Ordering::Relaxed) {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "delivery_system",
-                    format!(
-                        "SYSTEM AUDIT: sysctl returned non-UTF-8 total memory output | Forensic: \
-                         Error '{err}'"
-                    ),
+                    "native_memory",
+                    format!("Native macOS RAM observation unavailable: {error}; RAM headroom remains unknown"),
                 );
-                None
             }
-        },
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_progress",
-                format!(
-                    "SYSTEM AUDIT: sysctl hw.memsize returned non-zero status | Forensic: Stderr \
-                     '{}'",
-                    stderr.trim()
-                ),
-            );
-            None
+            (None, None)
         }
-        Err(err) => {
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_system",
-                format!(
-                    "SYSTEM AUDIT: Failed to execute sysctl hw.memsize | Forensic: Error '{err}'"
-                ),
-            );
-            None
-        }
-    };
-
-    let available = match crate::tool_builders::VmstatBuilder::new().build().output() {
-        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-            Ok(stdout) => {
-                let parsed = parse_vm_stat_available(&stdout);
-                if let Some(v) = parsed {
-                    Some(v)
-                } else {
-                    crate::media_conversion_gate::delivery_runtime_batch_audit(
-                        "delivery_system",
-                        "SYSTEM AUDIT: Failed to parse macOS available memory from vm_stat | \
-                         Forensic: Output structure unrecognized; memory-based optimizations will \
-                         be disabled",
-                    );
-                    None
-                }
-            }
-            Err(err) => {
-                crate::media_conversion_gate::delivery_runtime_batch_audit(
-                    "delivery_system",
-                    format!(
-                        "SYSTEM AUDIT: vm_stat returned non-UTF-8 output | Forensic: Error '{err}'"
-                    ),
-                );
-                None
-            }
-        },
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_progress",
-                format!(
-                    "SYSTEM AUDIT: vm_stat returned non-zero status | Forensic: Stderr '{}'",
-                    stderr.trim()
-                ),
-            );
-            None
-        }
-        Err(err) => {
-            crate::media_conversion_gate::delivery_runtime_batch_audit(
-                "delivery_system",
-                format!("SYSTEM AUDIT: Failed to execute vm_stat | Forensic: Error '{err}'"),
-            );
-            None
-        }
-    };
-
-    (available, total)
+    }
 }
 
+#[cfg(target_os = "macos")]
+fn native_macos_memory_mb() -> std::io::Result<(u64, u64)> {
+    unsafe extern "C" {
+        #[link_name = "vm_kernel_page_size"]
+        static KERNEL_PAGE_SIZE: libc::vm_size_t;
+        #[link_name = "mach_host_self"]
+        fn acquire_host_port() -> libc::host_t;
+    }
+    // Hold one send right for this process instead of acquiring one per sample.
+    static HOST: std::sync::OnceLock<libc::host_t> = std::sync::OnceLock::new();
+    let host = *HOST.get_or_init(|| unsafe { acquire_host_port() });
+    if host == 0 {
+        return Err(std::io::Error::other("Mach host port is unavailable"));
+    }
+    let mut total = 0_u64;
+    let mut size = std::mem::size_of_val(&total);
+    if unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut total).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if size != std::mem::size_of_val(&total) || total == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid native physical RAM observation",
+        ));
+    }
+    let mut statistics: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    let status = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&raw mut statistics).cast(),
+            &raw mut count,
+        )
+    };
+    if status != libc::KERN_SUCCESS {
+        return Err(std::io::Error::other(format!(
+            "Mach VM statistics failed: {status}"
+        )));
+    }
+    let required = u32::try_from(
+        (std::mem::offset_of!(libc::vm_statistics64, speculative_count)
+            + std::mem::size_of::<libc::natural_t>())
+            / std::mem::size_of::<libc::integer_t>(),
+    )
+    .map_err(std::io::Error::other)?;
+    if count < required || count > libc::HOST_VM_INFO64_COUNT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Incomplete native VM statistics",
+        ));
+    }
+    let page_size = u64::try_from(unsafe { KERNEL_PAGE_SIZE }).map_err(std::io::Error::other)?;
+    let available = macos_available_mb(
+        u64::from(statistics.free_count),
+        u64::from(statistics.inactive_count),
+        u64::from(statistics.speculative_count),
+        page_size,
+    )
+    .ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid native available RAM counters",
+    ))?;
+    if available > total / (1024 * 1024) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Available RAM exceeds physical RAM",
+        ));
+    }
+    Ok((available, total / (1024 * 1024)))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_available_mb(free: u64, inactive: u64, speculative: u64, page_size: u64) -> Option<u64> {
+    // vm_stat excludes speculative pages from its displayed "Pages free" count.
+    if !page_size.is_power_of_two() {
+        return None;
+    }
+    free.checked_sub(speculative)?
+        .checked_add(inactive)?
+        .checked_mul(page_size)
+        .map(|bytes| bytes / (1024 * 1024))
+}
+
+#[cfg(test)]
 fn parse_vm_stat_available(out: &str) -> Option<u64> {
     let mut page_size = None;
     let mut pages_available = None::<u64>;
@@ -283,6 +392,7 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
     Some(pages.checked_mul(page_size?)? / (1024 * 1024))
 }
 
+#[cfg(test)]
 fn parse_vm_stat_value(line: &str) -> Option<u64> {
     let val_str = line.split(':').nth(1)?.trim().replace('.', "");
     match val_str.parse::<u64>() {
@@ -300,6 +410,7 @@ fn parse_vm_stat_value(line: &str) -> Option<u64> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn get_memory_linux() -> (Option<u64>, Option<u64>) {
     let content = match std::fs::read_to_string("/proc/meminfo") {
         Ok(c) => c,
@@ -463,6 +574,55 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_vm_counters_keep_the_existing_vm_stat_available_definition() {
+        for page_size in [4096, 16384] {
+            let text = format!(
+                "page size of {page_size} bytes\nPages free: 34559.\nPages inactive: 208154.\nPages speculative: 4096.\n"
+            );
+            assert_eq!(
+                macos_available_mb(34559 + 4096, 208154, 4096, page_size),
+                parse_vm_stat_available(&text),
+            );
+        }
+        assert_eq!(macos_available_mb(1, 0, 2, 16384), None);
+        assert_eq!(macos_available_mb(u64::MAX, 1, 0, 16384), None);
+        assert_eq!(macos_available_mb(u64::MAX, 0, 0, 16384), None);
+        assert_eq!(macos_available_mb(1, 0, 0, 0), None);
+        assert_eq!(macos_available_mb(1, 0, 0, 3), None);
+    }
+
+    #[test]
+    fn native_pressure_cannot_be_hidden_by_reclaimable_ram() {
+        assert_eq!(
+            macos_pressure_from_dispatch_flags(1),
+            Some(MemoryPressure::Low)
+        );
+        for flags in [2, 4] {
+            let native = macos_pressure_from_dispatch_flags(flags);
+            assert_eq!(native, Some(MemoryPressure::High));
+            for ram in [None, Some(MemoryPressure::Low), Some(MemoryPressure::Normal)] {
+                assert_eq!(
+                    combine_native_pressure(ram, native),
+                    Some(MemoryPressure::High)
+                );
+            }
+        }
+        for flags in [0, 3, 8, u32::MAX] {
+            assert_eq!(macos_pressure_from_dispatch_flags(flags), None);
+        }
+        assert_eq!(combine_native_pressure(Some(MemoryPressure::Low), None), None);
+        assert_eq!(
+            combine_native_pressure(Some(MemoryPressure::High), None),
+            Some(MemoryPressure::High)
+        );
+        assert_eq!(combine_native_pressure(None, Some(MemoryPressure::Low)), None);
+        assert_eq!(
+            combine_native_pressure(Some(MemoryPressure::Low), Some(MemoryPressure::Low)),
+            Some(MemoryPressure::Low)
+        );
+    }
 
     #[test]
     fn vm_stat_uses_real_macos_header_page_size() {

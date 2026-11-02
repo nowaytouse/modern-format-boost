@@ -477,9 +477,9 @@ impl ToolsArgs {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CachePolicy {
-    /// Total serialized path-tree payload bytes, excluding SQLite overhead and durable state.
+    /// Independent payload limit for directory snapshots and Gate 1 proof cache; excludes durable state.
     pub path_tree_max_bytes: u64,
-    /// Idle lifetime; successful cache reads refresh the timestamp.
+    /// Directory idle lifetime and Gate 1 proof age; expired proofs require fresh verification.
     pub path_tree_ttl_seconds: u64,
 }
 

@@ -29,13 +29,16 @@ mod output_audit;
 mod source_cleanup;
 #[cfg(target_os = "windows")]
 mod windows;
+mod xmp_sidecar_index;
 
 pub use delivery_policy::{
     MetadataDeliveryReport, MetadataLayerOutcome, apply_file_timestamps_for_delivery,
     preserve_filesystem_for_delivery, preserve_for_delivery,
 };
 pub use exif::preserve_internal;
+pub(crate) use output_audit::verify_output_embedded_metadata_with_index;
 pub use source_cleanup::SourceDirectoryCleanupSnapshot;
+pub(crate) use xmp_sidecar_index::XmpSidecarIndex;
 pub(crate) fn verify_output_embedded_metadata_with_explicit_xmp(
     src: &Path,
     xmp: &Path,
@@ -3287,29 +3290,25 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) -> io::Result<bool> {
 }
 
 fn xmp_candidate_matches_source(path: &Path, stem: &str, full_name: &str) -> bool {
+    xmp_candidate_key(path).is_some_and(|candidate| candidate == stem || candidate == full_name)
+}
+
+fn xmp_candidate_key(path: &Path) -> Option<String> {
     if !path
         .extension()
         .is_some_and(|value| value.eq_ignore_ascii_case("xmp"))
     {
-        return false;
+        return None;
     }
     let Some(candidate_stem) = path.file_stem().and_then(|value| value.to_str()) else {
         // A valid UTF-8 source name cannot match this stem. Do not guess by
         // replacing invalid bytes with a visible Unicode character.
-        return false;
+        return None;
     };
-    let candidate_stem = candidate_stem.to_lowercase();
-    candidate_stem == stem || candidate_stem == full_name
+    Some(candidate_stem.to_lowercase())
 }
 
-/// Find a unique adjacent XMP candidate using supported stem or compound names.
-/// Names identify candidates, not historical ownership or valid XMP content.
-///
-/// # Errors
-/// Refuses ambiguous matches, non-regular sidecars and incomplete directory reads.
-/// A failed discovery must never be interpreted as proof that no sidecar exists.
-pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
-    let parent = crate::media_conversion_gate::path_parent_or_dot(src);
+fn xmp_source_names(src: &Path) -> io::Result<(String, String)> {
     let stem = src
         .file_stem()
         .and_then(|value| value.to_str())
@@ -3330,6 +3329,18 @@ pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
             )
         })?
         .to_lowercase();
+    Ok((stem, full_name))
+}
+
+/// Find a unique adjacent XMP candidate using supported stem or compound names.
+/// Names identify candidates, not historical ownership or valid XMP content.
+///
+/// # Errors
+/// Refuses ambiguous matches, non-regular sidecars and incomplete directory reads.
+/// A failed discovery must never be interpreted as proof that no sidecar exists.
+pub fn find_xmp_sidecar(src: &Path) -> io::Result<Option<PathBuf>> {
+    let parent = crate::media_conversion_gate::path_parent_or_dot(src);
+    let (stem, full_name) = xmp_source_names(src)?;
     let mut selected: Option<PathBuf> = None;
     for entry in std::fs::read_dir(parent).map_err(|error| {
         io::Error::new(

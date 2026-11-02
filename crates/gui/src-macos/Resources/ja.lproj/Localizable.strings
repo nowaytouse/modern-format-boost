@@ -273,10 +273,10 @@
 "menu.front" = "すべてを手前に移動";
 "settings.title" = "メディア設定";
 "settings.section.cache" = "DB とキャッシュ";
-"settings.cacheMaxBytes" = "スナップショット上限（バイト）";
-"settings.cacheMaxBytes.help" = "正の整数を指定します。再作成可能なディレクトリスナップショットのデータ量のみを制限し、データベース全体のファイルサイズは制限しません。個別指定を解除すると、継承した設定が引き続き適用されます。";
-"settings.cacheTtlSeconds" = "キャッシュの未使用期間（秒）";
-"settings.cacheTtlSeconds.help" = "正の整数を指定します。キャッシュが使われると未使用時間の計測が再開し、期限切れのスナップショットは再作成されます。履歴と再開用レコードは保持されます。";
+"settings.cacheMaxBytes" = "各キャッシュ上限（バイト）";
+"settings.cacheMaxBytes.help" = "正の整数を指定します。ディレクトリのスナップショットとローカル検証記録に、それぞれこの上限を適用します。DB全体のサイズ上限ではありません。削除・退避された検証記録は再検証が必要ですが、正式なタスク進行状況と履歴は保持されます。個別指定を解除すると継承設定を使用します。";
+"settings.cacheTtlSeconds" = "キャッシュの有効期間（秒）";
+"settings.cacheTtlSeconds.help" = "正の整数を指定します。ディレクトリの記録は最終利用時刻、検証記録は検証成功時刻から計測します。期限切れの記録は再走査または再検証されます。正式なタスク進行状況と履歴は保持されます。";
 "settings.backend_failed" = "設定ツールが失敗しました（終了コード %d）。";
 "settings.cache.path" = "キャッシュの場所";
 "settings.cache.database" = "Core データベース";

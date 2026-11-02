@@ -23,6 +23,23 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Large-batch Verification and Recovery (2026-11-02)
+
+- Keep PTY master and spare slave handles out of worker processes. A two-process
+  regression reproduces the stranded terminal write after launcher death.
+- Hold the production lease while refreshing app artifacts, so a normal build
+  cannot overwrite workers while a media task is active.
+- Index XMP candidates per directory and Photos output mappings per manifest,
+  preserving complete membership, ambiguity, content and library checks.
+- Persist individually bound Gate 1 proofs for interrupted local verification;
+  rehash inputs before reuse and retain fresh structural/filesystem checks,
+  Photos custody and final deletion evidence. Expose proof cache cleanup and
+  bound its lifecycle separately from durable task state.
+- Honor native macOS memory warnings in every performance tier and use live
+  conservative thread budgets for Gate decoders. Read RAM counters natively
+  instead of repeatedly spawning system utilities. Avoid cloning full ordinary
+  task manifests during retry lineage checks.
+
 ### Long-running Native Log Display (2026-11-02)
 
 - Release discarded query-output buffers per read even after the retained-output

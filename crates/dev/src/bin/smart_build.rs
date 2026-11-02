@@ -1286,6 +1286,8 @@ fn sync_foundation_dylib_artifact(project_root: &Path, style: &Style, force: boo
 }
 
 fn sync_app_bundle(project_root: &Path, style: &Style, force: bool) -> Result<()> {
+    let _production_lease = foundation::production_lock::acquire_production_lease()
+        .context("cannot refresh app artifacts while a production task is active")?;
     let foundation_changed = sync_foundation_dylib_artifact(project_root, style, force)?;
 
     let app_res_dir = project_root
