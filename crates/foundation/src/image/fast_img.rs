@@ -6162,6 +6162,40 @@ fn query_osxphotos_asset_probes_from_library(
         return Ok(Vec::new());
     }
     let osxphotos = resolve_osxphotos_command()?;
+    query_osxphotos_asset_probes_with_command(uuids, library, &osxphotos)
+}
+
+fn query_osxphotos_asset_probes_with_command(
+    uuids: &[String],
+    library: &Path,
+    osxphotos: &Path,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
+    if uuids.iter().collect::<BTreeSet<_>>().len() != uuids.len() {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos custody query contains duplicate UUIDs".to_string(),
+        ));
+    }
+    let batch_size = fast_img_icloud_upload_verify_batch_size();
+    if batch_size == 0 {
+        return Err(ImgQualityError::AnalysisError(
+            "Photos verification batch size must be positive".to_string(),
+        ));
+    }
+    // Final delete-gate rechecks need the same response bound as import verification.
+    let mut probes = Vec::with_capacity(uuids.len());
+    for batch in uuids.chunks(batch_size) {
+        probes.extend(query_osxphotos_asset_probe_batch(
+            batch, library, osxphotos,
+        )?);
+    }
+    Ok(probes)
+}
+
+fn query_osxphotos_asset_probe_batch(
+    uuids: &[String],
+    library: &Path,
+    osxphotos: &Path,
+) -> Result<Vec<FastImgLibraryAssetProbe>> {
     let mut uuid_file = crate::media_conversion_gate::delivery_named_tempfile_in_scratch_or_err(
         "fast_img_osxphotos_uuid_query",
         Some("mfb_fast_img_osxphotos_uuid"),
@@ -6178,7 +6212,7 @@ fn query_osxphotos_asset_probes_from_library(
     uuid_file.flush().map_err(|e| {
         ImgQualityError::AnalysisError(format!("flush osxphotos UUID query file failed: {e}"))
     })?;
-    let mut command = std::process::Command::new(&osxphotos);
+    let mut command = std::process::Command::new(osxphotos);
     command
         .arg("query")
         .arg("--db")
@@ -12172,6 +12206,61 @@ mod tests {
             OSXPHOTOS_QUERY_TIMEOUT_BASE_SECS.load(Ordering::SeqCst),
             330
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn osxphotos_large_custody_query_respects_verification_batches() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let scratch = tempfile::tempdir()?;
+        let _home = crate::common_utils::EnvGuard::set(
+            crate::constants::ENV_MFB_HOME_ROOT,
+            scratch.path().to_string_lossy().as_ref(),
+        );
+        let tool = scratch.path().join("osxphotos");
+        std::fs::write(
+            &tool,
+            r#"#!/bin/sh
+set -eu
+while [ "$1" != '--uuid-from-file' ]; do shift; done
+uuids=$2
+padding=$(printf '%06000d' 0)
+printf '['
+separator=''
+while IFS= read -r uuid; do
+    printf '%s{"uuid":"%s","path":"/tmp/fixture.heic","iscloudasset":true,"incloud":true,"ismissing":false,"metadata":"%s"}' "$separator" "$uuid" "$padding"
+    separator=','
+done < "$uuids"
+printf ']'
+"#,
+        )?;
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700))?;
+        let uuids = (0..1473).map(|n| format!("asset-{n}")).collect::<Vec<_>>();
+        // Full osxphotos rows exceed the runner's 8 MiB cap, as in the failed batch.
+        let probes = query_osxphotos_asset_probes_with_command(
+            &uuids,
+            &scratch.path().join("synthetic.photoslibrary"),
+            &tool,
+        )?;
+        assert_eq!(probes.len(), uuids.len());
+        for (probe, uuid) in probes.iter().zip(&uuids) {
+            assert_eq!(&probe.uuid, uuid);
+            assert_eq!(probe.path, Path::new("/tmp/fixture.heic"));
+            assert!(probe.iscloudasset && probe.incloud == Some(true) && !probe.ismissing);
+        }
+        assert!(
+            query_osxphotos_asset_probes_with_command(
+                &["duplicate".into(), "duplicate".into()],
+                &scratch.path().join("synthetic.photoslibrary"),
+                &scratch.path().join("must-not-launch"),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate UUIDs")
+        );
+        Ok(())
     }
 
     #[test]

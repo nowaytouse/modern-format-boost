@@ -1417,6 +1417,12 @@ check, so interruption leaves earlier completed work reusable. Logs distinguish
 reused, fresh and invalidated checks. Gate 2/3 Photos custody, current library
 state and final source-deletion requirements still need their existing evidence.
 
+Local Photos custody queries, including the final source-deletion recheck, use
+`photos.verification_batch_size` instead of placing all pending UUIDs into one
+captured JSON response. Each response must parse completely and contain only
+its requested UUIDs without duplicates. A failed or oversized response remains
+an error; truncated output is never treated as delivery evidence.
+
 The `gate1_verified_file` namespace is reconstructable cache, separate from
 formal task/checkpoint state. Cache Settings and `cache_cleaner` report it as
 rebuildable and can clear it globally or for an exact source root. Clearing or

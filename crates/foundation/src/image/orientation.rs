@@ -996,7 +996,11 @@ fn max_rgb_delta(ref_img: &image::DynamicImage, out_img: &image::DynamicImage) -
 }
 
 /// Read the EXIF Orientation value (1–8) from a file.
-fn read_exif_orientation(path: &Path) -> Result<u8> {
+/// A missing tag means orientation 1 only after a successful complete read.
+///
+/// # Errors
+/// Rejects unreadable, conflicting or invalid orientation evidence.
+pub fn read_exif_orientation(path: &Path) -> Result<u8> {
     use crate::ToolBuilder;
     use crate::image_builders::ExiftoolBuilder;
 

@@ -2037,6 +2037,11 @@ fn run_cjxl_jpeg_encode_with_plan_mode(
     allow_jpeg_reconstruction: Option<u8>,
     mode: JpegLosslessTranscodePlanMode,
 ) -> anyhow::Result<foundation::process_runner::ProcessOutput> {
+    foundation::image::orientation::read_exif_orientation(input).map_err(|error| {
+        anyhow::anyhow!(
+            "JPEG source orientation could not be proven; encoding was not started: {error}"
+        )
+    })?;
     let plan = jpeg_lossless_encode_plan(mode, options);
     match plan.as_slice() {
         [JxlEffortPlan::Single(effort)] => {
@@ -7360,6 +7365,35 @@ mod tests {
         assert!(reversible.force());
         assert!(pixel_equivalent.compress());
         assert!(options.compress());
+    }
+
+    #[test]
+    fn invalid_jpeg_orientation_is_rejected_before_effort_search() -> anyhow::Result<()> {
+        foundation::tools::require(&["exiftool"]).map_err(anyhow::Error::msg)?;
+        let root = tempdir()?;
+        let source = root.path().join("invalid-orientation.jpeg");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([23, 47, 89])).save(&source)?;
+        let exiftool = foundation::common_utils::resolve_tool_path("exiftool")
+            .ok_or_else(|| anyhow::anyhow!("exiftool unavailable"))?;
+        let status = Command::new(exiftool)
+            .args(["-overwrite_original", "-Orientation#=0"])
+            .arg(&source)
+            .status()?;
+        anyhow::ensure!(status.success(), "cannot write synthetic orientation 0");
+        let original = fs::read(&source)?;
+        // No encoder can write this candidate: its parent does not exist.
+        let candidate = root.path().join("not-created/candidate.jxl");
+        let options = ConvertOptions::default();
+        let error = run_cjxl_jpeg_encode_with_policy(&source, &candidate, &options, 1)
+            .err()
+            .expect("invalid source orientation must fail before candidate encoding");
+        let detail = format!("{error:#}");
+        assert!(detail.contains("encoding was not started"), "{detail}");
+        assert!(detail.contains("EXIF orientation out of range"), "{detail}");
+        assert!(detail.ends_with(": 0"), "{detail}");
+        assert_eq!(fs::read(&source)?, original);
+        assert!(!candidate.parent().unwrap().exists());
+        Ok(())
     }
 
     #[test]

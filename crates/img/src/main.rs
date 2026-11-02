@@ -11492,6 +11492,7 @@ fn fast_img_record_local_gate_failures(
             "Gate 1 isolation output changed after verification: {}",
             output.display()
         );
+        println!("[FAIL    ]   {rel}: Gate 1 rejected this asset; batch check details: {reason}");
         rejected.push(Err(FastImgTranscodeError {
             rel_key: rel,
             out_rel_key,

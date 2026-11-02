@@ -23,6 +23,18 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Photos Custody Queries and V2 Icon (2026-11-03)
+
+- Apply the existing Photos verification batch size to local custody queries,
+  including the final source-deletion recheck, instead of requesting the entire
+  pending set in one captured JSON response. UUID membership, duplicates, current
+  original-file hashes and fail-closed deletion requirements are unchanged.
+- Reject invalid source EXIF orientation before JPEG Effort search while retaining
+  final delivery checks. Include Gate-isolated file failures in the launcher's
+  retained-file report, alongside encoding failures.
+- Adopt the V2 raccoon vector icon across the native app and Photos helper,
+  preserving transparent padding, standard icon sizes and bundle identifiers.
+
 ### Large-batch Verification and Recovery (2026-11-02)
 
 - Keep PTY master and spare slave handles out of worker processes. A two-process

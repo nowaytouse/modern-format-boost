@@ -4609,6 +4609,12 @@ mod tests {
                 "[FAIL    ]   nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained",
             )
             .unwrap();
+        output
+            .push_line(
+                "IMG",
+                "[FAIL    ]   nested/gate.jpg: Gate 1 rejected this asset; batch check details: Bad IFD1 directory",
+            )
+            .unwrap();
         output.flush().unwrap();
         let current = dev::infra::history_store::read_session_output_since(
             session.log_dir(),
@@ -4622,6 +4628,10 @@ mod tests {
                 ("current.jpg: no gain".to_owned(), "skipped".to_owned()),
                 (
                     "nested/fixture.heic: original-media XMP delivery verification failed; source and sidecar retained".to_owned(),
+                    "failed".to_owned(),
+                ),
+                (
+                    "nested/gate.jpg: Gate 1 rejected this asset; batch check details: Bad IFD1 directory".to_owned(),
                     "failed".to_owned(),
                 ),
             ]
