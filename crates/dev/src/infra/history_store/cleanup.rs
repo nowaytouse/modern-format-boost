@@ -97,8 +97,8 @@ fn removed_table_exists(connection: &Connection) -> Result<bool> {
 fn ensure_session_not_removed(connection: &Connection, session: &str) -> Result<()> {
     if removed_table_exists(connection)? {
         let removed: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM history_removed_sessions_v1 WHERE session_id=?1",
-            [session],
+            "SELECT COUNT(*) FROM history_removed_sessions_v1 WHERE session_id IN (?1,?2)",
+            params![session, retired_session_digest(session)],
             |row| row.get(0),
         )?;
         ensure!(
@@ -107,6 +107,10 @@ fn ensure_session_not_removed(connection: &Connection, session: &str) -> Result<
         );
     }
     Ok(())
+}
+
+fn retired_session_digest(session: &str) -> String {
+    format!("blake3:{}", blake3::hash(session.as_bytes()).to_hex())
 }
 
 /// Claim ownership inside the caller's payload transaction, never in a separate commit.
@@ -183,6 +187,56 @@ fn authoritative_log_names(session: &str) -> BTreeSet<String> {
     ])
 }
 
+fn session_archive_directory<'a>(root: &Path, path: &'a Path, session: &str) -> Option<&'a Path> {
+    let parent = path.parent()?;
+    if parent.parent() != Some(root) {
+        return None;
+    }
+    let name = parent.file_name()?.to_str()?;
+    let stamp = name
+        .rsplit_once("_Bundle_")
+        .map(|(_, stamp)| stamp)
+        .or_else(|| name.strip_prefix("Bundle_"))?;
+    let suffix = stamp.strip_prefix(session)?;
+    (suffix.is_empty()
+        || suffix.strip_prefix('_').is_some_and(|index| {
+            !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+        }))
+    .then_some(parent)
+}
+
+fn legacy_audit_exists(root: &Path, session: &str) -> Result<bool> {
+    let name = format!("session_audit_{session}.jsonl");
+    let has_audit = |directory: &Path| -> Result<bool> {
+        match fs::symlink_metadata(directory.join(&name)) {
+            Ok(metadata) => Ok(metadata.is_file()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    };
+    if has_audit(root)? {
+        return Ok(true);
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let filename = entry.file_name();
+        if filename.to_str().is_some_and(|name| {
+            name.starts_with("Bundle_")
+                || (name.contains("_Bundle_") && !name.starts_with("_Bundle_"))
+        }) && entry.file_type()?.is_dir()
+            && has_audit(&entry.path())?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_registered_manifest(root: &Path, path: &Path, session: &str) -> bool {
+    path.file_name() == Some(std::ffi::OsStr::new("manifest.json"))
+        && session_archive_directory(root, path, session).is_some()
+}
+
 fn relative_artifact(root: &Path, path: &Path) -> Result<String> {
     let relative = path
         .strip_prefix(root)
@@ -214,13 +268,13 @@ fn artifact_file(path: &Path) -> Result<std::fs::File> {
         .open(path)?;
     let metadata = file.metadata()?;
     ensure!(
-        metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() },
-        "History artifact is not an owned regular file"
+        metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() } && metadata.nlink() == 1,
+        "History artifact is not an exclusively owned regular file"
     );
     Ok(file)
 }
 
-/// Register only the three files created by the session, or their exact archived locations.
+/// Register the session logs and, after archival, their exact archive manifest.
 pub fn register_history_artifacts(
     directory: &Path,
     session: &str,
@@ -228,13 +282,14 @@ pub fn register_history_artifacts(
 ) -> Result<()> {
     let _lease = acquire_history_session_lease(directory, session)?;
     ensure!(
-        paths.len() == 3,
-        "History session requires exactly three authoritative log artifacts"
+        (3..=4).contains(&paths.len()),
+        "History session requires three authoritative logs and at most one archive manifest"
     );
     let root = cleanup_root(directory)?;
     let expected = authoritative_log_names(session);
     let mut names = BTreeSet::new();
     let mut artifacts = Vec::new();
+    let mut manifest_directory = None;
     for path in paths {
         // Normalize only the explicitly selected root alias, never a child link.
         let path = path
@@ -245,16 +300,36 @@ pub fn register_history_artifacts(
             .file_name()
             .and_then(|name| name.to_str())
             .context("History artifact has no UTF-8 filename")?;
-        ensure!(
-            expected.contains(name) && names.insert(name.to_owned()),
-            "History artifact identity is not a unique session-owned log"
-        );
+        if is_registered_manifest(&root, &path, session) {
+            ensure!(
+                manifest_directory.is_none(),
+                "History archive has multiple manifests"
+            );
+            manifest_directory = path.parent().map(Path::to_path_buf);
+        } else {
+            ensure!(
+                expected.contains(name) && names.insert(name.to_owned()),
+                "History artifact identity is not a unique session-owned log"
+            );
+        }
         let metadata = artifact_file(&path)?.metadata()?;
         artifacts.push(OwnedArtifact {
             relative_path,
             device: metadata.dev(),
             inode: metadata.ino(),
         });
+    }
+    ensure!(
+        names == expected,
+        "History archive is missing an authoritative session log"
+    );
+    if let Some(manifest_directory) = manifest_directory {
+        ensure!(
+            artifacts.iter().all(|artifact| {
+                root.join(&artifact.relative_path).parent() == Some(manifest_directory.as_path())
+            }),
+            "History archive manifest does not share the registered log directory"
+        );
     }
     artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let mut connection = open_history_write(directory)?;
@@ -267,19 +342,17 @@ pub fn register_history_artifacts(
     )?;
     let previous: Vec<OwnedArtifact> = serde_json::from_str(&previous)?;
     if !previous.is_empty() {
-        ensure!(
-            previous.len() == artifacts.len(),
-            "History archive lost an authoritative artifact"
-        );
-        for artifact in &artifacts {
-            let name = Path::new(&artifact.relative_path).file_name();
+        for old in &previous {
+            let name = Path::new(&old.relative_path).file_name();
             ensure!(
-                previous
+                artifacts
                     .iter()
-                    .any(|old| Path::new(&old.relative_path).file_name() == name
-                        && old.device == artifact.device
-                        && old.inode == artifact.inode),
-                "History archive replaced an authoritative artifact"
+                    .any(
+                        |artifact| Path::new(&artifact.relative_path).file_name() == name
+                            && artifact.device == old.device
+                            && artifact.inode == old.inode
+                    ),
+                "History archive replaced or lost an authoritative artifact"
             );
         }
     }
@@ -364,10 +437,18 @@ struct DeletableArtifact {
     hash: String,
 }
 
+struct EmptyArchive {
+    path: PathBuf,
+    session: String,
+    device: u64,
+    inode: u64,
+}
+
 struct CleanupPlan {
     preview: HistoryCleanupPreview,
     ranges: Vec<RunRange>,
     deletable: Vec<DeletableArtifact>,
+    empty_archives: Vec<EmptyArchive>,
 }
 
 fn cleanup_root(directory: &Path) -> Result<PathBuf> {
@@ -683,6 +764,7 @@ fn build_plan(
     hash_field(&mut hasher, &serde_json::to_vec(&selected)?, &mut budget)?;
     let mut ranges = Vec::new();
     let mut deletable = Vec::new();
+    let mut empty_archives = Vec::new();
     let mut preview = HistoryCleanupPreview {
         schema_version: 1,
         kind: "history_cleanup_preview",
@@ -931,11 +1013,12 @@ fn build_plan(
             .context("History artifact registration is invalid")?
             .unwrap_or_default();
         ensure!(
-            artifacts.len() <= 3,
+            artifacts.len() <= 4,
             "History artifact registration exceeds its authoritative scope"
         );
         let mut paths = BTreeSet::new();
         let names = authoritative_log_names(session);
+        let first_deletable = deletable.len();
         for artifact in artifacts {
             let path = root.join(&artifact.relative_path);
             ensure!(
@@ -944,9 +1027,11 @@ fn build_plan(
             );
             relative_artifact(root, &path)?;
             ensure!(
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| names.contains(name)),
+                is_registered_manifest(root, &path, session)
+                    || path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| names.contains(name)),
                 "History ownership registry names a non-log artifact; nothing removed"
             );
             let mut decision = HistoryArtifactDecision {
@@ -984,10 +1069,61 @@ fn build_plan(
             )?;
             preview.artifacts.push(decision);
         }
-        preview.artifacts.push(HistoryArtifactDecision {
-            path: root.display().to_string(), scope:"unregistered_external_logs", status:"retained",
-            reason:format!("session {session}: worker/archived logs without authoritative ownership are not enumerated or deleted"),
-        });
+        let mut unverified_archive = None;
+        if let Some(directory) = paths.iter().find_map(|relative| {
+            let path = root.join(relative);
+            session_archive_directory(root, &path, session).map(Path::to_path_buf)
+        }) {
+            for entry in fs::read_dir(&directory)? {
+                let path = entry?.path();
+                if !path
+                    .strip_prefix(root)?
+                    .to_str()
+                    .is_some_and(|relative| paths.contains(relative))
+                {
+                    unverified_archive = Some(directory.clone());
+                    break;
+                }
+            }
+            if unverified_archive.is_none()
+                && deletable.len() - first_deletable == 4
+                && deletable[first_deletable..]
+                    .iter()
+                    .all(|artifact| artifact.path.parent() == Some(directory.as_path()))
+            {
+                let metadata = fs::symlink_metadata(&directory)?;
+                ensure!(
+                    metadata.is_dir()
+                        && metadata.uid() == unsafe { libc::geteuid() }
+                        && metadata.mode() & 0o022 == 0,
+                    "History archive is not a privately owned directory"
+                );
+                hash_field(&mut hasher, &metadata.dev().to_le_bytes(), &mut budget)?;
+                hash_field(&mut hasher, &metadata.ino().to_le_bytes(), &mut budget)?;
+                empty_archives.push(EmptyArchive {
+                    path: directory,
+                    session: session.clone(),
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                });
+            }
+        }
+        let decision = unverified_archive.map_or_else(
+            || HistoryArtifactDecision {
+                path: root.display().to_string(),
+                scope: "unregistered_external_logs",
+                status: "retained",
+                reason: "Only logs with verified ownership are eligible for removal.".to_owned(),
+            },
+            |directory| HistoryArtifactDecision {
+                path: directory.display().to_string(),
+                scope: "unverified_archive",
+                status: "retained",
+                reason: "The archive contains files without verified ownership.".to_owned(),
+            },
+        );
+        hash_field(&mut hasher, &serde_json::to_vec(&decision)?, &mut budget)?;
+        preview.artifacts.push(decision);
         ranges.extend(wanted);
     }
     preview.snapshot_token = hasher.finalize().to_hex().to_string();
@@ -995,6 +1131,7 @@ fn build_plan(
         preview,
         ranges,
         deletable,
+        empty_archives,
     })
 }
 
@@ -1067,7 +1204,12 @@ pub fn execute_history_cleanup(
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;")?;
+    connection.execute_batch(
+        "PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;",
+    )?;
+    let secure_delete: i64 =
+        connection.pragma_query_value(None, "secure_delete", |row| row.get(0))?;
+    ensure!(secure_delete == 1, "History secure deletion is unavailable");
     persist_history_wal_sidecars(&connection)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let plan = build_plan(&root, &transaction, request)?;
@@ -1188,6 +1330,46 @@ pub fn execute_history_cleanup(
             }),
         }
     }
+    let mut emptied_sessions = BTreeSet::new();
+    for archive in plan.empty_archives {
+        if receipt
+            .failed_artifacts
+            .iter()
+            .any(|failure| Path::new(&failure.path).parent() == Some(archive.path.as_path()))
+        {
+            continue;
+        }
+        let remove = (|| -> Result<()> {
+            let metadata = fs::symlink_metadata(&archive.path)?;
+            ensure!(
+                metadata.is_dir()
+                    && metadata.dev() == archive.device
+                    && metadata.ino() == archive.inode,
+                "History archive directory identity changed"
+            );
+            // Never recursively remove a directory, even if it was empty at preview time.
+            fs::remove_dir(&archive.path)?;
+            Ok(())
+        })();
+        match remove.and_then(|()| {
+            // The legacy reader needs the original marker if an unregistered audit survives.
+            ensure!(
+                !legacy_audit_exists(&root, &archive.session)?,
+                "An unregistered legacy audit still exists for this session"
+            );
+            Ok(())
+        }) {
+            Ok(()) => {
+                emptied_sessions.insert(archive.session);
+            }
+            Err(error) => receipt.failed_artifacts.push(HistoryArtifactDecision {
+                path: archive.path.display().to_string(),
+                scope: "archive_directory",
+                status: "failed",
+                reason: format!("History archive cleanup could not be fully verified: {error:#}"),
+            }),
+        }
+    }
     let finish = (|| -> Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for session in selected
@@ -1245,6 +1427,12 @@ pub fn execute_history_cleanup(
                     "DELETE FROM history_sessions WHERE session_id=?1",
                     [session],
                 )?;
+                if emptied_sessions.contains(session) {
+                    transaction.execute(
+                        "UPDATE history_removed_sessions_v1 SET session_id=?2 WHERE session_id=?1",
+                        params![session, retired_session_digest(session)],
+                    )?;
+                }
             }
         }
         transaction.commit()?;
@@ -1260,11 +1448,36 @@ pub fn execute_history_cleanup(
             ),
         });
     }
+    let compact = connection.execute_batch("VACUUM");
+    let checkpoint = (|| -> Result<()> {
+        let state: (i64, i64, i64) =
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        ensure!(
+            matches!(state, (0, 0, 0) | (0, -1, -1)),
+            "History WAL could not be truncated, possibly because another reader is active"
+        );
+        Ok(())
+    })();
+    if compact.is_err() || checkpoint.is_err() {
+        receipt.failed_artifacts.push(HistoryArtifactDecision {
+            path: root.join(HISTORY_DATABASE).display().to_string(),
+            scope: "database_privacy",
+            status: "failed",
+            reason: [compact.err().map(anyhow::Error::from), checkpoint.err()]
+                .into_iter()
+                .flatten()
+                .map(|error| format!("{error:#}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        });
+    }
     if !receipt.failed_artifacts.is_empty()
         || receipt
             .retained_artifacts
             .iter()
-            .any(|artifact| artifact.scope == "registered_file_problem")
+            .any(|artifact| artifact.scope != "unregistered_external_logs")
     {
         receipt.status = "partial";
     }
@@ -1276,11 +1489,32 @@ mod tests {
     use super::*;
 
     // Fixture users share the default serial lock with other state-root tests.
-    fn fixture() -> Result<(
+    type HistoryFixture = (
         tempfile::TempDir,
         foundation::common_utils::EnvGuard,
         PathBuf,
-    )> {
+    );
+
+    fn fixture() -> Result<Option<HistoryFixture>> {
+        // The formal root is bound for the lifetime of the process.
+        let thread = std::thread::current();
+        let name = thread
+            .name()
+            .context("history cleanup test name unavailable")?;
+        if std::env::var("MFB_HISTORY_CLEANUP_TEST").as_deref() != Ok(name) {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", name, "--nocapture", "--test-threads=1"])
+                .env("MFB_HISTORY_CLEANUP_TEST", name)
+                .output()?;
+            ensure!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("running 1 test"),
+                "isolated History cleanup regression failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(None);
+        }
         let root = tempfile::tempdir()?;
         let guard = foundation::common_utils::EnvGuard::set(
             "MFB_HOME_ROOT",
@@ -1288,7 +1522,7 @@ mod tests {
         );
         let logs = root.path().join("logs");
         fs::create_dir(&logs)?;
-        Ok((root, guard, logs))
+        Ok(Some((root, guard, logs)))
     }
 
     fn run(logs: &Path, session: &str, id: &str, line: &str) -> Result<()> {
@@ -1343,9 +1577,86 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn history_cleanup_scrubs_payloads_and_removes_only_proven_archive_entries() -> Result<()> {
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        let payload = "synthetic-private-payload-for-page-scrubbing";
+        let session = "synthetic-private-complete-session";
+        let mixed = "synthetic-mixed-session";
+        run(&logs, session, "run-private", payload)?;
+        run(&logs, mixed, "run-mixed", "mixed run output")?;
+        run(&logs, "unselected", "run-other", "untouched run output")?;
+        for target in [session, mixed] {
+            let mut owned = Vec::new();
+            let archive = logs.join(format!("Synthetic_Bundle_{target}"));
+            fs::create_dir(&archive)?;
+            for path in owned_logs(&logs, target)? {
+                let destination = archive.join(path.file_name().context("fixture filename")?);
+                fs::rename(path, &destination)?;
+                owned.push(destination);
+            }
+            let manifest = archive.join("manifest.json");
+            fs::write(&manifest, b"synthetic owned archive manifest")?;
+            owned.push(manifest);
+            register_history_artifacts(&logs, target, &owned)?;
+            if target == mixed {
+                fs::write(archive.join("user.jpeg"), b"untouched user file")?;
+            }
+        }
+        let database = logs.join(HISTORY_DATABASE);
+        let wal = logs.join(format!("{HISTORY_DATABASE}-wal"));
+        let contains = |path: &Path, needle: &str| -> Result<bool> {
+            Ok(fs::read(path)?
+                .windows(needle.len())
+                .any(|bytes| bytes == needle.as_bytes()))
+        };
+        assert!(contains(&database, payload)? || contains(&wal, payload)?);
+        let mut selected = request(session, "run-private");
+        selected.runs.extend(request(mixed, "run-mixed").runs);
+        let preview = preview_history_cleanup(&logs, &selected)?;
+        assert!(
+            preview
+                .artifacts
+                .iter()
+                .any(|item| item.scope == "unverified_archive")
+        );
+        selected.snapshot_token = Some(preview.snapshot_token);
+        let receipt = execute_history_cleanup(&logs, &selected)?;
+        assert_eq!(receipt.status, "partial");
+        assert_eq!(receipt.removed_artifacts, 8);
+        assert!(
+            receipt.failed_artifacts.is_empty(),
+            "{:?}",
+            receipt.failed_artifacts
+        );
+        assert!(
+            !logs
+                .join(format!("Synthetic_Bundle_{session}"))
+                .try_exists()?
+        );
+        let mixed_archive = logs.join(format!("Synthetic_Bundle_{mixed}"));
+        assert_eq!(
+            fs::read(mixed_archive.join("user.jpeg"))?,
+            b"untouched user file"
+        );
+        assert_eq!(fs::read_dir(mixed_archive)?.count(), 1);
+        assert_eq!(fs::metadata(&wal)?.len(), 0);
+        assert!(!contains(&database, payload)?);
+        assert!(!contains(&database, session)?);
+        assert!(!contains(&database, "run-private")?);
+        assert!(contains(&database, "untouched run output")?);
+        assert!(acquire_history_session_lease(&logs, session).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn history_cleanup_retains_cold_read_only_access_after_partial_and_full_removal() -> Result<()>
     {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "first", "one", "first output")?;
         run(&logs, "second", "two", "second output")?;
         for (session, id, remaining) in [("first", "one", 1), ("second", "two", 0)] {
@@ -1401,7 +1712,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_preserves_unselected_runs_shared_logs_and_output_boundaries() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "one")?;
         run(&logs, "session", "run-two", "two")?;
         run(&logs, "other", "run-other", "unselected")?;
@@ -1428,7 +1741,7 @@ mod tests {
             ),
             (1, 2, 1, 0)
         );
-        assert_eq!(receipt.status, "completed");
+        assert_eq!(receipt.status, "partial");
         for path in &paths {
             assert_eq!(fs::read(path)?, b"private synthetic diagnostic");
         }
@@ -1455,7 +1768,9 @@ mod tests {
     #[serial_test::serial]
     fn history_cleanup_accepts_unallocated_output_sequence_only_for_zero_boundaries() -> Result<()>
     {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         append_history_event(
             &logs,
             "session",
@@ -1506,7 +1821,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_rejects_missing_output_sequence_with_persisted_rows() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "retained output")?;
         let connection = open_history_write(&logs)?;
         connection.execute(
@@ -1540,7 +1857,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_keeps_allocated_output_boundary_after_rows_are_deleted() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "removed output")?;
         let connection = open_history_write(&logs)?;
         connection.execute("DELETE FROM history_output", [])?;
@@ -1569,7 +1888,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_removes_only_registered_files_and_retains_unknown_artifacts() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "one")?;
         let paths = owned_logs(&logs, "session")?;
         let private_media = logs.join("not-an-owned-log.jpg");
@@ -1626,7 +1947,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_retires_rows_even_when_a_registered_log_requires_attention() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "one")?;
         let paths = owned_logs(&logs, "session")?;
         let old = logs.join("unregistered-old.log");
@@ -1669,7 +1992,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_rejects_live_leases_stale_tokens_unknown_ids_and_schema() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "session", "run-one", "one")?;
         let lease = acquire_history_session_lease(&logs, "session")?;
         assert!(preview_history_cleanup(&logs, &request("session", "run-one")).is_err());
@@ -1703,7 +2028,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_cleanup_legacy_activity_and_symlinks_fail_closed() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         let session = format!("fixture_{}_1", std::process::id());
         let id = format!("run-{}-fixture-0", std::process::id());
         run(&logs, &session, &id, "one")?;
@@ -1749,7 +2076,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn history_readonly_preparation_retains_rows_schema_and_main_database_bytes() -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "cold-session", "cold-run", "retained output")?;
         let source = logs.join(HISTORY_DATABASE).canonicalize()?;
         let writer = Connection::open_with_flags(
@@ -1821,7 +2150,9 @@ mod tests {
     #[serial_test::serial]
     fn history_readonly_preparation_rejects_missing_corrupt_unknown_and_linked_sources()
     -> Result<()> {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         let source = logs.join(HISTORY_DATABASE);
         assert!(prepare_history_read_only_access(&logs).is_err());
         assert!(!source.exists());
@@ -1851,7 +2182,9 @@ mod tests {
     #[serial_test::serial]
     fn history_cleanup_multiselect_keeps_other_sessions_and_rejects_unsafe_sidecars() -> Result<()>
     {
-        let (_root, _guard, logs) = fixture()?;
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
         run(&logs, "first", "run-first", "first")?;
         run(&logs, "second", "run-second", "second")?;
         run(&logs, "other", "run-other", "other")?;

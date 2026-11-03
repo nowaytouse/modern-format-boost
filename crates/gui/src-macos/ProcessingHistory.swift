@@ -2624,9 +2624,9 @@ private struct HistoryRemovalPreview: Codable {
               preview.runs.count == request.runs.count, Set(preview.runs) == Set(request.runs),
               preview.external_log_scope == "registered_session_logs_only",
               [preview.event_rows, preview.output_rows, preview.event_bytes, preview.output_bytes].allSatisfy({ $0 <= UInt64(Int64.max) }),
-              preview.event_rows >= UInt64(request.runs.count * 2), preview.artifacts.count <= request.runs.count * 4,
+               preview.event_rows >= UInt64(request.runs.count * 2), preview.artifacts.count <= request.runs.count * 5,
               preview.artifacts.allSatisfy({ $0.valid && ["delete", "retained"].contains($0.status)
-                  && ["registered_file", "registered_file_problem", "unregistered_external_logs"].contains($0.scope)
+                   && ["registered_file", "registered_file_problem", "unregistered_external_logs", "unverified_archive"].contains($0.scope)
                   && ($0.status != "delete" || $0.scope == "registered_file") }) else {
             throw HostError(message: localized("history.remove.invalid"))
         }
@@ -2666,18 +2666,18 @@ private struct HistoryRemovalReceipt: Codable {
               receipt.output_rows == preview.output_rows,
               receipt.removed_artifacts <= UInt64(preview.artifacts.filter { $0.status == "delete" }.count),
               receipt.retained_artifacts.count <= preview.artifacts.count,
-              receipt.failed_artifacts.count <= preview.artifacts.count + 1,
+               receipt.failed_artifacts.count <= preview.artifacts.count + 2,
               receipt.retained_artifacts.allSatisfy({ artifact in
                   artifact.valid && artifact.status == "retained" && preview.artifacts.contains {
                       $0.status == "retained" && $0.path == artifact.path && $0.scope == artifact.scope && $0.reason == artifact.reason
                   }
               }),
               receipt.failed_artifacts.allSatisfy({ $0.valid && $0.status == "failed"
-                  && ["registered_file", "ownership_registry"].contains($0.scope) }),
+                   && ["registered_file", "ownership_registry", "archive_directory", "database_privacy"].contains($0.scope) }),
               receipt.removed_artifacts + UInt64(receipt.failed_artifacts.filter { $0.scope == "registered_file" }.count)
                   == UInt64(preview.artifacts.filter { $0.status == "delete" }.count),
               (receipt.status == "completed") == (receipt.failed_artifacts.isEmpty
-                  && !receipt.retained_artifacts.contains { $0.scope == "registered_file_problem" }) else {
+                   && !receipt.retained_artifacts.contains { $0.scope != "unregistered_external_logs" }) else {
             throw HostError(message: localized("history.remove.invalid"))
         }
         return receipt
@@ -2843,6 +2843,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var cleanupButton = NSButton()
     private var retryFailedButton = NSButton()
     var onRetryFailed: ((FastImgFailedRetrySelection) -> Void)?
+    var onRemoved: ((URL, String, String) -> Void)?
     var canRetryFailed: () -> Bool = { ApplicationSession.current?.isDebug != true }
     private var removeButton = NSButton()
     private var removalBusy = false
@@ -3861,9 +3862,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 do {
                     let receipt = try result.get()
                     let receiptDetail = receipt.detail(privacy: self.privacyEnabled)
+                    if self.removalFixture { self.entries = [] }
+                    else {
+                        self.entries.removeAll { entry in
+                            request.runs.contains { $0.session_id == entry.stamp && $0.run_id == entry.context?.run_id }
+                        }
+                        for run in request.runs { self.onRemoved?(source, run.session_id, run.run_id) }
+                    }
+                    self.applyFilter()
                     self.finishRemoval(receiptDetail)
-                    if self.removalFixture { self.entries = []; self.applyFilter() }
-                    else { self.refresh(directory: source) }
+                    if !self.removalFixture { self.refresh(directory: source) }
                     if let window = self.window, window.isVisible {
                         let alert = NSAlert()
                         alert.messageText = localized(receipt.status == "completed" ? "history.remove.completed" : "history.remove.partial", receipt.removed_runs, receipt.removed_artifacts)

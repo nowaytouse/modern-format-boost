@@ -1,4 +1,4 @@
-"app.subtitle" = "macOS 原生媒体处理 · 可将文件或文件夹拖放到窗口任意位置";
+"app.subtitle" = "选择或拖入文件或文件夹，再选择处理操作。";
 "window.debug_title" = "Modern Format Boost %@ — 调试窗口";
 "debug.banner" = "调试窗口 · 界面、日志与只读预览";
 "debug.preview_action" = "检查输入";
@@ -38,7 +38,7 @@
 "tool_snapshot.scope.img" = "图像处理";
 "tool_snapshot.scope.vid" = "视频处理";
 "history.remove.title" = "删除所选处理记录…";
-"history.remove.scope" = "清理所选处理记录及其保存的输出；只有能确认归属的日志才会删除。媒体、恢复状态和归属不明的日志会保留。";
+"history.remove.scope" = "从历史数据库中清除所选批次，并删除能确认属于这些批次的归档。媒体、续跑资料和归属不明的日志会保留。";
 "history.remove.preview" = "确认清理范围";
 "history.remove.counts" = "所选批次：%d · 处理记录：%llu · 日志行：%llu";
 "history.remove.artifacts" = "可安全清理的日志：%d · 需要保留的日志项：%d";
@@ -274,7 +274,15 @@
 "menu.minimize" = "最小化";
 "menu.zoom" = "缩放";
 "menu.front" = "全部置于前面";
-"settings.title" = "媒体设置";
+"settings.title" = "设置";
+"settings.section.general" = "通用";
+"settings.section.about" = "关于";
+"settings.zoom" = "主窗口缩放";
+"settings.zoom.help" = "调整主窗口中文字和控件的大小。";
+"settings.zoom.percent" = "%d%%";
+"settings.developer.help" = "显示高级处理操作、命令预览和诊断信息。";
+"settings.about.version" = "版本 %@";
+"settings.about.licenses" = "开源许可证…";
 "settings.section.cache" = "数据库与缓存";
 "settings.cacheMaxBytes" = "每类缓存上限（字节）";
 "settings.cacheMaxBytes.help" = "须为正整数。目录快照和本地核验复用记录分别使用此上限；它不是整个数据库的大小上限。清空或超额淘汰核验缓存后，相关文件会重新核验，正式任务进度和历史仍保留。取消单独设置后沿用继承配置。";

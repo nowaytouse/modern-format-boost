@@ -1,4 +1,4 @@
-"app.subtitle" = "Native macOS media processing · Drop a file or folder anywhere";
+"app.subtitle" = "Choose or drop a file or folder, then select an operation.";
 "window.debug_title" = "Modern Format Boost %@ — Debug";
 "debug.banner" = "Debug · Interface, logs, and read-only previews";
 "debug.preview_action" = "Inspect input";
@@ -38,7 +38,7 @@
 "tool_snapshot.scope.img" = "Image processing";
 "tool_snapshot.scope.vid" = "Video processing";
 "history.remove.title" = "Remove selected history…";
-"history.remove.scope" = "Removes selected processing records and their captured output. Only logs with confirmed ownership are deleted. Media, resume state and unowned logs are kept.";
+"history.remove.scope" = "Clears selected batches from the history database and removes archives owned by those batches. Media, resume data and logs with uncertain ownership are kept.";
 "history.remove.preview" = "Review removal";
 "history.remove.counts" = "Selected batches: %d · Saved records: %llu · Log lines: %llu";
 "history.remove.artifacts" = "Logs safe to remove: %d · Log entries to keep: %d";
@@ -274,7 +274,15 @@
 "menu.minimize" = "Minimize";
 "menu.zoom" = "Zoom";
 "menu.front" = "Bring All to Front";
-"settings.title" = "Media Settings";
+"settings.title" = "Settings";
+"settings.section.general" = "General";
+"settings.section.about" = "About";
+"settings.zoom" = "Main window zoom";
+"settings.zoom.help" = "Changes the size of text and controls in the main window.";
+"settings.zoom.percent" = "%d%%";
+"settings.developer.help" = "Shows advanced operations, the command preview and diagnostics.";
+"settings.about.version" = "Version %@";
+"settings.about.licenses" = "Open Source Licenses…";
 "settings.section.cache" = "Database & Cache";
 "settings.cacheMaxBytes" = "Per-cache limit (bytes)";
 "settings.cacheMaxBytes.help" = "Positive integer. Directory snapshots and local verification proofs each use this limit; it does not limit the database file size. Cleared or evicted proofs require verification again. Durable task progress and history are retained. Clearing this override preserves inherited configuration.";

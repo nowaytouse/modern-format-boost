@@ -18,10 +18,18 @@ private let maxProcessLogBatchEntries = 256
 private let languagePreferenceKey = "MFBGuiLanguage"
 private let appearancePreferenceKey = "MFBGuiAppearance"
 private let developerPreferenceKey = "MFBGuiDeveloperMode"
+private let zoomPreferenceKey = "MFBGuiInterfaceZoom"
+private let interfaceZoomSteps = Array(stride(from: 90, through: 150, by: 10))
+private let defaultInterfaceZoom = 100
+private func savedInterfaceZoom(_ preferences: UserDefaults) -> Int {
+    let value = preferences.integer(forKey: zoomPreferenceKey)
+    return interfaceZoomSteps.contains(value) ? value : defaultInterfaceZoom
+}
 private let historyPreferenceKey = "MFBGuiHistoryDirectory"
 private let mainWindowContentSize = NSSize(width: 980, height: 720)
+private let compactWindowWidth: CGFloat = 760
 private let mainWindowStyleMask: NSWindow.StyleMask = [
-    .titled, .closable, .miniaturizable, .fullSizeContentView,
+    .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
 ]
 
 private var appVersion: String {
@@ -53,7 +61,8 @@ private func initialHistoryDirectory(
 
 private func bundledLicenseText() throws -> String {
     guard let project = Bundle.main.url(forResource: "LICENSE", withExtension: nil),
-          let thirdParty = Bundle.main.url(forResource: "LICENSES", withExtension: "json") else {
+          let thirdParty = Bundle.main.url(forResource: "LICENSES", withExtension: "json"),
+          let nativeNotices = Bundle.main.url(forResource: "THIRD_PARTY_NOTICES", withExtension: "txt") else {
         throw HostError(message: localized("error.licenses_missing"))
     }
     let data = try Data(contentsOf: thirdParty)
@@ -61,13 +70,23 @@ private func bundledLicenseText() throws -> String {
           let licenses = document["licenses"] as? [[String: Any]], !licenses.isEmpty else {
         throw HostError(message: localized("error.licenses_missing"))
     }
-    var sections = ["Modern Format Boost · \(appVersion)", try String(contentsOf: project, encoding: .utf8)]
+    var sections = ["Modern Format Boost · \(appVersion)",
+                    try String(contentsOf: project, encoding: .utf8),
+                    try String(contentsOf: nativeNotices, encoding: .utf8)]
     for license in licenses {
-        guard let name = license["name"] as? String, let text = license["text"] as? String,
-              let users = license["used_by"] as? [[String: Any]] else {
+        guard let name = license["name"] as? String, !name.isEmpty,
+              let text = license["text"] as? String, !text.isEmpty,
+              let users = license["used_by"] as? [[String: Any]], !users.isEmpty else {
             throw HostError(message: localized("error.licenses_missing"))
         }
-        let crates = users.compactMap { ($0["crate"] as? [String: Any])?["name"] as? String }.sorted()
+        let crates = try users.map { user in
+            guard let package = user["crate"] as? [String: Any],
+                  let name = package["name"] as? String, !name.isEmpty,
+                  let version = package["version"] as? String, !version.isEmpty else {
+                throw HostError(message: localized("error.licenses_missing"))
+            }
+            return "\(name) \(version)"
+        }.sorted()
         sections.append("\(name)\n\(crates.joined(separator: ", "))\n\n\(text)")
     }
     return sections.joined(separator: "\n\n────────────────────────\n\n")
@@ -528,6 +547,11 @@ private struct MediaSettings {
     var toolPaths: [ToolPipeline: [String: String]] = [:]
     private var invalidToolPipelines: Set<ToolPipeline> = []
     private var invalidValues: [MediaSetting: String] = [:]
+
+    func hasSameOverrides(as other: Self) -> Bool {
+        values == other.values && toolPaths == other.toolPaths
+            && invalidToolPipelines == other.invalidToolPipelines
+    }
 
     // String values are the control/persistence boundary; processing uses typed groups.
     var values: [MediaSetting: String] {
@@ -1725,6 +1749,8 @@ private final class ToolPathsPanel: NSObject, NSTextFieldDelegate, NSWindowDeleg
 private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFieldDelegate, NSComboBoxDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private enum SearchDestination: Equatable {
         case setting(MediaSetting)
+        case general(String)
+        case about
         case cache
         case tools
     }
@@ -1732,6 +1758,12 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private let panel: NSPanel
     private let preferences: UserDefaults
     private let applied: () -> Void
+    private let interfaceOnly: Bool
+    private let languagePopup = NSPopUpButton()
+    private let appearancePopup = NSPopUpButton()
+    private let zoomSlider = NSSlider()
+    private let zoomValue = NSTextField(labelWithString: "")
+    private let developerCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private var popups: [MediaSetting: NSPopUpButton] = [:]
     private var textFields: [MediaSetting: NSTextField] = [:]
     private var toggles: [MediaSetting: NSButton] = [:]
@@ -1770,6 +1802,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var applying = false
     private var applyGeneration = UUID()
     private var inheritedGeneration = UUID()
+    private var inheritedLoadStarted = false
     private let resetButton = NSButton()
     private let cancelButton = NSButton()
     private let applyButton = NSButton()
@@ -1797,9 +1830,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private var processingGuide: ProcessingGuideController?
     private var validatingLayout = false
 
-    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false, videos: Bool = false, applied: @escaping () -> Void) {
+    init(preferences: UserDefaults, developer: Bool = false, fast: Bool = false, avif: Bool = false,
+         videos: Bool = false, interfaceOnly: Bool = false, applied: @escaping () -> Void) {
         self.preferences = preferences
         self.applied = applied
+        self.interfaceOnly = interfaceOnly
         self.developer = developer
         self.fast = fast
         self.avif = avif
@@ -1824,7 +1859,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         configureSearch()
         tabs.translatesAutoresizingMaskIntoConstraints = false
         tabs.delegate = self
-        for section in ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"] {
+        installTab("general", grid: generalSettingsGrid())
+        let mediaSections = ["img", "vid", "photos", "performance"] + (developer ? ["developer"] : []) + ["cache"]
+        for section in interfaceOnly ? [] : mediaSections {
             let fields = MediaSetting.allCases.filter { field in
                 if fast && field.isFastImage && !field.appliesToFast(avif: avif) { return false }
                 if field == .performance { return section == "performance" }
@@ -1838,8 +1875,6 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 return section == "img" && !videos && (fast ? field.isFastImage : field.isImage)
             }
             if fields.isEmpty { continue }
-            let tab = NSTabViewItem(identifier: section)
-            tab.label = localized("settings.section.\(section)")
             let grid = NSGridView()
             grid.rowSpacing = 8
             grid.columnSpacing = 12
@@ -2003,19 +2038,9 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                 grid.column(at: 2).width = 22
                 grid.column(at: 2).xPlacement = .center
             }
-            grids[section] = grid
-            let content = NSView()
-            grid.translatesAutoresizingMaskIntoConstraints = false
-            content.addSubview(grid)
-            NSLayoutConstraint.activate([
-                grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-                grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-                grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
-                grid.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -32),
-            ])
-            tab.view = content
-            tabs.addTabViewItem(tab)
+            installTab(section, grid: grid)
         }
+        installTab("about", grid: aboutSettingsGrid())
         root.addArrangedSubview(tabs)
         tabHeight = tabs.heightAnchor.constraint(equalToConstant: 210)
         tabHeight?.isActive = true
@@ -2067,6 +2092,145 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         restore(MediaSettings(preferences: preferences))
     }
 
+    private func installTab(_ section: String, grid: NSGridView) {
+        let tab = NSTabViewItem(identifier: section)
+        tab.label = localized("settings.section.\(section)")
+        grids[section] = grid
+        let content = NSView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            grid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            grid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+        ])
+        tab.view = content
+        tabs.addTabViewItem(tab)
+    }
+
+    private func generalSettingsGrid() -> NSGridView {
+        languagePopup.addItems(withTitles: AppLanguage.allCases.map(\.nativeTitle))
+        appearancePopup.addItems(withTitles: AppAppearance.allCases.map(\.localizedTitle))
+        zoomSlider.minValue = Double(interfaceZoomSteps.first!)
+        zoomSlider.maxValue = Double(interfaceZoomSteps.last!)
+        zoomSlider.numberOfTickMarks = interfaceZoomSteps.count
+        zoomSlider.allowsTickMarkValuesOnly = true
+        zoomSlider.isContinuous = true
+        zoomSlider.target = self
+        zoomSlider.action = #selector(updateZoomValue)
+        zoomSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        zoomSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        zoomValue.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        zoomValue.alignment = .right
+        zoomValue.widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        zoomValue.setAccessibilityElement(false)
+        let zoomRow = NSStackView(views: [zoomSlider, zoomValue])
+        zoomRow.spacing = 10
+        zoomRow.alignment = .centerY
+        let zoomHelp = NSTextField(wrappingLabelWithString: localized("settings.zoom.help"))
+        zoomHelp.textColor = .secondaryLabelColor
+        let zoomControls = NSStackView(views: [zoomRow, zoomHelp])
+        zoomControls.orientation = .vertical
+        zoomControls.alignment = .leading
+        zoomControls.spacing = 6
+        zoomRow.widthAnchor.constraint(equalTo: zoomControls.widthAnchor).isActive = true
+        zoomHelp.widthAnchor.constraint(equalTo: zoomControls.widthAnchor).isActive = true
+        developerCheck.title = localized("option.developer")
+        developerCheck.toolTip = localized("settings.developer.help")
+        developerCheck.setAccessibilityHelp(developerCheck.toolTip)
+        let fields: [(String, NSControl, NSView)] = [
+            ("field.appearance", appearancePopup, appearancePopup),
+            ("field.language", languagePopup, languagePopup),
+            ("settings.zoom", zoomSlider, zoomControls),
+        ]
+        let grid = NSGridView(views: fields.map { key, control, view in
+            control.setAccessibilityLabel(localized(key))
+            return [NSTextField(labelWithString: localized(key)), view]
+        } + [[NSView(), developerCheck]])
+        grid.rowSpacing = 12
+        grid.columnSpacing = 14
+        grid.column(at: 0).width = 156
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 1).xPlacement = .fill
+        zoomSlider.setAccessibilityHelp(zoomHelp.stringValue)
+        restoreInterfacePreferences()
+        return grid
+    }
+
+    private func aboutSettingsGrid() -> NSGridView {
+        let logo = NSImageView(image: NSApp.applicationIconImage)
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.setAccessibilityElement(false)
+        logo.setAccessibilityHidden(true)
+        logo.widthAnchor.constraint(equalToConstant: 112).isActive = true
+        logo.heightAnchor.constraint(equalToConstant: 112).isActive = true
+        let name = NSTextField(labelWithString: "Modern Format Boost")
+        name.font = .systemFont(ofSize: 19, weight: .semibold)
+        let version = NSTextField(labelWithString: localized("settings.about.version", appVersion))
+        version.textColor = .secondaryLabelColor
+        let licenses = NSButton(title: localized("settings.about.licenses"), target: self, action: #selector(showLicenses))
+        let details = NSStackView(views: [logo, name, version, licenses])
+        details.orientation = .vertical
+        details.alignment = .centerX
+        details.spacing = 8
+        let grid = NSGridView(views: [[NSView(), details]])
+        grid.column(at: 0).width = 0
+        grid.column(at: 1).xPlacement = .fill
+        return grid
+    }
+
+    @objc private func showLicenses() {
+        do {
+            let text = try bundledLicenseText()
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+            scroll.hasVerticalScroller = true
+            scroll.borderType = .bezelBorder
+            let view = NSTextView(frame: scroll.bounds)
+            view.isEditable = false
+            view.isSelectable = true
+            view.font = .systemFont(ofSize: 13)
+            view.textContainerInset = NSSize(width: 12, height: 10)
+            view.autoresizingMask = [.width]
+            view.textContainer?.widthTracksTextView = true
+            view.string = text
+            view.setAccessibilityLabel(localized("settings.about.licenses"))
+            scroll.documentView = view
+            let alert = NSAlert()
+            alert.messageText = localized("settings.about.licenses")
+            alert.accessoryView = scroll
+            alert.addButton(withTitle: localized("menu.close"))
+            alert.beginSheetModal(for: panel)
+        } catch { NSAlert(error: error).beginSheetModal(for: panel) }
+    }
+
+    private func restoreInterfacePreferences(defaults: Bool = false) {
+        let language = defaults ? AppLanguage.system
+            : preferences.string(forKey: languagePreferenceKey).flatMap(AppLanguage.init(rawValue:)) ?? .system
+        let appearance = defaults ? AppAppearance.system
+            : preferences.string(forKey: appearancePreferenceKey).flatMap(AppAppearance.init(rawValue:)) ?? .system
+        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language) ?? 0)
+        appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
+        developerCheck.state = !defaults && preferences.bool(forKey: developerPreferenceKey) ? .on : .off
+        zoomSlider.integerValue = defaults ? defaultInterfaceZoom : savedInterfaceZoom(preferences)
+        updateZoomValue()
+    }
+
+    @objc private func updateZoomValue() {
+        zoomValue.stringValue = localized("settings.zoom.percent", zoomSlider.integerValue)
+        zoomSlider.setAccessibilityValueDescription(zoomValue.stringValue)
+    }
+
+    private func applyInterfacePreferences() {
+        let language = AppLanguage.allCases[safe: languagePopup.indexOfSelectedItem] ?? .system
+        let appearance = AppAppearance.allCases[safe: appearancePopup.indexOfSelectedItem] ?? .system
+        preferences.set(language.rawValue, forKey: languagePreferenceKey)
+        preferences.set(appearance.rawValue, forKey: appearancePreferenceKey)
+        preferences.set(developerCheck.state == .on, forKey: developerPreferenceKey)
+        preferences.set(zoomSlider.integerValue, forKey: zoomPreferenceKey)
+        cancel()
+        applied()
+    }
+
     private func configureSearch() {
         search.placeholderString = localized("settings.search")
         search.setAccessibilityLabel(localized("settings.search"))
@@ -2108,6 +2272,8 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         case let .setting(field):
             let section = fieldSections[field] ?? field.section
             return field.title + " · " + localized("settings.section.\(section)")
+        case let .general(key): return localized(key) + " · " + localized("settings.section.general")
+        case .about: return localized("settings.section.about")
         case .cache: return localized("settings.section.cache")
         case .tools: return localized("settings.tools.title")
         }
@@ -2131,8 +2297,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                           "settings.cache.database", "settings.cache.journal", "settings.cache.pages", "settings.cache.backup",
                           "settings.history.path", "settings.history.backup", "settings.history.backup_help",
                           "settings.history.overview", "settings.history.check", "settings.history.check_help"].map { localized($0) }.joined(separator: " ")
-        if matches(cacheTerms) { result.append(.cache) }
-        if developer, matches(localized("settings.tools.title") + " tools.paths --tool " + ToolPathsPanel.searchNames) {
+        for key in ["field.appearance", "field.language", "settings.zoom", "option.developer"]
+            where matches(searchTitle(.general(key))) { result.append(.general(key)) }
+        if matches(localized("settings.section.about") + " " + localized("settings.about.licenses")) {
+            result.append(.about)
+        }
+        if grids["cache"] != nil, matches(cacheTerms) { result.append(.cache) }
+        if grids["developer"] != nil, matches(localized("settings.tools.title") + " tools.paths --tool " + ToolPathsPanel.searchNames) {
             result.append(.tools)
         }
         return result
@@ -2179,6 +2350,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             tabs.selectTabViewItem(withIdentifier: section)
             let control: NSView? = (textFields[field] as NSView?) ?? popups[field] ?? toggles[field]
             if let control { panel.makeFirstResponder(control) }
+        case let .general(key):
+            tabs.selectTabViewItem(withIdentifier: "general")
+            let controls: [String: NSControl] = ["field.appearance": appearancePopup, "field.language": languagePopup,
+                "settings.zoom": zoomSlider, "option.developer": developerCheck]
+            if let control = controls[key] { panel.makeFirstResponder(control) }
+        case .about:
+            tabs.selectTabViewItem(withIdentifier: "about")
         case .cache:
             tabs.selectTabViewItem(withIdentifier: "cache")
             panel.makeFirstResponder(cacheRefresh)
@@ -2660,16 +2838,19 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         NotificationCenter.default.post(name: DisplayPrivacy.changed, object: preferences)
     }
 
-    func show(for window: NSWindow) {
+    func show(for window: NSWindow, section: String = "general") {
         privacyCheck.state = DisplayPrivacy.enabled(in: preferences) ? .on : .off
-        if tabs.numberOfTabViewItems > 0 { tabs.selectTabViewItem(at: 0) }
+        restoreInterfacePreferences()
+        tabs.selectTabViewItem(withIdentifier: section)
+        updatePanelSize()
         window.beginSheet(panel)
-        loadInheritedValues()
     }
 
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
         updatePanelSize()
-        if tabViewItem?.identifier as? String == "cache", !cacheLoaded && !validatingLayout { refreshCache() }
+        guard panel.sheetParent != nil, !validatingLayout, let section = tabViewItem?.identifier as? String else { return }
+        if !["general", "about"].contains(section), !inheritedLoadStarted { loadInheritedValues() }
+        if section == "cache", !cacheLoaded { refreshCache() }
     }
 
     @objc private func showRecoveryGuide() {
@@ -2680,7 +2861,11 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     private func updatePanelSize() {
         guard let section = tabs.selectedTabViewItem?.identifier as? String,
               let grid = grids[section], let tabHeight else { return }
+        let about = section == "about"
         advanced.isHidden = developer || section != "photos"
+        privacyCheck.isHidden = about
+        privacyNote.isHidden = about
+        resetButton.isHidden = about
         cancelButton.title = localized("alert.cancel")
         cancelButton.isEnabled = !cacheBusy
         resetButton.isEnabled = !cacheBusy
@@ -2697,7 +2882,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         status.isHidden = status.stringValue.isEmpty
         let visibleRows = (0..<grid.numberOfRows).map { grid.row(at: $0) }.filter { !$0.isHidden }
         let rowsHeight: CGFloat
-        if section == "cache" {
+        if ["general", "about", "cache"].contains(section) {
             panel.contentView?.layoutSubtreeIfNeeded()
             rowsHeight = grid.frame.height
         } else {
@@ -2709,13 +2894,14 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         panel.contentView?.layoutSubtreeIfNeeded()
         let searchExtras: CGFloat = 36 + (searchResults.isHidden ? 0 : (searchHeight?.constant ?? 0) + 12)
             + (searchEmpty.isHidden ? 0 : 30)
-        let privacyHeight = privacyCheck.fittingSize.height + privacyNote.fittingSize.height + root.spacing * 2
+        let privacyHeight = about ? 0 : privacyCheck.fittingSize.height + privacyNote.fittingSize.height + root.spacing * 2
         let extras: CGFloat = (advanced.isHidden ? 0 : 32) + (status.isHidden ? 0 : 52) + searchExtras + privacyHeight
         panel.setContentSize(NSSize(width: 660, height: tabHeight.constant + 76 + extras))
         panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     private func loadInheritedValues() {
+        inheritedLoadStarted = true
         inheritedGeneration = UUID()
         let generation = inheritedGeneration
         let settings = draft()
@@ -3043,6 +3229,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
     @objc private func resetTab() {
         var settings = draft()
         let section = tabs.selectedTabViewItem?.identifier as? String
+        if section == "general" { restoreInterfacePreferences(defaults: true); return }
         for field in rows.keys where field.section == section || (section == "img" && field.isFastImage && !field.isDeveloper) {
             settings.values.removeValue(forKey: field)
         }
@@ -3091,6 +3278,10 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         sourceGeneration = UUID()
         do {
             let settings = draft()
+            if interfaceOnly || settings.hasSameOverrides(as: MediaSettings(preferences: preferences)) {
+                applyInterfacePreferences()
+                return
+            }
             try settings.validate()
             applying = true
             applyGeneration = UUID()
@@ -3112,8 +3303,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
                     do {
                         try result.get()
                         try settings.save(to: self.preferences)
-                        self.applied()
-                        self.cancel()
+                        self.applyInterfacePreferences()
                     } catch { NSAlert(error: error).beginSheetModal(for: self.panel) }
                 }
             }
@@ -3318,7 +3508,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard MediaSettings(preferences: preferences).values == settings.values else {
             throw HostError(message: "Media settings did not persist independently")
         }
-        tabs.selectTabViewItem(at: 0)
+        tabs.selectTabViewItem(withIdentifier: "img")
         resetTab()
         guard draft().values == [.vidCodec: "av1", .vidErrorMode: "fail-fast"], popups[effort]?.indexOfSelectedItem == 0 else {
             throw HostError(message: "Resetting image settings changed video settings")
@@ -3446,6 +3636,35 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         inheritedSources.removeAll()
         inheritedMixed.removeAll()
         restore(MediaSettings())
+    }
+
+    func validateInterfaceSettingsForSelfTest() throws {
+        let keys = [zoomPreferenceKey, languagePreferenceKey, appearancePreferenceKey, developerPreferenceKey]
+        let original = keys.map { preferences.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, original) { preferences.set(value, forKey: key) }
+        }
+        tabs.selectTabViewItem(withIdentifier: "general")
+        updatePanelSize()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        guard zoomSlider.frame.width >= 280,
+              zoomSlider.accessibilityLabel() == localized("settings.zoom"),
+              matchingSettings(localized("settings.zoom")).contains(.general("settings.zoom")) else {
+            throw HostError(message: "Window zoom is clipped, unnamed, or missing from Settings search")
+        }
+        zoomSlider.integerValue = 130
+        updateZoomValue()
+        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: .japanese)!)
+        appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: .dark)!)
+        developerCheck.state = .on
+        apply()
+        guard zoomValue.stringValue == localized("settings.zoom.percent", 130),
+              savedInterfaceZoom(preferences) == 130,
+              preferences.string(forKey: languagePreferenceKey) == AppLanguage.japanese.rawValue,
+              preferences.string(forKey: appearancePreferenceKey) == AppAppearance.dark.rawValue,
+              preferences.bool(forKey: developerPreferenceKey) else {
+            throw HostError(message: "General Settings did not persist independently of media processing")
+        }
     }
 
     private func validateAvifMetadataForSelfTest() throws {
@@ -4840,6 +5059,7 @@ private struct LiveWorkerExecution {
     private var sawOtherFailure = false
     private(set) var latest: HistoryWorkerExecution?
     private(set) var invalid = false
+    var confirmedRunID: String? { invalid ? nil : runID }
 
     mutating func ingest(_ line: String) -> Bool {
         let raw = LogTone.message(line)
@@ -6791,23 +7011,24 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let preferences: UserDefaults
     private let window: NSWindow
     private let titleLabel = NSTextField(labelWithString: "Modern Format Boost")
-    private let aboutIcon = NSButton()
+    private let logo = NSImageView()
+    private var logoSize: [NSLayoutConstraint] = []
+    private var mainFonts: [(NSControl, NSFont)] = []
+    private var interfaceScale: CGFloat = 1
+    private let actionRow = NSStackView()
+    private let compactActions = NSStackView()
+    private let primaryActions = NSStackView()
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let mediaLabel = NSTextField(labelWithString: "")
     private let operationLabel = NSTextField(labelWithString: "")
     private let photosScopeLabel = NSTextField(labelWithString: "")
     private let metadataSafetyLabel = NSTextField(wrappingLabelWithString: "")
-    private let languageLabel = NSTextField(labelWithString: "")
-    private let appearanceLabel = NSTextField(labelWithString: "")
     private let targetField = NSTextField()
     private let backupLabel = NSTextField(labelWithString: "")
     private let backupField = NSTextField()
     private let processingPopup = NSPopUpButton()
     private let operationPopup = NSPopUpButton()
     private var processingRow: NSGridRow?
-    private let languagePopup = NSPopUpButton()
-    private let appearancePopup = NSPopUpButton()
-    private let developerCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let ultimateCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let verboseCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let shortestPathCheck = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -6891,7 +7112,6 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var resolvedHistoryDirectory = historyDirectory
     private let pauseButton = NSButton(title: "", target: nil, action: nil)
     private let stopButton = NSButton(title: "", target: nil, action: nil)
-    private var aboutWindow: NSWindow?
     private var processingGuide: ProcessingGuideController?
     private var closeWhenFinished = false
     private var lastRequest: ProcessorRequest?
@@ -6913,7 +7133,7 @@ private final class AppController: NSObject, NSWindowDelegate {
     private var refreshTimer: Timer?
     private var processingActivity: NSObjectProtocol?
 
-    private var developerMode: Bool { developerCheck.state == .on }
+    private var developerMode: Bool
     private var privacyEnabled: Bool { DisplayPrivacy.enabled(in: preferences) }
 
     private var optionControls: [(NSButton, String)] { [
@@ -6953,6 +7173,7 @@ private final class AppController: NSObject, NSWindowDelegate {
 
     init(preferences: UserDefaults = guiPreferences) {
         self.preferences = preferences
+        developerMode = preferences.bool(forKey: developerPreferenceKey)
         resolvedHistoryDirectory = initialHistoryDirectory(preferences: preferences)
         window = NSWindow(
             contentRect: NSRect(
@@ -7017,6 +7238,11 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshProcessingStatus()
     }
 
+    func windowDidResize(_ notification: Notification) {
+        guard let width = window.contentView?.bounds.width else { return }
+        if arrangeActions(for: width) { updateWindowSize() }
+    }
+
     private func refreshStatus() {
         switch statusDisplay {
         case .processor: statusLabel.stringValue = processorStatus.message
@@ -7058,9 +7284,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .visible
         window.setContentSize(mainWindowContentSize)
-        window.contentMinSize = mainWindowContentSize
-        window.contentMaxSize = mainWindowContentSize
-        window.standardWindowButton(.zoomButton)?.isEnabled = false
+        window.contentMinSize = NSSize(width: compactWindowWidth, height: 360)
         window.tabbingMode = .disallowed
         window.delegate = self
 
@@ -7071,46 +7295,26 @@ private final class AppController: NSObject, NSWindowDelegate {
         root.onDrop = { [weak self] path in self?.acceptTarget(path) }
         window.contentView = root
 
-        let icon = aboutIcon
-        icon.isBordered = false
-        icon.target = self
-        icon.action = #selector(showAbout)
-        icon.toolTip = localized("menu.about")
-        icon.setAccessibilityLabel(localized("menu.about"))
-        icon.image = NSApp.applicationIconImage
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.widthAnchor.constraint(equalToConstant: 36).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 36).isActive = true
-        icon.setContentHuggingPriority(.required, for: .horizontal)
+        logo.image = NSApp.applicationIconImage
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.setAccessibilityElement(false)
+        logo.setAccessibilityHidden(true)
+        logoSize = [logo.widthAnchor.constraint(equalToConstant: 56),
+                    logo.heightAnchor.constraint(equalToConstant: 56)]
+        NSLayoutConstraint.activate(logoSize)
+        logo.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let titleStack = NSStackView(views: [titleLabel, subtitleLabel])
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 2
-        let identity = NSStackView(views: [icon, titleStack])
-        identity.orientation = .horizontal
-        identity.alignment = .centerY
-        identity.spacing = 12
-
-        languagePopup.target = self
-        languagePopup.action = #selector(languageChanged)
-        appearancePopup.target = self
-        appearancePopup.action = #selector(appearanceChanged)
-        developerCheck.target = self
-        developerCheck.action = #selector(developerModeChanged)
-        let preferenceGrid = NSGridView(views: [
-            [languageLabel, languagePopup],
-            [appearanceLabel, appearancePopup],
-        ])
-        preferenceGrid.rowSpacing = 5
-        preferenceGrid.columnSpacing = 8
-        preferenceGrid.column(at: 0).xPlacement = .trailing
-        preferenceGrid.column(at: 1).xPlacement = .fill
         let headerSpacer = NSView()
         headerSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let header = NSStackView(views: [identity, headerSpacer, preferenceGrid])
+        let header = NSStackView(views: [logo, titleStack, headerSpacer])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 16
@@ -7243,8 +7447,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         settingsButton.target = self
         settingsButton.action = #selector(showSettings)
         settingsButton.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-        settingsButton.imagePosition = .imageOnly
-        settingsButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        settingsButton.imagePosition = .imageLeading
         preflightButton.target = self
         preflightButton.action = #selector(inspectInput)
         preflightButton.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: nil)
@@ -7268,10 +7471,18 @@ private final class AppController: NSObject, NSWindowDelegate {
         stopButton.isEnabled = false
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actionRow = NSStackView(views: [settingsButton, helpButton, historyButton, preflightButton, diagnosticsButton, openButton, copyButton, spacer, pauseButton, stopButton, runButton])
-        actionRow.orientation = .horizontal
-        actionRow.alignment = .centerY
-        actionRow.spacing = 8
+        for view in [pauseButton, stopButton, runButton] { primaryActions.addArrangedSubview(view) }
+        for view in [settingsButton, helpButton, historyButton, preflightButton, diagnosticsButton,
+                     openButton, copyButton, spacer, primaryActions] { actionRow.addArrangedSubview(view) }
+        let compactSpacer = NSView()
+        compactSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        compactActions.addArrangedSubview(compactSpacer)
+        for row in [actionRow, primaryActions, compactActions] {
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+        }
+        compactActions.isHidden = true
 
         logView.isEditable = false
         logView.isSelectable = true
@@ -7314,7 +7525,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         fileProgressIndicator.minValue = 0
         fileProgressIndicator.maxValue = 100
         fileProgressIndicator.isIndeterminate = false
-        fileProgressIndicator.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        fileProgressIndicator.widthAnchor.constraint(equalToConstant: 240).isActive = true
         fileProgressLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         fileProgressLabel.lineBreakMode = .byWordWrapping
         fileProgressLabel.maximumNumberOfLines = 2
@@ -7382,7 +7593,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusRow.spacing = 8
         let stack = mainLayout
         for view in [
-            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
             countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
@@ -7391,7 +7602,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(16, after: header)
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
-            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow,
+            header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
             countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -7403,8 +7614,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -16),
         ])
+        collectMainFonts(in: stack)
         applyLocalization()
-        selectSavedPreferences()
+        applyInterfaceZoom(savedInterfaceZoom(preferences))
         restoreOptions(for: .adjacent)
         configurationChanged()
         updateLogPresentation()
@@ -7413,6 +7625,56 @@ private final class AppController: NSObject, NSWindowDelegate {
     private func configureHost() {
         host.onLog = { [weak self] text in self?.appendLog(text) }
         host.onCompletion = { [weak self] result in self?.processingCompleted(result) }
+    }
+
+    private func collectMainFonts(in view: NSView) {
+        guard view !== logScroll else { return }
+        if let control = view as? NSControl {
+            let font = control.font ?? .systemFont(ofSize: NSFont.systemFontSize(for: control.controlSize))
+            mainFonts.append((control, font))
+        }
+        let children = (view as? NSStackView)?.arrangedSubviews ?? view.subviews
+        for child in children { collectMainFonts(in: child) }
+    }
+
+    private func applyInterfaceZoom(_ zoom: Int) {
+        let scale = CGFloat(zoom) / 100
+        guard interfaceScale != scale else { return }
+        let factor = scale / interfaceScale
+        interfaceScale = scale
+        let fonts = NSFontManager.shared
+        for (control, font) in mainFonts {
+            control.font = fonts.convert(font, toSize: font.pointSize * scale)
+        }
+        for constraint in logoSize { constraint.constant = 56 * scale }
+        logView.font = .monospacedSystemFont(ofSize: 12 * scale, weight: .regular)
+        for storage in [fullLogPresentation, privateLogPresentation] {
+            storage.beginEditing()
+            storage.enumerateAttribute(.font, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if let font = value as? NSFont {
+                    storage.addAttribute(.font, value: fonts.convert(font, toSize: font.pointSize * factor), range: range)
+                }
+            }
+            storage.endEditing()
+        }
+        refreshPrivacyPresentation()
+        updateWindowSize()
+    }
+
+    @discardableResult
+    private func arrangeActions(for width: CGFloat) -> Bool {
+        guard let current = primaryActions.superview as? NSStackView else { return false }
+        let buttons = (actionRow.arrangedSubviews + primaryActions.arrangedSubviews)
+            .compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+        let required = buttons.reduce(CGFloat(56)) { $0 + max(32, $1.intrinsicContentSize.width) + 8 }
+        let destination = width < required ? compactActions : actionRow
+        guard current !== destination else { return false }
+        destination.isHidden = false
+        current.removeArrangedSubview(primaryActions)
+        primaryActions.removeFromSuperview()
+        destination.addArrangedSubview(primaryActions)
+        compactActions.isHidden = destination !== compactActions
+        return true
     }
 
     @objc private func chooseTarget() {
@@ -7537,7 +7799,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         configurationChanged()
     }
 
-    @objc private func developerModeChanged() {
+    private func setDeveloperMode(_ enabled: Bool) {
+        developerMode = enabled
         preferences.set(developerMode, forKey: developerPreferenceKey)
         updateOptionTitles()
         refreshOperationPopup()
@@ -7620,6 +7883,14 @@ private final class AppController: NSObject, NSWindowDelegate {
                 return !isDebugWindow && !self.host.isRunning && self.configurationControlsEnabled && !self.restoreFixture
             }
             historyPanel?.onRetryFailed = { [weak self] selection in self?.runSelectedFailures(selection) }
+            historyPanel?.onRemoved = { [weak self] directory, _, runID in
+                guard let self, !self.host.isRunning, self.workerExecution.confirmedRunID == runID,
+                      self.resolvedHistoryDirectory.standardizedFileURL == directory.standardizedFileURL else { return }
+                self.lastRequest = nil
+                self.failedRetryAvailable = nil
+                self.clearBatchLog()
+                self.configurationChanged()
+            }
         }
         historyPanel?.refresh(directory: resolvedHistoryDirectory)
         historyPanel?.show()
@@ -7709,39 +7980,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         } catch { present(error) }
     }
 
-    @objc func showAbout() {
-        do {
-            let text = try bundledLicenseText()
-            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
-                                 styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            panel.isReleasedWhenClosed = false
-            panel.title = "\(localized("menu.about")) · \(appVersion)"
-            var scrollFrame = panel.contentView!.bounds
-            scrollFrame.origin.y = 48
-            scrollFrame.size.height -= 48
-            let scroll = NSScrollView(frame: scrollFrame)
-            scroll.autoresizingMask = [.width, .height]
-            scroll.hasVerticalScroller = true
-            let textView = NSTextView(frame: scroll.bounds)
-            textView.isEditable = false
-            textView.isSelectable = true
-            textView.font = .systemFont(ofSize: 13)
-            textView.textContainerInset = NSSize(width: 20, height: 16)
-            textView.autoresizingMask = [.width]
-            textView.textContainer?.widthTracksTextView = true
-            textView.string = text
-            scroll.documentView = textView
-            panel.contentView?.addSubview(scroll)
-            developerCheck.removeFromSuperview()
-            developerCheck.frame = NSRect(x: 20, y: 14, width: 520, height: 24)
-            developerCheck.autoresizingMask = [.width, .maxYMargin]
-            panel.contentView?.addSubview(developerCheck)
-            aboutWindow?.close()
-            aboutWindow = panel
-            panel.center()
-            panel.makeKeyAndOrderFront(nil)
-        } catch { present(error) }
-    }
+    func showAbout() { openSettings(section: "about") }
 
     private func invalidatePreflight() {
         preflightGeneration = UUID()
@@ -7837,8 +8076,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         preflightButton.isEnabled = configurationControlsEnabled && selectedOperation == .adjacent
             && !targetField.stringValue.isEmpty
         preflightButton.toolTip = localized(selectedOperation == .adjacent ? "preflight.title" : "preflight.standard_only")
-        settingsButton.isEnabled = configurationControlsEnabled && selectedOperation != .restoreJpeg
-        settingsButton.toolTip = localized(selectedOperation == .restoreJpeg ? "settings.restore_unused" : "settings.title")
+        settingsButton.isEnabled = configurationControlsEnabled
+        settingsButton.toolTip = localized("settings.title")
         if let fixed = capabilities.fixedProcessingMode {
             processingPopup.selectItem(
                 at: ProcessingMode.allCases.firstIndex { $0.rawValue == fixed.rawValue } ?? 0,
@@ -7956,7 +8195,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             runButton.setAccessibilityLabel(runButton.title)
             runButton.toolTip = localized("debug.preview_only")
         }
-        settingsButton.toolTip = localized(restoresJpeg ? "settings.restore_unused" : "settings.title")
+        settingsButton.toolTip = localized("settings.title")
     }
 
     private func request() throws -> ProcessorRequest {
@@ -8370,7 +8609,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             let rendered = NSMutableAttributedString(string: String(line), attributes: [
                 .foregroundColor: restrained ? NSColor.labelColor
                     : tone == .failure ? processDiagnosticColor(String(line)) : tone.color,
-                .font: restrained ? LogTone.normal.font : tone.font,
+                .font: interfaceScale == 1 ? (restrained ? LogTone.normal.font : tone.font)
+                    : .monospacedSystemFont(ofSize: 12 * interfaceScale,
+                        weight: restrained || tone == .normal || tone == .muted ? .regular : .semibold),
             ])
             if restrained, let marker = line.range(of: #"(?i)^\s*(?:ERR:\s*)?(?:\[(?:ERROR|FAIL(?:ED)?|WARN(?:ING)?)\s*\]|(?:Error|Failed|Warning|错误|失败|警告|エラー|失敗):)"#,
                                                   options: .regularExpression) {
@@ -8424,14 +8665,24 @@ private final class AppController: NSObject, NSWindowDelegate {
         logDetailsButton.setAccessibilityLabel(logDetailsButton.title)
         logDetailsButton.setAccessibilityExpanded(logDetailsExpanded)
         refreshLatestDiagnostics()
-        let height: CGFloat = logDetailsExpanded ? mainWindowContentSize.height
-            : max(360, ceil(mainLayout.fittingSize.height) + 48)
-        let size = NSSize(width: mainWindowContentSize.width, height: height)
-        if window.contentView?.bounds.size != size {
-            window.contentMinSize = size
-            window.contentMaxSize = size
-            window.setContentSize(size)
+        updateWindowSize()
+    }
+
+    private func updateWindowSize() {
+        guard let content = window.contentView else { return }
+        let current = content.bounds.size
+        let optionWidths = optionColumns.compactMap { column in
+            column.arrangedSubviews.compactMap { $0.isHidden ? nil : $0.intrinsicContentSize.width }.max()
         }
+        let minimumWidth = max(compactWindowWidth, optionWidths.reduce(0, +) + 64)
+        let width = max(current.width, minimumWidth)
+        arrangeActions(for: width)
+        content.layoutSubtreeIfNeeded()
+        let minimumHeight = max(360, ceil(mainLayout.fittingSize.height) + 48)
+        let height = logDetailsExpanded ? max(current.height, mainWindowContentSize.height, minimumHeight) : minimumHeight
+        let size = NSSize(width: width, height: height)
+        window.contentMinSize = NSSize(width: minimumWidth, height: minimumHeight)
+        if current != size { window.setContentSize(size) }
     }
 
     private func refreshToolSnapshot() {
@@ -9279,16 +9530,30 @@ private final class AppController: NSObject, NSWindowDelegate {
         else if batchResults.hasPartialSuccess { setLocalizedStatus("result.attention_count", String(failures ?? 0)) }
     }
 
-    @objc private func showSettings() {
-        guard configurationControlsEnabled, selectedOperation != .restoreJpeg else { return }
+    @objc func showSettings() { openSettings(section: "general") }
+
+    private func openSettings(section: String) {
+        guard configurationControlsEnabled, window.attachedSheet == nil else { return }
         settingsPanel = MediaSettingsPanel(preferences: preferences, developer: developerMode,
             fast: selectedOperation.backendMode == "fast-img",
             avif: selectedOperation == .fastImgAvif,
             videos: selectedOperation == .adjacent ? processingPopup.indexOfSelectedItem == 2
-                : selectedOperation.backendMode != "fast-img") { [weak self] in
-            self?.configurationChanged()
+                : selectedOperation.backendMode != "fast-img",
+            interfaceOnly: selectedOperation == .restoreJpeg) { [weak self] in
+            guard let self else { return }
+            let language = self.preferences.string(forKey: languagePreferenceKey)
+                .flatMap(AppLanguage.init(rawValue:)) ?? .system
+            if language != LocalizationCatalog.shared.language { self.languageChanged(language) }
+            let appearance = self.preferences.string(forKey: appearancePreferenceKey)
+                .flatMap(AppAppearance.init(rawValue:)) ?? .system
+            appearance.apply()
+            let developer = self.preferences.bool(forKey: developerPreferenceKey)
+            if self.developerMode != developer { self.setDeveloperMode(developer) }
+            self.applyInterfaceZoom(savedInterfaceZoom(self.preferences))
+            self.configurationChanged()
+            self.updateWindowSize()
         }
-        settingsPanel?.show(for: window)
+        settingsPanel?.show(for: window, section: section)
     }
 
     @objc private func openHelp() {
@@ -9317,34 +9582,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc private func languageChanged() {
+    private func languageChanged(_ language: AppLanguage) {
         invalidatePreflight()
         preflightPanel?.close()
         preflightPanel = nil
-        let language = AppLanguage.allCases[safe: languagePopup.indexOfSelectedItem] ?? .system
         LocalizationCatalog.shared.select(language)
         applyLocalization()
         (NSApp.delegate as? AppDelegate)?.configureMenus()
         updateMetadataSafetyNotice()
         if !batchOverview.isHidden { refreshBatchOverview() }
-    }
-
-    @objc private func appearanceChanged() {
-        let appearance = AppAppearance.allCases[safe: appearancePopup.indexOfSelectedItem] ?? .system
-        guiPreferences.set(appearance.rawValue, forKey: appearancePreferenceKey)
-        appearance.apply()
-    }
-
-    private func selectSavedPreferences() {
-        let selectedLanguage = LocalizationCatalog.shared.language
-        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: selectedLanguage) ?? 0)
-        let appearance = guiPreferences.string(forKey: appearancePreferenceKey)
-            .flatMap(AppAppearance.init(rawValue:)) ?? .system
-        appearancePopup.selectItem(at: AppAppearance.allCases.firstIndex(of: appearance) ?? 0)
-        appearance.apply()
-        developerCheck.state = preferences.bool(forKey: developerPreferenceKey) ? .on : .off
-        updateOptionTitles()
-        refreshOperationPopup()
     }
 
     private func replaceTitles(_ popup: NSPopUpButton, with titles: [String]) {
@@ -9355,8 +9601,6 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func applyLocalization() {
-        aboutIcon.toolTip = localized("menu.about")
-        aboutIcon.setAccessibilityLabel(localized("menu.about"))
         subtitleLabel.stringValue = localized(isDebugWindow ? "debug.banner" : "app.subtitle")
         subtitleLabel.toolTip = subtitleLabel.stringValue
         window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
@@ -9368,9 +9612,6 @@ private final class AppController: NSObject, NSWindowDelegate {
         mediaLabel.stringValue = localized("field.media")
         operationLabel.stringValue = localized("field.operation")
         photosScopeLabel.stringValue = localized("field.photos_scope")
-        languageLabel.stringValue = localized("field.language")
-        appearanceLabel.stringValue = localized("field.appearance")
-        developerCheck.title = localized("option.developer")
         chooseButton.title = localized("button.choose")
         backupButton.title = localized("button.choose")
         chooseButton.toolTip = localized("button.choose_target")
@@ -9381,6 +9622,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
         historyButton.title = localized("button.history")
+        settingsButton.title = localized("settings.title")
         settingsButton.toolTip = localized("settings.title")
         settingsButton.setAccessibilityLabel(localized("settings.title"))
         preflightButton.toolTip = localized("preflight.title")
@@ -9401,8 +9643,6 @@ private final class AppController: NSObject, NSWindowDelegate {
             localized("media.both"), localized("media.images"), localized("media.videos"),
         ])
         refreshOperationPopup()
-        replaceTitles(languagePopup, with: AppLanguage.allCases.map(\.nativeTitle))
-        replaceTitles(appearancePopup, with: AppAppearance.allCases.map(\.localizedTitle))
         refreshCountStatus()
         refreshFileProgress()
         refreshLatestDiagnostics()
@@ -9463,8 +9703,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         configurationControlsEnabled = !processing
         (window.contentView as? NativeDropView)?.acceptsDrops = !processing
         for control in [
-            chooseButton, backupButton, operationPopup, developerCheck, openButton, copyButton, runButton,
-            languagePopup, appearancePopup, settingsButton,
+            chooseButton, backupButton, operationPopup, openButton, copyButton, runButton, settingsButton,
         ] {
             control.isEnabled = !processing
         }
@@ -9723,18 +9962,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             targetField.stringValue = previousTarget
             backupField.stringValue = previousBackup
             commandField.stringValue = previousCommand
-            languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language) ?? 0)
-            languageChanged()
+            languageChanged(language)
         }
         targetField.stringValue = "/synthetic/language-draft"
         backupField.stringValue = "/synthetic/language-backup"
         commandField.stringValue = "synthetic command preview"
-        func changeLanguage(_ language: AppLanguage) {
-            languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: language)!)
-            languageChanged()
-        }
         for language in [AppLanguage.english, .simplifiedChinese, .japanese] {
-            changeLanguage(language)
+            languageChanged(language)
             let repeatLabel = localized("log.repeated_occurrences", "3")
             guard repeatLabel != "log.repeated_occurrences", repeatLabel.contains("3") else {
                 throw HostError(message: "Repeated-log count was not localized for every language")
@@ -9743,14 +9977,15 @@ private final class AppController: NSObject, NSWindowDelegate {
                                  (.ready, "status.processor_ready"), (.unavailable, "status.processor_unavailable")] {
                 processorStatus = state
                 statusDisplay = .processor
-                changeLanguage(language)
+                languageChanged(language)
                 guard statusLabel.stringValue == localized(key), processorStatus == state,
-                      aboutIcon.toolTip == localized("menu.about"), aboutIcon.accessibilityLabel() == localized("menu.about") else {
+                      settingsButton.title == localized("settings.title"),
+                      settingsButton.accessibilityLabel() == localized("settings.title") else {
                     throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
                 }
             }
             processorStatus = .failed(diagnostic: "synthetic original failure", truncated: true)
-            changeLanguage(language)
+            languageChanged(language)
             guard statusLabel.stringValue == localized("status.processor_failed") + ": synthetic original failure\n"
                 + localized("status.processor_diagnostic_truncated"), processorStatus != .ready else {
                 throw HostError(message: "Language change lost the core failure evidence or relabeled it ready")
@@ -9790,13 +10025,13 @@ private final class AppController: NSObject, NSWindowDelegate {
                 throw HostError(message: "Critical-only overflow lost pending controls or inherited old counts")
             }
             setStatus("synthetic original diagnostic")
-            changeLanguage(language)
+            languageChanged(language)
             guard statusLabel.stringValue == "synthetic original diagnostic" else {
                 throw HostError(message: "Language change replaced an actionable error with core readiness")
             }
             for key in ["status.ready", "result.partially_completed", "result.finished_with_failures", "status.stopped"] {
                 setLocalizedStatus(key)
-                changeLanguage(language)
+                languageChanged(language)
                 guard statusLabel.stringValue == localized(key) else {
                     throw HostError(message: "Language change reset a completed, failed, or stopped status")
                 }
@@ -9804,7 +10039,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         }
         processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
         let startedAt = processingStartedAt
-        changeLanguage(.japanese)
+        languageChanged(.japanese)
         let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt!))
         guard statusLabel.stringValue == localized("status.running_elapsed", elapsed / 60, elapsed % 60),
               processingStartedAt == startedAt, targetField.stringValue == "/synthetic/language-draft",
@@ -10278,16 +10513,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         let previousBatch = batchResults
         let previousTarget = targetField.stringValue
         let previousFixture = photosProgressFixture
-        let previousDeveloper = developerCheck.state
+        let previousDeveloper = developerMode
         defer {
             photosProgressFixture = previousFixture
             targetField.stringValue = previousTarget
-            developerCheck.state = previousDeveloper
+            developerMode = previousDeveloper
             clearBatchLog()
             batchResults = previousBatch
         }
         photosProgressFixture = true
-        developerCheck.state = .off
+        developerMode = false
         configurePhotosCustodyFixture()
         window.contentView?.layoutSubtreeIfNeeded()
         guard !gateActivity.invalid, !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
@@ -10390,16 +10625,16 @@ private final class AppController: NSObject, NSWindowDelegate {
         let previousRequest = lastRequest
         let previousTarget = targetField.stringValue
         let previousFixture = photosProgressFixture
-        let previousDeveloper = developerCheck.state
+        let previousDeveloper = developerMode
         defer {
             photosProgressFixture = previousFixture
             lastRequest = previousRequest
             targetField.stringValue = previousTarget
-            developerCheck.state = previousDeveloper
+            developerMode = previousDeveloper
             clearBatchLog()
         }
         photosProgressFixture = true
-        developerCheck.state = .off
+        developerMode = false
         try configurePhotosProgressFixture()
         window.contentView?.layoutSubtreeIfNeeded()
         guard !fileProgressRow.isHidden, !fileProgressIndicator.isHidden,
@@ -10818,6 +11053,22 @@ private final class AppController: NSObject, NSWindowDelegate {
               logDetailsButton.accessibilityLabel() == localized("log.details.show") else {
             throw HostError(message: "Ordinary startup did not collapse technical processing details")
         }
+        let originalSize = window.contentView!.bounds.size
+        let originalFontSize = titleLabel.font!.pointSize
+        for width in [compactWindowWidth, 1280] {
+            window.setContentSize(NSSize(width: width, height: originalSize.height))
+            applyInterfaceZoom(150)
+            window.contentView?.layoutSubtreeIfNeeded()
+            guard let content = window.contentView,
+                  abs(content.bounds.width - width) < 1,
+                  abs(titleLabel.font!.pointSize - originalFontSize * 1.5) < 1,
+                  logo.bounds.width >= 83,
+                  content.bounds.contains(runButton.convert(runButton.bounds, to: content)) else {
+                throw HostError(message: "Window zoom clipped the main action or did not resize the logo and text")
+            }
+            applyInterfaceZoom(100)
+        }
+        window.setContentSize(originalSize)
         logDetailsExpanded = true
         updateLogPresentation()
         defer {
@@ -11061,8 +11312,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                 throw HostError(message: "Option column alignment drifted")
             }
         }
-        developerCheck.state = .on
-        developerModeChanged()
+        setDeveloperMode(true)
         guard operationPopup.itemArray.count == OperationMode.allCases.count,
                !copyButton.isHidden, !openButton.isHidden, !diagnosticsButton.isHidden,
                !watchCheck.isHidden, watchCheck.isEnabled,
@@ -11085,8 +11335,7 @@ private final class AppController: NSObject, NSWindowDelegate {
                   })
             else { throw HostError(message: "Option clipped or overlapped: \(button.title)") }
         }
-        developerCheck.state = .off
-        developerModeChanged()
+        setDeveloperMode(false)
         guard operationPopup.itemArray.count == 6, diagnosticsButton.isHidden,
               diagnosticsPanel?.isVisible == false,
               watchCheck.isHidden, !watchCheck.isEnabled,
@@ -11101,8 +11350,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               !defaultArguments.contains("--retry"), !defaultArguments.contains("--watch")
         else { throw HostError(message: "Default checkbox flags disagree with the command") }
         let originalFrame = window.frame
-        developerCheck.state = .on
-        developerModeChanged()
+        setDeveloperMode(true)
         guard try ProcessorCommand.arguments(from: request()).contains("--no-resume") else {
             throw HostError(message: "Developer fresh-run selection was not forwarded")
         }
@@ -11121,8 +11369,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             let visibleFields: [NSView] = [targetField, commandField, statusLabel]
                 + (backupRow.isHidden ? [] : [backupField])
                 + (photosScopeRow.isHidden ? [] : [photosScopeButton])
-            guard window.frame.size == originalFrame.size,
-                  content.frame.size == mainWindowContentSize,
+            guard abs(window.frame.width - originalFrame.width) < 1,
                   visibleFields.allSatisfy({
                       let frame = $0.convert($0.bounds, to: content)
                       return frame.minX >= 0 && frame.maxX <= content.bounds.maxX + 1
@@ -11133,8 +11380,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
         }
 
-        developerCheck.state = .off
-        developerModeChanged()
+        setDeveloperMode(false)
         operationPopup.selectItem(at: OperationMode.allCases.firstIndex(of: .fastImgJxl)!)
         operationChanged()
         guard ultimateCheck.state == .on, !ultimateCheck.isEnabled, ultimateCheck.isHidden,
@@ -11185,8 +11431,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         operationChanged()
         shortestPathCheck.state = .off
         optionChanged(shortestPathCheck)
-        developerCheck.state = .on
-        developerModeChanged()
+        setDeveloperMode(true)
         watchCheck.state = .on
         optionChanged(watchCheck)
         let reopened = AppController(preferences: preferences)
@@ -11200,13 +11445,12 @@ private final class AppController: NSObject, NSWindowDelegate {
             throw HostError(message: "Fast-img options did not persist")
         }
         for developer in [false, true] {
-            developerCheck.state = developer ? .on : .off
-            developerModeChanged()
+            setDeveloperMode(developer)
             for item in operationPopup.itemArray {
                 operationPopup.select(item)
                 operationChanged()
                 try validateOptionLayoutForSelfTest()
-                guard settingsButton.isEnabled == (selectedOperation != .restoreJpeg) else {
+                guard settingsButton.isEnabled else {
                     throw HostError(message: "Settings availability disagrees with the selected operation")
                 }
             }
@@ -11226,7 +11470,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               targetField.stringValue == runningTarget,
               (window.contentView as? NativeDropView)?.acceptsDrops == false,
               !verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled,
-              !languagePopup.isEnabled, !appearancePopup.isEnabled,
+              !settingsButton.isEnabled,
               optionControls.allSatisfy({ !$0.0.isEnabled })
         else { throw HostError(message: "Background status or running controls lost their state") }
     }
@@ -11264,7 +11508,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             configurationChanged()
             let notice = localized(audit ? "metadata.restore_audit" : "metadata.restore_auto")
             let runTitle = localized(audit ? "button.audit_restore_jpeg" : "button.restore_jpeg")
-            guard !settingsButton.isEnabled, settingsButton.toolTip == localized("settings.restore_unused"),
+            guard settingsButton.isEnabled, settingsButton.toolTip == localized("settings.title"),
                   photosScopeRow.isHidden == !scopeAvailable, photosScopeButton.isEnabled == scopeAvailable,
                   metadataSafetyLabel.stringValue == notice, metadataSafetyLabel.accessibilityLabel() == notice,
                   runButton.title == runTitle, runButton.accessibilityLabel() == runTitle,
@@ -11370,6 +11614,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAbout() { controller?.showAbout() }
+    @objc private func showSettings() { controller?.showSettings() }
 
     func configureMenus() {
         let main = NSMenu()
@@ -11377,6 +11622,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         let about = appMenu.addItem(withTitle: localized("menu.about"), action: #selector(showAbout), keyEquivalent: "")
         about.target = self
+        let settings = appMenu.addItem(withTitle: localized("settings.title"), action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: localized("menu.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -11487,10 +11734,10 @@ private func runSelfTest() -> Int32 {
                 return 1
             }
         }
-        guard !mainWindowStyleMask.contains(.resizable),
-              mainWindowContentSize == NSSize(width: 980, height: 720)
+        guard mainWindowStyleMask.contains(.resizable),
+              compactWindowWidth < mainWindowContentSize.width
         else {
-            fputs("native-host self-test fixed window sizing failed\n", stderr)
+            fputs("native-host self-test window sizing failed\n", stderr)
             return 1
         }
         if Bundle.main.bundleURL.pathExtension == "app",
@@ -12274,6 +12521,7 @@ private func runSelfTest() -> Int32 {
                 throw HostError(message: preflightFailures.joined(separator: "\n"))
             }
             try ProcessingHistoryPanel(directory: URL(fileURLWithPath: "/tmp/history-self-test")).validateForSelfTest()
+            try MediaSettingsPanel(preferences: preferences, interfaceOnly: true, applied: {}).validateInterfaceSettingsForSelfTest()
             try MediaSettingsPanel(preferences: preferences, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, developer: true, applied: {}).validateForSelfTest()
             try MediaSettingsPanel(preferences: preferences, fast: true, applied: {}).validateForSelfTest()

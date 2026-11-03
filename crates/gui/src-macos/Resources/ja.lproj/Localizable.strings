@@ -1,4 +1,4 @@
-"app.subtitle" = "macOS ネイティブのメディア処理 · ファイルまたはフォルダをドロップ";
+"app.subtitle" = "ファイルやフォルダを選択またはドロップし、処理を選んでください。";
 "window.debug_title" = "Modern Format Boost %@ — デバッグウインドウ";
 "debug.banner" = "デバッグ専用 · 画面・ログ・読み取り専用プレビュー";
 "debug.preview_action" = "入力を確認";
@@ -38,7 +38,7 @@
 "tool_snapshot.scope.img" = "画像処理";
 "tool_snapshot.scope.vid" = "動画処理";
 "history.remove.title" = "選択した履歴を削除…";
-"history.remove.scope" = "選択した処理記録と保存された出力を削除します。所有元を確認できたログだけを削除し、メディア、再開用の状態、所有元不明のログは保持します。";
+"history.remove.scope" = "選択したバッチを履歴データベースから削除し、バッチに属することを確認できた記録ファイルを削除します。メディア、再開用データ、帰属が不明なログは保持します。";
 "history.remove.preview" = "削除範囲を確認";
 "history.remove.counts" = "選択したバッチ：%d · 保存された記録：%llu · ログ行：%llu";
 "history.remove.artifacts" = "安全に削除できるログ：%d · 保持するログ項目：%d";
@@ -274,7 +274,15 @@
 "menu.minimize" = "しまう";
 "menu.zoom" = "拡大／縮小";
 "menu.front" = "すべてを手前に移動";
-"settings.title" = "メディア設定";
+"settings.title" = "設定";
+"settings.section.general" = "一般";
+"settings.section.about" = "情報";
+"settings.zoom" = "メインウインドウの拡大率";
+"settings.zoom.help" = "メインウインドウの文字とコントロールの大きさを変更します。";
+"settings.zoom.percent" = "%d%%";
+"settings.developer.help" = "高度な処理、コマンドのプレビュー、診断情報を表示します。";
+"settings.about.version" = "バージョン %@";
+"settings.about.licenses" = "オープンソースライセンス…";
 "settings.section.cache" = "DB とキャッシュ";
 "settings.cacheMaxBytes" = "各キャッシュ上限（バイト）";
 "settings.cacheMaxBytes.help" = "正の整数を指定します。ディレクトリのスナップショットとローカル検証記録に、それぞれこの上限を適用します。DB全体のサイズ上限ではありません。削除・退避された検証記録は再検証が必要ですが、正式なタスク進行状況と履歴は保持されます。個別指定を解除すると継承設定を使用します。";

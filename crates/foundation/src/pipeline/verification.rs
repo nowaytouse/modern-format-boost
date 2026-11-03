@@ -287,11 +287,10 @@ impl Gate1Local {
                 )]);
             }
         };
-        self.run_with_proof_cache(ctx, error_mode, &resume)
+        Self::run_with_proof_cache(ctx, error_mode, &resume)
     }
 
     fn run_with_proof_cache(
-        &self,
         ctx: &PipelineCtx,
         error_mode: crate::BatchErrorMode,
         shared: &Gate1ProofCache<'_>,
@@ -325,7 +324,7 @@ impl Gate1Local {
             ctx,
             || collect_delivery_output_files(&ctx.working_copy, None),
             |check, completed, total, state, files| {
-                activity.emit(check, completed, total, state, files)
+                activity.emit(check, completed, total, state, files);
             },
             error_mode,
         )
@@ -1907,7 +1906,7 @@ mod tests {
         let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
         let first_started = std::time::Instant::now();
         let first =
-            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
         let fresh_duration = first_started.elapsed();
         assert!(first.passed, "{first:?}");
         assert_eq!(
@@ -1919,7 +1918,7 @@ mod tests {
         let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
         let resumed_started = std::time::Instant::now();
         let second =
-            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
         let resumed_duration = resumed_started.elapsed();
         assert!(second.passed, "{second:?}");
         assert_eq!(cache.counts(), (3, 0, 0));
@@ -1938,7 +1937,7 @@ mod tests {
         .unwrap();
         let cache = super::Gate1ProofCache::for_tests(&ctx, "synthetic-test-authority").unwrap();
         let changed =
-            Gate1Local.run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
+            Gate1Local::run_with_proof_cache(&ctx, crate::BatchErrorMode::LogAndContinue, &cache);
         assert!(
             !changed.passed,
             "a prior embedded-metadata receipt must not mask changed filesystem metadata"
@@ -4874,8 +4873,15 @@ mod photos_submission_tests {
                 .is_err(),
                 "invalid {pointer} must reject on read"
             );
-            if let Ok(changed) = serde_json::from_value::<WorkingCopyMarker>(changed) {
-                assert!(write_marker_atomic(&changed).is_err());
+            let changed = serde_json::from_value::<WorkingCopyMarker>(changed);
+            if matches!(
+                pointer,
+                "/photos_submission_history/intents/0/kind"
+                    | "/photos_submission_history/intents/0/backend/backend"
+            ) {
+                assert!(changed.is_err(), "unknown enum at {pointer} must reject");
+            } else {
+                assert!(write_marker_atomic(&changed.unwrap()).is_err(), "{pointer}");
             }
         }
         for pointer in [

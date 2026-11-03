@@ -466,27 +466,26 @@ mod tests {
     const TEST_NATIVE_READY_ENV: &str = "MFB_TEST_NATIVE_WRITER_LOCK_READY";
     const TEST_NATIVE_RELEASE_ENV: &str = "MFB_TEST_NATIVE_WRITER_LOCK_RELEASE";
 
-    fn child_helper() -> Option<ProductionLease> {
-        let path = std::env::var_os(TEST_PATH_ENV)?;
+    fn child_helper(path: &Path) -> Result<ProductionLease> {
         let lease = match std::env::var_os(LEASE_FD_ENV) {
-            Some(fd) => acquire_inherited(Path::new(&path), &fd).ok()?,
-            None => acquire_at(Path::new(&path)).ok()?,
-        };
+            Some(fd) => acquire_inherited(path, &fd),
+            None => acquire_at(path),
+        }?;
         if let Some(ready) = std::env::var_os(TEST_READY_ENV) {
-            fs::write(ready, b"ready").unwrap();
+            fs::write(ready, b"ready")?;
         }
         if let Some(release) = std::env::var_os(TEST_RELEASE_ENV) {
             while !Path::new(&release).exists() {
                 thread::sleep(Duration::from_millis(10));
             }
         }
-        Some(lease)
+        Ok(lease)
     }
 
     #[test]
     fn production_lease_subprocess_helper() {
-        if std::env::var_os(TEST_PATH_ENV).is_some() {
-            let _lease = child_helper().expect("test child lease acquisition");
+        if let Some(path) = std::env::var_os(TEST_PATH_ENV) {
+            let _lease = child_helper(Path::new(&path)).expect("test child lease acquisition");
         }
     }
 

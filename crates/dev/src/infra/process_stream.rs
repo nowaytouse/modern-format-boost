@@ -459,11 +459,10 @@ fn push_chunk_log_lines<F: FnMut(&str)>(
     buffer.extend_from_slice(chunk);
     let complete = if eof {
         buffer.len()
+    } else if let Some(end) = buffer.iter().rposition(|&byte| byte == b'\n') {
+        end + 1
     } else {
-        buffer
-            .iter()
-            .rposition(|&byte| byte == b'\n')
-            .map_or(0, |end| end + 1)
+        return Ok(());
     };
     let mut first_error = None;
     for bytes in buffer[..complete].split(|&byte| byte == b'\n') {
@@ -1104,10 +1103,8 @@ mod tests {
         let mut inherited_ttys = Vec::new();
         for entry in std::fs::read_dir("/dev/fd")? {
             let entry = entry?;
-            if let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>()
-                && fd > 2
-                && unsafe { libc::isatty(fd) } == 1
-            {
+            let fd = entry.file_name().to_string_lossy().parse::<i32>()?;
+            if fd > 2 && unsafe { libc::isatty(fd) } == 1 {
                 inherited_ttys.push(fd);
             }
         }
@@ -1116,9 +1113,7 @@ mod tests {
         while !directory.join("release").exists() {
             std::thread::sleep(Duration::from_millis(5));
         }
-        let disconnected = io::stderr()
-            .write_all(&vec![b'x'; 1024 * 1024])
-            .is_err();
+        let disconnected = io::stderr().write_all(&vec![b'x'; 1024 * 1024]).is_err();
         std::fs::write(
             directory.join("result"),
             format!("{disconnected}:{inherited_ttys:?}"),

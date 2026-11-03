@@ -1,6 +1,6 @@
 # cargo-about configuration
-# License acceptance list aligned with deny.toml
-# Generated license reports: docs/LICENSES.html, docs/LICENSES.txt, docs/LICENSES.json
+# Accepted licenses for notice generation. CI separately enforces deny.toml.
+# See docs/LICENSING.md for the distribution report and release review.
 
 accepted = [
   "MIT",
@@ -20,5 +20,4 @@ accepted = [
   "CC0-1.0",
 ]
 
-# jpegxl-rs and jpegxl-sys use GPL-3.0-or-later
-# This is acceptable as they are optional dependencies for JXL support
+# jpegxl-rs and jpegxl-sys are GPL-3.0-or-later and enabled in the default build.

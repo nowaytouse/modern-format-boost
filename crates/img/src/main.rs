@@ -3688,7 +3688,9 @@ fn fast_img_failed_retry_requested_path(input: &Path) -> anyhow::Result<PathBuf>
     let absolute = if input.is_absolute() {
         input.to_path_buf()
     } else {
-        std::env::current_dir()?.join(input)
+        foundation::media_conversion_gate::delivery_cwd_or_err("Fast IMG failed retry input")
+            .map_err(anyhow::Error::msg)?
+            .join(input)
     };
     anyhow::ensure!(
         !absolute.components().any(|part| matches!(

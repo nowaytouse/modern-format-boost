@@ -10,9 +10,11 @@ use std::time::{Duration, Instant};
 const MEMORY_SAMPLE_MAX_AGE: Duration = Duration::from_millis(250);
 static MEMORY_SAMPLE: Mutex<Option<MemorySample<Option<(u64, u64)>>>> = Mutex::new(None);
 #[cfg(target_os = "macos")]
-static NATIVE_PRESSURE_SAMPLE: Mutex<Option<MemorySample<Option<MemoryPressure>>>> = Mutex::new(None);
+static NATIVE_PRESSURE_SAMPLE: Mutex<Option<MemorySample<Option<MemoryPressure>>>> =
+    Mutex::new(None);
 #[cfg(target_os = "macos")]
-static NATIVE_PRESSURE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NATIVE_PRESSURE_FAILED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 struct MemorySample<T> {
@@ -129,7 +131,7 @@ fn ram_pressure_level() -> Option<MemoryPressure> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn combine_native_pressure(
+const fn combine_native_pressure(
     ram: Option<MemoryPressure>,
     native: Option<MemoryPressure>,
 ) -> Option<MemoryPressure> {
@@ -144,7 +146,7 @@ fn combine_native_pressure(
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn macos_pressure_from_dispatch_flags(flags: u32) -> Option<MemoryPressure> {
+const fn macos_pressure_from_dispatch_flags(flags: u32) -> Option<MemoryPressure> {
     // XNU's sysctl returns dispatch flags (1/2/4), not its internal pressure enum.
     match flags {
         1 => Some(MemoryPressure::Low),
@@ -237,7 +239,9 @@ fn get_memory_macos() -> (Option<u64>, Option<u64>) {
             if !FAILED.swap(true, Ordering::Relaxed) {
                 crate::media_conversion_gate::delivery_runtime_batch_audit(
                     "native_memory",
-                    format!("Native macOS RAM observation unavailable: {error}; RAM headroom remains unknown"),
+                    format!(
+                        "Native macOS RAM observation unavailable: {error}; RAM headroom remains unknown"
+                    ),
                 );
             }
             (None, None)
@@ -269,7 +273,8 @@ fn native_macos_memory_mb() -> std::io::Result<(u64, u64)> {
             std::ptr::null_mut(),
             0,
         )
-    } != 0 {
+    } != 0
+    {
         return Err(std::io::Error::last_os_error());
     }
     if size != std::mem::size_of_val(&total) || total == 0 {
@@ -312,10 +317,12 @@ fn native_macos_memory_mb() -> std::io::Result<(u64, u64)> {
         u64::from(statistics.speculative_count),
         page_size,
     )
-    .ok_or_else(|| std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "Invalid native available RAM counters",
-    ))?;
+    .ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid native available RAM counters",
+        )
+    })?;
     if available > total / (1024 * 1024) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -582,7 +589,7 @@ mod tests {
                 "page size of {page_size} bytes\nPages free: 34559.\nPages inactive: 208154.\nPages speculative: 4096.\n"
             );
             assert_eq!(
-                macos_available_mb(34559 + 4096, 208154, 4096, page_size),
+                macos_available_mb(34_559 + 4096, 208_154, 4096, page_size),
                 parse_vm_stat_available(&text),
             );
         }
@@ -602,7 +609,11 @@ mod tests {
         for flags in [2, 4] {
             let native = macos_pressure_from_dispatch_flags(flags);
             assert_eq!(native, Some(MemoryPressure::High));
-            for ram in [None, Some(MemoryPressure::Low), Some(MemoryPressure::Normal)] {
+            for ram in [
+                None,
+                Some(MemoryPressure::Low),
+                Some(MemoryPressure::Normal),
+            ] {
                 assert_eq!(
                     combine_native_pressure(ram, native),
                     Some(MemoryPressure::High)
@@ -612,12 +623,18 @@ mod tests {
         for flags in [0, 3, 8, u32::MAX] {
             assert_eq!(macos_pressure_from_dispatch_flags(flags), None);
         }
-        assert_eq!(combine_native_pressure(Some(MemoryPressure::Low), None), None);
+        assert_eq!(
+            combine_native_pressure(Some(MemoryPressure::Low), None),
+            None
+        );
         assert_eq!(
             combine_native_pressure(Some(MemoryPressure::High), None),
             Some(MemoryPressure::High)
         );
-        assert_eq!(combine_native_pressure(None, Some(MemoryPressure::Low)), None);
+        assert_eq!(
+            combine_native_pressure(None, Some(MemoryPressure::Low)),
+            None
+        );
         assert_eq!(
             combine_native_pressure(Some(MemoryPressure::Low), Some(MemoryPressure::Low)),
             Some(MemoryPressure::Low)

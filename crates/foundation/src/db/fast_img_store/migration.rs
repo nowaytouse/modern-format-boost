@@ -101,7 +101,9 @@ pub(super) fn legacy_marker_path_for_working_copy(wc: &Path) -> Result<PathBuf> 
     let absolute = if wc.is_absolute() {
         wc.to_path_buf()
     } else {
-        std::env::current_dir()?.join(wc)
+        crate::media_conversion_gate::delivery_cwd_or_err("legacy Fast IMG marker")
+            .map_err(anyhow::Error::msg)?
+            .join(wc)
     };
     let key = blake3::hash(text(&absolute)?.as_bytes())
         .to_hex()

@@ -241,54 +241,31 @@ impl ToolBuilder for IdentifyBuilder {
     }
 
     fn check_available(&self) -> bool {
-        if crate::common_utils::media_tool_binding_applies(self.get_command_name())
-            && crate::common_utils::resolve_tool_path(self.get_command_name()).is_none()
-        {
-            if !self.use_magick
-                && crate::common_utils::resolve_tool_path(constants::TOOL_MAGICK).is_some()
-            {
-                let mut fallback = Self::new();
-                fallback.use_magick(true);
-                return ToolBuilder::check_available(&fallback);
+        let name = self.get_command_name();
+        let command = if crate::common_utils::media_tool_binding_applies(name) {
+            crate::common_utils::resolve_tool_path(name).map(Command::new)
+        } else {
+            Some(self.get_resolved_command())
+        };
+        if let Some(mut command) = command {
+            match command.args(self.get_check_args()).output() {
+                Ok(output) if output.status.success() => return true,
+                Ok(output) => crate::media_conversion_gate::delivery_jxl_batch_audit(
+                    "magick_availability_probe",
+                    format!("{name} availability probe exited with {}", output.status),
+                ),
+                Err(error) => crate::media_conversion_gate::delivery_jxl_batch_audit(
+                    "magick_availability_probe",
+                    format!("failed to run {name} availability probe: {error}"),
+                ),
             }
+        }
+        if self.use_magick {
             return false;
         }
-        let mut cmd = self.get_resolved_command();
-        if self.use_magick {
-            cmd.arg(constants::MAGICK_ARG_IDENTIFY);
-        }
-        cmd.arg(constants::ARG_VERSION);
-
-        match cmd.output() {
-            Ok(o) if o.status.success() => true,
-            Ok(_) | Err(_) => {
-                if self.use_magick {
-                    false
-                } else {
-                    if crate::common_utils::media_tool_binding_applies(constants::TOOL_MAGICK)
-                        && crate::common_utils::resolve_tool_path(constants::TOOL_MAGICK).is_none()
-                    {
-                        return false;
-                    }
-                    let path =
-                        crate::common_utils::resolve_tool_path_or_audit(constants::TOOL_MAGICK);
-                    let mut fallback = Command::new(path);
-                    fallback
-                        .arg(constants::MAGICK_ARG_IDENTIFY)
-                        .arg(constants::ARG_VERSION);
-                    match fallback.output() {
-                        Ok(output) => output.status.success(),
-                        Err(err) => {
-                            crate::media_conversion_gate::delivery_jxl_batch_audit(
-                                "magick_availability_probe",
-                                format!("failed to run ImageMagick availability probe: {err}"),
-                            );
-                            false
-                        }
-                    }
-                }
-            }
-        }
+        let mut fallback = Self::new();
+        fallback.use_magick(true);
+        ToolBuilder::check_available(&fallback)
     }
 }
 

@@ -23,6 +23,16 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Window Settings and History Privacy (2026-11-03)
+
+- Move language, appearance and developer controls into Settings. Add a
+  keyboard-adjustable main-window zoom, compact and wide layouts, and an About
+  tab with a larger logo and access to the bundled open-source notices.
+- Securely clear selected SQLite history records and remove only verified
+  batch-owned archives. Report partial cleanup when history evidence remains.
+- Include updated Rust and native-component license notices in the macOS app
+  and command-line release archives.
+
 ### Fast IMG Source Preparation (2026-11-03)
 
 - Show original-format candidates, source classification and source hashing as

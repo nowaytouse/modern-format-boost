@@ -329,7 +329,7 @@ impl<'a> Gate1ProofCache<'a> {
         })
     }
 
-    pub(crate) fn sidecars(&self) -> &XmpSidecarIndex {
+    pub(crate) const fn sidecars(&self) -> &XmpSidecarIndex {
         &self.sidecars
     }
 
@@ -339,7 +339,7 @@ impl<'a> Gate1ProofCache<'a> {
     }
 
     #[cfg(test)]
-    pub(super) fn counts(&self) -> (usize, usize, usize) {
+    pub(super) const fn counts(&self) -> (usize, usize, usize) {
         (self.reused.get(), self.fresh.get(), self.invalidated.get())
     }
 

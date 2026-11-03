@@ -624,7 +624,7 @@ fn require_foreign_key(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     anyhow::ensure!(
         actual.len() == columns.len()
-            && actual.iter().zip(columns).enumerate().all(
+            && (0_i64..).zip(actual.iter().zip(columns)).all(
                 |(
                     sequence,
                     (
@@ -636,7 +636,7 @@ fn require_foreign_key(
                         && from == expected_from
                         && to == expected_to
                         && action == on_delete
-                        && usize::try_from(*actual_sequence).ok() == Some(sequence)
+                        && *actual_sequence == sequence
                 },
             ),
         "SQLite state table {table} has incomplete foreign keys; database retained without repair"

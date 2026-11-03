@@ -685,7 +685,7 @@ impl AppSession {
         if let Some(bundle) = &archived {
             let archived_audit = bundle.join(format!("session_audit_{}.jsonl", self.stamp));
             append_jsonl_audit_record(&archived_audit, "SESSION_ARCHIVE_DONE")?;
-            let paths = [&self.session_log, &self.verbose_log, &self.session_audit]
+            let mut paths = [&self.session_log, &self.verbose_log, &self.session_audit]
                 .into_iter()
                 .map(|path| {
                     path.file_name()
@@ -693,6 +693,7 @@ impl AppSession {
                         .context("session artifact has no filename")
                 })
                 .collect::<Result<Vec<_>>>()?;
+            paths.push(bundle.join("manifest.json"));
             history_store::register_history_artifacts(&self.log_dir, &self.stamp, &paths)?;
         }
         Ok(archived)

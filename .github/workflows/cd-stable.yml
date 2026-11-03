@@ -127,6 +127,8 @@ jobs:
           cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
             dist/crates/dev/scripts/
           cp README.md LICENSE dist/
+          mkdir -p dist/docs
+          cp docs/{LICENSING.md,LICENSES.json,THIRD_PARTY_NOTICES.txt} dist/docs/
           (cd dist && zip -r "../${ARCHIVE}" .)
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 

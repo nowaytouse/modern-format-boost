@@ -36,9 +36,23 @@ pub use delivery_policy::{
     preserve_filesystem_for_delivery, preserve_for_delivery,
 };
 pub use exif::preserve_internal;
-pub(crate) use output_audit::verify_output_embedded_metadata_with_index;
 pub use source_cleanup::SourceDirectoryCleanupSnapshot;
-pub(crate) use xmp_sidecar_index::XmpSidecarIndex;
+
+/// A phase-scoped namespace observation; file contents still require fresh proof.
+pub(crate) struct XmpSidecarIndex {
+    directories:
+        std::collections::BTreeMap<PathBuf, std::sync::Mutex<xmp_sidecar_index::DirectoryView>>,
+}
+
+pub(crate) fn verify_output_embedded_metadata_with_index(
+    src: &Path,
+    dst: &Path,
+    policy: MetadataOutputPolicy,
+    index: &XmpSidecarIndex,
+) -> io::Result<OutputMetadataAudit> {
+    output_audit::verify_output_embedded_metadata_with_index(src, dst, policy, index)
+}
+
 pub(crate) fn verify_output_embedded_metadata_with_explicit_xmp(
     src: &Path,
     xmp: &Path,

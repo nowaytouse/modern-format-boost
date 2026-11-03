@@ -42,6 +42,7 @@ const APP_BUNDLE_RESOURCE_BINARIES: &[&str] = &[
 ];
 const NATIVE_APP_BUNDLE_RESOURCES: &[(&str, &str)] = &[
     ("docs/LICENSES.json", "LICENSES.json"),
+    ("docs/THIRD_PARTY_NOTICES.txt", "THIRD_PARTY_NOTICES.txt"),
     ("LICENSE", "LICENSE"),
 ];
 const RUST_SOURCE_EXTENSIONS: &[&str] = &["rs", "sql", "c", "h", "cpp", "cc", "proto", "py", "sh"];
@@ -2612,6 +2613,7 @@ mod tests {
         fs::create_dir_all(root.join("docs"))?;
         fs::create_dir_all(root.join("Resources"))?;
         fs::write(root.join("docs/LICENSES.json"), r#"{"licenses":[]}"#)?;
+        fs::write(root.join("docs/THIRD_PARTY_NOTICES.txt"), "Native notices")?;
         fs::write(root.join("LICENSE"), "Project license")?;
 
         assert!(sync_native_app_bundle_resources(
@@ -2625,6 +2627,10 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join("Resources/LICENSE"))?,
             "Project license"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Resources/THIRD_PARTY_NOTICES.txt"))?,
+            "Native notices"
         );
         Ok(())
     }

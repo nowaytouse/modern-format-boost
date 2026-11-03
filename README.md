@@ -205,7 +205,7 @@ See [Python/Rust migration](docs/PYTHON_RUST_MIGRATION.md#canonical-commands)
 for canonical commands and the remaining Python roles. Contributions should keep
 private media, libraries, local paths, databases and credentials out of commits.
 
-MFB is [MIT licensed](LICENSE). External encoders and dependencies retain their
-own licenses; see [dependency notices](docs/LICENSES.json). It is an actively
-developed private tool, not a replacement for a backup or a promise of universal
-format compatibility.
+MFB source code is [MIT licensed](LICENSE). Dependencies and external tools retain
+their own licenses. See [licensing and distribution](docs/LICENSING.md). It is
+an actively developed private tool, not a replacement for a backup or a promise
+of universal format compatibility.

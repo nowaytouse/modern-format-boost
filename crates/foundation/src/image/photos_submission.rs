@@ -199,9 +199,10 @@ fn prepare_applescript_with(
             "empty AppleScript media submission refused".into(),
         ));
     }
-    let first_index = marker
-        .photos_submission_history()
-        .map_or(0, |history| history.intents.len());
+    let first_index = match marker.photos_submission_history() {
+        Some(history) => history.intents.len(),
+        None => 0,
+    };
     let mut sources = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     let mut paths = BTreeSet::new();

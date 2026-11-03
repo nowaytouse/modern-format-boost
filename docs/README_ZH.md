@@ -180,6 +180,6 @@ Fast IMG 会先查找匹配的保存状态，再决定是否需要建立新输�
 正式命令和保留的 Python 用途见 [Python/Rust 迁移说明](PYTHON_RUST_MIGRATION.md#canonical-commands)。
 贡献时不要提交私人媒体、图库、本机路径、数据库或凭据。
 
-MFB 采用 [MIT 许可证](../LICENSE)。外部编码器和依赖仍遵守各自的许可证，
-详见[依赖声明](LICENSES.json)。本项目仍是持续开发中的私人工具，不能替代备份，
+MFB 源代码采用 [MIT 许可证](../LICENSE)。依赖和外部工具仍遵守各自的许可证，
+详见[许可证与分发](LICENSING.md)。本项目仍是持续开发中的私人工具，不能替代备份，
 也不承诺所有格式和环境都能处理。

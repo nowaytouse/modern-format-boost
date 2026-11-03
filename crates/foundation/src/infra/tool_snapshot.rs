@@ -1042,7 +1042,7 @@ mod tests {
     fn isolated_test(name: &str) -> Result<bool> {
         const CHILD: &str = "MFB_TOOL_SNAPSHOT_TEST_CHILD";
         let receipt = format!("MFB tool snapshot isolated test: {name}");
-        if std::env::var(CHILD).ok().as_deref() == Some(name) {
+        if std::env::var_os(CHILD).as_deref() == Some(OsStr::new(name)) {
             println!("{receipt}");
             return Ok(false);
         }

@@ -216,7 +216,7 @@ reveals it without changing its value. Search and navigation preserve the draft.
 Photos exposes backend selection, expandable native/AppleScript/verification batch sizes,
 adaptive sizing with minimum/maximum/target duration, root folder, album name
 and subfolder preservation. Configuration-file overrides and standard IMG/VID failure
-policies appear in Developer mode, enabled in About. Fast IMG has its own failure
+policies appear in Developer mode, enabled under Settings → General. Fast IMG has its own failure
 handling control in Image settings, independent of the standard-mode preference. Image tool selection
 is an ordinary Image/Fast IMG processing preference.
 Video exposes HEVC/AV1 in Settings, plus an independent developer configuration

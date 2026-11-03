@@ -943,10 +943,10 @@ fn tool_override_env_name(name: &str) -> String {
 /// An explicit configuration/CLI/environment override, excluding default PATH discovery.
 #[must_use]
 pub fn explicit_tool_override(name: &str) -> Option<PathBuf> {
-    crate::runtime_config::active()
-        .and_then(|config| config.tools.paths.get(name))
-        .cloned()
-        .or_else(|| std::env::var_os(tool_override_env_name(name)).map(PathBuf::from))
+    match crate::runtime_config::active().and_then(|config| config.tools.paths.get(name)) {
+        Some(path) => Some(path.clone()),
+        None => std::env::var_os(tool_override_env_name(name)).map(PathBuf::from),
+    }
 }
 
 /// A shared runtime prerequisite failed; this is not an individual media failure.
@@ -991,7 +991,16 @@ impl BoundTool {
     }
 
     fn unchanged(&self) -> bool {
-        tool_identity(&self.path).is_ok_and(|identity| identity == self.identity)
+        match tool_identity(&self.path) {
+            Ok(identity) => identity == self.identity,
+            Err(error) => {
+                crate::media_conversion_gate::delivery_runtime_batch_audit(
+                    "bound_tool_identity",
+                    format!("could not recheck {}: {error:#}", self.path.display()),
+                );
+                false
+            }
+        }
     }
 }
 
@@ -1295,17 +1304,15 @@ pub fn emit_tool_runtime_status(state: &str, error: Option<&ToolRuntimeError>) -
     let runtime = BOUND_TOOL_RUNTIME.get();
     let snapshot = runtime.and_then(|runtime| runtime.snapshot.as_ref());
     let names = snapshot
-        .map(|snapshot| snapshot.tools.keys().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let observed = runtime
-        .map(|runtime| {
-            runtime
-                .tools
-                .keys()
-                .filter(|name| snapshot.is_none_or(|snapshot| !snapshot.tools.contains_key(*name)))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        .into_iter()
+        .flat_map(|snapshot| snapshot.tools.keys().cloned());
+    let observed = runtime.into_iter().flat_map(|runtime| {
+        runtime
+            .tools
+            .keys()
+            .filter(move |name| snapshot.is_none_or(|snapshot| !snapshot.tools.contains_key(*name)))
+            .cloned()
+    });
     let (boundary, boundary_message) =
         tool_runtime_boundary_text(state, snapshot.is_some(), cfg!(target_os = "macos"));
     let event = crate::tool_snapshot::SnapshotEvent {
@@ -1315,8 +1322,8 @@ pub fn emit_tool_runtime_status(state: &str, error: Option<&ToolRuntimeError>) -
         boundary: boundary.to_owned(),
         identity: snapshot.map(|snapshot| snapshot.identity.clone()),
         manifest_path: snapshot.map(|snapshot| snapshot.manifest_path.clone()),
-        tool_names: names.into_iter().cloned().collect(),
-        observed_tool_names: observed.into_iter().cloned().collect(),
+        tool_names: names.collect(),
+        observed_tool_names: observed.collect(),
         cause_code: error.map(|error| error.cause_code.to_owned()),
         tool: error.and_then(|error| error.tool.clone()),
         message: error.map_or_else(

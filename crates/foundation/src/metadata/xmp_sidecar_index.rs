@@ -1,15 +1,11 @@
+use super::XmpSidecarIndex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-/// A phase-scoped namespace observation; file contents still require fresh proof.
-pub(crate) struct XmpSidecarIndex {
-    directories: BTreeMap<PathBuf, Mutex<DirectoryView>>,
-}
-
-struct DirectoryView {
+pub(super) struct DirectoryView {
     metadata: Metadata,
     membership: blake3::Hash,
     candidates: BTreeMap<String, Vec<PathBuf>>,

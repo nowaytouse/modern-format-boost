@@ -125,7 +125,7 @@ pub fn verify_output_embedded_metadata(
     verify_output_embedded_metadata_with_discovery(src, dst, policy, &super::find_xmp_sidecar)
 }
 
-pub(crate) fn verify_output_embedded_metadata_with_index(
+pub(super) fn verify_output_embedded_metadata_with_index(
     src: &Path,
     dst: &Path,
     policy: MetadataOutputPolicy,

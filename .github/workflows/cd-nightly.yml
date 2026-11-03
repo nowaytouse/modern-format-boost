@@ -119,6 +119,8 @@ jobs:
           cp crates/dev/scripts/{quality_regression_model.py,loop_intent_clustering.py,fastmode_paths.py} \
             dist/crates/dev/scripts/
           cp LICENSE README.md docs/CHANGELOG.md dist/
+          mkdir -p dist/docs
+          cp docs/{LICENSING.md,LICENSES.json,THIRD_PARTY_NOTICES.txt} dist/docs/
           tar -C dist -czf "$RELEASE_ARCHIVE" .
 
       - name: Upload artifact

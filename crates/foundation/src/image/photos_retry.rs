@@ -331,10 +331,12 @@ where
                 PhotosSubmissionBackend::Native { journal_path, .. } => {
                     let id = native_identifier(intent, &journal(journal_path)?, entry)?;
                     let uuid = super::osxphotos_uuid_from_photos_import_identifier(&id)?;
-                    if !discovered.iter().any(|candidate| {
-                        super::osxphotos_uuid_from_photos_import_identifier(candidate)
-                            .is_ok_and(|candidate| candidate == uuid)
-                    }) {
+                    let mut found = false;
+                    for candidate in &discovered {
+                        found |=
+                            super::osxphotos_uuid_from_photos_import_identifier(candidate)? == uuid;
+                    }
+                    if !found {
                         return Err(unresolved(
                             "native UUID is not present in the recorded destination album",
                         ));
@@ -666,6 +668,24 @@ mod tests {
             &mut |_| Err(unresolved("journal missing")),
         );
         assert!(result.is_err());
+        let result = reconcile_with(
+            std::slice::from_ref(&fixture.parent),
+            &fixture.admitted,
+            std::slice::from_ref(&fixture.entry),
+            PhotosSubmissionKind::Encoded,
+            &BTreeMap::new(),
+            None,
+            &mut |_| panic!("malformed album discovery cannot authorize a custody query"),
+            &mut |_| Ok(false),
+            &mut |_| Ok(vec!["UUID-B/L0/001".into(), "/missing-uuid".into()]),
+            &mut |_| Ok(fixture.record.clone()),
+        );
+        assert!(
+            result
+                .expect_err("malformed album identity must reject")
+                .to_string()
+                .contains("empty asset identifier")
+        );
         assert_eq!(sends.get(), 0);
         Ok(())
     }

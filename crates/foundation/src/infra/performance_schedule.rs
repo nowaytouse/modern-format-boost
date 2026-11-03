@@ -532,7 +532,11 @@ mod tests {
                 "high pressure must override {tier:?}"
             );
         }
-        for pressure in [Some(MemoryPressure::Low), Some(MemoryPressure::Normal), None] {
+        for pressure in [
+            Some(MemoryPressure::Low),
+            Some(MemoryPressure::Normal),
+            None,
+        ] {
             assert_eq!(
                 clamp_tier_with_pressure(PerfGovernorTier::Balanced, pressure),
                 PerfGovernorTier::Balanced,

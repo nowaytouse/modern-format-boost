@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "anyhow"
 version = "1.0.104"
-source = "git+https://github.com/dtolnay/anyhow#bb1b0f9af0f645d5fdf1ac63a1fcbf3975ee452c"
+source = "git+https://github.com/dtolnay/anyhow#87c8571326d60b90391d0555c9675b5ac6f044b1"
 
 [[package]]
 name = "arbitrary"
@@ -388,9 +388,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
+checksum = "375989decec1a0fa424442bed520fa12ede43a48475ce8c7417d2c69b32b5f6b"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ccc89b83875474399e9d9d70841163f6319d1a41"
+source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -467,7 +467,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ccc89b83875474399e9d9d70841163f6319d1a41"
+source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
 dependencies = [
  "anstream",
  "anstyle",
@@ -478,7 +478,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.7"
-source = "git+https://github.com/clap-rs/clap#ccc89b83875474399e9d9d70841163f6319d1a41"
+source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -489,7 +489,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.1"
-source = "git+https://github.com/clap-rs/clap#ccc89b83875474399e9d9d70841163f6319d1a41"
+source = "git+https://github.com/clap-rs/clap#ec93e71255c0b833a34f50662a3fdb22f53f6ded"
 
 [[package]]
 name = "cmake"
@@ -521,7 +521,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "console"
 version = "0.16.6"
-source = "git+https://github.com/console-rs/console#3271250d3fdd2ccabbb3d590b193c6ef15fd84a5"
+source = "git+https://github.com/console-rs/console#7acdc5f8ef9789ed5c85cde4fb9bead53a95c81d"
 dependencies = [
  "encode_unicode",
  "libc",
@@ -564,8 +564,8 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.3"
-source = "git+https://github.com/srijs/rust-crc32fast#d2363eab95ebc85fcf726d1c8fa845148e474591"
+version = "1.5.4"
+source = "git+https://github.com/srijs/rust-crc32fast#118796a864d40beed113e887522531d5474b8abc"
 dependencies = [
  "cfg-if",
 ]
@@ -631,9 +631,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2376ffd6f96d8a9db59875b4b6b0237d6900b5baf64279714e05493ce64828a"
+checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
 dependencies = [
  "cmov",
 ]
@@ -872,7 +872,7 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs#54f49cd9f4c36774f68cc6ab95edf62a3b6c506e"
+source = "git+https://github.com/rust-lang/flate2-rs#d05c7c4af2879369e4cdc72827ee71216f868eb7"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -1212,7 +1212,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.6"
-source = "git+https://github.com/console-rs/indicatif#4925bce2ec5ffc8deaccc5658585d3fa30f23ec6"
+source = "git+https://github.com/console-rs/indicatif#66b0ee253f2a2923dd1e861d3d35f20c4f09546c"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2250,7 +2250,7 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 [[package]]
 name = "quick-xml"
 version = "0.42.0"
-source = "git+https://github.com/tafia/quick-xml#0d50dffc5f4816ea21f75a0a09d1fb93644b4b06"
+source = "git+https://github.com/tafia/quick-xml#250824b3f7c1bfa986177083b89263d7103b5e62"
 dependencies = [
  "memchr",
 ]
@@ -3111,9 +3111,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-properties"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+checksum = "993ad287eb20e8ba755312801cfe1413e0f25d604075863acaddca10b04c1833"
 
 [[package]]
 name = "unicode-width"
@@ -3522,7 +3522,7 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "zerocopy"
 version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#d19b86bee54a80f957fba6cd536ccaca0df50fb4"
+source = "git+https://github.com/google/zerocopy#f61435de34bb62c67497bb3510225c5bc5f659be"
 dependencies = [
  "zerocopy-derive",
 ]
@@ -3530,7 +3530,7 @@ dependencies = [
 [[package]]
 name = "zerocopy-derive"
 version = "0.8.63"
-source = "git+https://github.com/google/zerocopy#d19b86bee54a80f957fba6cd536ccaca0df50fb4"
+source = "git+https://github.com/google/zerocopy#f61435de34bb62c67497bb3510225c5bc5f659be"
 dependencies = [
  "proc-macro2",
  "quote",

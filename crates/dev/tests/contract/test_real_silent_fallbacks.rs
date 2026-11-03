@@ -12398,22 +12398,30 @@ fn media_conversion_unified_log_layout_m160() {
         "run_training must pin MFB_LOG_DIR at session start (M160)"
     );
 
-    let drag_drop = fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
-        .expect("drag_and_drop_processor.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
+    let drag_drop_source =
+        fs::read_to_string(root.join("crates/dev/src/bin/drag_and_drop_processor.rs"))
+            .expect("drag_and_drop_processor.rs must be readable"); // audited: contract test assertion path; panic/expect is test-only failure signal
+    let app_session_source = fs::read_to_string(root.join("crates/dev/src/app/session.rs"))
+        .expect("app/session.rs must be readable");
+    let drag_drop = production_scope(&drag_drop_source);
+    let app_session = production_scope(&app_session_source);
     assert!(
-        drag_drop.contains("ensure_unified_log_dir"),
-        "drag-and-drop must use ensure_unified_log_dir (M160)"
+        drag_drop.contains("AppSession::start()") && app_session.contains("ensure_unified_log_dir"),
+        "drag-and-drop must start a session in the unified log directory (M160)"
     );
     assert!(
-        drag_drop.contains("archive_drag_drop_session_bundle"),
-        "drag-and-drop must archive session bundle with manifest (M160)"
+        drag_drop.contains("session.archive()")
+            && app_session.contains("archive_drag_drop_session_bundle"),
+        "drag-and-drop must archive its session bundle with manifest (M160)"
     );
     assert!(
         logging.contains("log_file_includes_progress"),
         "Rust logging must gate mfb::progress via MFB_LOG_PROGRESS (M160)"
     );
     assert!(
-        !drag_drop.contains("PROJECT_ROOT / \"logs\"") && !drag_drop.contains(".join(\"logs\")"),
+        [drag_drop, app_session].into_iter().all(|source| {
+            !source.contains("PROJECT_ROOT / \"logs\"") && !source.contains(".join(\"logs\")")
+        }),
         "drag-and-drop must not use in-repo logs (M160)"
     );
 
@@ -12756,7 +12764,7 @@ fn media_conversion_tool_and_ffi_paths_m164() {
         ),
         (
             "crates/foundation/src/image_builders.rs",
-            "resolve_tool_path_or_audit",
+            "get_resolved_command",
         ),
         (
             "crates/foundation/src/c_api.rs",
@@ -15766,7 +15774,7 @@ fn media_conversion_delivery_path_layout_m87() {
     for needle in [
         "output_stem_for_delivery",
         "path_parent_or_dot",
-        "strip_prefix_or_self",
+        "resolve_output_dir_for_delivery",
         "delivery_path_layout_fallback_audit",
     ] {
         assert!(
@@ -15774,6 +15782,11 @@ fn media_conversion_delivery_path_layout_m87() {
             "conversion.rs must use {needle} (M87)"
         );
     }
+    let resolve = gate_fn_body(&gate, "resolve_output_dir_for_delivery");
+    assert!(
+        resolve.contains("strip_prefix_or_self") && resolve.contains("path_parent_or_dot"),
+        "resolve_output_dir_for_delivery must use the audited path helpers (M87)"
+    );
     let hits = offending_lines(
         &root,
         &[join_legacy_aware(

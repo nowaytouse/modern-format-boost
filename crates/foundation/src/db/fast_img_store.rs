@@ -642,7 +642,10 @@ fn write_sources(
     old: Option<&WorkingCopyMarker>,
     next: &WorkingCopyMarker,
 ) -> Result<()> {
-    let previous = old.map(source_outcomes).unwrap_or_default();
+    let previous = match old {
+        Some(marker) => source_outcomes(marker),
+        None => BTreeMap::new(),
+    };
     let next = source_outcomes(next);
     for rel in previous.keys().filter(|rel| !next.contains_key(**rel)) {
         conn.execute(
@@ -671,9 +674,10 @@ fn append_submissions(
     old: Option<&WorkingCopyMarker>,
     next: &WorkingCopyMarker,
 ) -> Result<()> {
-    let old_len = old
-        .and_then(WorkingCopyMarker::photos_submission_history)
-        .map_or(0, |history| history.intents.len());
+    let old_len = match old.and_then(WorkingCopyMarker::photos_submission_history) {
+        Some(history) => history.intents.len(),
+        None => 0,
+    };
     let Some(history) = next.photos_submission_history() else {
         return Ok(());
     };
