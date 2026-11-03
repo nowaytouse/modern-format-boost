@@ -23,6 +23,15 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### History Cleanup and Long-Running Jobs (2026-11-03)
+
+- Stream history cleanup previews for large batches, validate the read snapshot
+  before taking SQLite's write lock, and report contention before deleting
+  anything. Keep secure deletion, database compaction and checked WAL truncation.
+- Explain history removal and its media safety boundaries in the native guide.
+- Show elapsed time in localized units from seconds through years. Enlarge the
+  main window logo and expose processor recovery as a keyboard-accessible action.
+
 ### Window Settings and History Privacy (2026-11-03)
 
 - Move language, appearance and developer controls into Settings. Add a

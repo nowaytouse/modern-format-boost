@@ -38,13 +38,14 @@
 "tool_snapshot.scope.img" = "画像処理";
 "tool_snapshot.scope.vid" = "動画処理";
 "history.remove.title" = "選択した履歴を削除…";
-"history.remove.scope" = "選択したバッチを履歴データベースから削除し、バッチに属することを確認できた記録ファイルを削除します。メディア、再開用データ、帰属が不明なログは保持します。";
+"history.remove.scope" = "選択した履歴と、MFB が帰属を確認できたログを削除します。元ファイル、変換後のファイル、「写真」の項目、再開用データは保持します。";
 "history.remove.preview" = "削除範囲を確認";
 "history.remove.counts" = "選択したバッチ：%d · 保存された記録：%llu · ログ行：%llu";
 "history.remove.artifacts" = "安全に削除できるログ：%d · 保持するログ項目：%d";
 "history.remove.confirm" = "記録を削除";
+"history.remove.busy" = "履歴を更新中です。記録やファイルは削除されていません。少し待ってから、記録を選び直してお試しください。";
 "history.remove.cancel" = "キャンセル";
-"history.remove.loading" = "選択した記録を確認中…";
+"history.remove.loading" = "選択した記録を確認中です。大きなバッチには時間がかかることがあります。";
 "history.remove.running" = "選択した記録を削除中…";
 "history.remove.cancelled" = "キャンセルしました。記録は削除されていません。";
 "history.remove.invalid" = "削除結果を確認できません。処理履歴を再読み込みしてから、もう一度お試しください。";
@@ -174,7 +175,7 @@
 "command.placeholder" = "コマンドのプレビュー";
 "status.ready" = "準備完了";
 "status.running" = "実行中…";
-"status.running_elapsed" = "実行中 · %d 分 %02d 秒";
+"status.running_elapsed" = "実行中 · %@";
 "status.checking_processor" = "必要なコンポーネントを確認中…";
 "status.command_copied" = "コマンドをコピーしました";
 "status.completed" = "正常に完了しました";
@@ -182,7 +183,9 @@
 "status.processor_ready" = "コンポーネントの準備完了";
 "status.processor_failed" = "コンポーネントの確認に失敗しました";
 "status.processor_unavailable" = "必要なコンポーネントがありません。クリックして完全版を入手してください。";
-"status.core_help" = "完全版のダウンロードページを開きます。開発者モードではローカルの実行ファイルを選べます。";
+"status.accessibility_label" = "処理状況";
+"status.choose_processor" = "処理プログラムを選択…";
+"status.download_full" = "完全版を入手…";
 "button.help" = "ヘルプ";
 "settings.automatic" = "自動で設定";
 "settings.advanced" = "詳細設定";
@@ -566,6 +569,16 @@
 "cleanup.outcome.verification_blocked" = "受け渡しの検証が整理条件を満たさないため、出力フォルダの削除は試みていません。";
 "settings.unavailable" = "この操作に対応するメディアのエンコード設定はありません。";
 
+"helpguide.history.title" = "9. 処理履歴を削除する";
+"helpguide.history.intro" = "処理履歴の削除では、MFB が保存した履歴を消去します。元ファイル、変換後のファイル、「写真」の項目、処理再開用のデータは保持します。";
+"helpguide.history.1.title" = "削除範囲を確認する";
+"helpguide.history.1.body" = "「処理履歴」で削除するバッチを選び、確認前にプレビューで対象の記録、保存されたログ行、削除できるファイルを確認します。MFB は実行前に、プレビューと現在の記録やファイルが一致することを確認します。";
+"helpguide.history.2.title" = "削除の対象になるファイルとフォルダ";
+"helpguide.history.2.body" = "削除の対象になるのは、MFB が登録したセッションログと付属のアーカイブ目録です。登録時のファイルの同一性とプレビューの内容を照合します。選択していない記録と共有するログや、帰属を確認できないファイルは保持します。アーカイブフォルダは、そのセッションに属することを確認でき、削除後に空になった場合にだけ取り除きます。";
+"helpguide.history.3.title" = "データベース内の記録";
+"helpguide.history.3.body" = "MFB は選択した SQLite の記録と保存済みログ行を安全に削除し、データベースを圧縮して、先行書き込みログ（WAL）が切り詰められたことを確認します。記録を削除できても一部の消去が完了しなかった場合は、結果に残った項目を表示します。";
+"helpguide.history.4.title" = "バックアップと書き出したコピー";
+"helpguide.history.4.body" = "削除が適用されるのは、MFB が現在使っている履歴です。書き出したコピー、バックアップ、システムのスナップショットには、記録が残ることがあります。";
 "history.title" = "処理履歴";
 "history.search" = "バッチを検索";
 "history.all" = "すべて";

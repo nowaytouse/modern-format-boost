@@ -38,13 +38,14 @@
 "tool_snapshot.scope.img" = "Image processing";
 "tool_snapshot.scope.vid" = "Video processing";
 "history.remove.title" = "Remove selected history…";
-"history.remove.scope" = "Clears selected batches from the history database and removes archives owned by those batches. Media, resume data and logs with uncertain ownership are kept.";
+"history.remove.scope" = "Removes selected history records and logs whose ownership MFB can verify. Original files, converted outputs, Photos items, and resume data are kept.";
 "history.remove.preview" = "Review removal";
 "history.remove.counts" = "Selected batches: %d · Saved records: %llu · Log lines: %llu";
 "history.remove.artifacts" = "Logs safe to remove: %d · Log entries to keep: %d";
 "history.remove.confirm" = "Remove records";
+"history.remove.busy" = "History is being updated. No records or files were removed. Wait a moment, then select the records and try again.";
 "history.remove.cancel" = "Cancel";
-"history.remove.loading" = "Checking selected records…";
+"history.remove.loading" = "Checking selected records. Large batches can take a while.";
 "history.remove.running" = "Removing selected records…";
 "history.remove.cancelled" = "Removal cancelled; nothing removed.";
 "history.remove.invalid" = "The removal response could not be verified. Reload processing history before trying again.";
@@ -174,7 +175,7 @@
 "command.placeholder" = "Command preview";
 "status.ready" = "Ready";
 "status.running" = "Running…";
-"status.running_elapsed" = "Running · %d min %02d sec";
+"status.running_elapsed" = "Running · %@";
 "status.checking_processor" = "Checking core components…";
 "status.command_copied" = "Command copied";
 "status.completed" = "Completed successfully";
@@ -182,7 +183,9 @@
 "status.processor_ready" = "Core components ready";
 "status.processor_failed" = "Core component check failed";
 "status.processor_unavailable" = "Core components missing. Click to get the complete app.";
-"status.core_help" = "Missing components: open the complete download. Developers can select a local core executable.";
+"status.accessibility_label" = "Processing status";
+"status.choose_processor" = "Choose Processor…";
+"status.download_full" = "Get Complete Version…";
 "button.help" = "Help";
 "settings.automatic" = "Automatic";
 "settings.advanced" = "Advanced settings";
@@ -566,6 +569,16 @@
 "cleanup.outcome.verification_blocked" = "Delivery verification did not permit cleanup. Output folder removal was not attempted.";
 "settings.unavailable" = "This operation has no configurable media encoding settings.";
 
+"helpguide.history.title" = "9. Remove Processing History";
+"helpguide.history.intro" = "Removing a processing record clears history saved by MFB. Your original files, converted files, Photos items, and data for resuming work are kept.";
+"helpguide.history.1.title" = "Review what will be removed";
+"helpguide.history.1.body" = "In Processing History, select the batches to remove and review the preview before confirming. It lists the records, saved log lines, and eligible files. MFB checks the preview against the current records and files before it proceeds.";
+"helpguide.history.2.title" = "Which files and folders are eligible?";
+"helpguide.history.2.body" = "Only MFB-registered session logs and the accompanying archive manifest are eligible. MFB checks that each file still matches the recorded identity and the preview. Logs shared with unselected records and files whose ownership is unclear are kept. MFB removes the archive folder only if it is verified to belong to the session and is empty after cleanup.";
+"helpguide.history.3.title" = "What happens to the database?";
+"helpguide.history.3.body" = "MFB securely deletes the selected SQLite records and saved log lines, compacts the database, and checks that SQLite has truncated its write-ahead log (WAL). If the records were removed but part of the cleanup could not be completed, the result lists what remains.";
+"helpguide.history.4.title" = "Backups and exported copies";
+"helpguide.history.4.body" = "This action applies to MFB’s current history store. Exported copies, backups, and system snapshots can still contain these records.";
 "history.title" = "Processing History";
 "history.search" = "Search batches";
 "history.all" = "All";

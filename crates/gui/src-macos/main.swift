@@ -28,6 +28,7 @@ private func savedInterfaceZoom(_ preferences: UserDefaults) -> Int {
 private let historyPreferenceKey = "MFBGuiHistoryDirectory"
 private let mainWindowContentSize = NSSize(width: 980, height: 720)
 private let compactWindowWidth: CGFloat = 760
+private let mainLogoSize: CGFloat = 80
 private let mainWindowStyleMask: NSWindow.StyleMask = [
     .titled, .closable, .miniaturizable, .resizable, .fullSizeContentView,
 ]
@@ -131,6 +132,11 @@ private enum AppAppearance: String, CaseIterable {
         case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
+}
+
+private struct ProcessingStart: Equatable {
+    var date = Date()
+    var uptime = ProcessInfo.processInfo.systemUptime
 }
 
 private final class LocalizationCatalog {
@@ -7129,7 +7135,9 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
     private var statusDisplay: StatusDisplay = .processor
     private var selectedPhotosContainer: PhotosAuditContainer?
-    private var processingStartedAt: TimeInterval?
+    private var processingStartedAt: ProcessingStart?
+    private let elapsedFormatter = DateComponentsFormatter()
+    private let statusRecoveryButton = NSButton()
     private var refreshTimer: Timer?
     private var processingActivity: NSObjectProtocol?
 
@@ -7244,12 +7252,28 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func refreshStatus() {
+        let message: String
+        var needsRecovery = false
         switch statusDisplay {
-        case .processor: statusLabel.stringValue = processorStatus.message
+        case .processor:
+            message = processorStatus.message
+            switch processorStatus {
+            case .unavailable, .failed: needsRecovery = configurationControlsEnabled && !isDebugWindow
+            case .ready, .checking: break
+            }
         case let .localized(key, arguments):
             let format = LocalizationCatalog.shared.text(key)
-            statusLabel.stringValue = arguments.isEmpty ? format : String(format: format, locale: Locale.current, arguments: arguments)
-        case let .message(message): statusLabel.stringValue = message
+            message = arguments.isEmpty ? format : String(format: format, locale: Locale.current, arguments: arguments)
+        case let .message(text): message = text
+        }
+        if statusLabel.stringValue != message {
+            statusLabel.stringValue = message
+            statusLabel.toolTip = message
+        }
+        statusRecoveryButton.isHidden = !needsRecovery
+        if needsRecovery {
+            statusRecoveryButton.title = localized(developerMode ? "status.choose_processor" : "status.download_full")
+            statusRecoveryButton.setAccessibilityLabel(statusRecoveryButton.title)
         }
     }
 
@@ -7275,8 +7299,13 @@ private final class AppController: NSObject, NSWindowDelegate {
             setLocalizedStatus(host.isPaused ? "status.paused" : "status.pausing")
             return
         }
-        let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt))
-        setLocalizedStatus("status.running_elapsed", elapsed / 60, elapsed % 60)
+        let elapsed = floor(max(0, ProcessInfo.processInfo.systemUptime - startedAt.uptime))
+        let end = startedAt.date.addingTimeInterval(elapsed)
+        if let duration = elapsedFormatter.string(from: startedAt.date, to: end) {
+            setLocalizedStatus("status.running_elapsed", duration)
+        } else {
+            setLocalizedStatus("status.running")
+        }
     }
 
     private func configureWindow() {
@@ -7299,8 +7328,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         logo.imageScaling = .scaleProportionallyUpOrDown
         logo.setAccessibilityElement(false)
         logo.setAccessibilityHidden(true)
-        logoSize = [logo.widthAnchor.constraint(equalToConstant: 56),
-                    logo.heightAnchor.constraint(equalToConstant: 56)]
+        logoSize = [logo.widthAnchor.constraint(equalToConstant: mainLogoSize),
+                    logo.heightAnchor.constraint(equalToConstant: mainLogoSize)]
         NSLayoutConstraint.activate(logoSize)
         logo.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
@@ -7580,14 +7609,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        statusLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(repairCore)))
-        statusLabel.toolTip = localized("status.core_help")
+        statusRecoveryButton.target = self
+        statusRecoveryButton.action = #selector(repairCore)
+        statusRecoveryButton.isHidden = true
         progressIndicator.style = .spinning
         progressIndicator.controlSize = .small
         progressIndicator.isDisplayedWhenStopped = false
         let statusSpacer = NSView()
         statusSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let statusRow = NSStackView(views: [progressIndicator, statusLabel, statusSpacer])
+        let statusRow = NSStackView(views: [progressIndicator, statusLabel, statusRecoveryButton, statusSpacer])
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
         statusRow.spacing = 8
@@ -7646,7 +7676,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         for (control, font) in mainFonts {
             control.font = fonts.convert(font, toSize: font.pointSize * scale)
         }
-        for constraint in logoSize { constraint.constant = 56 * scale }
+        for constraint in logoSize { constraint.constant = mainLogoSize * scale }
         logView.font = .monospacedSystemFont(ofSize: 12 * scale, weight: .regular)
         for storage in [fullLogPresentation, privateLogPresentation] {
             storage.beginEditing()
@@ -9601,6 +9631,15 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func applyLocalization() {
+        let locale = LocalizationCatalog.shared.language.resourceName ?? Bundle.main.preferredLocalizations.first ?? "en"
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        calendar.locale = Locale(identifier: locale)
+        elapsedFormatter.calendar = calendar
+        elapsedFormatter.allowedUnits = [.year, .month, .weekOfMonth, .day, .hour, .minute, .second]
+        elapsedFormatter.unitsStyle = .full
+        elapsedFormatter.maximumUnitCount = 3
+        elapsedFormatter.zeroFormattingBehavior = .dropAll
         subtitleLabel.stringValue = localized(isDebugWindow ? "debug.banner" : "app.subtitle")
         subtitleLabel.toolTip = subtitleLabel.stringValue
         window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
@@ -9636,7 +9675,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         refreshPrivacyPresentation()
         pauseButton.title = localized(host.controlState == "paused" ? "button.resume" : "button.pause")
         stopButton.title = localized("button.stop")
-        statusLabel.toolTip = localized("status.core_help")
+        statusLabel.setAccessibilityLabel(localized("status.accessibility_label"))
         updateOptionTitles()
         commandField.placeholderString = localized("command.placeholder")
         replaceTitles(processingPopup, with: [
@@ -9713,7 +9752,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         pauseButton.title = localized("button.pause")
         if processing {
             if processingStartedAt == nil {
-                processingStartedAt = ProcessInfo.processInfo.systemUptime
+                processingStartedAt = ProcessingStart()
                 processingActivity = ProcessInfo.processInfo.beginActivity(
                     options: .userInitiatedAllowingIdleSystemSleep,
                     reason: "Processing user-selected media"
@@ -9980,7 +10019,9 @@ private final class AppController: NSObject, NSWindowDelegate {
                 languageChanged(language)
                 guard statusLabel.stringValue == localized(key), processorStatus == state,
                       settingsButton.title == localized("settings.title"),
-                      settingsButton.accessibilityLabel() == localized("settings.title") else {
+                      settingsButton.accessibilityLabel() == localized("settings.title"),
+                      statusLabel.toolTip == statusLabel.stringValue,
+                      statusRecoveryButton.isHidden == (state != .unavailable) else {
                     throw HostError(message: "Language change retained stale core readiness wording or changed readiness")
                 }
             }
@@ -10037,11 +10078,18 @@ private final class AppController: NSObject, NSWindowDelegate {
                 }
             }
         }
-        processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
-        let startedAt = processingStartedAt
+        let epoch = Date(timeIntervalSince1970: 0)
+        languageChanged(.english)
+        for (seconds, unit) in [(65.0, "minute"), (3_600, "hour"), (86_700, "day"), (694_801, "week"), (31_017_600, "month"), (35_251_323, "year")] {
+            guard elapsedFormatter.string(from: epoch, to: epoch.addingTimeInterval(seconds))?.contains(unit) == true else {
+                throw HostError(message: "Elapsed time did not show the \(unit) unit")
+            }
+        }
+        let startedAt = ProcessingStart(date: epoch, uptime: ProcessInfo.processInfo.systemUptime - 35_251_323)
+        processingStartedAt = startedAt
         languageChanged(.japanese)
-        let elapsed = max(0, Int(ProcessInfo.processInfo.systemUptime - startedAt!))
-        guard statusLabel.stringValue == localized("status.running_elapsed", elapsed / 60, elapsed % 60),
+        guard statusLabel.stringValue.contains("年"), statusLabel.stringValue.contains("か月"),
+              statusLabel.stringValue.contains("週間"), statusRecoveryButton.isHidden,
               processingStartedAt == startedAt, targetField.stringValue == "/synthetic/language-draft",
               backupField.stringValue == "/synthetic/language-backup", commandField.stringValue == "synthetic command preview",
               optionControls.map({ $0.0.state }) == optionStates else {
@@ -11062,7 +11110,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             guard let content = window.contentView,
                   abs(content.bounds.width - width) < 1,
                   abs(titleLabel.font!.pointSize - originalFontSize * 1.5) < 1,
-                  logo.bounds.width >= 83,
+                  abs(logo.bounds.width - mainLogoSize * 1.5) < 1,
                   content.bounds.contains(runButton.convert(runButton.bounds, to: content)) else {
                 throw HostError(message: "Window zoom clipped the main action or did not resize the logo and text")
             }
@@ -11458,7 +11506,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         try validateRestorePresentationForSelfTest()
         setProcessing(true)
         defer { setProcessing(false) }
-        processingStartedAt = ProcessInfo.processInfo.systemUptime - 65
+        processingStartedAt = ProcessingStart(date: Date(), uptime: ProcessInfo.processInfo.systemUptime - 65)
         refreshProcessingStatus()
         let runningStatus = statusLabel.stringValue
         let runningTarget = targetField.stringValue
@@ -11466,7 +11514,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         verboseCheck.state = .on
         configurationChanged()
         guard statusLabel.stringValue == runningStatus,
-              runningStatus == localized("status.running_elapsed", 1, 5),
+              runningStatus.hasPrefix(localized("status.running_elapsed", "")),
+              statusLabel.toolTip == runningStatus, statusRecoveryButton.isHidden,
               targetField.stringValue == runningTarget,
               (window.contentView as? NativeDropView)?.acceptsDrops == false,
               !verboseCheck.isEnabled, !runButton.isEnabled, !dryRunCheck.isEnabled,

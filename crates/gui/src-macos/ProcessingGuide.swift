@@ -4,6 +4,7 @@ import AppKit
 final class ProcessingGuideController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     private static let sections: [(String, Int)] = [
         ("policy", 4), ("metadata", 5), ("routes", 4), ("search", 5), ("safety", 4), ("results", 5), ("tools", 5), ("restore", 3),
+        ("history", 4),
     ]
     private let text: (String) -> String
     private let navigation = NSTableView()
@@ -287,6 +288,10 @@ final class ProcessingGuideController: NSWindowController, NSTableViewDataSource
             controller.show(relativeTo: nil, topic: "results")
             try require(controller.textView.string.contains(translate("helpguide.results.5.body")),
                 "Result guide did not explain check-attempt units and final verification boundaries")
+            controller.show(relativeTo: nil, topic: "history")
+            try require(controller.textView.string.hasPrefix(translate("helpguide.history.title"))
+                && (1...4).allSatisfy { controller.textView.string.contains(translate("helpguide.history.\($0).body")) },
+                "History guide did not explain the scope and verification of record removal")
             controller.close()
         }
     }

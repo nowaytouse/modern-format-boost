@@ -2697,8 +2697,12 @@ private func historyRemovalOutput(_ request: HistoryRemovalRequest, directory: U
     guard let binary = ProcessorLocator.resolveTool(named: "cache_cleaner") else {
         throw HostError(message: localized("settings.cache.backend_missing"))
     }
-    // A destructive operation must finish its transaction and report recovery paths before it exits.
-    return try settingsToolOutput(binary, arguments: request.arguments(directory: directory), timeout: request.snapshot_token == nil ? 10 : nil)
+    // Preview streams the selected output. Removal must finish its transaction and report recovery paths.
+    do {
+        return try settingsToolOutput(binary, arguments: request.arguments(directory: directory), timeout: nil)
+    } catch let error as HostError where error.localizedDescription.hasPrefix("Error: MFB_HISTORY_CLEANUP_BUSY:") {
+        throw HostError(message: localized("history.remove.busy"))
+    }
 }
 
 private struct HistoryReadOnlyAccessReceipt: Decodable {

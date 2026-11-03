@@ -675,6 +675,10 @@ fn hash_field(hasher: &mut blake3::Hasher, value: &[u8], budget: &mut usize) -> 
         *budget <= SNAPSHOT_BYTE_LIMIT,
         "History cleanup snapshot exceeds its bounded read budget"
     );
+    hash_snapshot_field(hasher, value)
+}
+
+fn hash_snapshot_field(hasher: &mut blake3::Hasher, value: &[u8]) -> Result<()> {
     hasher.update(&u64::try_from(value.len())?.to_le_bytes());
     hasher.update(value);
     Ok(())
@@ -965,16 +969,12 @@ fn build_plan(
         let mut output_count = 0_u64;
         let mut selected_outputs = 0_u64;
         let mut query = snapshot.prepare("SELECT sequence,ts,pipeline,line FROM history_output WHERE session_id=?1 ORDER BY sequence")?;
-        let outputs = query.query_map([session], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?;
-        for row in outputs {
-            let (sequence, timestamp, pipeline, line) = row?;
+        let mut outputs = query.query([session])?;
+        while let Some(row) = outputs.next()? {
+            let sequence: i64 = row.get(0)?;
+            let timestamp = row.get_ref(1)?.as_str()?;
+            let pipeline = row.get_ref(2)?.as_str()?;
+            let line = row.get_ref(3)?.as_str()?;
             ensure!(
                 sequence > 0 && line.len() <= 8 * 1024 * 1024,
                 "History output record is invalid or oversized"
@@ -985,7 +985,8 @@ fn build_plan(
             hash_field(&mut hasher, &sequence.to_le_bytes(), &mut budget)?;
             hash_field(&mut hasher, timestamp.as_bytes(), &mut budget)?;
             hash_field(&mut hasher, pipeline.as_bytes(), &mut budget)?;
-            hash_field(&mut hasher, line.as_bytes(), &mut budget)?;
+            // Output is streamed from one SQLite row and hashed without copying its payload.
+            hash_snapshot_field(&mut hasher, line.as_bytes())?;
             if wanted
                 .iter()
                 .any(|range| sequence > range.output_start && sequence <= range.output_end)
@@ -1211,12 +1212,25 @@ pub fn execute_history_cleanup(
         connection.pragma_query_value(None, "secure_delete", |row| row.get(0))?;
     ensure!(secure_delete == 1, "History secure deletion is unavailable");
     persist_history_wal_sidecars(&connection)?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
     let plan = build_plan(&root, &transaction, request)?;
     ensure!(
         plan.preview.snapshot_token == token,
         "History selection or its artifacts changed since preview; nothing removed"
     );
+    // Take SQLite's write lease on this exact snapshot before staging files.
+    let changed = transaction
+        .execute("UPDATE history_sessions SET updated_at=updated_at WHERE 0", [])
+        .map_err(|error| {
+            let context = match error.sqlite_error_code() {
+                Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                    "MFB_HISTORY_CLEANUP_BUSY: another operation is writing History; no rows or files were removed"
+                }
+                _ => "begin History cleanup write transaction",
+            };
+            anyhow::Error::from(error).context(context)
+        })?;
+    ensure!(changed == 0, "History write lease acquisition changed rows");
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
     let stage_result = (|| -> Result<()> {
         for artifact in &plan.deletable {
@@ -1573,6 +1587,37 @@ mod tests {
         }
         register_history_artifacts(logs, session, &paths)?;
         Ok(paths)
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn history_cleanup_write_contention_retains_rows_and_allows_retry() -> Result<()> {
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        run(&logs, "finished", "run-finished", "retained while busy")?;
+        let paths = owned_logs(&logs, "finished")?;
+        let mut selected = request("finished", "run-finished");
+        selected.snapshot_token = Some(preview_history_cleanup(&logs, &selected)?.snapshot_token);
+        let mut writer = open_history_write(&logs)?;
+        let transaction = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Err(error) = execute_history_cleanup(&logs, &selected) else {
+            anyhow::bail!("History cleanup unexpectedly acquired a held write transaction");
+        };
+        assert!(error.to_string().starts_with("MFB_HISTORY_CLEANUP_BUSY:"));
+        assert_eq!(
+            transaction.query_row("SELECT COUNT(*) FROM history_events", [], |row| row
+                .get::<_, i64>(0))?,
+            2
+        );
+        assert!(paths.iter().all(|path| path.is_file()));
+        transaction.rollback()?;
+        drop(writer);
+        let receipt = execute_history_cleanup(&logs, &selected)?;
+        assert_eq!(receipt.status, "completed");
+        assert_eq!(receipt.removed_runs, 1);
+        assert_eq!(receipt.removed_artifacts, 3);
+        Ok(())
     }
 
     #[test]
