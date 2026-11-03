@@ -7356,13 +7356,15 @@ private final class AppController: NSObject, NSWindowDelegate {
         chooseButton.action = #selector(chooseTarget)
         let targetRow = NSStackView(views: [targetField, targetPrivacyLabel, chooseButton])
         targetPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        targetPrivacyLabel.widthAnchor.constraint(equalTo: targetField.widthAnchor).isActive = true
+        targetPrivacyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         targetRow.orientation = .horizontal
         targetRow.alignment = .centerY
+        targetRow.distribution = .fill
         targetRow.spacing = 8
         targetField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        targetField.widthAnchor.constraint(equalTo: targetRow.widthAnchor, constant: -100).isActive = true
-        chooseButton.widthAnchor.constraint(equalToConstant: 92).isActive = true
+        chooseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
+        chooseButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        chooseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         backupField.isEditable = false
         backupField.isSelectable = true
@@ -7370,16 +7372,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         backupField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         backupButton.target = self
         backupButton.action = #selector(chooseBackup)
-        backupLabel.alignment = .right
+        backupLabel.alignment = .left
         backupLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
         backupRow.addArrangedSubview(backupLabel)
         backupRow.addArrangedSubview(backupField)
         backupRow.addArrangedSubview(backupPrivacyLabel)
         backupPrivacyLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        backupPrivacyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        backupButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 92).isActive = true
+        backupButton.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        backupButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         backupRow.addArrangedSubview(backupButton)
         backupRow.orientation = .horizontal
         backupRow.alignment = .centerY
-        backupRow.spacing = 8
+        backupRow.distribution = .fill
+        backupRow.spacing = 12
         backupField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         backupRow.isHidden = true
 
@@ -7409,7 +7416,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         photosScopeButton.lineBreakMode = .byTruncatingMiddle
         photosScopeButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
         photosScopeButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        photosScopeLabel.alignment = .right
+        photosScopeLabel.alignment = .left
         photosScopeLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
         photosScopeRow.addArrangedSubview(photosScopeLabel)
         photosScopeRow.addArrangedSubview(photosScopeButton)
@@ -9651,6 +9658,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         mediaLabel.stringValue = localized("field.media")
         operationLabel.stringValue = localized("field.operation")
         photosScopeLabel.stringValue = localized("field.photos_scope")
+        processingPopup.setAccessibilityLabel(mediaLabel.stringValue)
+        operationPopup.setAccessibilityLabel(operationLabel.stringValue)
+        photosScopeButton.setAccessibilityLabel(photosScopeLabel.stringValue)
         chooseButton.title = localized("button.choose")
         backupButton.title = localized("button.choose")
         chooseButton.toolTip = localized("button.choose_target")
@@ -11111,8 +11121,13 @@ private final class AppController: NSObject, NSWindowDelegate {
                   abs(content.bounds.width - width) < 1,
                   abs(titleLabel.font!.pointSize - originalFontSize * 1.5) < 1,
                   abs(logo.bounds.width - mainLogoSize * 1.5) < 1,
-                  content.bounds.contains(runButton.convert(runButton.bounds, to: content)) else {
-                throw HostError(message: "Window zoom clipped the main action or did not resize the logo and text")
+                  content.bounds.contains(runButton.convert(runButton.bounds, to: content)),
+                  content.bounds.contains(chooseButton.convert(chooseButton.bounds, to: content)),
+                  chooseButton.bounds.width + 1 >= chooseButton.intrinsicContentSize.width,
+                  targetField.bounds.width > chooseButton.bounds.width,
+                  processingPopup.accessibilityLabel() == localized("field.media"),
+                  operationPopup.accessibilityLabel() == localized("field.operation") else {
+                throw HostError(message: "Window zoom clipped a main control or changed its accessible layout")
             }
             applyInterfaceZoom(100)
         }
@@ -11155,7 +11170,7 @@ private final class AppController: NSObject, NSWindowDelegate {
               targetField.frame.width >= content.bounds.width * 0.65,
               operationPopup.frame.width >= content.bounds.width * 0.65,
               window.title.contains(appVersion) else {
-            throw HostError(message: "Main form width, log area or visible version regressed")
+            throw HostError(message: "Main form layout regressed (window \(content.bounds.width), target \(targetField.frame.width), operation \(operationPopup.frame.width), log height \(logScroll.frame.height), version \(appVersion))")
         }
         appendLog("previous batch sentinel")
         let progressLine = #"MFB_PROGRESS={"schema_version":1,"stage_id":"synthetic-1","stage":"fast_img_encode","processed":1,"total":3,"state":"running"}"#

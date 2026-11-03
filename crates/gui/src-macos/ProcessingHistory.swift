@@ -2835,7 +2835,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     private var issueScanControl: HistoryStore.IssueScanControl?
     private var issueScanIsIgnored = false
     private var issueGeneration = UUID()
-    private let status = NSTextField(labelWithString: "")
+    private let status = NSTextField(wrappingLabelWithString: "")
     private let progress = NSProgressIndicator()
     private let splitController = NSSplitViewController()
     private var split: NSSplitView { splitController.splitView }
@@ -2910,9 +2910,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     func show() {
         updateLocalization()
-        if !isBackgroundSelfTest {
+        if !isBackgroundSelfTest, let window {
+            let opening = !window.isVisible
             showWindow(nil)
-            window?.makeKeyAndOrderFront(nil)
+            window.makeKeyAndOrderFront(nil)
+            if opening { window.makeFirstResponder(search) }
         }
         configureInitialDivider()
     }
@@ -3002,6 +3004,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         ])
         search.delegate = self
         search.sendsSearchStringImmediately = true
+        window?.initialFirstResponder = search
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
         filter.selectedSegment = 0
         filter.target = self
@@ -3148,9 +3151,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         divider.boxType = .separator
         root.addArrangedSubview(divider)
         divider.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        for buttons in [[logButton, cleanupButton, exportButton, retryFailedButton], [revealButton, copyButton, removeButton]] {
-            let actions = NSStackView(views: buttons)
+        let utilitySpacer = NSView()
+        let removalSpacer = NSView()
+        for spacer in [utilitySpacer, removalSpacer] {
+            spacer.setContentHuggingPriority(.fittingSizeCompression, for: .horizontal)
+        }
+        for views: [NSView] in [[logButton, revealButton, copyButton, exportButton, utilitySpacer],
+                               [cleanupButton, retryFailedButton, removalSpacer, removeButton]] {
+            let actions = NSStackView(views: views)
             actions.orientation = .horizontal
+            actions.distribution = .fill
             actions.spacing = HistoryLayout.spacing
             root.addArrangedSubview(actions)
             actions.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
@@ -3160,10 +3170,14 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         progress.isDisplayedWhenStopped = false
         status.font = HistoryLayout.smallFont
         status.textColor = .secondaryLabelColor
-        status.lineBreakMode = .byTruncatingMiddle
+        status.maximumNumberOfLines = 2
+        status.lineBreakMode = .byWordWrapping
+        status.cell?.truncatesLastVisibleLine = true
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let footer = NSStackView(views: [progress, status])
         footer.orientation = .horizontal
+        footer.alignment = .top
         footer.spacing = HistoryLayout.spacing
         root.addArrangedSubview(footer)
         footer.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
@@ -5183,6 +5197,15 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         guard let listScroll = table.enclosingScrollView,
               table.rect(ofColumn: 4).maxX <= listScroll.contentSize.width + 1 else {
             throw HostError(message: "History initial columns did not fit the list viewport")
+        }
+        guard window?.initialFirstResponder === search, status.maximumNumberOfLines == 2,
+              status.lineBreakMode == .byWordWrapping,
+              removeButton.superview === cleanupButton.superview,
+              removeButton.superview !== logButton.superview,
+              logButton.bounds.width <= logButton.intrinsicContentSize.width + 1,
+              let removalRow = removeButton.superview,
+              abs(removeButton.frame.maxX - removalRow.bounds.maxX) <= 1 else {
+            throw HostError(message: "History status or action layout regressed")
         }
         generation = UUID()
         entries = []

@@ -1622,6 +1622,73 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
+    fn history_cleanup_accepts_large_output_and_rechecks_every_payload_byte() -> Result<()> {
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        run(&logs, "large", "run-large", "original")?;
+        let mut connection = open_history_write(&logs)?;
+        let transaction = connection.transaction()?;
+        let row_bytes = 8 * 1024 * 1024;
+        let rows = SNAPSHOT_BYTE_LIMIT / row_bytes + 1;
+        assert_eq!(
+            transaction.execute(
+                "WITH RECURSIVE chunks(i) AS (
+                     VALUES(1) UNION ALL SELECT i + 1 FROM chunks WHERE i < ?1
+                 )
+                 INSERT INTO history_output(session_id, ts, pipeline, line)
+                 SELECT 'large', 'now', 'IMG', CAST(zeroblob(?2) AS TEXT) FROM chunks",
+                params![i64::try_from(rows)?, i64::try_from(row_bytes)?],
+            )?,
+            rows
+        );
+        assert_eq!(
+            transaction.execute(
+                "UPDATE history_events
+                 SET event='MFB_HISTORY_FINISHED=' || json_set(
+                     substr(event, instr(event, '=') + 1), '$.output_sequence',
+                     (SELECT MAX(sequence) FROM history_output WHERE session_id='large')
+                 )
+                 WHERE session_id='large' AND event LIKE 'MFB_HISTORY_FINISHED=%'",
+                [],
+            )?,
+            1
+        );
+        transaction.commit()?;
+
+        let mut selected = request("large", "run-large");
+        let preview = preview_history_cleanup(&logs, &selected)?;
+        assert_eq!(preview.output_rows, u64::try_from(rows + 1)?);
+        assert_eq!(
+            preview.output_bytes,
+            u64::try_from(rows * row_bytes + "original".len())?
+        );
+        selected.snapshot_token = Some(preview.snapshot_token);
+        assert_eq!(
+            connection.execute(
+                "UPDATE history_output SET line='modified'
+                 WHERE sequence=(SELECT MIN(sequence) FROM history_output WHERE session_id='large')",
+                [],
+            )?,
+            1
+        );
+        let Err(error) = execute_history_cleanup(&logs, &selected) else {
+            anyhow::bail!("History cleanup accepted a modified payload with its old token");
+        };
+        assert!(error.to_string().contains("changed since preview"));
+        assert_eq!(
+            connection.query_row(
+                "SELECT COUNT(*) FROM history_output WHERE session_id='large'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?,
+            i64::try_from(rows + 1)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
     fn history_cleanup_scrubs_payloads_and_removes_only_proven_archive_entries() -> Result<()> {
         let Some((_root, _guard, logs)) = fixture()? else {
             return Ok(());
