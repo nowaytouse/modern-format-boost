@@ -422,7 +422,11 @@ pub fn resolve_output_dir_for_delivery(
     if let (Some(user_out), Some(base)) = (user_out, base_dir) {
         let rel = strip_prefix_or_self(input, base, "strip_base_dir");
         let parent = path_parent_or_dot(rel);
-        return user_out.join(parent);
+        return if parent == Path::new(".") {
+            user_out.to_path_buf()
+        } else {
+            user_out.join(parent)
+        };
     }
     user_out.map_or_else(
         || {
@@ -4361,13 +4365,14 @@ pub fn path_stem_root_segment(stem: &str) -> &str {
     stem.split('.').next().unwrap_or(stem)
 }
 
-/// Parent directory for metadata/XMP sidecar resolution (audited `.` for a
-/// missing or empty parent, including a bare relative filename).
+/// Parent directory for metadata and delivery paths. A bare relative filename
+/// belongs to `.`; audit paths without a usable parent or filename.
 #[must_use]
 pub fn path_parent_or_dot(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        Some(_) if path.file_name().is_some() => Path::new("."),
+        _ => {
             delivery_metadata_batch_audit(
                 "path_parent",
                 format!(
@@ -4376,7 +4381,8 @@ pub fn path_parent_or_dot(path: &Path) -> &Path {
                 ),
             );
             Path::new(".")
-        })
+        }
+    }
 }
 
 /// Gate-owned placeholder for audit calls that have no stable asset path.
@@ -8031,6 +8037,43 @@ mod tests {
     use super::*;
     use crate::types::CheckResult;
     use serial_test::serial;
+
+    #[test]
+    fn root_level_delivery_path_does_not_report_a_missing_parent() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let input = root.path().join("root-image.jpg");
+        std::fs::write(&input, b"fixture")?;
+        let output_dir = root.path().join("output");
+        let log = tempfile::NamedTempFile::new()?;
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(std::sync::Mutex::new(log.reopen()?))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || -> anyhow::Result<()> {
+            assert_eq!(
+                resolve_output_dir_for_delivery(&input, Some(root.path()), Some(&output_dir)),
+                output_dir
+            );
+            assert_eq!(
+                crate::convert::conversion::determine_output_path_with_base(
+                    &input,
+                    root.path(),
+                    "jxl",
+                    &Some(output_dir.clone()),
+                )
+                .map_err(anyhow::Error::msg)?,
+                output_dir.join("root-image.JXL")
+            );
+            assert_eq!(path_parent_or_dot(Path::new("")), Path::new("."));
+            Ok(())
+        })?;
+        let diagnostics = std::fs::read_to_string(log.path())?;
+        assert!(!diagnostics.contains("root-image.jpg: missing or empty parent"));
+        assert!(diagnostics.contains("missing or empty parent directory"));
+        Ok(())
+    }
 
     #[test]
     fn delivery_cwd_result_preserves_observed_directory() {

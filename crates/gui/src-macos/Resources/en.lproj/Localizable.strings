@@ -6,6 +6,9 @@
 "error.production_busy" = "Another media task is running. Wait until it finishes, then try again.";
 "debug.already_open" = "Only 1 debug window can be open. Return to the existing window.";
 "field.target.placeholder" = "Choose or drop a file/folder";
+"field.target" = "Source";
+"button.choose_target" = "Choose source";
+"button.choose_backup" = "Choose backup";
 "field.backup" = "Backup";
 "field.backup.placeholder" = "Choose the matching backup folder or Photos library";
 "field.media" = "Media";
@@ -664,8 +667,13 @@
 "progress.stage.image_processing" = "Image processing";
 "progress.stage.video_processing" = "Video processing";
 "progress.stage.fast_img_encode" = "Fast IMG encoding";
-"progress.stage.modern_source_inspection" = "Original-format image inspection";
-"progress.inspection" = "%@ · Inspected %@ / %@ · Stage %.2f%%";
+"progress.stage.modern_source_inspection" = "Checking original-format candidates";
+"progress.stage.fast_img_source_preparation" = "Checking batch sources";
+"progress.stage.fast_img_source_hashing" = "Computing source fingerprints";
+"progress.candidates" = "Checking original-format candidates · %@ of %@ candidates checked";
+"progress.candidates_ended" = "Original-format check ended · %@ of %@ candidates checked";
+"progress.candidates_finished" = "Checked %@ of %@ original-format candidates · Checking batch sources next";
+"progress.inspection" = "%@ · %@ of %@ source files";
 "progress.files" = "%@ · Files %@ / %@ · %.2f%%";
 "progress.stage_finished" = "%@ stage ended · %@ / %@ files";
 "progress.empty" = "%@ · No files in this stage";

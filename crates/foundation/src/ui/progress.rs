@@ -331,6 +331,8 @@ pub enum FileProgressStage {
     VideoProcessing,
     FastImgEncode,
     ModernSourceInspection,
+    FastImgSourcePreparation,
+    FastImgSourceHashing,
 }
 
 #[derive(serde::Serialize)]
@@ -2555,6 +2557,14 @@ mod tests {
             (
                 FileProgressStage::ModernSourceInspection,
                 "modern_source_inspection",
+            ),
+            (
+                FileProgressStage::FastImgSourcePreparation,
+                "fast_img_source_preparation",
+            ),
+            (
+                FileProgressStage::FastImgSourceHashing,
+                "fast_img_source_hashing",
             ),
         ] {
             let json = serde_json::to_value(FileProgressEvent {

@@ -1412,14 +1412,11 @@ pub fn determine_output_path_with_base(
     let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
-            let rel_path = crate::media_conversion_gate::strip_prefix_or_self(
+            let out_subdir = crate::media_conversion_gate::resolve_output_dir_for_delivery(
                 input,
-                base_dir,
-                "strip_base_dir",
+                Some(base_dir),
+                Some(dir),
             );
-            let parent = crate::media_conversion_gate::path_parent_or_dot(rel_path);
-
-            let out_subdir = dir.join(parent);
             fs::create_dir_all(&out_subdir).map_err(|e| {
                 format!(
                     "Failed to create output directory {}: {}",

@@ -85,11 +85,6 @@ pub fn probe_modern_lossy_static(path: &Path) -> Result<Option<ModernLossyStatic
 
     let webp_compression = if format == FormatKind::WebP {
         let Some(compression) = probe_static_webp_compression(path)? else {
-            tracing::debug!(
-                target: "modern_lossy_static",
-                path = %path.display(),
-                "retaining WebP without positive static codec evidence"
-            );
             return Ok(None);
         };
         Some(compression)
@@ -284,6 +279,11 @@ fn probe_static_webp_compression(path: &Path) -> Result<Option<CompressionType>>
         ))
     })?;
     if features.has_animation() || has_animation_chunks {
+        tracing::debug!(
+            target: "modern_lossy_static",
+            path = %path.display(),
+            "retaining animated WebP outside static-only delivery"
+        );
         return Ok(None);
     }
     if features.width() == 0 || features.height() == 0 {
@@ -295,7 +295,14 @@ fn probe_static_webp_compression(path: &Path) -> Result<Option<CompressionType>>
     let compression = match features.format() {
         Some(::webp::BitstreamFormat::Lossy) => CompressionType::Lossy,
         Some(::webp::BitstreamFormat::Lossless) => CompressionType::Lossless,
-        Some(::webp::BitstreamFormat::Undefined) | None => return Ok(None),
+        Some(::webp::BitstreamFormat::Undefined) | None => {
+            tracing::debug!(
+                target: "modern_lossy_static",
+                path = %path.display(),
+                "retaining WebP without positive static codec evidence"
+            );
+            return Ok(None);
+        }
     };
     // Header features establish codec semantics, not complete pixel validity.
     let decoded = crate::image_detection::open_image_with_limits(path).map_err(|error| {

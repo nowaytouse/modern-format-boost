@@ -6,6 +6,9 @@
 "error.production_busy" = "另一个媒体任务正在运行。请等待任务结束后重试。";
 "debug.already_open" = "只能打开 1 个调试窗口。请返回已打开的调试窗口。";
 "field.target.placeholder" = "选择或拖入文件/文件夹";
+"field.target" = "处理来源";
+"button.choose_target" = "选择处理来源";
+"button.choose_backup" = "选择备份";
 "field.backup" = "备份";
 "field.backup.placeholder" = "选择对应的备份文件夹或照片图库";
 "field.media" = "媒体类型";
@@ -664,8 +667,13 @@
 "progress.stage.image_processing" = "图像处理";
 "progress.stage.video_processing" = "视频处理";
 "progress.stage.fast_img_encode" = "Fast IMG 编码";
-"progress.stage.modern_source_inspection" = "检查原格式图片";
-"progress.inspection" = "%@ · 已检查 %@ / %@ · 阶段进度 %.2f%%";
+"progress.stage.modern_source_inspection" = "检查原格式交付候选";
+"progress.stage.fast_img_source_preparation" = "检查本批来源";
+"progress.stage.fast_img_source_hashing" = "计算来源指纹";
+"progress.candidates" = "检查原格式交付候选 · 已检查 %@ / %@ 个候选";
+"progress.candidates_ended" = "原格式交付候选检查结束 · 已检查 %@ / %@ 个候选";
+"progress.candidates_finished" = "已检查 %@ / %@ 个原格式交付候选 · 接下来检查本批来源";
+"progress.inspection" = "%@ · %@ / %@ 个来源文件";
 "progress.files" = "%@ · 文件进度 %@ / %@ · %.2f%%";
 "progress.stage_finished" = "%@阶段已结束 · %@ / %@ 个文件";
 "progress.empty" = "%@ · 当前阶段没有文件";

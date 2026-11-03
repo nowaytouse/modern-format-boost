@@ -23,6 +23,17 @@ areas of change are:
   regressions with scoped evidence. These do not establish a general throughput
   improvement or complete cross-run recovery.
 
+### Fast IMG Source Preparation (2026-11-03)
+
+- Show original-format candidates, source classification and source hashing as
+  separate progress stages. Give source and backup pickers distinct accessibility
+  labels, and update live progress values only when they change.
+- Index same-stem Live Photo candidates by directory during classification and
+  recheck directory membership before using the resulting inventory.
+- Create the selected output directory for root-level inputs without a spurious
+  missing-parent warning.
+- Distinguish animated WebP from inconclusive static codec evidence in logs.
+
 ### Photos Custody Queries and V2 Icon (2026-11-03)
 
 - Apply the existing Photos verification batch size to local custody queries,

@@ -6,6 +6,9 @@
 "error.production_busy" = "別のメディア処理が実行中です。完了してから再試行してください。";
 "debug.already_open" = "デバッグウインドウは 1 つだけ開けます。既存のデバッグウインドウに戻ってください。";
 "field.target.placeholder" = "ファイルまたはフォルダを選択／ドロップ";
+"field.target" = "処理対象";
+"button.choose_target" = "処理対象を選択";
+"button.choose_backup" = "バックアップを選択";
 "field.backup" = "バックアップ";
 "field.backup.placeholder" = "対応するバックアップフォルダまたは写真ライブラリを選択";
 "field.media" = "メディア";
@@ -664,8 +667,13 @@
 "progress.stage.image_processing" = "画像処理";
 "progress.stage.video_processing" = "動画処理";
 "progress.stage.fast_img_encode" = "Fast IMG エンコード";
-"progress.stage.modern_source_inspection" = "元の形式の画像を確認";
-"progress.inspection" = "%@ · 確認 %@ / %@ · この段階 %.2f%%";
+"progress.stage.modern_source_inspection" = "元の形式で扱う候補を確認";
+"progress.stage.fast_img_source_preparation" = "今回の元ファイルを確認";
+"progress.stage.fast_img_source_hashing" = "元ファイルの指紋を計算";
+"progress.candidates" = "元の形式で扱う候補を確認中 · %@ / %@ 件を確認";
+"progress.candidates_ended" = "元の形式で扱う候補の確認を終了 · %@ / %@ 件を確認";
+"progress.candidates_finished" = "元の形式で扱う候補 %@ / %@ 件を確認済み · 次は今回の元ファイルを確認";
+"progress.inspection" = "%@ · 元ファイル %@ / %@ 件";
 "progress.files" = "%@ · ファイル %@ / %@ · %.2f%%";
 "progress.stage_finished" = "%@段階終了 · %@ / %@ ファイル";
 "progress.empty" = "%@ · この段階のファイルなし";

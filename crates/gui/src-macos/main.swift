@@ -4756,9 +4756,15 @@ private struct FileStageProgress {
         let total: UInt64
         let state: String
 
+        var isSourcePreparation: Bool {
+            ["modern_source_inspection", "fast_img_source_preparation", "fast_img_source_hashing"].contains(stage)
+        }
+
+        var stageLabel: String { localized("progress.stage.\(stage)") }
+
         var valid: Bool {
             schema_version == 1 && !stage_id.isEmpty && stage_id.utf8.count <= 64
-                && ["image_processing", "video_processing", "fast_img_encode", "modern_source_inspection"].contains(stage)
+                && (isSourcePreparation || ["image_processing", "video_processing", "fast_img_encode"].contains(stage))
                 && ["running", "finished"].contains(state)
                 && processed <= total && total <= UInt64(Int64.max)
         }
@@ -4803,15 +4809,24 @@ private struct FileStageProgress {
 
     var label: String {
         guard let event else { return localized("progress.unavailable") }
-        let stage = localized("progress.stage.\(event.stage)")
+        let processed = String(event.processed)
+        let total = String(event.total)
+        if event.stage == "modern_source_inspection", event.total > 0 {
+            if event.state == "finished" {
+                let key = event.processed == event.total ? "progress.candidates_finished" : "progress.candidates_ended"
+                return localized(key, processed, total)
+            }
+            return localized("progress.candidates", processed, total)
+        }
+        let stage = event.stageLabel
         if event.state == "finished" {
-            return localized("progress.stage_finished", stage, String(event.processed), String(event.total))
+            return localized("progress.stage_finished", stage, processed, total)
         }
         guard let percentage = event.percentage else { return localized("progress.empty", stage) }
-        if event.stage == "modern_source_inspection" {
-            return localized("progress.inspection", stage, String(event.processed), String(event.total), percentage)
+        if event.isSourcePreparation {
+            return localized("progress.inspection", stage, processed, total)
         }
-        return localized("progress.files", stage, String(event.processed), String(event.total), percentage)
+        return localized("progress.files", stage, processed, total, percentage)
     }
 }
 
@@ -8465,16 +8480,25 @@ private final class AppController: NSObject, NSWindowDelegate {
             }
             return
         }
-        fileProgressIndicator.isHidden = false
+        fileProgressIndicator.isHidden = fileProgress.event?.isSourcePreparation == true
+            && fileProgress.event?.state == "finished"
         fileProgressLabel.textColor = .labelColor
         fileProgressRow.isHidden = logPhase.phase == .verification || (fileProgress.event == nil && !fileProgress.invalid)
-        fileProgressLabel.stringValue = fileProgress.label
-        fileProgressLabel.toolTip = fileProgress.label
+        let label = fileProgress.label
+        if fileProgressLabel.stringValue != label {
+            fileProgressLabel.stringValue = label
+            fileProgressLabel.toolTip = label
+            fileProgressLabel.setAccessibilityLabel(label)
+        }
         fileProgressIndicator.isIndeterminate = fileProgress.invalid || fileProgress.event?.percentage == nil
             || fileProgress.event?.state == "finished"
-        fileProgressIndicator.doubleValue = fileProgress.event?.percentage ?? 0
-        fileProgressIndicator.setAccessibilityLabel(fileProgress.label)
-        if fileProgressIndicator.isIndeterminate && !configurationControlsEnabled {
+        let value = fileProgress.event?.percentage ?? 0
+        if fileProgressIndicator.doubleValue != value { fileProgressIndicator.doubleValue = value }
+        let stageLabel = fileProgress.event?.stageLabel ?? label
+        if fileProgressIndicator.accessibilityLabel() != stageLabel {
+            fileProgressIndicator.setAccessibilityLabel(stageLabel)
+        }
+        if !fileProgressIndicator.isHidden && fileProgressIndicator.isIndeterminate && !configurationControlsEnabled {
             fileProgressIndicator.startAnimation(nil)
         } else {
             fileProgressIndicator.stopAnimation(nil)
@@ -9338,6 +9362,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         window.title = isDebugWindow ? localized("window.debug_title", appVersion) : "Modern Format Boost · \(appVersion)"
         targetField.placeholderString = localized("field.target.placeholder")
         backupField.placeholderString = localized("field.backup.placeholder")
+        targetField.setAccessibilityLabel(localized("field.target"))
+        backupField.setAccessibilityLabel(localized("field.backup"))
         backupLabel.stringValue = localized("field.backup")
         mediaLabel.stringValue = localized("field.media")
         operationLabel.stringValue = localized("field.operation")
@@ -9347,6 +9373,10 @@ private final class AppController: NSObject, NSWindowDelegate {
         developerCheck.title = localized("option.developer")
         chooseButton.title = localized("button.choose")
         backupButton.title = localized("button.choose")
+        chooseButton.toolTip = localized("button.choose_target")
+        backupButton.toolTip = localized("button.choose_backup")
+        chooseButton.setAccessibilityLabel(chooseButton.toolTip)
+        backupButton.setAccessibilityLabel(backupButton.toolTip)
         openButton.title = localized("button.open_terminal")
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
@@ -10777,6 +10807,13 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func validateInterfaceForSelfTest() throws {
+        guard targetField.accessibilityLabel() == localized("field.target"),
+              backupField.accessibilityLabel() == localized("field.backup"),
+              chooseButton.accessibilityLabel() == localized("button.choose_target"),
+              backupButton.accessibilityLabel() == localized("button.choose_backup"),
+              chooseButton.accessibilityLabel() != backupButton.accessibilityLabel() else {
+            throw HostError(message: "Source and backup pickers lack distinct accessibility names")
+        }
         guard !logDetailsExpanded, logScroll.isHidden, latestDiagnosticsRow.isHidden,
               logDetailsButton.accessibilityLabel() == localized("log.details.show") else {
             throw HostError(message: "Ordinary startup did not collapse technical processing details")
@@ -10836,6 +10873,37 @@ private final class AppController: NSObject, NSWindowDelegate {
         guard fileProgressIndicator.isIndeterminate, fileProgress.event?.processed == 1,
               batchResults.totals.isEmpty else {
             throw HostError(message: "An incomplete stage was shown as batch completion")
+        }
+        let finishedInspection = #"MFB_PROGRESS={"schema_version":1,"stage_id":"synthetic-modern","stage":"modern_source_inspection","processed":15,"total":15,"state":"finished"}"#
+        appendLog(finishedInspection.replacingOccurrences(of: #""processed":15"#, with: #""processed":14"#))
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("progress.candidates_ended", "14", "15") else {
+            throw HostError(message: "Partial candidate inspection claimed completion or the next phase")
+        }
+        appendLog(finishedInspection.replacingOccurrences(of: "synthetic-modern", with: "synthetic-modern-complete"))
+        guard !fileProgressRow.isHidden, fileProgressIndicator.isHidden,
+              fileProgressLabel.stringValue == localized("progress.candidates_finished", "15", "15") else {
+            throw HostError(message: "Completed original-format inspection still showed an active bar")
+        }
+        for stage in ["fast_img_source_preparation", "fast_img_source_hashing"] {
+            let line = #"MFB_PROGRESS={"schema_version":1,"stage_id":"\#(stage)","stage":"\#(stage)","processed":4,"total":32,"state":"running"}"#
+            appendLog(line)
+            content.layoutSubtreeIfNeeded()
+            guard fileProgress.event?.stage == stage, !fileProgressIndicator.isHidden,
+                  !fileProgressIndicator.isIndeterminate, fileProgressIndicator.doubleValue == 12.5,
+                  fileProgressLabel.stringValue == localized("progress.inspection",
+                      localized("progress.stage.\(stage)"), "4", "32"),
+                  fileProgressLabel.accessibilityLabel() == fileProgressLabel.stringValue,
+                  fileProgressIndicator.accessibilityLabel() == localized("progress.stage.\(stage)"),
+                  content.bounds.contains(content.convert(fileProgressRow.bounds, from: fileProgressRow)),
+                  logScroll.frame.height >= 260,
+                  batchResults.totals.isEmpty else {
+                throw HostError(message: "Source preparation inherited counts from a previous stage")
+            }
+            appendLog(line.replacingOccurrences(of: "running", with: "finished"))
+            guard fileProgressIndicator.isHidden else {
+                throw HostError(message: "Completed source preparation still showed an active bar")
+            }
         }
         clearBatchLog()
         guard fileProgressRow.isHidden, fileProgress.event == nil,

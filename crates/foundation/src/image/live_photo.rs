@@ -6,6 +6,8 @@
 use crate::builder_base::ToolBuilder;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::{collections::HashMap, ffi::OsString};
 
 // JXL is also protected as an archived still, not a claim of native Live playback.
 const LIVE_STILL_EXTENSIONS: &[&str] =
@@ -35,37 +37,35 @@ fn live_member_extension(path: &Path) -> String {
 /// Same-stem discovery is followed by Apple Content Identifier verification.
 /// A proven mismatch is not a pair; missing or unreadable identity metadata is
 /// retained conservatively so metadata loss cannot make a real pair unsafe.
-fn regular_companions(
+fn directory_paths(
     parent: &Path,
+) -> std::io::Result<impl Iterator<Item = std::io::Result<PathBuf>>> {
+    let entries = std::fs::read_dir(parent).inspect_err(|error| {
+        crate::media_conversion_gate::probe_image_format_audit(
+            "live_photo_parent_read_failed",
+            parent,
+            format!("failed to inspect Live Photo companion directory: {error}"),
+        );
+    })?;
+    Ok(entries.map(move |entry| {
+        entry.map(|entry| entry.path()).inspect_err(|error| {
+            crate::media_conversion_gate::probe_image_format_audit(
+                "live_photo_directory_entry_failed",
+                parent,
+                format!("failed to read a Live Photo companion directory entry: {error}"),
+            );
+        })
+    }))
+}
+
+fn regular_companions(
+    paths: impl Iterator<Item = std::io::Result<PathBuf>>,
     stem: &std::ffi::OsStr,
     extensions: &[&str],
 ) -> std::io::Result<Vec<PathBuf>> {
-    let entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(error) => {
-            crate::media_conversion_gate::probe_image_format_audit(
-                "live_photo_parent_read_failed",
-                parent,
-                format!("failed to inspect Live Photo companion directory: {error}"),
-            );
-            return Err(error);
-        }
-    };
-
     let mut companions = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                crate::media_conversion_gate::probe_image_format_audit(
-                    "live_photo_directory_entry_failed",
-                    parent,
-                    format!("failed to read a Live Photo companion directory entry: {error}"),
-                );
-                return Err(error);
-            }
-        };
-        let path = entry.path();
+    for path in paths {
+        let path = path?;
         let same_stem = crate::media_conversion_gate::path_file_stem_os_or_none(&path)
             .is_some_and(|candidate| candidate.eq_ignore_ascii_case(stem));
         if !same_stem {
@@ -212,6 +212,15 @@ pub fn is_live(path: &Path) -> bool {
 /// Returns an error if companion discovery is incomplete; callers must not
 /// report the pair as delivered when only the requested member was copied.
 pub fn find_live_companions(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    find_live_companions_with(path, |parent, stem, extensions| {
+        regular_companions(directory_paths(parent)?, stem, extensions)
+    })
+}
+
+fn find_live_companions_with(
+    path: &Path,
+    find: impl FnOnce(&Path, &std::ffi::OsStr, &[&str]) -> std::io::Result<Vec<PathBuf>>,
+) -> std::io::Result<Vec<PathBuf>> {
     let ext_lower = live_member_extension(path);
     let Some(stem) = crate::media_conversion_gate::path_file_stem_os_or_none(path) else {
         return Ok(Vec::new());
@@ -224,9 +233,9 @@ pub fn find_live_companions(path: &Path) -> std::io::Result<Vec<PathBuf>> {
     }
 
     let companions = if LIVE_STILL_EXTENSIONS.contains(&ext_lower.as_str()) {
-        regular_companions(parent, stem, &["mov"])
+        find(parent, stem, &["mov"])
     } else if ext_lower == "mov" {
-        regular_companions(parent, stem, LIVE_STILL_EXTENSIONS)
+        find(parent, stem, LIVE_STILL_EXTENSIONS)
     } else {
         return Ok(Vec::new());
     };
@@ -237,11 +246,145 @@ pub fn find_live_companions(path: &Path) -> std::io::Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Reuse directory names during a single classification pass.
+/// Call [`Self::verify_unchanged`] before using the results.
+#[derive(Default)]
+pub struct LivePhotoScan {
+    #[cfg(unix)]
+    directories: HashMap<PathBuf, DirectoryScan>,
+}
+
+impl LivePhotoScan {
+    /// Inspect current metadata and content for any same-stem companions.
+    ///
+    /// # Errors
+    /// Returns an error when directory discovery or companion inspection fails.
+    pub fn is_live(&mut self, path: &Path) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        let companions = find_live_companions_with(path, |parent, stem, extensions| {
+            let directory = match self.directories.entry(parent.to_path_buf()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(DirectoryScan::read(parent)?)
+                }
+            };
+            let paths = directory
+                .paths_by_stem
+                .get(&stem.to_ascii_lowercase())
+                .into_iter()
+                .flatten();
+            regular_companions(paths.cloned().map(Ok), stem, extensions)
+        })?;
+        #[cfg(not(unix))]
+        let companions = find_live_companions(path)?;
+        Ok(!companions.is_empty())
+    }
+
+    /// # Errors
+    /// Returns an error if a directory changed or cannot be inspected.
+    pub fn verify_unchanged(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        for (parent, directory) in &self.directories {
+            if DirectoryScan::read(parent)? != *directory {
+                return Err(changed_directory_error(parent));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[derive(PartialEq, Eq)]
+struct DirectoryScan {
+    stamp: DirectoryStamp,
+    paths_by_stem: HashMap<OsString, Vec<PathBuf>>,
+}
+
+#[cfg(unix)]
+impl DirectoryScan {
+    fn read(parent: &Path) -> std::io::Result<Self> {
+        let stamp = directory_stamp(parent)?;
+        let mut paths_by_stem: HashMap<OsString, Vec<PathBuf>> = HashMap::new();
+        for path in directory_paths(parent)? {
+            let path = path?;
+            if let Some(stem) = path.file_stem() {
+                paths_by_stem
+                    .entry(stem.to_ascii_lowercase())
+                    .or_default()
+                    .push(path);
+            }
+        }
+        for paths in paths_by_stem.values_mut() {
+            paths.sort_unstable();
+        }
+        if directory_stamp(parent)? != stamp {
+            return Err(changed_directory_error(parent));
+        }
+        Ok(Self {
+            stamp,
+            paths_by_stem,
+        })
+    }
+}
+
+#[cfg(unix)]
+type DirectoryStamp = (u64, u64, i64, i64, i64, i64);
+
+#[cfg(unix)]
+fn directory_stamp(parent: &Path) -> std::io::Result<DirectoryStamp> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(parent)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "Live Photo parent is not a directory: {}",
+            parent.display()
+        )));
+    }
+    Ok((
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+    ))
+}
+
+#[cfg(unix)]
+fn changed_directory_error(parent: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "Directory changed during Live Photo discovery: {}; rescan required",
+        parent.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn indexed_companions_match_live_scan_and_reject_changed_namespace() -> std::io::Result<()> {
+        let root = TempDir::new()?;
+        let still = root.path().join("img_0001.JPG");
+        let single = root.path().join("img_0002.jpg");
+        File::create(&still)?;
+        File::create(&single)?;
+        File::create(root.path().join("IMG_0001.MOV"))?;
+
+        let mut scan = LivePhotoScan::default();
+        assert!(scan.is_live(&still)?);
+        assert!(!scan.is_live(&single)?);
+        scan.verify_unchanged()?;
+
+        File::create(root.path().join("IMG_0002.MOV"))?;
+        assert!(is_live(&single));
+        assert!(scan.verify_unchanged().is_err());
+        Ok(())
+    }
 
     #[test]
     fn test_live_photo_detection() {

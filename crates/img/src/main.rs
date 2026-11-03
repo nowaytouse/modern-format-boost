@@ -4433,8 +4433,15 @@ fn scan_fast_img_sources(
             path.display()
         );
     }
-    for (path, identity) in candidates.into_iter().zip(format_identities) {
-        if foundation::live_photo::is_live(&path) {
+    let preparation = foundation::progress::FileStageProgress::new(
+        candidate_count as u64,
+        foundation::progress::FileProgressStage::FastImgSourcePreparation,
+    );
+    let mut live_photos = foundation::live_photo::LivePhotoScan::default();
+    for (index, (path, identity)) in candidates.into_iter().zip(format_identities).enumerate() {
+        foundation::batch_control::checkpoint()?;
+        preparation.set(index as u64);
+        if live_photos.is_live(&path)? {
             ignored_candidates.push((path, fast_img_ignored::IgnoredReason::LivePhotoPairMember));
             continue;
         }
@@ -4494,6 +4501,8 @@ fn scan_fast_img_sources(
             ignored_candidates.push((path, reason));
         }
     }
+    preparation.set(candidate_count as u64);
+    preparation.finish();
     let classified_count = source_files
         .len()
         .checked_add(modern_lossy_scan.candidates.len())
@@ -4507,8 +4516,9 @@ fn scan_fast_img_sources(
         ignored_candidates,
         expected_ignored_count,
     )?;
-    ignored.emit_markers_from_environment()?;
     let source_hashes = fast_img_source_hash_set(src_dir, &source_files)?;
+    live_photos.verify_unchanged()?;
+    ignored.emit_markers_from_environment()?;
     let planned_encode_count = source_files.len().saturating_sub(scan_failures.len());
     if strategy == "avif" {
         println!(
@@ -10193,7 +10203,12 @@ fn fast_img_source_hash_set(
     source_jpegs: &[PathBuf],
 ) -> anyhow::Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
-    for source in source_jpegs {
+    let progress = foundation::progress::FileStageProgress::new(
+        source_jpegs.len() as u64,
+        foundation::progress::FileProgressStage::FastImgSourceHashing,
+    );
+    for (index, source) in source_jpegs.iter().enumerate() {
+        foundation::batch_control::checkpoint()?;
         let rel = source.strip_prefix(src_dir).map_err(|err| {
             anyhow::anyhow!(
                 "fast-img source hash path outside root: source={} root={} ({err})",
@@ -10205,7 +10220,9 @@ fn fast_img_source_hash_set(
             rel.to_string_lossy().to_string(),
             calculate_blake3_hash(source)?,
         );
+        progress.set((index + 1) as u64);
     }
+    progress.finish();
     Ok(hashes)
 }
 
