@@ -582,6 +582,10 @@
 "helpguide.history.3.body" = "MFB 对选中的 SQLite 记录和保存的日志行执行安全删除，并确认预写日志（WAL）已截断。旧版历史库可能需要先压实整个数据库，因此第一次清理可能较慢。之后清除的空间可供新记录复用。如果记录已删除，但部分清理无法完成，结果会列出仍保留的项目。";
 "helpguide.history.4.title" = "备份与导出副本";
 "helpguide.history.4.body" = "清理只适用于 MFB 当前使用的历史存储。已经导出的副本、备份和系统快照中可能仍保留这些记录。";
+"history.remove.selected_count" = "删除 %ld 条处理记录…";
+"history.selection.count" = "已选 %ld 个批次";
+"history.selection.unsupported" = "部分记录无法核对，或尚未完成。取消选择这些记录后可继续。";
+"history.selection.limit" = "每次最多清理 %ld 个批次。";
 "history.title" = "处理记录";
 "history.search" = "搜索批次";
 "history.all" = "全部";

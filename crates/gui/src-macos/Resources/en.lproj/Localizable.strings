@@ -582,6 +582,10 @@
 "helpguide.history.3.body" = "MFB securely deletes the selected SQLite records and saved log lines and checks that SQLite has truncated its write-ahead log (WAL). Older history databases may need a full compaction before later deletions can reuse the cleared space. That first cleanup can take longer. If the records were removed but part of the cleanup could not be completed, the result lists what remains.";
 "helpguide.history.4.title" = "Backups and exported copies";
 "helpguide.history.4.body" = "This action applies to MFB’s current history store. Exported copies, backups, and system snapshots can still contain these records.";
+"history.remove.selected_count" = "Remove %ld history records…";
+"history.selection.count" = "%ld batches selected";
+"history.selection.unsupported" = "Some records are incomplete or cannot be verified. Deselect them to continue.";
+"history.selection.limit" = "Select up to %ld batches per cleanup.";
 "history.title" = "Processing History";
 "history.search" = "Search batches";
 "history.all" = "All";

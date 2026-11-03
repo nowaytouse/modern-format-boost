@@ -2564,12 +2564,13 @@ private struct HistoryRunSelection: Codable, Hashable {
 }
 
 private struct HistoryRemovalRequest: Encodable {
+    static let maximumRuns = 128
     let schema_version = 1
     let runs: [HistoryRunSelection]
     var snapshot_token: String?
 
     init(entries: [HistoryEntry], directory: URL) throws {
-        guard !entries.isEmpty, entries.count <= 128 else { throw HostError(message: localized("history.remove.unsupported")) }
+        guard !entries.isEmpty, entries.count <= Self.maximumRuns else { throw HostError(message: localized("history.remove.unsupported")) }
         runs = try entries.map { entry in
             guard !entry.legacy, entry.finished != nil, entry.hasStoredOutput,
                   entry.audit.standardizedFileURL == directory.appendingPathComponent("history.sqlite3").standardizedFileURL,
@@ -2633,11 +2634,12 @@ private struct HistoryRemovalPreview: Codable {
         return preview
     }
 
-    func detail(privacy: Bool) -> String {
+    func detail(privacy: Bool, selectedBatches: [String] = []) -> String {
         var rows = [localized("history.remove.scope"),
             localized("history.remove.counts", runs.count, event_rows, output_rows),
             localized("history.remove.artifacts", artifacts.filter { $0.status == "delete" }.count,
                       artifacts.filter { $0.status == "retained" }.count)]
+        if !selectedBatches.isEmpty { rows += [""] + selectedBatches }
         for artifact in artifacts {
             rows.append("\n" + localized(artifact.status == "delete" ? "history.remove.confirm" : "history.remove.retained")
                 + ": " + DisplayPrivacy.path(artifact.path, hidden: privacy, problem: artifact.scope == "registered_file_problem") + "\n" + artifact.reason)
@@ -2857,6 +2859,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         didSet { if removalExecuting != oldValue { onRemovalExecutionChanged?(removalExecuting) } }
     }
     private var removeButton = NSButton()
+    private let selectionHint = NSTextField(wrappingLabelWithString: "")
     private var removalBusy = false
     private var removalAlert: NSAlert?
     private var removalQuery = historyRemovalOutput
@@ -3158,6 +3161,12 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         divider.boxType = .separator
         root.addArrangedSubview(divider)
         divider.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        selectionHint.font = HistoryLayout.smallFont
+        selectionHint.textColor = .secondaryLabelColor
+        selectionHint.maximumNumberOfLines = 2
+        selectionHint.isHidden = true
+        root.addArrangedSubview(selectionHint)
+        selectionHint.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
         let utilitySpacer = NSView()
         let removalSpacer = NSView()
         for spacer in [utilitySpacer, removalSpacer] {
@@ -3424,7 +3433,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare" : "history.summary"), forSegment: 0)
         detailMode.setLabel(localized(selection.count == 2 ? "history.compare.failures" : "history.failed_files"), forSegment: 2)
         if selection.count == 2 { detail.string = Self.renderComparison(selection, privacy: privacyEnabled) }
-        else if selection.count > 2 { detail.string = localized("history.compare.select_two") }
+        else if selection.count > 2 { detail.string = localized("history.selection.count", selection.count) }
         else { detail.string = selected.map { Self.render($0, privacy: privacyEnabled) } ?? localized(displayed.isEmpty && !entries.isEmpty ? "history.no_match" : "history.select") }
         detail.scrollToBeginningOfDocument(nil)
         updateActions()
@@ -3766,10 +3775,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         cleanupButton.isEnabled = single && selected?.context?.mode == "fast-img" && (!privacyEnabled || selected?.hasCleanupAttention == true)
         retryFailedButton.isEnabled = single && canRetryFailed() && onRetryFailed != nil && selected?.failedRetrySelection != nil
         retryFailedButton.isHidden = ApplicationSession.current?.isDebug == true || onRetryFailed == nil
-        removeButton.isEnabled = (ApplicationSession.current?.isDebug != true || removalFixture) && ready
-            && (try? HistoryRemovalRequest(entries: selectedEntries, directory: directory)) != nil
-        removeButton.toolTip = ApplicationSession.current?.isDebug == true && !removalFixture ? localized("debug.preview_only")
-            : localized(removeButton.isEnabled || selectedEntries.isEmpty ? "history.remove.title" : "history.remove.unsupported")
+        let selection = selectedEntries
+        let count = selection.count
+        let supported = (try? HistoryRemovalRequest(entries: selection, directory: directory)) != nil
+        let readOnly = ApplicationSession.current?.isDebug == true && !removalFixture
+        removeButton.isEnabled = ready && !readOnly && supported
+        removeButton.title = count > 1 ? localized("history.remove.selected_count", count) : localized("history.remove.title")
+        removeButton.setAccessibilityLabel(removeButton.title)
+        let problem: String?
+        if count > HistoryRemovalRequest.maximumRuns {
+            problem = localized("history.selection.limit", HistoryRemovalRequest.maximumRuns)
+        } else if count > 0 && !supported {
+            problem = localized("history.selection.unsupported")
+        } else { problem = nil }
+        selectionHint.isHidden = readOnly || (count < 2 && problem == nil)
+        selectionHint.stringValue = [localized("history.selection.count", count), problem].compactMap { $0 }.joined(separator: " · ")
+        selectionHint.toolTip = selectionHint.stringValue
+        removeButton.toolTip = readOnly ? localized("debug.preview_only") : problem ?? removeButton.title
     }
 
     @objc private func retrySelectedFailures() {
@@ -3806,8 +3828,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     }
 
     @objc private func removeSelectedHistory() {
+        let selection = selectedEntries
         guard removeButton.isEnabled, let window, window.isVisible, window.attachedSheet == nil,
-              let request = try? HistoryRemovalRequest(entries: selectedEntries, directory: directory) else { return }
+              let request = try? HistoryRemovalRequest(entries: selection, directory: directory) else { return }
         let source = directory
         let query = removalQuery
         removalBusy = true
@@ -3825,7 +3848,13 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     self.progress.stopAnimation(nil)
                     let alert = NSAlert()
                     alert.messageText = localized("history.remove.preview")
-                    Self.setRemovalDetails(preview.detail(privacy: self.privacyEnabled), on: alert)
+                    let privacy = self.privacyEnabled
+                    let selectedBatches = selection.map { entry in
+                        let name = privacy ? localized("privacy.display.hidden")
+                            : entry.context?.inputs.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? localized("result.unknown")
+                        return "• " + Self.timestampLabel(entry.timestamp) + " · " + name
+                    }
+                    Self.setRemovalDetails(preview.detail(privacy: privacy, selectedBatches: selectedBatches), on: alert)
                     alert.alertStyle = .warning
                     alert.addButton(withTitle: localized("history.remove.confirm"))
                     alert.addButton(withTitle: localized("history.remove.cancel"))
@@ -3901,11 +3930,10 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                 do {
                     let receipt = try result.get()
                     let receiptDetail = receipt.detail(privacy: self.privacyEnabled)
-                    if self.removalFixture { self.entries = [] }
-                    else {
-                        self.entries.removeAll { entry in
-                            request.runs.contains { $0.session_id == entry.stamp && $0.run_id == entry.context?.run_id }
-                        }
+                    self.entries.removeAll { entry in
+                        request.runs.contains { $0.session_id == entry.stamp && $0.run_id == entry.context?.run_id }
+                    }
+                    if !self.removalFixture {
                         for run in request.runs { self.onRemoved?(source, run.session_id, run.run_id) }
                     }
                     self.applyFilter()
@@ -3944,7 +3972,9 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         second.context = HistoryContext(schema_version: 1, inputs: ["/synthetic/Second private folder"], output: nil,
             backup: nil, mode: "standard", dry_run: false, in_place: false, shortest_path: false,
             version: "0.12.0", retry: nil, resume: nil, no_resume: nil, output_sequence: 0, run_id: "fixture-run-two")
-        entries = [fixture, second]
+        let legacy = HistoryEntry(id: "fixture:2", stamp: "fixture-legacy", audit: fixture.audit,
+                                  timestamp: "2026-10-25T08:30:00Z", legacy: true)
+        entries = [fixture, second, legacy]
         removalQuery = historyRemovalFixtureOutput
         applyFilter()
         show()
@@ -5328,7 +5358,7 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         applyFilter()
         table.selectRowIndexes(IndexSet(integersIn: 0...2), byExtendingSelection: false)
         showSelected()
-        guard detail.string == localized("history.compare.select_two"), selected == nil else {
+        guard detail.string == localized("history.selection.count", 3), selected == nil else {
             throw HostError(message: "History compared an ambiguous selection")
         }
         table.deselectAll(nil)
@@ -5429,6 +5459,24 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         table.deselectAll(nil)
         showSelected()
         window?.setFrame(original, display: false)
+
+        filter.selectedSegment = 0
+        showRemovalFixture()
+        table.selectRowIndexes(IndexSet(integersIn: 0...1), byExtendingSelection: false)
+        showSelected()
+        let request = try HistoryRemovalRequest(entries: selectedEntries, directory: directory)
+        let preview = try HistoryRemovalPreview.decode(removalQuery(request, directory), request: request, directory: directory)
+        guard removeButton.isEnabled, !selectionHint.isHidden,
+              removeButton.title == localized("history.remove.selected_count", 2),
+              preview.runs.map(\.run_id) == ["fixture-run-one", "fixture-run-two"] else {
+            throw HostError(message: "History multi-selection did not reach one deletion preview")
+        }
+        table.selectRowIndexes(IndexSet(integersIn: 0...2), byExtendingSelection: false)
+        showSelected()
+        guard !removeButton.isEnabled, !selectionHint.isHidden,
+              selectionHint.stringValue.contains(localized("history.selection.unsupported")) else {
+            throw HostError(message: "Mixed History selection did not explain its deletion restriction")
+        }
     }
 
     private func validateRefreshCoalescingForSelfTest() throws {

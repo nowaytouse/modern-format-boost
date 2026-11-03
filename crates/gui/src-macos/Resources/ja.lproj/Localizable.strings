@@ -582,6 +582,10 @@
 "helpguide.history.3.body" = "MFB は選択した SQLite の記録と保存済みログ行を安全に削除し、先行書き込みログ（WAL）が切り詰められたことを確認します。旧形式のデータベースは最初に全体の再編成が必要な場合があり、その回は時間がかかります。以後、消去した領域は新しい記録に再利用されます。記録を削除できても一部の消去が完了しなかった場合は、結果に残った項目を表示します。";
 "helpguide.history.4.title" = "バックアップと書き出したコピー";
 "helpguide.history.4.body" = "削除が適用されるのは、MFB が現在使っている履歴です。書き出したコピー、バックアップ、システムのスナップショットには、記録が残ることがあります。";
+"history.remove.selected_count" = "履歴 %ld 件を削除…";
+"history.selection.count" = "%ld 件を選択中";
+"history.selection.unsupported" = "旧形式や未完了など、確認できない履歴の選択を外してください。";
+"history.selection.limit" = "一度に整理できるのは %ld 件までです。";
 "history.title" = "処理履歴";
 "history.search" = "バッチを検索";
 "history.all" = "すべて";
