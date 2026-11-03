@@ -7106,6 +7106,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     private let helpButton = NSButton(title: "", target: nil, action: nil)
     private var settingsPanel: MediaSettingsPanel?
     private var historyPanel: ProcessingHistoryPanel?
+    private var historyRemovalInProgress = false
+    private let historyRemovalNotice = NSTextField(wrappingLabelWithString: "")
     private let preflightButton = NSButton(title: "", target: nil, action: nil)
     private var preflightPanel: PreflightInspectorPanel?
     private var preflightQuery: PreflightQuery?
@@ -7233,6 +7235,10 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func requestClose() -> Bool {
+        guard !historyRemovalInProgress else {
+            historyPanel?.show()
+            return false
+        }
         invalidatePreflight()
         guard !host.isRunning else {
             closeWhenFinished = true
@@ -7519,6 +7525,9 @@ private final class AppController: NSObject, NSWindowDelegate {
             row.spacing = 8
         }
         compactActions.isHidden = true
+        historyRemovalNotice.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        historyRemovalNotice.maximumNumberOfLines = 2
+        historyRemovalNotice.isHidden = true
 
         logView.isEditable = false
         logView.isSelectable = true
@@ -7631,7 +7640,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         let stack = mainLayout
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
-            countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+            historyRemovalNotice, countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] { stack.addArrangedSubview(view) }
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -7640,7 +7649,7 @@ private final class AppController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
         for view in [
             header, targetRow, grid, backupRow, photosScopeRow, metadataSafetyLabel, options, commandField, actionRow, compactActions,
-            countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
+            historyRemovalNotice, countStatusLabel, fileProgressRow, toolSnapshotLabel, batchOverview, logToolbar, logScroll, latestDiagnosticsRow, statusRow,
         ] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -7867,7 +7876,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openInTerminal() {
-        guard !isDebugWindow, !restoreFixture, developerMode, configurationControlsEnabled, !privacyEnabled else { return }
+        guard !isDebugWindow, !restoreFixture, !historyRemovalInProgress,
+              developerMode, configurationControlsEnabled, !privacyEnabled else { return }
         do { setStatus(try host.openInTerminal(request())) }
         catch { present(error) }
     }
@@ -7915,9 +7925,17 @@ private final class AppController: NSObject, NSWindowDelegate {
     @objc private func openHistory() {
         if historyPanel == nil { historyPanel = ProcessingHistoryPanel(directory: resolvedHistoryDirectory, preferences: preferences) }
         if !isDebugWindow {
+            historyPanel?.canExecuteRemoval = { [weak self] in
+                guard let self else { return false }
+                return !self.host.isRunning && self.configurationControlsEnabled
+            }
+            historyPanel?.onRemovalExecutionChanged = { [weak self] busy in
+                self?.setHistoryRemovalInProgress(busy)
+            }
             historyPanel?.canRetryFailed = { [weak self] in
                 guard let self else { return false }
-                return !isDebugWindow && !self.host.isRunning && self.configurationControlsEnabled && !self.restoreFixture
+                return !isDebugWindow && !self.host.isRunning && !self.historyRemovalInProgress
+                    && self.configurationControlsEnabled && !self.restoreFixture
             }
             historyPanel?.onRetryFailed = { [weak self] selection in self?.runSelectedFailures(selection) }
             historyPanel?.onRemoved = { [weak self] directory, _, runID in
@@ -7934,7 +7952,8 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     private func runSelectedFailures(_ selection: FastImgFailedRetrySelection) {
-        guard !isDebugWindow, !restoreFixture, !host.isRunning, configurationControlsEnabled else { return }
+        guard !isDebugWindow, !restoreFixture, !host.isRunning,
+              !historyRemovalInProgress, configurationControlsEnabled else { return }
         do {
             let operation: OperationMode = selection.strategy == "avif" ? .fastImgAvif : .fastImgJxl
             guard let item = operationPopup.itemArray.first(where: { ($0.representedObject as? String) == operation.rawValue })
@@ -8075,7 +8094,7 @@ private final class AppController: NSObject, NSWindowDelegate {
             if !privacyEnabled { inspectInput() }
             return
         }
-        guard !restoreFixture, !host.isRunning else { return }
+        guard !restoreFixture, !host.isRunning, !historyRemovalInProgress else { return }
         invalidatePreflight()
         do {
             let request = try request()
@@ -8226,7 +8245,9 @@ private final class AppController: NSObject, NSWindowDelegate {
         } else { runKey = isPhotosRestoreAudit ? "button.audit_restore_jpeg" : "button.restore_jpeg" }
         runButton.title = localized(runKey)
         runButton.setAccessibilityLabel(runButton.title)
-        runButton.toolTip = restoresJpeg ? metadataSafetyLabel.stringValue : nil
+        runButton.toolTip = historyRemovalInProgress ? historyRemovalNotice.stringValue
+            : restoresJpeg ? metadataSafetyLabel.stringValue : nil
+        runButton.setAccessibilityHelp(runButton.toolTip)
         if isDebugWindow {
             runButton.title = localized("debug.preview_action")
             runButton.setAccessibilityLabel(runButton.title)
@@ -9190,6 +9211,17 @@ private final class AppController: NSObject, NSWindowDelegate {
     }
 
     func validateProductionBusyForSelfTest() throws {
+        setHistoryRemovalInProgress(true)
+        setProcessing(false)
+        runHere()
+        guard !historyRemovalNotice.isHidden, !runButton.isEnabled, !openButton.isEnabled,
+              !requestClose(), !host.isRunning else {
+            throw HostError(message: "History cleanup did not guard media launch and normal quit")
+        }
+        setHistoryRemovalInProgress(false)
+        guard historyRemovalNotice.isHidden, runButton.isEnabled, openButton.isEnabled else {
+            throw HostError(message: "History cleanup did not restore media controls")
+        }
         appendLog("[FAIL] /synthetic/MFB_PRODUCTION_TASK_BUSY.jpg")
         guard !sawProductionBusy else { throw HostError(message: "A filename was interpreted as task contention") }
         appendLog("ERR: Error: MFB_PRODUCTION_TASK_BUSY: synthetic lease contention")
@@ -9670,6 +9702,8 @@ private final class AppController: NSObject, NSWindowDelegate {
         openButton.title = localized("button.open_terminal")
         copyButton.title = localized("button.copy_command")
         runButton.title = localized("button.run")
+        updateHistoryRemovalNotice()
+        historyPanel?.refreshRemovalAvailability()
         historyButton.title = localized("button.history")
         settingsButton.title = localized("settings.title")
         settingsButton.toolTip = localized("settings.title")
@@ -9747,6 +9781,21 @@ private final class AppController: NSObject, NSWindowDelegate {
         if selectedOperation != selected { restoreOptions(for: selectedOperation) }
     }
 
+    private func setHistoryRemovalInProgress(_ busy: Bool) {
+        historyRemovalInProgress = busy
+        updateHistoryRemovalNotice()
+        runButton.isEnabled = !busy && configurationControlsEnabled && !restoreFixture
+        openButton.isEnabled = runButton.isEnabled
+        updateMetadataSafetyNotice()
+        updateWindowSize()
+    }
+
+    private func updateHistoryRemovalNotice() {
+        historyRemovalNotice.stringValue = localized("history.remove.processing_unavailable")
+        historyRemovalNotice.setAccessibilityLabel(historyRemovalNotice.stringValue)
+        historyRemovalNotice.isHidden = !historyRemovalInProgress
+    }
+
     private func setProcessing(_ processing: Bool) {
         if processing { invalidatePreflight() }
         configurationControlsEnabled = !processing
@@ -9757,6 +9806,11 @@ private final class AppController: NSObject, NSWindowDelegate {
             control.isEnabled = !processing
         }
         applyCapabilityState()
+        if historyRemovalInProgress {
+            runButton.isEnabled = false
+            openButton.isEnabled = false
+        }
+        historyPanel?.refreshRemovalAvailability()
         pauseButton.isEnabled = processing && host.controlState != "cancelled"
         stopButton.isEnabled = processing && host.controlState != "cancelled"
         pauseButton.title = localized("button.pause")

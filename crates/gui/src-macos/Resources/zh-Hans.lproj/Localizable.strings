@@ -3,7 +3,7 @@
 "debug.banner" = "调试窗口 · 界面、日志与只读预览";
 "debug.preview_action" = "检查输入";
 "debug.preview_only" = "此调试窗口为只读，不能处理或导入媒体，也不能打开终端。请使用主窗口。";
-"error.production_busy" = "另一个媒体任务正在运行。请等待任务结束后重试。";
+"error.production_busy" = "有媒体任务或历史清理正在进行，请等它结束后重试。";
 "debug.already_open" = "只能打开 1 个调试窗口。请返回已打开的调试窗口。";
 "field.target.placeholder" = "选择或拖入文件/文件夹";
 "field.target" = "处理来源";
@@ -46,7 +46,10 @@
 "history.remove.busy" = "处理记录正在更新，尚未删除任何记录或文件。请稍等片刻，再选择要删除的记录并重试。";
 "history.remove.cancel" = "取消";
 "history.remove.loading" = "正在核对所选记录，大批次可能需要一些时间。";
-"history.remove.running" = "正在清理所选记录…";
+"history.remove.running" = "正在清理所选记录。清理结束后可开始处理媒体或退出 MFB。";
+"history.remove.media_busy" = "请等当前媒体任务或其他历史清理结束后，再删除记录。";
+"history.remove.blocks_media" = "清理期间无法开始处理媒体或退出 MFB。";
+"history.remove.processing_unavailable" = "正在清理历史记录。清理结束后可开始处理媒体或退出 MFB。";
 "history.remove.cancelled" = "已取消，未清理任何记录。";
 "history.remove.invalid" = "无法核实清理结果。请重新载入处理记录后再试。";
 "history.remove.unsupported" = "请选择已结束且保存了运行身份的数据库记录。";
@@ -572,7 +575,7 @@
 "helpguide.history.title" = "9. 删除处理记录";
 "helpguide.history.intro" = "删除处理记录只清理 MFB 保存的历史。原件、转换结果、照片图库中的项目和续跑资料都会保留。";
 "helpguide.history.1.title" = "先查看清理范围";
-"helpguide.history.1.body" = "在「处理记录」中选中要清理的批次，确认前先查看预览。预览列出处理记录、已保存的日志行和可清理的文件。执行前，MFB 会再次核对当前记录和文件是否与预览一致。";
+"helpguide.history.1.body" = "在「处理记录」中选中要清理的批次，确认前先查看预览。预览列出处理记录、已保存的日志行和可清理的文件。执行前，MFB 会再次核对当前记录和文件是否与预览一致。媒体处理中可以查看预览，等任务结束后再确认清理。";
 "helpguide.history.2.title" = "哪些文件和目录会被清理";
 "helpguide.history.2.body" = "只有 MFB 登记过的会话日志及其归档清单才有资格清理。MFB 会核对登记的文件身份和预览时的内容。与未选记录共用的日志和归属无法确认的文件都会保留。只有确认归档目录属于该会话，且清理后已空，才会移除目录。";
 "helpguide.history.3.title" = "数据库中的记录如何清除";

@@ -3,7 +3,7 @@
 "debug.banner" = "Debug · Interface, logs, and read-only previews";
 "debug.preview_action" = "Inspect input";
 "debug.preview_only" = "This read-only debug window cannot process or import media, or open Terminal. Use the main window.";
-"error.production_busy" = "Another media task is running. Wait until it finishes, then try again.";
+"error.production_busy" = "A media task or history cleanup is already running. Try again when it finishes.";
 "debug.already_open" = "Only 1 debug window can be open. Return to the existing window.";
 "field.target.placeholder" = "Choose or drop a file/folder";
 "field.target" = "Source";
@@ -46,7 +46,10 @@
 "history.remove.busy" = "History is being updated. No records or files were removed. Wait a moment, then select the records and try again.";
 "history.remove.cancel" = "Cancel";
 "history.remove.loading" = "Checking selected records. Large batches can take a while.";
-"history.remove.running" = "Removing selected records…";
+"history.remove.running" = "Removing selected records. Wait for cleanup to finish before starting a media task or quitting MFB.";
+"history.remove.media_busy" = "Wait for the running media task or other history cleanup to finish before removing records.";
+"history.remove.blocks_media" = "Media processing and quitting MFB will be unavailable until removal finishes.";
+"history.remove.processing_unavailable" = "History cleanup is running. You can start media processing or quit MFB once it finishes.";
 "history.remove.cancelled" = "Removal cancelled; nothing removed.";
 "history.remove.invalid" = "The removal response could not be verified. Reload processing history before trying again.";
 "history.remove.unsupported" = "Select completed database records with recorded run identities.";
@@ -572,7 +575,7 @@
 "helpguide.history.title" = "9. Remove Processing History";
 "helpguide.history.intro" = "Removing a processing record clears history saved by MFB. Your original files, converted files, Photos items, and data for resuming work are kept.";
 "helpguide.history.1.title" = "Review what will be removed";
-"helpguide.history.1.body" = "In Processing History, select the batches to remove and review the preview before confirming. It lists the records, saved log lines, and eligible files. MFB checks the preview against the current records and files before it proceeds.";
+"helpguide.history.1.body" = "In Processing History, select the batches to remove and review the preview before confirming. It lists the records, saved log lines, and eligible files. MFB checks the preview against the current records and files before it proceeds. You can preview during media processing. Wait for the media task to finish before confirming removal.";
 "helpguide.history.2.title" = "Which files and folders are eligible?";
 "helpguide.history.2.body" = "Only MFB-registered session logs and the accompanying archive manifest are eligible. MFB checks that each file still matches the recorded identity and the preview. Logs shared with unselected records and files whose ownership is unclear are kept. MFB removes the archive folder only if it is verified to belong to the session and is empty after cleanup.";
 "helpguide.history.3.title" = "What happens to the database?";

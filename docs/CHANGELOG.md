@@ -30,6 +30,9 @@ areas of change are:
   anything. After an exclusive one-time scrub of older databases, securely clear
   selected records and verify WAL truncation without rewriting the whole library.
   Reuse cleared pages for future history. Use an updated app to open schema 3.
+- History browsing and removal previews can run during media processing. Confirmed
+  history removal holds the same production lease as processing, including batch
+  setup and archiving, so database maintenance cannot interrupt a media run.
 - Explain history removal and its media safety boundaries in the native guide.
 - Show elapsed time in localized units from seconds through years. Enlarge the
   main window logo and expose processor recovery as a keyboard-accessible action.

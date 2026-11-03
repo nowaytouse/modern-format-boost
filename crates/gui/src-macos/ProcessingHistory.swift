@@ -2700,6 +2700,8 @@ private func historyRemovalOutput(_ request: HistoryRemovalRequest, directory: U
     // Preview streams the selected output. Removal must finish its transaction and report recovery paths.
     do {
         return try settingsToolOutput(binary, arguments: request.arguments(directory: directory), timeout: nil)
+    } catch let error as HostError where error.localizedDescription.hasPrefix("Error: MFB_HISTORY_CLEANUP_MEDIA_BUSY:") {
+        throw HostError(message: localized("history.remove.media_busy"))
     } catch let error as HostError where error.localizedDescription.hasPrefix("Error: MFB_HISTORY_CLEANUP_BUSY:") {
         throw HostError(message: localized("history.remove.busy"))
     }
@@ -2849,6 +2851,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     var onRetryFailed: ((FastImgFailedRetrySelection) -> Void)?
     var onRemoved: ((URL, String, String) -> Void)?
     var canRetryFailed: () -> Bool = { ApplicationSession.current?.isDebug != true }
+    var canExecuteRemoval: () -> Bool = { true }
+    var onRemovalExecutionChanged: ((Bool) -> Void)?
+    private var removalExecuting = false {
+        didSet { if removalExecuting != oldValue { onRemovalExecutionChanged?(removalExecuting) } }
+    }
     private var removeButton = NSButton()
     private var removalBusy = false
     private var removalAlert: NSAlert?
@@ -3818,13 +3825,13 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
                     self.progress.stopAnimation(nil)
                     let alert = NSAlert()
                     alert.messageText = localized("history.remove.preview")
-                    alert.informativeText = localized("history.remove.scope")
                     Self.setRemovalDetails(preview.detail(privacy: self.privacyEnabled), on: alert)
                     alert.alertStyle = .warning
                     alert.addButton(withTitle: localized("history.remove.confirm"))
                     alert.addButton(withTitle: localized("history.remove.cancel"))
                     alert.buttons.first?.hasDestructiveAction = true
                     self.removalAlert = alert
+                    self.refreshRemovalAvailability()
                     alert.beginSheetModal(for: window) { [weak self] response in
                         guard let self else { return }
                         self.removalAlert = nil
@@ -3840,7 +3847,16 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
         }
     }
 
+    func refreshRemovalAvailability() {
+        guard let alert = removalAlert else { return }
+        let allowed = canExecuteRemoval()
+        alert.buttons.first?.isEnabled = allowed
+        alert.informativeText = localized("history.remove.scope") + "\n\n"
+            + localized(allowed ? "history.remove.blocks_media" : "history.remove.media_busy")
+    }
+
     private func finishRemoval(_ message: String) {
+        removalExecuting = false
         removalBusy = false
         refreshButton.isEnabled = true
         progress.stopAnimation(nil)
@@ -3870,6 +3886,11 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
 
     private func executeRemoval(_ request: HistoryRemovalRequest, preview: HistoryRemovalPreview, source: URL) {
         guard ApplicationSession.current?.isDebug != true || removalFixture else { return }
+        guard canExecuteRemoval() else {
+            finishRemoval(localized("history.remove.media_busy"))
+            return
+        }
+        removalExecuting = true
         status.stringValue = localized("history.remove.running")
         progress.startAnimation(nil)
         let query = removalQuery
@@ -5169,6 +5190,23 @@ final class ProcessingHistoryPanel: NSWindowController, NSTableViewDataSource, N
     func validateForSelfTest() throws {
         try validateRefreshCoalescingForSelfTest()
         try validateFailedRetryHistoryForSelfTest()
+        let syntheticRemoval = NSAlert()
+        let confirmRemoval = syntheticRemoval.addButton(withTitle: localized("history.remove.confirm"))
+        let savedRemovalAvailability = canExecuteRemoval
+        removalAlert = syntheticRemoval
+        canExecuteRemoval = { false }
+        refreshRemovalAvailability()
+        let removalBlocked = !confirmRemoval.isEnabled
+            && syntheticRemoval.informativeText.contains(localized("history.remove.media_busy"))
+        canExecuteRemoval = { true }
+        refreshRemovalAvailability()
+        let removalRestored = confirmRemoval.isEnabled
+            && syntheticRemoval.informativeText.contains(localized("history.remove.blocks_media"))
+        canExecuteRemoval = savedRemovalAvailability
+        removalAlert = nil
+        guard removalBlocked, removalRestored else {
+            throw HostError(message: "History removal preview did not reflect media processing availability")
+        }
         let savedRetryAction = onRetryFailed
         onRetryFailed = { _ in }
         defer { onRetryFailed = savedRetryAction }

@@ -1217,6 +1217,8 @@ fn compact_legacy_history(connection: &mut Connection) -> Result<()> {
                 if version(connection)? < SCHEMA_VERSION {
                     connection.execute_batch("VACUUM")?;
                     truncate_history_wal(connection)?;
+                    #[cfg(test)]
+                    tests::pause_for_crash_test("after_legacy_checkpoint");
                     connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 }
                 return Ok(());
@@ -1368,9 +1370,13 @@ pub fn execute_history_cleanup(
     if let Err(error) = deletion {
         return Err(failure_with_recovery(error, &staged));
     }
+    #[cfg(test)]
+    tests::pause_for_crash_test("before_commit");
     if let Err(error) = transaction.commit() {
         return Err(failure_with_recovery(error.into(), &staged));
     }
+    #[cfg(test)]
+    tests::pause_for_crash_test("after_commit");
     let mut receipt = HistoryCleanupReceipt {
         schema_version: 1,
         kind: "history_cleanup_receipt",
@@ -1630,6 +1636,122 @@ mod tests {
         }
         register_history_artifacts(logs, session, &paths)?;
         Ok(paths)
+    }
+
+    pub(super) fn pause_for_crash_test(stage: &str) {
+        if std::env::var("MFB_HISTORY_CRASH_STAGE").as_deref() == Ok(stage) {
+            let root = std::env::var_os("MFB_HISTORY_CRASH_ROOT").expect("crash test root");
+            fs::write(PathBuf::from(root).join("ready"), b"").expect("signal crash boundary");
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn history_cleanup_process_exit_preserves_database_transaction_boundaries() -> Result<()> {
+        use std::process::{Command, Stdio};
+        use std::time::Instant;
+
+        if let Some(root) = std::env::var_os("MFB_HISTORY_CRASH_ROOT") {
+            let logs = PathBuf::from(root).join("logs");
+            fs::create_dir(&logs)?;
+            run(&logs, "selected", "run-selected", "selected output")?;
+            run(&logs, "unrelated", "run-unrelated", "unrelated output")?;
+            owned_logs(&logs, "selected")?;
+            if std::env::var("MFB_HISTORY_CRASH_STAGE").as_deref() == Ok("after_legacy_checkpoint")
+            {
+                open_history_write(&logs)?.pragma_update(None, "user_version", 2)?;
+            }
+            let mut selected = request("selected", "run-selected");
+            selected.snapshot_token =
+                Some(preview_history_cleanup(&logs, &selected)?.snapshot_token);
+            let _ = execute_history_cleanup(&logs, &selected)?;
+            anyhow::bail!("cleanup completed without reaching the crash test boundary");
+        }
+
+        let thread = std::thread::current();
+        let test_name = thread
+            .name()
+            .context("History crash test name unavailable")?;
+        for stage in ["before_commit", "after_commit", "after_legacy_checkpoint"] {
+            let root = tempfile::tempdir()?;
+            let mut child = Command::new(std::env::current_exe()?)
+                .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+                .env("MFB_HISTORY_CRASH_ROOT", root.path())
+                .env("MFB_HISTORY_CRASH_STAGE", stage)
+                .env("MFB_HOME_ROOT", root.path())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let ready = root.path().join("ready");
+            while !ready.exists() && Instant::now() < deadline {
+                if child.try_wait()?.is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let reached_boundary = ready.exists();
+            if child.try_wait()?.is_none() {
+                child.kill()?;
+            }
+            let exit = child.wait_with_output()?;
+            ensure!(
+                reached_boundary && !exit.status.success(),
+                "cleanup did not stop at {stage}: {}\n{}",
+                String::from_utf8_lossy(&exit.stdout),
+                String::from_utf8_lossy(&exit.stderr)
+            );
+
+            let logs = root.path().join("logs");
+            let connection = Connection::open(logs.join(HISTORY_DATABASE))?;
+            assert_eq!(
+                connection
+                    .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?,
+                "ok",
+                "{stage}"
+            );
+            assert!(
+                connection
+                    .prepare("PRAGMA foreign_key_check")?
+                    .query([])?
+                    .next()?
+                    .is_none()
+            );
+            for (table, count) in [("history_events", 2), ("history_output", 1)] {
+                let sql = format!("SELECT COUNT(*) FROM {table} WHERE session_id=?1");
+                let selected_count = if stage == "before_commit" { count } else { 0 };
+                for (session, expected) in [("selected", selected_count), ("unrelated", count)] {
+                    let actual: i64 = connection.query_row(&sql, [session], |row| row.get(0))?;
+                    assert_eq!(actual, expected, "{stage}: {table}/{session}");
+                }
+            }
+            let version: i64 =
+                connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+            let legacy = stage == "after_legacy_checkpoint";
+            assert_eq!(version, if legacy { 2 } else { SCHEMA_VERSION }, "{stage}");
+            let pending = fs::read_dir(&logs)?
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".mfb-history-cleanup-")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(pending.len(), if legacy { 0 } else { 3 }, "{stage}");
+            for entry in pending {
+                assert_eq!(
+                    fs::read(entry.path())?,
+                    b"private synthetic diagnostic",
+                    "{stage}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

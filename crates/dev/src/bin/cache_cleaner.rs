@@ -1640,6 +1640,15 @@ fn main() -> Result<()> {
             let preview = dev::infra::history_store::preview_history_cleanup(directory, &request)?;
             println!("{}", serde_json::to_string(&preview)?);
         } else {
+            // Hold the same lease as media workers until database and archive cleanup finish.
+            use foundation::production_lock::{acquire_production_lease, is_production_task_busy};
+            let _lease = acquire_production_lease().map_err(|error| {
+                if is_production_task_busy(&error) {
+                    error.context("MFB_HISTORY_CLEANUP_MEDIA_BUSY: finish the active media task or history cleanup before deleting records")
+                } else {
+                    error.context("acquire exclusive History cleanup lease")
+                }
+            })?;
             let receipt = dev::infra::history_store::execute_history_cleanup(directory, &request)?;
             println!("{}", serde_json::to_string(&receipt)?);
         }
