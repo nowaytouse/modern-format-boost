@@ -1630,15 +1630,33 @@ fn main() -> Result<()> {
             encoded.len() <= 64 * 1024,
             "History cleanup JSON exceeds 64 KiB; nothing removed"
         );
-        let request: dev::infra::history_store::HistoryCleanupRequest =
+        use dev::infra::history_store::{
+            HistoryCleanupRequest, HistoryForceCleanupRequest, execute_history_cleanup,
+            execute_history_force_cleanup, preview_history_cleanup, preview_history_force_cleanup,
+        };
+
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum CleanupRequest {
+            Normal(HistoryCleanupRequest),
+            Force(HistoryForceCleanupRequest),
+        }
+
+        let request: CleanupRequest =
             serde_json::from_str(encoded).context("invalid History cleanup request")?;
         let directory = args
             .history_directory
             .as_deref()
             .context("History cleanup requires its explicit directory")?;
-        if args.history_cleanup_preview.is_some() {
-            let preview = dev::infra::history_store::preview_history_cleanup(directory, &request)?;
-            println!("{}", serde_json::to_string(&preview)?);
+        let response = if args.history_cleanup_preview.is_some() {
+            match request {
+                CleanupRequest::Normal(request) => {
+                    serde_json::to_string(&preview_history_cleanup(directory, &request)?)?
+                }
+                CleanupRequest::Force(request) => {
+                    serde_json::to_string(&preview_history_force_cleanup(directory, &request)?)?
+                }
+            }
         } else {
             // Hold the same lease as media workers until database and archive cleanup finish.
             use foundation::production_lock::{acquire_production_lease, is_production_task_busy};
@@ -1649,9 +1667,16 @@ fn main() -> Result<()> {
                     error.context("acquire exclusive History cleanup lease")
                 }
             })?;
-            let receipt = dev::infra::history_store::execute_history_cleanup(directory, &request)?;
-            println!("{}", serde_json::to_string(&receipt)?);
-        }
+            match request {
+                CleanupRequest::Normal(request) => {
+                    serde_json::to_string(&execute_history_cleanup(directory, &request)?)?
+                }
+                CleanupRequest::Force(request) => {
+                    serde_json::to_string(&execute_history_force_cleanup(directory, &request)?)?
+                }
+            }
+        };
+        println!("{response}");
         io::stdout().flush()?;
         return Ok(());
     }

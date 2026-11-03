@@ -4,7 +4,7 @@ use super::*;
 use rusqlite::OptionalExtension as _;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -384,6 +384,40 @@ pub struct HistoryCleanupRequest {
     pub snapshot_token: Option<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryForceCleanupRequest {
+    pub schema_version: u8,
+    pub force_sessions: Vec<String>,
+    #[serde(default)]
+    pub snapshot_token: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryForceCleanupPreview {
+    pub schema_version: u8,
+    pub kind: &'static str,
+    pub source: String,
+    pub snapshot_token: String,
+    pub force_sessions: Vec<String>,
+    pub event_rows: u64,
+    pub output_rows: u64,
+    pub retained_artifacts: Vec<HistoryArtifactDecision>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HistoryForceCleanupReceipt {
+    pub schema_version: u8,
+    pub kind: &'static str,
+    pub status: &'static str,
+    pub database_committed: bool,
+    pub force_sessions: Vec<String>,
+    pub event_rows: u64,
+    pub output_rows: u64,
+    pub retained_artifacts: Vec<HistoryArtifactDecision>,
+    pub failed_artifacts: Vec<HistoryArtifactDecision>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct HistoryArtifactDecision {
     pub path: String,
@@ -568,14 +602,21 @@ fn selections(request: &HistoryCleanupRequest) -> Result<BTreeSet<HistoryRunSele
     Ok(selected)
 }
 
+fn cleanup_session_locks<'a>(
+    root: &Path,
+    sessions: impl IntoIterator<Item = &'a str>,
+) -> Result<Vec<foundation::process_lock::DirLock>> {
+    sessions.into_iter().collect::<BTreeSet<_>>().into_iter().map(|session| {
+        foundation::process_lock::acquire_output_dir_lock(&lock_target(root, session)?)
+            .with_context(|| format!("History session {session} is active or its writer lease is unavailable; nothing removed"))
+    }).collect()
+}
+
 fn cleanup_locks(
     root: &Path,
     selected: &BTreeSet<HistoryRunSelection>,
 ) -> Result<Vec<foundation::process_lock::DirLock>> {
-    selected.iter().map(|run| &run.session_id).collect::<BTreeSet<_>>().into_iter().map(|session| {
-        foundation::process_lock::acquire_output_dir_lock(&lock_target(root, session)?)
-            .with_context(|| format!("History session {session} is active or its writer lease is unavailable; nothing removed"))
-    }).collect()
+    cleanup_session_locks(root, selected.iter().map(|run| run.session_id.as_str()))
 }
 
 fn validate_cleanup_schema(snapshot: &Transaction<'_>) -> Result<()> {
@@ -583,7 +624,11 @@ fn validate_cleanup_schema(snapshot: &Transaction<'_>) -> Result<()> {
         schema_version(snapshot)? >= 2,
         "History cleanup requires schema 2 or newer; original retained"
     );
-    validate_backup_schema(snapshot, 2)?;
+    validate_cleanup_objects(snapshot, 2)
+}
+
+fn validate_cleanup_objects(snapshot: &Transaction<'_>, version: i64) -> Result<()> {
+    validate_backup_schema(snapshot, version)?;
     let mut objects = snapshot
         .prepare("SELECT type,name,tbl_name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")?;
     for row in objects.query_map([], |row| {
@@ -1547,6 +1592,372 @@ pub fn execute_history_cleanup(
     Ok(receipt)
 }
 
+fn force_selections(request: &HistoryForceCleanupRequest) -> Result<BTreeSet<&str>> {
+    ensure!(
+        request.schema_version == 1,
+        "unsupported History force cleanup request version"
+    );
+    ensure!(
+        !request.force_sessions.is_empty() && request.force_sessions.len() <= MAX_SELECTIONS,
+        "History force cleanup requires 1..=128 selected sessions"
+    );
+    let mut sessions = BTreeSet::new();
+    for session in &request.force_sessions {
+        identity(session)?;
+        ensure!(
+            !session.contains(['/', '\\']),
+            "unsafe History session identity"
+        );
+        ensure!(
+            sessions.insert(session.as_str()),
+            "duplicate History session identity"
+        );
+    }
+    Ok(sessions)
+}
+
+fn forced_legacy_audits(root: &Path, session: &str) -> Result<Vec<PathBuf>> {
+    let name = format!("session_audit_{session}.jsonl");
+    let mut audits = Vec::new();
+    let mut inspect = |path: PathBuf| -> Result<()> {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => audits.push(path),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspect legacy History audit"),
+        }
+        Ok(())
+    };
+    inspect(root.join(&name))?;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path().join(&name);
+        if session_archive_directory(root, &path, session).is_some() && entry.file_type()?.is_dir()
+        {
+            inspect(path)?;
+        }
+    }
+    audits.sort_unstable();
+    Ok(audits)
+}
+
+fn completed_legacy_event(event: &str) -> bool {
+    event == "SESSION_COMPLETED" || event.starts_with("SESSION_COMPLETED ")
+}
+
+fn completed_legacy_audit(path: &Path) -> Result<bool> {
+    let mut file = artifact_file(path)?;
+    let length = file.metadata()?.len();
+    let offset = length.saturating_sub(64 * 1024);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.take(length - offset).read_to_end(&mut bytes)?;
+    let Some(last) = bytes
+        .rsplit(|byte| *byte == b'\n')
+        .find(|line| !line.is_empty())
+    else {
+        return Ok(false);
+    };
+    if offset > 0 && last.len() == bytes.len() {
+        return Ok(false);
+    }
+    let value: serde_json::Value = match serde_json::from_slice(last) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    Ok(value["event"].as_str().is_some_and(completed_legacy_event)
+        && value["ts"]
+            .as_str()
+            .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()))
+}
+
+fn build_force_plan(
+    root: &Path,
+    snapshot: Option<&Transaction<'_>>,
+    sessions: &BTreeSet<&str>,
+) -> Result<HistoryForceCleanupPreview> {
+    let version = snapshot.map(schema_version).transpose()?.unwrap_or(0);
+    if let Some(snapshot) = snapshot {
+        validate_cleanup_objects(snapshot, version)?;
+    }
+    let source = root.join(HISTORY_DATABASE).display().to_string();
+    let mut digest = blake3::Hasher::new();
+    hash_snapshot_field(&mut digest, b"MFB History force cleanup v1")?;
+    hash_snapshot_field(&mut digest, source.as_bytes())?;
+    let mut result = HistoryForceCleanupPreview {
+        schema_version: 1,
+        kind: "history_force_cleanup_preview",
+        source,
+        snapshot_token: String::new(),
+        force_sessions: sessions.iter().map(|value| (*value).to_owned()).collect(),
+        event_rows: 0,
+        output_rows: 0,
+        retained_artifacts: Vec::new(),
+    };
+    for session in sessions {
+        hash_snapshot_field(&mut digest, b"session")?;
+        hash_snapshot_field(&mut digest, session.as_bytes())?;
+        let mut exists = false;
+        let mut terminal = false;
+        let mut owner = None;
+        if let Some(db) = snapshot {
+            ensure_session_not_removed(db, session)?;
+            let updated: Option<Vec<u8>> = db
+                .query_row(
+                    "SELECT CAST(updated_at AS BLOB) FROM history_sessions WHERE session_id=?1",
+                    [session],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(updated) = updated {
+                exists = true;
+                hash_snapshot_field(&mut digest, b"database row")?;
+                hash_snapshot_field(&mut digest, &updated)?;
+                if owner_table_exists(db)? {
+                    owner = db.query_row(
+                        "SELECT owner_pid,artifacts_json FROM history_session_ownership_v1 WHERE session_id=?1",
+                        [session], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                    ).optional()?;
+                }
+                let mut events = db.prepare(
+                    "SELECT sequence,CAST(ts AS BLOB),CAST(event AS BLOB) FROM history_events WHERE session_id=?1 ORDER BY sequence",
+                )?;
+                let mut rows = events.query([session])?;
+                while let Some(row) = rows.next()? {
+                    hash_snapshot_field(&mut digest, b"event")?;
+                    hash_snapshot_field(&mut digest, &row.get::<_, i64>(0)?.to_le_bytes())?;
+                    hash_snapshot_field(&mut digest, row.get_ref(1)?.as_blob()?)?;
+                    let event = row.get_ref(2)?.as_blob()?;
+                    hash_snapshot_field(&mut digest, event)?;
+                    terminal = std::str::from_utf8(event).is_ok_and(completed_legacy_event);
+                    checked_add(&mut result.event_rows, 1)?;
+                }
+                if version >= 2 {
+                    let mut outputs = db.prepare(
+                        "SELECT sequence,CAST(ts AS BLOB),CAST(pipeline AS BLOB),CAST(line AS BLOB) FROM history_output WHERE session_id=?1 ORDER BY sequence",
+                    )?;
+                    let mut rows = outputs.query([session])?;
+                    while let Some(row) = rows.next()? {
+                        hash_snapshot_field(&mut digest, b"output")?;
+                        hash_snapshot_field(&mut digest, &row.get::<_, i64>(0)?.to_le_bytes())?;
+                        for index in 1..=3 {
+                            hash_snapshot_field(&mut digest, row.get_ref(index)?.as_blob()?)?;
+                        }
+                        checked_add(&mut result.output_rows, 1)?;
+                    }
+                }
+            }
+        }
+        // Keep archive files outside force cleanup, including files not registered as owned.
+        let audits = forced_legacy_audits(root, session)?;
+        ensure!(
+            exists || !audits.is_empty(),
+            "selected History session is missing"
+        );
+        for audit in &audits {
+            let metadata = fs::symlink_metadata(audit)?;
+            ensure!(
+                metadata.is_file(),
+                "legacy History audit changed during preview"
+            );
+            hash_snapshot_field(&mut digest, b"legacy audit")?;
+            hash_snapshot_field(&mut digest, audit.as_os_str().as_encoded_bytes())?;
+            for value in [metadata.dev(), metadata.ino(), metadata.len()] {
+                hash_snapshot_field(&mut digest, &value.to_le_bytes())?;
+            }
+            for value in [
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+            ] {
+                hash_snapshot_field(&mut digest, &value.to_le_bytes())?;
+            }
+        }
+        let mut has_registered_artifacts = false;
+        if let Some((pid, artifacts)) = owner {
+            registered_writer_is_inactive(pid)?;
+            hash_snapshot_field(&mut digest, b"owner")?;
+            hash_snapshot_field(&mut digest, &pid.to_le_bytes())?;
+            hash_snapshot_field(&mut digest, artifacts.as_bytes())?;
+            has_registered_artifacts = artifacts != "[]";
+        } else {
+            let mut parts = session.rsplitn(3, '_');
+            let nonce = parts.next().unwrap_or_default();
+            let pid = parts.next().and_then(|value| value.parse::<i32>().ok());
+            if parts.next().is_some()
+                && pid.is_some()
+                && !nonce.is_empty()
+                && nonce.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                legacy_session_is_inactive(session, &[])?;
+            } else if !terminal {
+                ensure!(
+                    !exists && !audits.is_empty(),
+                    "legacy History activity cannot be proven inactive; nothing removed"
+                );
+                for audit in &audits {
+                    ensure!(
+                        completed_legacy_audit(audit)?,
+                        "legacy History activity cannot be proven inactive; nothing removed"
+                    );
+                }
+            }
+        }
+        if let Some(audit) = audits.first() {
+            result.retained_artifacts.push(HistoryArtifactDecision {
+                path: audit.display().to_string(),
+                scope: "unregistered_external_logs",
+                status: "retained",
+                reason: format!(
+                    "Force cleanup retained all {} matching external audit files",
+                    audits.len()
+                ),
+            });
+        }
+        if has_registered_artifacts {
+            result.retained_artifacts.push(HistoryArtifactDecision {
+                path: root.display().to_string(),
+                scope: "registered_external_logs",
+                status: "retained",
+                reason: format!(
+                    "Force cleanup kept the external artifacts registered to {session}"
+                ),
+            });
+        }
+        hash_snapshot_field(&mut digest, b"end session")?;
+    }
+    result.snapshot_token = digest.finalize().to_hex().to_string();
+    Ok(result)
+}
+
+/// Preview removal of every stored row belonging to the selected inactive sessions.
+pub fn preview_history_force_cleanup(
+    directory: &Path,
+    request: &HistoryForceCleanupRequest,
+) -> Result<HistoryForceCleanupPreview> {
+    let root = cleanup_root(directory)?;
+    let sessions = force_selections(request)?;
+    let _locks = cleanup_session_locks(&root, sessions.iter().copied())?;
+    let mut db = open_history_read(&root)?;
+    let snapshot = db.as_mut().map(Connection::transaction).transpose()?;
+    build_force_plan(&root, snapshot.as_ref(), &sessions)
+}
+
+/// Remove selected History sessions without interpreting ambiguous run boundaries.
+pub fn execute_history_force_cleanup(
+    directory: &Path,
+    request: &HistoryForceCleanupRequest,
+) -> Result<HistoryForceCleanupReceipt> {
+    let token = request
+        .snapshot_token
+        .as_deref()
+        .context("History force cleanup requires the exact preview token")?;
+    let root = cleanup_root(directory)?;
+    let sessions = force_selections(request)?;
+    let _locks = cleanup_session_locks(&root, sessions.iter().copied())?;
+    let path = root.join(HISTORY_DATABASE);
+    let mut db = if path.try_exists()? {
+        Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?
+    } else {
+        ensure!(
+            build_force_plan(&root, None, &sessions)?.snapshot_token == token,
+            "History force cleanup selection changed since preview; nothing removed"
+        );
+        open_history_write(&root)?
+    };
+    db.busy_timeout(Duration::from_secs(5))?;
+    db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;")?;
+    let secure: i64 = db.pragma_query_value(None, "secure_delete", |row| row.get(0))?;
+    ensure!(secure == 1, "History secure deletion is unavailable");
+    persist_history_wal_sidecars(&db)?;
+    let transaction = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let preview = build_force_plan(&root, Some(&transaction), &sessions)?;
+    ensure!(
+        preview.snapshot_token == token,
+        "History force cleanup selection changed since preview; nothing removed"
+    );
+    if schema_version(&transaction)? == 1 {
+        migrate_history_v1(&transaction)?;
+    }
+    if !removed_table_exists(&transaction)? {
+        transaction.execute_batch(
+            "CREATE TABLE history_removed_sessions_v1(session_id TEXT PRIMARY KEY NOT NULL);",
+        )?;
+    }
+    let has_owners = owner_table_exists(&transaction)?;
+    let mut event_rows = 0;
+    let mut output_rows = 0;
+    for session in sessions {
+        checked_add(
+            &mut event_rows,
+            transaction.execute("DELETE FROM history_events WHERE session_id=?1", [session])?,
+        )?;
+        checked_add(
+            &mut output_rows,
+            transaction.execute("DELETE FROM history_output WHERE session_id=?1", [session])?,
+        )?;
+        if has_owners {
+            transaction.execute(
+                "DELETE FROM history_session_ownership_v1 WHERE session_id=?1",
+                [session],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM history_sessions WHERE session_id=?1",
+            [session],
+        )?;
+        // A raw legacy stamp suppresses an external audit that still exists.
+        let retired = if legacy_audit_exists(&root, session)? {
+            session.to_owned()
+        } else {
+            retired_session_digest(session)
+        };
+        transaction.execute(
+            "INSERT INTO history_removed_sessions_v1 VALUES (?1)",
+            [retired],
+        )?;
+    }
+    ensure!(
+        (event_rows, output_rows) == (preview.event_rows, preview.output_rows),
+        "History force cleanup counts changed; nothing removed"
+    );
+    transaction.commit()?;
+    let mut failures = Vec::new();
+    for error in [
+        compact_legacy_history(&mut db).err(),
+        truncate_history_wal(&db).err(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        failures.push(HistoryArtifactDecision {
+            path: preview.source.clone(),
+            scope: "database_privacy",
+            status: "failed",
+            reason: format!("{error:#}"),
+        });
+    }
+    Ok(HistoryForceCleanupReceipt {
+        schema_version: 1,
+        kind: "history_force_cleanup_receipt",
+        status: if failures.is_empty() && preview.retained_artifacts.is_empty() {
+            "completed"
+        } else {
+            "partial"
+        },
+        database_committed: true,
+        force_sessions: preview.force_sessions,
+        event_rows,
+        output_rows,
+        retained_artifacts: preview.retained_artifacts,
+        failed_artifacts: failures,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1636,6 +2047,106 @@ mod tests {
         }
         register_history_artifacts(logs, session, &paths)?;
         Ok(paths)
+    }
+
+    #[test]
+    fn forced_cleanup_revalidates_unfinished_session_and_preserves_files() -> Result<()> {
+        let Some((root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        let media = root.path().join("user-media.jpg");
+        fs::write(&media, b"user file")?;
+        let owned = owned_logs(&logs, "unfinished")?;
+        append_history_event(
+            &logs,
+            "unfinished",
+            r#"MFB_HISTORY_CONTEXT={"schema_version":1,"run_id":"run-unfinished","output_sequence":0}"#,
+        )?;
+        let mut writer = HistoryOutputWriter::open(&logs, "unfinished")?;
+        writer.push_line("IMG", "private history line")?;
+        writer.flush()?;
+        drop(writer);
+        run(
+            &logs,
+            "unrelated",
+            "run-unrelated",
+            "unrelated history line",
+        )?;
+
+        let mut request = HistoryForceCleanupRequest {
+            schema_version: 1,
+            force_sessions: vec!["unfinished".to_owned()],
+            snapshot_token: None,
+        };
+        let lease = acquire_history_session_lease(&logs, "unfinished")?;
+        assert!(preview_history_force_cleanup(&logs, &request).is_err());
+        drop(lease);
+
+        let preview = preview_history_force_cleanup(&logs, &request)?;
+        assert_eq!((preview.event_rows, preview.output_rows), (1, 1));
+        assert_eq!(preview.retained_artifacts.len(), 2);
+        request.snapshot_token = Some(preview.snapshot_token);
+        append_history_event(
+            &logs,
+            "unfinished",
+            r#"MFB_HISTORY_SOURCE_SET={"schema_version":1,"run_id":"run-unfinished","source_root":"/synthetic","file_count":1,"content_blake3":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )?;
+        assert!(execute_history_force_cleanup(&logs, &request).is_err());
+        request.snapshot_token =
+            Some(preview_history_force_cleanup(&logs, &request)?.snapshot_token);
+        let receipt = execute_history_force_cleanup(&logs, &request)?;
+        assert_eq!((receipt.event_rows, receipt.output_rows), (2, 1));
+        assert!(receipt.database_committed);
+        assert_eq!(receipt.status, "partial");
+        assert!(receipt.failed_artifacts.is_empty());
+        let db = open_history_read(&logs)?.context("test History database")?;
+        let sessions = db
+            .prepare("SELECT session_id FROM history_sessions")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(sessions, ["unrelated"]);
+        assert!(ensure_session_not_removed(&db, "unfinished").is_err());
+        for path in owned {
+            assert_eq!(fs::read(path)?, b"private synthetic diagnostic");
+        }
+        assert_eq!(fs::read(media)?, b"user file");
+        Ok(())
+    }
+
+    #[test]
+    fn forced_cleanup_retires_a_completed_legacy_audit_without_removing_it() -> Result<()> {
+        let Some((_root, _guard, logs)) = fixture()? else {
+            return Ok(());
+        };
+        let legacy_audit = logs.join("session_audit_old.jsonl");
+        fs::write(&legacy_audit, b"{}\n")?;
+        let mut request = HistoryForceCleanupRequest {
+            schema_version: 1,
+            force_sessions: vec!["old".to_owned()],
+            snapshot_token: None,
+        };
+        assert!(preview_history_force_cleanup(&logs, &request).is_err());
+        assert!(!logs.join(HISTORY_DATABASE).exists());
+        let complete =
+            b"{\"ts\":\"2026-10-01T00:00:00Z\",\"event\":\"SESSION_COMPLETED images_ok=1\"}\n";
+        fs::write(&legacy_audit, complete)?;
+        let preview = preview_history_force_cleanup(&logs, &request)?;
+        assert_eq!((preview.event_rows, preview.output_rows), (0, 0));
+        assert_eq!(preview.retained_artifacts.len(), 1);
+        request.snapshot_token = Some(preview.snapshot_token);
+        let receipt = execute_history_force_cleanup(&logs, &request)?;
+        assert!(receipt.database_committed);
+        assert_eq!(receipt.status, "partial");
+        assert!(receipt.failed_artifacts.is_empty());
+        assert_eq!(fs::read(legacy_audit)?, complete);
+        let db = open_history_read(&logs)?.context("test History database")?;
+        let retired = db.query_row(
+            "SELECT session_id FROM history_removed_sessions_v1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        assert_eq!(retired, "old");
+        Ok(())
     }
 
     pub(super) fn pause_for_crash_test(stage: &str) {

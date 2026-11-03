@@ -1089,6 +1089,8 @@ private struct LocalCacheStatus: Decodable {
     let pruningPreview: PruningPreview?
     let database: Database?
 
+    var pathTree: Namespace? { namespaces.first { $0.name == "path_tree" } }
+
     func totals(rebuildable: Bool) throws -> (rows: UInt64, bytes: UInt64) {
         var rows: UInt64 = 0, bytes: UInt64 = 0
         for namespace in namespaces where namespace.rebuildable == rebuildable {
@@ -1110,7 +1112,8 @@ private struct LocalCacheStatus: Decodable {
         guard status.schemaVersion == 1, status.cacheDirectory.hasPrefix("/"),
               status.storeBytes <= UInt64(Int64.max), status.legacyAnalysisBytes <= UInt64(Int64.max),
               Set(status.namespaces.map(\.name)).count == status.namespaces.count,
-              status.namespaces.allSatisfy({ !$0.name.isEmpty && $0.rebuildable == ($0.name == "path_tree") }) else {
+              status.namespaces.allSatisfy({ !$0.name.isEmpty
+                  && $0.rebuildable == ["path_tree", "gate1_verified_file"].contains($0.name) }) else {
             throw HostError(message: localized("settings.cache.invalid"))
         }
         _ = try status.totals(rebuildable: true)
@@ -1126,10 +1129,9 @@ private struct LocalCacheStatus: Decodable {
         try status.integrity?.validate()
         try status.database?.validate()
         if let preview = status.pruningPreview {
-            let totals = try status.totals(rebuildable: true)
             guard status.database != nil, status.removedRows == 0, status.removedFiles == 0,
                   status.pruning == nil else { throw HostError(message: localized("settings.cache.invalid")) }
-            try preview.validate(rows: totals.rows, bytes: totals.bytes)
+            try preview.validate(rows: status.pathTree?.rows ?? 0, bytes: status.pathTree?.payloadBytes ?? 0)
         }
         if let integrity = status.integrity, integrity.status == .healthy || integrity.status == .unhealthy {
             guard integrity.blobScanComplete,
@@ -2514,7 +2516,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         cacheLabels["store"]?.toolTip = localized("settings.cache.store_help")
         cacheLabels["obsolete"]?.stringValue = localized("settings.cache.files", String(snapshot.legacyAnalysisFiles), size(snapshot.legacyAnalysisBytes))
         cacheClear.isEnabled = !cacheBusy && (cache.rows > 0 || snapshot.legacyAnalysisFiles > 0)
-        cachePrune.isEnabled = !cacheBusy && cache.rows > 0
+        cachePrune.isEnabled = !cacheBusy && (snapshot.pathTree?.rows ?? 0) > 0
         cacheCheck.isEnabled = !cacheBusy
         cacheBackup.isEnabled = !cacheBusy && cacheStore != nil
         cacheLoaded = true
@@ -4362,6 +4364,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             "store_bytes": 1024, "legacy_analysis_bytes": 64, "legacy_analysis_files": 1,
             "removed_rows": 0, "removed_files": 0, "namespaces": [
                 ["name": "path_tree", "rows": 3, "payload_bytes": 512, "rebuildable": true],
+                ["name": "gate1_verified_file", "rows": 5, "payload_bytes": 1024, "rebuildable": true],
                 ["name": "checkpoint", "rows": 2, "payload_bytes": 128, "rebuildable": false],
                 ["name": "future_state", "rows": 4, "payload_bytes": 256, "rebuildable": false]]]
         let snapshot = try LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: document))
@@ -4452,7 +4455,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard try HistoryDatabaseBackup.decode(JSONSerialization.data(withJSONObject: historyReceipt), source: historySource, destination: destination).historySchemaVersion == 1 else {
             throw HostError(message: "Version-one History backup was incorrectly migrated or rejected")
         }
-        guard try snapshot.totals(rebuildable: true).rows == 3,
+        guard try snapshot.totals(rebuildable: true).rows == 8,
               try snapshot.totals(rebuildable: false).rows == 6 else {
             throw HostError(message: "Cache and retained state counts were mixed")
         }
@@ -4464,6 +4467,13 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         guard cacheClear.isEnabled, cachePrune.isEnabled, !resetButton.isHidden, !applyButton.isHidden,
               cacheCheck.isEnabled, cacheLabels["path"]?.stringValue == snapshot.cacheDirectory else {
             throw HostError(message: "Cache controls were not placed in Settings")
+        }
+        var gateOnly = document
+        gateOnly["namespaces"] = [["name": "gate1_verified_file", "rows": 5, "payload_bytes": 1024, "rebuildable": true]]
+        gateOnly["legacy_analysis_files"] = 0
+        try displayCache(LocalCacheStatus.decode(JSONSerialization.data(withJSONObject: gateOnly)))
+        guard cacheClear.isEnabled, !cachePrune.isEnabled else {
+            throw HostError(message: "Gate 1 cache enabled path-tree pruning")
         }
         cacheBusy = true
         try displayCache(databaseSnapshot)
@@ -4550,7 +4560,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
         try displayCache(snapshot)
         let healthy: [String: Any] = ["schema_version": 1, "status": "healthy",
             "sqlite_integrity": "ok", "foreign_keys": "ok", "blob_scan_complete": true,
-            "checked_cache_rows": 3, "checked_protected_rows": 6,
+            "checked_cache_rows": 8, "checked_protected_rows": 6,
             "corrupt_cache_rows": 0, "corrupt_protected_rows": 0, "issue_count": 0, "issues": []]
         var checked = document
         checked["integrity"] = healthy
@@ -4558,7 +4568,7 @@ private final class MediaSettingsPanel: NSObject, NSTabViewDelegate, NSSearchFie
             throw HostError(message: "Database integrity result was not decoded")
         }
         for (key, value) in [("schema_version", 2 as Any), ("status", "unknown"),
-                             ("checked_cache_rows", 4), ("blob_scan_complete", false),
+                             ("checked_cache_rows", 3), ("blob_scan_complete", false),
                              ("corrupt_protected_rows", 1), ("issue_count", 1)] {
             var report = healthy
             report[key] = value

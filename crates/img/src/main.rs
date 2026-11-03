@@ -13,6 +13,7 @@ use img::lossless_converter::{
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use foundation::ToolBuilder;
 use foundation::analysis_cache::AnalysisCache;
+use foundation::batch::history_source_set::{HISTORY_SOURCE_SET_PREFIX, HistorySourceSet};
 use foundation::common_utils::calculate_blake3_hash;
 use foundation::delivery_codec_strategy::resolve_cli_img_static_delivery;
 use foundation::fast_img::{
@@ -4370,6 +4371,32 @@ struct FastImgSourceInventory {
     planned_encode_count: usize,
 }
 
+impl FastImgSourceInventory {
+    fn history_source_set(&self, root: &Path, import_to_photos: bool) -> Option<HistorySourceSet> {
+        if !self.scan_failures.is_empty() || self.modern_probe_failure_count != 0 {
+            return None;
+        }
+        let tier2 = if import_to_photos {
+            self.modern_lossy_candidates.as_slice()
+        } else {
+            &[]
+        };
+        let count = self.source_files.len().checked_add(tier2.len())?;
+        let encoded = self.source_files.iter().filter_map(|path| {
+            let relative = path.strip_prefix(root).ok()?;
+            let digest = self.source_hashes.get(relative.to_str()?)?;
+            Some((relative, digest.as_str()))
+        });
+        let passthrough = tier2.iter().filter_map(|candidate| {
+            Some((
+                candidate.path.strip_prefix(root).ok()?,
+                candidate.blake3.as_str(),
+            ))
+        });
+        HistorySourceSet::from_observed(root, count, encoded.chain(passthrough))
+    }
+}
+
 const fn fast_img_tier2_source_format(strategy: &str, format: FormatKind) -> bool {
     match strategy.as_bytes() {
         b"jxl" => foundation::image::modern_lossy_static::is_modern_static_image_format(format),
@@ -5039,6 +5066,27 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         input_plan.src_root == src_dir,
         "fast-img source root changed before inventory"
     );
+    let inventory = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
+    runtime_cli::check_tool_runtime_after_failure()?;
+    if !dry_run.0
+        && !retry_requested
+        && failed_retry_context.is_none()
+        && existing_marker.is_none()
+        && input.is_dir()
+        && std::env::var_os("MFB_RUN_ID").is_some()
+        && let Ok(invocation_id) = std::env::var("MFB_INVOCATION_ID")
+        && let Some(source_set) = inventory.history_source_set(&src_dir, shortest_path.0)
+    {
+        use std::io::Write as _;
+
+        let marker =
+            serde_json::json!({ "invocation_id": invocation_id, "source_set": source_set });
+        writeln!(
+            std::io::stdout().lock(),
+            "{HISTORY_SOURCE_SET_PREFIX}{marker}"
+        )
+        .context("write Fast IMG history source set")?;
+    }
     let FastImgSourceInventory {
         source_files: source_jpegs,
         scan_failures,
@@ -5047,8 +5095,7 @@ fn run_fast_img(options: FastImgRunOptions<'_>) -> anyhow::Result<()> {
         source_hashes: current_source_hashes,
         ignored,
         planned_encode_count,
-    } = scan_fast_img_sources(input_plan.candidates, &src_dir, strategy)?;
-    runtime_cli::check_tool_runtime_after_failure()?;
+    } = inventory;
     let ignored_count = ignored.count();
     let marker_context = FastImgMarkerContext {
         src_dir: &src_dir,

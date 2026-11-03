@@ -8,6 +8,9 @@ use crate::infra::process_stream::{
 };
 use crate::infra::signal_handlers::set_child_active;
 use anyhow::{Context, Result, bail};
+use foundation::batch::history_source_set::{
+    HISTORY_SOURCE_SET_EVENT, HISTORY_SOURCE_SET_PREFIX, HistorySourceSet,
+};
 use foundation::infra::runtime_config::RuntimeConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -752,11 +755,29 @@ impl LaunchCommand {
             let mut snapshot_marker_error = None;
             let mut execution_marker_error = None;
             let mut seen_config_marker = false;
+            let mut source_set = None;
+            let mut source_set_rejected = false;
             let result = stream_process_with_pty_observed(
                 &argv,
                 None,
                 &env_overrides,
                 |line| {
+                    if let Some(payload) = line.strip_prefix(HISTORY_SOURCE_SET_PREFIX) {
+                        if source_set.is_some() {
+                            source_set = None;
+                            source_set_rejected = true;
+                        } else if !source_set_rejected {
+                            let observation = invocation_id
+                                .filter(|_| expected_pipeline == "img")
+                                .filter(|_| self.args.first().is_some_and(|arg| arg == "fast-img"))
+                                .and_then(|id| {
+                                    HistorySourceSet::parse_observation(payload, id).ok()
+                                });
+                            source_set_rejected = observation.is_none();
+                            source_set = observation;
+                        }
+                        return;
+                    }
                     if let Some(payload) = line.strip_prefix("MFB_HISTORY_CONFIG=") {
                         if config_marker_error.is_some() {
                             return;
@@ -879,6 +900,22 @@ impl LaunchCommand {
                 .context("worker output storage receipt write failed")
                 .err()
             });
+            if source_set_rejected {
+                eprintln!(
+                    "[WARN] rejected malformed, duplicate, or unexpected worker source-set evidence"
+                );
+            }
+            if let (Ok(_), Some(source_set), Some(run_id)) = (&result, source_set, session.run_id())
+            {
+                let write_result = (|| -> Result<()> {
+                    let mut payload = serde_json::to_value(source_set)?;
+                    payload["run_id"] = serde_json::json!(run_id);
+                    session.append_history_event(HISTORY_SOURCE_SET_EVENT, payload)
+                })();
+                if let Err(error) = write_result {
+                    eprintln!("[WARN] could not save worker source-set evidence: {error:#}");
+                }
+            }
             let stats = match result {
                 Ok(stats) if session_log_error.is_some() || config_marker_error.is_some() => {
                     collected_error = match (session_log_error, config_marker_error) {

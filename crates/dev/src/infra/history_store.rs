@@ -9,9 +9,11 @@ use std::time::Duration;
 mod cleanup;
 pub use cleanup::{
     HistoryArtifactDecision, HistoryCleanupPreview, HistoryCleanupReceipt, HistoryCleanupRequest,
+    HistoryForceCleanupPreview, HistoryForceCleanupReceipt, HistoryForceCleanupRequest,
     HistoryReadOnlyAccessReceipt, HistoryRunSelection, HistorySessionLease,
-    acquire_history_session_lease, execute_history_cleanup, prepare_history_read_only_access,
-    preview_history_cleanup, register_history_artifacts,
+    acquire_history_session_lease, execute_history_cleanup, execute_history_force_cleanup,
+    prepare_history_read_only_access, preview_history_cleanup, preview_history_force_cleanup,
+    register_history_artifacts,
 };
 
 pub const HISTORY_DATABASE: &str = "history.sqlite3";
@@ -561,6 +563,7 @@ pub fn append_history_event(log_dir: &Path, session_id: &str, event: &str) -> Re
             name,
             "MFB_HISTORY_CONTEXT"
                 | "MFB_HISTORY_INPUT_PLAN"
+                | foundation::batch::history_source_set::HISTORY_SOURCE_SET_EVENT
                 | "MFB_HISTORY_CONFIG"
                 | "MFB_HISTORY_INVOCATION"
                 | "MFB_HISTORY_WORKER_EXECUTION"

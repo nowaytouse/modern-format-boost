@@ -33,6 +33,14 @@ areas of change are:
 - History browsing and removal previews can run during media processing. Confirmed
   history removal holds the same production lease as processing, including batch
   setup and archiving, so database maintenance cannot interrupt a media run.
+- Group history runs only when a stored source manifest proves the same folder,
+  relative media filenames, file count and full-file BLAKE3 hashes. Each run
+  retains its own result and remains available when grouping is turned off.
+- Offer an explicit whole-session removal path for inactive legacy or incomplete
+  history. Force removal clears database records and retires recognized legacy
+  entries while preserving external logs, archives and media.
+- Accept verified Gate 1 cache entries in Settings and distinguish directory
+  cache pruning from clearing both supported rebuildable caches.
 - Explain history removal and its media safety boundaries in the native guide.
 - Show elapsed time in localized units from seconds through years. Enlarge the
   main window logo and expose processor recovery as a keyboard-accessible action.

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
 
+pub mod history_source_set;
 pub mod planned_source;
 
 // Advisory discovery freshness, not a content hash or delivery proof.

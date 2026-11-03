@@ -43,6 +43,7 @@ use dev::media::scope::{
     report_handoff_preserve_gaps_from_paths,
 };
 use foundation::BatchErrorMode;
+use foundation::batch::history_source_set::HISTORY_SOURCE_SET_EVENT;
 use foundation::infra::runtime_config::{FallbackPolicy, ToolPolicy, VidCodec};
 use foundation::process_lock::DirLock;
 use std::collections::BTreeSet;
@@ -2430,6 +2431,21 @@ fn run_drag_drop_inner(
         }
         commands
     };
+
+    if !args.retry
+        && !args.resume
+        && !args.retry_failed
+        && let [scan] = scans.as_slice()
+        && let Some(session) = session
+        && let Some(source_set) = scan.history_source_set()
+    {
+        let write_result = serde_json::to_value(source_set)
+            .context("serialize source-set evidence")
+            .and_then(|payload| session.append_history_event(HISTORY_SOURCE_SET_EVENT, payload));
+        if let Err(error) = write_result {
+            eprintln!("[WARN] could not save source-set evidence: {error:#}");
+        }
+    }
 
     let mut first_error: Option<anyhow::Error> = None;
     let mut summary = PipelineSummary::default();

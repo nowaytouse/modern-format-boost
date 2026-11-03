@@ -76,6 +76,7 @@ pub struct ContentScan {
     pub routed_images: Vec<String>,
     pub routed_videos: Vec<String>,
     pub entries: Vec<ScanEntry>,
+    pub source_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -96,6 +97,24 @@ pub struct ScanEntry {
 }
 
 impl ContentScan {
+    /// The selected media inventory at discovery time. Sidecars and other files
+    /// are outside this history grouping identity.
+    #[must_use]
+    pub fn history_source_set(
+        &self,
+    ) -> Option<foundation::batch::history_source_set::HistorySourceSet> {
+        let root = self.source_root.as_deref()?;
+        let count = self.img_count.checked_add(self.vid_count)?;
+        let files = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.selected && matches!(entry.route, ScanRoute::Image | ScanRoute::Video)
+            })
+            .map(|entry| (entry.relative_path.as_path(), entry.source.content_blake3()));
+        foundation::batch::history_source_set::HistorySourceSet::from_observed(root, count, files)
+    }
+
     #[must_use]
     pub fn selected_sources(&self, route: ScanRoute) -> Vec<foundation::batch::DiscoveredSource> {
         self.entries
@@ -387,6 +406,9 @@ fn scan_content_with_options(
                     path.display()
                 )
             })?;
+            if path == target {
+                scan.source_root = Some(resolved.clone());
+            }
             directories.push((path, resolved, entries));
             continue;
         }
